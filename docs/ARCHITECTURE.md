@@ -192,7 +192,7 @@ Fast path:
 
 User click
     ↓
-RequestId
+RequestKey (session-only)
     ↓
 in-memory lookup
     ↓
@@ -206,6 +206,20 @@ It must not include:
 - YAML parsing
 - database queries
 - network operations
+
+### Runtime Identity and Persistence Locators
+
+OpenCollection does not define durable IDs for requests or folders. The active
+workspace therefore assigns compact generational `RequestKey` and `FolderKey` values
+while it is loaded. These keys index in-memory storage directly, are never serialized,
+and are rebuilt the next time the workspace opens. When a deleted slot is reused, its
+generation changes so stale selections and asynchronous results cannot resolve to the
+replacement item.
+
+Repository adapters separately own persistence locators. An unbundled collection can
+use a workspace-relative file path; a bundled collection may use a structural item
+path. CLI selectors are derived from repository locators rather than runtime keys.
+Request names are presentation data and must not be treated as identity.
 
 
 ## CLI Request Execution

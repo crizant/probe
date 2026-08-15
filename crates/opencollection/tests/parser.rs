@@ -3,6 +3,7 @@ use std::{fs, path::PathBuf};
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, CollectionItem, EnvironmentVariable,
     MultipartValue, RawBodyKind, RequestBody, VariableValue, VariableValueSet, VariableValueType,
+    Workspace, WorkspaceItemRef,
 };
 use probe_opencollection::parse;
 
@@ -201,4 +202,23 @@ fn complete_fixture_round_trips_without_data_loss() {
     let after: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&serialized).expect("serialized output should be YAML");
     assert_eq!(before, after);
+}
+
+#[test]
+fn loads_and_indexes_more_than_one_thousand_requests() {
+    let parsed = parse(&fixture("phase2-large-workspace.yml"))
+        .expect("large workspace fixture should parse");
+    let workspace = Workspace::from_collection(parsed.into_collection());
+
+    assert_eq!(workspace.request_count(), 1_001);
+    assert_eq!(workspace.root_items().len(), 1_001);
+    let Some(WorkspaceItemRef::Request(last_request)) = workspace.root_items().last() else {
+        panic!("last root item should be a request");
+    };
+    assert_eq!(
+        workspace
+            .request(*last_request)
+            .and_then(|request| request.metadata.name.as_deref()),
+        Some("Request 1000")
+    );
 }

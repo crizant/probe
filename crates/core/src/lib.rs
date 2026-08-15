@@ -7,6 +7,10 @@
 
 use std::collections::BTreeMap;
 
+mod workspace;
+
+pub use workspace::{FolderKey, RequestKey, Workspace, WorkspaceFolder, WorkspaceItemRef};
+
 /// A parsed API collection.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Collection {

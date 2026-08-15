@@ -68,14 +68,17 @@ Implement the in-memory workspace.
 Conceptually:
 
 Workspace
-├── requests_by_id
-├── folders_by_id
+├── requests keyed by runtime RequestKey
+├── folders keyed by runtime FolderKey
 ├── environments
 └── metadata
 
 Requirements:
 
 - O(1) request lookup where appropriate
+- generational runtime keys are in-memory only and are rebuilt when a workspace is loaded
+- deleting and reusing a slot must not make a stale key resolve to a new item
+- persistent locators are owned by repository adapters, not domain keys
 - domain has no dependency on CLI or GPUI
 - domain has no dependency on YAML representation
 - simple Rust ownership
@@ -102,8 +105,8 @@ Initial commands:
 
 <app> collection validate <path>
 <app> request list <path>
-<app> request get <path> <request-id>
-<app> request run <path> <request-id>
+<app> request get <path> <request-selector>
+<app> request run <path> <request-selector>
 
 Support:
 
@@ -117,6 +120,7 @@ JSON output should be stable and machine-readable.
 Requirements:
 
 - deterministic output
+- request selectors use repository locators, never session-only runtime keys
 - meaningful exit codes
 - no unnecessary prompts
 - errors available as structured JSON when --json is used
