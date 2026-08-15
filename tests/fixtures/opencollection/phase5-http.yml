@@ -1,0 +1,37 @@
+opencollection: 1.0.0
+info:
+  name: Phase 5 HTTP fixture
+bundled: true
+config:
+  environments:
+    - name: local
+      variables:
+        - name: serverUrl
+          value: __SERVER_URL__
+        - name: token
+          value: cli-token
+items:
+  - info:
+      name: Execute JSON request
+      type: http
+      seq: 1
+    http:
+      method: POST
+      url: "{{serverUrl}}/echo"
+      headers:
+        - name: X-Probe
+          value: phase-five
+      params:
+        - name: mode
+          value: cli
+          type: query
+      body:
+        type: json
+        data: '{"source":"cli"}'
+      auth:
+        type: bearer
+        token: "{{token}}"
+    settings:
+      timeout: 2000
+      followRedirects: true
+      maxRedirects: 3

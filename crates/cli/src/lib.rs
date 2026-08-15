@@ -2,15 +2,16 @@
 
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use probe_core::{EnvironmentResolutionError, resolve_environment, resolve_request};
+use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpResponse};
 use probe_opencollection::{LoadedWorkspace, load_workspace};
 use serde_json::json;
 
 mod presentation;
 
-use presentation::{request_human, request_json};
+use presentation::{request_human, request_json, response_human, response_json};
 
 /// Exit code used when command-line arguments are invalid.
 pub const INVALID_ARGUMENTS_EXIT_CODE: u8 = 2;
@@ -20,7 +21,7 @@ pub const INVALID_WORKSPACE_EXIT_CODE: u8 = 3;
 pub const REQUEST_NOT_FOUND_EXIT_CODE: u8 = 4;
 /// Exit code reserved for environment and configuration errors.
 pub const CONFIGURATION_EXIT_CODE: u8 = 5;
-/// Exit code used for request execution errors or unavailable execution.
+/// Exit code used for request execution and output errors.
 pub const EXECUTION_EXIT_CODE: u8 = 6;
 
 /// Captured CLI output and process status.
@@ -77,12 +78,13 @@ pub const fn help() -> &'static str {
         "  collection validate <path>          Validate an OpenCollection workspace\n",
         "  request list <path>                 List HTTP requests\n",
         "  request get <path> <selector>       Inspect an HTTP request\n",
-        "  request run <path> <selector>       Resolve a request; HTTP starts in Phase 5\n",
+        "  request run <path> <selector>       Execute an HTTP request\n",
         "\n",
         "Options:\n",
         "      --environment <name>  Resolve request variables with an environment\n",
-        "      --json                Emit deterministic JSON\n",
-        "  -h, --help  Print help\n",
+        "      --output <file>        Write the response body to a file\n",
+        "      --json               Emit deterministic JSON\n",
+        "  -h, --help               Print help\n",
     )
 }
 
@@ -98,7 +100,7 @@ const REQUEST_HELP: &str = concat!(
     "Commands:\n",
     "  list <path>                 List requests and repository selectors\n",
     "  get <path> <selector> [--environment <name>]  Inspect one request\n",
-    "  run <path> <selector> [--environment <name>]  Resolve; HTTP starts in Phase 5\n",
+    "  run <path> <selector> [--environment <name>] [--output <file>]\n",
 );
 
 /// Runs the CLI adapter for arguments that exclude the executable name.
@@ -142,8 +144,12 @@ where
         Ok(environment) => environment,
         Err(error) => return RunOutput::failure(error, json_output),
     };
+    let output = match extract_output(&mut args) {
+        Ok(output) => output,
+        Err(error) => return RunOutput::failure(error, json_output),
+    };
 
-    match parse_command(&args, environment).and_then(execute) {
+    match parse_command(&args, environment, output).and_then(execute) {
         Ok(output) => RunOutput::success(output.render(json_output)),
         Err(error) => RunOutput::failure(error, json_output),
     }
@@ -166,6 +172,7 @@ enum Command {
         path: PathBuf,
         selector: String,
         environment: Option<String>,
+        output: Option<PathBuf>,
     },
 }
 
@@ -217,14 +224,6 @@ impl CliError {
         }
     }
 
-    fn execution_unavailable() -> Self {
-        Self {
-            category: "execution_unavailable",
-            message: "HTTP execution is not available until Phase 5".to_owned(),
-            exit_code: EXECUTION_EXIT_CODE,
-        }
-    }
-
     fn configuration(error: EnvironmentResolutionError) -> Self {
         let category = match error {
             EnvironmentResolutionError::EnvironmentNotFound(_) => "environment_not_found",
@@ -238,6 +237,46 @@ impl CliError {
             category,
             message: error.to_string(),
             exit_code: CONFIGURATION_EXIT_CODE,
+        }
+    }
+
+    fn http(error: HttpError) -> Self {
+        let category = if error.is_configuration() {
+            "request_configuration"
+        } else {
+            match error {
+                HttpError::Timeout => "request_timeout",
+                HttpError::Cancelled => "request_cancelled",
+                _ => "network_execution",
+            }
+        };
+        Self {
+            category,
+            message: error.to_string(),
+            exit_code: if error.is_configuration() {
+                CONFIGURATION_EXIT_CODE
+            } else {
+                EXECUTION_EXIT_CODE
+            },
+        }
+    }
+
+    fn output(path: &std::path::Path, error: &std::io::Error) -> Self {
+        Self {
+            category: "output_error",
+            message: format!(
+                "cannot write response body to '{}': {error}",
+                path.display()
+            ),
+            exit_code: EXECUTION_EXIT_CODE,
+        }
+    }
+
+    fn runtime(error: &std::io::Error) -> Self {
+        Self {
+            category: "runtime_error",
+            message: format!("cannot start asynchronous HTTP runtime: {error}"),
+            exit_code: EXECUTION_EXIT_CODE,
         }
     }
 }
@@ -266,23 +305,59 @@ fn extract_environment(args: &mut Vec<String>) -> Result<Option<String>, CliErro
     }
 }
 
-fn parse_command(args: &[String], environment: Option<String>) -> Result<Command, CliError> {
+fn extract_output(args: &mut Vec<String>) -> Result<Option<PathBuf>, CliError> {
+    let positions: Vec<_> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| (argument == "--output").then_some(index))
+        .collect();
+    match positions.as_slice() {
+        [] => Ok(None),
+        [_first, _second, ..] => Err(CliError::invalid_arguments(
+            "--output may only be specified once",
+        )),
+        [position] => {
+            if *position + 1 >= args.len() || args[*position + 1].starts_with('-') {
+                return Err(CliError::invalid_arguments(
+                    "--output requires a non-empty file path",
+                ));
+            }
+            let value = PathBuf::from(args.remove(*position + 1));
+            args.remove(*position);
+            Ok(Some(value))
+        }
+    }
+}
+
+fn parse_command(
+    args: &[String],
+    environment: Option<String>,
+    output: Option<PathBuf>,
+) -> Result<Command, CliError> {
     match args {
         [group, action, path]
-            if group == "collection" && action == "validate" && environment.is_none() =>
+            if group == "collection"
+                && action == "validate"
+                && environment.is_none()
+                && output.is_none() =>
         {
             Ok(Command::Validate {
                 path: PathBuf::from(path),
             })
         }
         [group, action, path]
-            if group == "request" && action == "list" && environment.is_none() =>
+            if group == "request"
+                && action == "list"
+                && environment.is_none()
+                && output.is_none() =>
         {
             Ok(Command::List {
                 path: PathBuf::from(path),
             })
         }
-        [group, action, path, selector] if group == "request" && action == "get" => {
+        [group, action, path, selector]
+            if group == "request" && action == "get" && output.is_none() =>
+        {
             Ok(Command::Get {
                 path: PathBuf::from(path),
                 selector: selector.clone(),
@@ -294,6 +369,7 @@ fn parse_command(args: &[String], environment: Option<String>) -> Result<Command
                 path: PathBuf::from(path),
                 selector: selector.clone(),
                 environment,
+                output,
             })
         }
         _ => Err(CliError::invalid_arguments(
@@ -315,16 +391,64 @@ fn execute(command: Command) -> Result<CommandOutput, CliError> {
             path,
             selector,
             environment,
-        } => {
-            let loaded = load(&path)?;
-            let key = loaded
-                .request_key(&selector)
-                .ok_or_else(|| CliError::request_not_found(&selector))?;
-            if let Some(environment) = environment.as_deref() {
-                resolve_loaded_request(&loaded, key, environment)?;
-            }
-            Err(CliError::execution_unavailable())
-        }
+            output,
+        } => run_request(&path, &selector, environment.as_deref(), output.as_ref()),
+    }
+}
+
+fn run_request(
+    path: &PathBuf,
+    selector: &str,
+    environment: Option<&str>,
+    output: Option<&PathBuf>,
+) -> Result<CommandOutput, CliError> {
+    let loaded = load(path)?;
+    let key = loaded
+        .request_key(selector)
+        .ok_or_else(|| CliError::request_not_found(selector))?;
+    let request = if let Some(environment) = environment {
+        resolve_loaded_request(&loaded, key, environment)?
+    } else {
+        loaded
+            .workspace()
+            .request(key)
+            .expect("repository request key must resolve")
+            .clone()
+    };
+    let base_directory = if path.is_dir() {
+        Some(path.clone())
+    } else {
+        path.parent().map(std::path::Path::to_owned)
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| CliError::runtime(&error))?;
+    let response = runtime.block_on(async {
+        let engine = HttpEngine::new().map_err(CliError::http)?;
+        engine
+            .execute_cancellable(
+                &request,
+                &ExecutionOptions { base_directory },
+                tokio::signal::ctrl_c(),
+            )
+            .await
+            .map_err(CliError::http)
+    })?;
+    if let Some(output) = output {
+        fs::write(output, &response.body).map_err(|error| CliError::output(output, &error))?;
+    }
+    Ok(response_output(&request, &response, output))
+}
+
+fn response_output(
+    request: &probe_core::HttpRequest,
+    response: &HttpResponse,
+    output: Option<&PathBuf>,
+) -> CommandOutput {
+    CommandOutput {
+        human: response_human(request, response, output.map(PathBuf::as_path)),
+        json: response_json(request, response, output.map(PathBuf::as_path)),
     }
 }
 

@@ -5,14 +5,14 @@
 
 #![forbid(unsafe_code)]
 
-use std::{collections::BTreeMap, error::Error as StdError, fmt};
+use std::{collections::BTreeMap, error::Error as StdError, fmt, time::Duration};
 
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Author, Body, BodyVariant, Collection,
     CollectionItem, CollectionMetadata, Environment, EnvironmentVariable, FileReference, Folder,
     FormField, Header, HttpRequest, ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBody, RawBodyKind, RequestBody, SecretVariable, Variable, VariableValue,
-    VariableValueSet, VariableValueType, VariableValueVariant,
+    QueryParameter, RawBody, RawBodyKind, RequestBody, RequestSettings, SecretVariable, Variable,
+    VariableValue, VariableValueSet, VariableValueType, VariableValueVariant,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -200,6 +200,55 @@ struct ItemDocument {
     #[serde(default)]
     items: Vec<Value>,
     http: Option<HttpDetailsDocument>,
+    #[serde(default)]
+    settings: RequestSettingsDocument,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RequestSettingsDocument {
+    timeout: Option<Value>,
+    #[serde(rename = "followRedirects")]
+    follow_redirects: Option<bool>,
+    #[serde(rename = "maxRedirects")]
+    max_redirects: Option<usize>,
+}
+
+impl RequestSettingsDocument {
+    fn into_domain(self) -> Result<RequestSettings, serde_yaml_ng::Error> {
+        let timeout = match self.timeout {
+            None => None,
+            Some(Value::String(value)) if value == "inherit" => None,
+            Some(Value::Number(value)) => {
+                let milliseconds = value.as_f64().ok_or_else(|| {
+                    <serde_yaml_ng::Error as serde::de::Error>::custom(
+                        "request timeout must be a finite non-negative number",
+                    )
+                })?;
+                if milliseconds.is_sign_negative() || !milliseconds.is_finite() {
+                    return Err(<serde_yaml_ng::Error as serde::de::Error>::custom(
+                        "request timeout must be a finite non-negative number",
+                    ));
+                }
+                Some(
+                    Duration::try_from_secs_f64(milliseconds / 1000.0).map_err(|_| {
+                        <serde_yaml_ng::Error as serde::de::Error>::custom(
+                            "request timeout is too large",
+                        )
+                    })?,
+                )
+            }
+            Some(_) => {
+                return Err(<serde_yaml_ng::Error as serde::de::Error>::custom(
+                    "request timeout must be milliseconds or 'inherit'",
+                ));
+            }
+        };
+        Ok(RequestSettings {
+            timeout,
+            follow_redirects: self.follow_redirects,
+            max_redirects: self.max_redirects,
+        })
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -708,6 +757,7 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
         }
         Some("http") => {
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
+            let settings = item.settings.into_domain()?;
             let http = item.http.unwrap_or_default();
             let body = http.body.map(project_request_body).transpose()?.flatten();
             let authentication = http.auth.map(project_authentication).transpose()?;
@@ -728,6 +778,7 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
                     .collect(),
                 body,
                 authentication,
+                settings,
             })))
         }
         _ => Ok(None),

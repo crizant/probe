@@ -5,7 +5,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 mod environment;
 mod workspace;
@@ -94,6 +94,19 @@ pub struct HttpRequest {
     pub body: Option<RequestBody>,
     /// Request authentication configuration.
     pub authentication: Option<Authentication>,
+    /// Execution settings shared by every interface.
+    pub settings: RequestSettings,
+}
+
+/// HTTP execution settings projected from OpenCollection.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RequestSettings {
+    /// Total request timeout. Zero means no timeout.
+    pub timeout: Option<Duration>,
+    /// Whether redirects should be followed.
+    pub follow_redirects: Option<bool>,
+    /// Maximum redirect hops when redirects are enabled.
+    pub max_redirects: Option<usize>,
 }
 
 /// An HTTP request header.

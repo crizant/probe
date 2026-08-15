@@ -1,4 +1,12 @@
-use std::{path::PathBuf, process::Command};
+use std::{
+    fs,
+    io::{Read, Write},
+    net::TcpListener,
+    path::PathBuf,
+    process::Command,
+    thread::{self, JoinHandle},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use serde_json::Value;
 
@@ -10,6 +18,73 @@ fn fixture(path: &str) -> PathBuf {
 
 fn probe() -> Command {
     Command::new(env!("CARGO_BIN_EXE_probe"))
+}
+
+#[derive(Debug)]
+struct CapturedRequest {
+    head: String,
+    body: Vec<u8>,
+}
+
+fn serve_once(body: Vec<u8>, content_type: &str) -> (String, JoinHandle<CapturedRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
+    let address = listener.local_addr().unwrap();
+    let content_type = content_type.to_owned();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 8 * 1024];
+        let header_end = loop {
+            if let Some(position) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                break position + 4;
+            }
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&buffer[..count]);
+        };
+        let head = String::from_utf8_lossy(&request[..header_end]).into_owned();
+        let content_length = head
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .map(|(_, value)| value.trim().parse::<usize>().unwrap())
+            .unwrap_or(0);
+        while request.len() - header_end < content_length {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&buffer[..count]);
+        }
+        let captured = CapturedRequest {
+            head,
+            body: request[header_end..header_end + content_length].to_vec(),
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.write_all(&body).unwrap();
+        captured
+    });
+    (format!("http://{address}"), handle)
+}
+
+fn runtime_fixture(server_url: &str) -> PathBuf {
+    let source = fs::read_to_string(fixture("phase5-http.yml")).unwrap();
+    let path = temporary_path("workspace.yml");
+    fs::write(&path, source.replace("__SERVER_URL__", server_url)).unwrap();
+    path
+}
+
+fn temporary_path(suffix: &str) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "probe-cli-{}-{unique}-{suffix}",
+        std::process::id()
+    ))
 }
 
 #[test]
@@ -168,34 +243,107 @@ fn reports_request_not_found_as_structured_error() {
 }
 
 #[test]
-fn recognizes_run_without_executing_http() {
+fn executes_request_as_deterministic_json() {
+    let (server_url, server) = serve_once(b"{\"result\":\"ok\"}".to_vec(), "application/json");
+    let workspace = runtime_fixture(&server_url);
     let output = probe()
         .args(["request", "run"])
-        .arg(fixture("unbundled"))
-        .arg("health.yml")
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--environment", "local", "--json"])
+        .output()
+        .expect("run command should run");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["request"]["method"], "POST");
+    assert_eq!(value["response"]["status"], 200);
+    assert_eq!(value["response"]["sizeBytes"], 15);
+    assert_eq!(value["response"]["body"]["encoding"], "utf8");
+    assert_eq!(value["response"]["body"]["content"], "{\"result\":\"ok\"}");
+    let captured = server.join().unwrap();
+    assert!(
+        captured
+            .head
+            .starts_with("POST /echo?mode=cli HTTP/1.1\r\n")
+    );
+    assert!(
+        captured
+            .head
+            .contains("authorization: Bearer cli-token\r\n")
+    );
+    assert!(captured.head.contains("x-probe: phase-five\r\n"));
+    assert_eq!(captured.body, b"{\"source\":\"cli\"}");
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn writes_response_body_to_an_explicit_file() {
+    let response_body = vec![0, 159, 146, 150];
+    let (server_url, server) = serve_once(response_body.clone(), "application/octet-stream");
+    let workspace = runtime_fixture(&server_url);
+    let body_output = temporary_path("response.bin");
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--environment", "local", "--output"])
+        .arg(&body_output)
         .arg("--json")
         .output()
         .expect("run command should run");
 
-    assert_eq!(output.status.code(), Some(6));
-    assert!(output.stderr.is_empty());
-    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
-    assert_eq!(value["error"]["category"], "execution_unavailable");
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["response"]["body"]["content"], Value::Null);
+    assert_eq!(value["response"]["body"]["omitted"], false);
+    assert_eq!(
+        value["response"]["body"]["outputPath"],
+        body_output.to_string_lossy().as_ref()
+    );
+    assert_eq!(fs::read(&body_output).unwrap(), response_body);
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
+    fs::remove_file(body_output).unwrap();
 }
 
 #[test]
-fn run_preflights_environment_resolution_before_phase_five() {
+fn omits_large_response_body_from_stdout() {
+    let response_body = vec![b'x'; 1024 * 1024 + 1];
+    let (server_url, server) = serve_once(response_body, "text/plain");
+    let workspace = runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--environment", "local", "--json"])
+        .output()
+        .expect("run command should run");
+
+    assert!(output.status.success());
+    assert!(output.stdout.len() < 10_000);
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["response"]["body"]["content"], Value::Null);
+    assert_eq!(value["response"]["body"]["omitted"], true);
+    assert_eq!(value["response"]["body"]["omissionReason"], "too_large");
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn run_preflights_environment_resolution_before_http() {
     let output = probe()
         .args(["request", "run"])
         .arg(fixture("phase4-environments.yml"))
-        .arg("items/0")
+        .arg("items/1")
         .args(["--environment", "development", "--json"])
         .output()
         .expect("run command should run");
 
-    assert_eq!(output.status.code(), Some(6));
+    assert_eq!(output.status.code(), Some(5));
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["error"]["category"], "execution_unavailable");
+    assert_eq!(value["error"]["category"], "missing_variable");
 }
 
 #[test]

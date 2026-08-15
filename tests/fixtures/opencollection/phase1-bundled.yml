@@ -34,6 +34,10 @@ items:
             - name: ownerId
               value: "42"
               type: path
+        settings:
+          timeout: 2500.5
+          followRedirects: false
+          maxRedirects: 3
   - info:
       name: Health check
       type: http
@@ -41,4 +45,3 @@ items:
     http:
       method: HEAD
       url: https://api.example.com/health
-

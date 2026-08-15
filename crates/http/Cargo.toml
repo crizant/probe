@@ -7,6 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 probe-core = { path = "../core" }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "multipart", "stream", "form", "query"] }
+tokio = { version = "1.53.1", features = ["rt", "macros", "time", "fs", "net", "io-util", "sync"] }
 
 [lints]
 workspace = true

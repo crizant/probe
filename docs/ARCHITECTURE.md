@@ -260,6 +260,24 @@ secret declarations contain no value, so references fail until a separate secure
 runtime value provider is introduced. Loading `dotEnvFilePath` is also outside Phase 4;
 the domain resolver remains independent of filesystem APIs.
 
+## HTTP Execution
+
+`probe-http` owns the single asynchronous HTTP implementation. It converts resolved
+domain requests into network requests, applies enabled headers and query parameters,
+selects body/file variants, implements Basic and Bearer authentication, and enforces
+OpenCollection timeout and redirect settings. Neither CLI nor desktop constructs HTTP
+requests independently.
+
+The engine accepts a caller-provided cancellation future. Completion of that future—or
+dropping the execution future—cancels the request without coupling the engine to
+terminal signals or a GUI framework. The CLI adapts Ctrl-C to this boundary; desktop
+can later adapt task or view cancellation to the same API.
+
+Completed responses contain raw bytes plus status, reason, final URL, duration, size,
+and deterministically sorted headers. The CLI only inlines UTF-8 bodies up to 1 MiB and
+supports `--output` for large or binary data. Response retention and history policies
+remain outside the frontend and can evolve without changing request construction.
+
 
 ## Persistence
 

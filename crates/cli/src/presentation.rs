@@ -1,8 +1,105 @@
+use std::path::Path;
+
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, HttpRequest, MultipartPartKind, MultipartValue,
     RawBodyKind, RequestBody, VariableValueType,
 };
+use probe_http::HttpResponse;
 use serde_json::{Map, Value, json};
+
+const MAX_INLINE_RESPONSE_BYTES: usize = 1024 * 1024;
+
+pub(super) fn response_human(
+    request: &HttpRequest,
+    response: &HttpResponse,
+    output: Option<&Path>,
+) -> String {
+    let method = request.method.as_deref().unwrap_or("<unset>");
+    let url = request.url.as_deref().unwrap_or("<unset>");
+    let mut rendered = format!(
+        "{method} {url}\n\n{} {}\n{} ms\n{}\nFinal URL: {}\nHeaders:\n",
+        response.status,
+        response.reason,
+        response.duration.as_millis(),
+        human_size(response.size),
+        response.url,
+    );
+    if response.headers.is_empty() {
+        rendered.push_str("  (none)\n");
+    } else {
+        for header in &response.headers {
+            rendered.push_str(&format!("  {}: {}\n", header.name, header.value));
+        }
+    }
+    rendered.push('\n');
+    if let Some(output) = output {
+        rendered.push_str(&format!("Response body written to {}\n", output.display()));
+    } else if response.size > MAX_INLINE_RESPONSE_BYTES {
+        rendered.push_str(&format!(
+            "Response body omitted because it exceeds {} bytes; use --output <file>.\n",
+            MAX_INLINE_RESPONSE_BYTES
+        ));
+    } else if let Ok(body) = std::str::from_utf8(&response.body) {
+        rendered.push_str(body);
+        if !body.ends_with('\n') {
+            rendered.push('\n');
+        }
+    } else {
+        rendered.push_str("Binary response body omitted; use --output <file>.\n");
+    }
+    rendered
+}
+
+pub(super) fn response_json(
+    request: &HttpRequest,
+    response: &HttpResponse,
+    output: Option<&Path>,
+) -> Value {
+    let output_path = output.map(|path| path.to_string_lossy().into_owned());
+    let (content, encoding, omitted, omission_reason) = if output.is_some() {
+        (None, None, false, None)
+    } else if response.size > MAX_INLINE_RESPONSE_BYTES {
+        (None, None, true, Some("too_large"))
+    } else if let Ok(body) = std::str::from_utf8(&response.body) {
+        (Some(body), Some("utf8"), false, None)
+    } else {
+        (None, None, true, Some("binary"))
+    };
+    json!({
+        "request": {
+            "method": request.method,
+            "url": request.url,
+        },
+        "response": {
+            "body": {
+                "content": content,
+                "encoding": encoding,
+                "omissionReason": omission_reason,
+                "omitted": omitted,
+                "outputPath": output_path,
+            },
+            "durationMs": response.duration.as_millis(),
+            "headers": response.headers.iter().map(|header| json!({
+                "name": header.name,
+                "value": header.value,
+            })).collect::<Vec<_>>(),
+            "reason": response.reason,
+            "sizeBytes": response.size,
+            "status": response.status,
+            "url": response.url,
+        }
+    })
+}
+
+fn human_size(size: usize) -> String {
+    if size < 1024 {
+        format!("{size} B")
+    } else if size < 1024 * 1024 {
+        format!("{:.1} KB", size as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+    }
+}
 
 pub(super) fn request_human(
     selector: &str,

@@ -77,11 +77,12 @@ collections use structural selectors:
 probe request get ./collection.yml items/0/items/0 --json
 ```
 
-`request run` is reserved but does not execute HTTP until the shared HTTP engine is
-implemented in Phase 5:
-
 ```bash
-probe request run ./api users/list-users.yml --json
+probe request run ./api users/list-users.yml \
+  --environment development --json
+
+probe request run ./api reports/download.yml \
+  --environment development --output ./report.pdf --json
 ```
 
 `--environment <name>` selects an OpenCollection environment, applies its `extends`
@@ -90,9 +91,8 @@ chain, and interpolates request variables before output or execution preflight.
 ## Development
 
 The repository is a Cargo workspace. It currently includes OpenCollection parsing,
-bundled and unbundled filesystem loading, an indexed in-memory workspace, the CLI
-foundation, and shared environment resolution. HTTP execution remains deferred to
-Phase 5.
+bundled and unbundled filesystem loading, an indexed in-memory workspace, shared
+environment resolution, and asynchronous HTTP execution used by the CLI.
 
 ```bash
 cargo run -p probe-cli -- --help

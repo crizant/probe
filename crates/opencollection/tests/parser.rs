@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::Duration};
 
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, CollectionItem, EnvironmentVariable,
@@ -52,6 +52,12 @@ fn parses_collection_folders_and_http_requests() {
     assert_eq!(request.query_parameters.len(), 1);
     assert_eq!(request.query_parameters[0].name, "limit");
     assert_eq!(request.query_parameters[0].value, "25");
+    assert_eq!(
+        request.settings.timeout,
+        Some(Duration::from_micros(2_500_500))
+    );
+    assert_eq!(request.settings.follow_redirects, Some(false));
+    assert_eq!(request.settings.max_redirects, Some(3));
 }
 
 #[test]
