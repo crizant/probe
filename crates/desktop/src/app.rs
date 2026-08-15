@@ -540,6 +540,7 @@ impl ProbeApp {
                     .flex()
                     .items_center()
                     .gap(px(theme.metrics.spacing_2))
+                    .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
                     .when(selected, |row| {
                         row.bg(theme.colors.selection.active_background)
@@ -555,6 +556,8 @@ impl ProbeApp {
                     .child(
                         div()
                             .w(px(42.0))
+                            .flex_none()
+                            .truncate()
                             .text_size(px(10.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(if selected {
@@ -564,7 +567,13 @@ impl ProbeApp {
                             })
                             .child(method),
                     )
-                    .child(div().flex_1().overflow_hidden().child(label.to_owned()))
+                    .child(
+                        components::truncated_label(label.to_owned())
+                            .flex_1()
+                            .when(selected, |label| {
+                                label.debug_selector(|| "request-tree-label".into())
+                            }),
+                    )
                     .into_any_element()
             }
             WorkspaceItemRef::Folder(key) => {
@@ -583,6 +592,7 @@ impl ProbeApp {
                     .flex()
                     .items_center()
                     .gap(px(theme.metrics.spacing_2))
+                    .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
                     .cursor_pointer()
                     .hover(move |row| row.bg(theme.colors.surfaces.raised))
@@ -594,11 +604,11 @@ impl ProbeApp {
                             cx.notify();
                         });
                     })
-                    .child(if expanded { "▾" } else { "▸" })
+                    .child(div().flex_none().child(if expanded { "▾" } else { "▸" }))
                     .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(label.to_owned()),
+                        components::truncated_label(label.to_owned())
+                            .flex_1()
+                            .font_weight(FontWeight::SEMIBOLD),
                     )
                     .into_any_element()
             }
@@ -662,6 +672,7 @@ impl ProbeApp {
                         .flex()
                         .flex_col()
                         .gap(px(theme.metrics.spacing_1))
+                        .overflow_hidden()
                         .rounded(px(theme.metrics.radius_small))
                         .cursor_pointer()
                         .hover(move |row| row.bg(theme.colors.surfaces.raised))
@@ -674,13 +685,11 @@ impl ProbeApp {
                                 }
                             });
                         })
-                        .child(label)
+                        .child(components::truncated_label(label))
                         .child(
-                            div()
+                            components::truncated_label(detail)
                                 .text_size(px(theme.typography.caption_size))
-                                .text_color(theme.colors.text.muted)
-                                .overflow_hidden()
-                                .child(detail),
+                                .text_color(theme.colors.text.muted),
                         );
                     #[cfg(test)]
                     let row = row.debug_selector(move || format!("recent-collection-{index}"));
@@ -758,6 +767,7 @@ impl ProbeApp {
                     .flex()
                     .items_center()
                     .gap(px(theme.metrics.spacing_2))
+                    .overflow_hidden()
                     .border_r_1()
                     .border_color(theme.colors.borders.subtle)
                     .when(active, |tab| tab.bg(theme.colors.surfaces.editor))
@@ -769,10 +779,17 @@ impl ProbeApp {
                     .on_click(move |_, _, cx| {
                         let _ = select_view.update(cx, |view, cx| view.select_request(tab_key, cx));
                     })
-                    .child(div().flex_1().overflow_hidden().child(label.to_owned()))
+                    .child(
+                        components::truncated_label(label.to_owned())
+                            .flex_1()
+                            .when(active, |label| {
+                                label.debug_selector(|| "request-tab-label".into())
+                            }),
+                    )
                     .child(
                         div()
                             .id(("close-tab", key.slot()))
+                            .flex_none()
                             .px(px(4.0))
                             .rounded(px(theme.metrics.radius_small))
                             .hover(move |close| close.bg(theme.colors.actions.disabled))
@@ -2143,15 +2160,12 @@ impl ProbeApp {
                     .border_color(theme.colors.borders.subtle)
                     .child(div().font_weight(FontWeight::SEMIBOLD).child("Response"))
                     .child(
-                        div()
+                        components::truncated_label(summary)
                             .id("response-status")
                             .debug_selector(|| "response-status".into())
-                            .min_w(px(0.0))
                             .flex_1()
                             .text_size(px(theme.typography.caption_size))
-                            .text_color(theme.colors.text.muted)
-                            .overflow_hidden()
-                            .child(summary),
+                            .text_color(theme.colors.text.muted),
                     ),
             )
             .child(content)
@@ -2631,6 +2645,7 @@ impl ProbeApp {
                     .flex()
                     .items_center()
                     .gap(px(theme.metrics.spacing_2))
+                    .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
                     .style_with_state(move |state, trigger| {
                         trigger
@@ -2645,9 +2660,10 @@ impl ProbeApp {
                             })
                             .hover(move |trigger| trigger.bg(theme.colors.surfaces.sidebar))
                     })
-                    .child(div().overflow_hidden().child(self.workspace_name()))
+                    .child(components::truncated_label(self.workspace_name()).flex_1())
                     .child(
                         div()
+                            .flex_none()
                             .text_size(px(theme.typography.caption_size))
                             .text_color(theme.colors.text.muted)
                             .child("▾"),
@@ -3433,5 +3449,57 @@ mod tests {
             })
             .expect("test window should remain open");
         assert_eq!(edited_url.as_deref(), Some("https://changed.example"));
+    }
+
+    #[gpui::test]
+    fn long_request_names_ellipsis_instead_of_wrapping(cx: &mut TestAppContext) {
+        cx.update(base_gpui::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        let long_name =
+            "List every pet owned by the currently authenticated user across every environment";
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.edit_request(
+                    request_key,
+                    |request| request.metadata.name = Some(long_name.to_owned()),
+                    cx,
+                );
+                view.select_request(request_key, cx);
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let tab_label = visual
+            .debug_bounds("request-tab-label")
+            .expect("request tab label should render");
+        let tree_label = visual
+            .debug_bounds("request-tree-label")
+            .expect("sidebar request label should render");
+        assert!(
+            tab_label.size.height < px(28.0),
+            "request tab label wrapped onto multiple lines: {:?}",
+            tab_label.size
+        );
+        assert!(
+            tree_label.size.height < px(28.0),
+            "sidebar request label wrapped onto multiple lines: {:?}",
+            tree_label.size
+        );
+        assert!(
+            tab_label.size.width <= px(220.0),
+            "request tab label exceeded the tab max width: {:?}",
+            tab_label.size
+        );
     }
 }

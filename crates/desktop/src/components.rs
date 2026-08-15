@@ -24,6 +24,11 @@ use crate::theme::Theme;
 
 use crate::shell::PaneLayout;
 
+/// Single-line label that shows an ellipsis when the available width is too small.
+pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
+    div().min_w(px(0.0)).truncate().child(text.into())
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct VariableContext {
     pub(crate) values: BTreeMap<String, String>,
@@ -56,13 +61,15 @@ impl Render for VariableTooltip {
             content = content.child(
                 div()
                     .flex()
+                    .items_center()
                     .gap(px(self.theme.metrics.spacing_2))
                     .child(
-                        div()
-                            .text_color(self.theme.colors.syntax.string)
-                            .child(format!("{{{{{name}}}}}")),
+                        truncated_label(format!("{{{{{name}}}}}"))
+                            .flex_none()
+                            .max_w(px(160.0))
+                            .text_color(self.theme.colors.syntax.string),
                     )
-                    .child(value.clone()),
+                    .child(truncated_label(value.clone()).flex_1()),
             );
         }
         content
@@ -268,6 +275,7 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
                 .flex()
                 .items_center()
                 .gap(px(theme.metrics.spacing_2))
+                .overflow_hidden()
                 .rounded(px(theme.metrics.radius_small))
                 .text_color(theme.colors.text.primary)
                 .style_with_state(move |state, item| {
@@ -279,6 +287,7 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
                 .child(
                     SelectItemIndicator::new()
                         .keep_mounted(true)
+                        .flex_none()
                         .w(px(14.0))
                         .style_with_state(|state, indicator| {
                             if state.selected {
@@ -289,7 +298,13 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
                         })
                         .child("✓"),
                 )
-                .child(SelectItemText::new().text(label)),
+                .child(
+                    SelectItemText::new()
+                        .text(label)
+                        .min_w(px(0.0))
+                        .flex_1()
+                        .truncate(),
+                ),
         );
     }
 
@@ -308,6 +323,8 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
                 .flex()
                 .items_center()
                 .justify_between()
+                .gap(px(theme.metrics.spacing_1))
+                .overflow_hidden()
                 .rounded(px(theme.metrics.radius_small))
                 .bg(theme.colors.surfaces.window)
                 .border_1()
@@ -325,9 +342,16 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
                             trigger.hover(move |trigger| trigger.bg(theme.colors.surfaces.raised))
                         })
                 })
-                .child(SelectValue::new().placeholder("None"))
+                .child(
+                    SelectValue::new()
+                        .placeholder("None")
+                        .min_w(px(0.0))
+                        .flex_1()
+                        .truncate(),
+                )
                 .child(
                     SelectIcon::new()
+                        .flex_none()
                         .text_color(theme.colors.text.muted)
                         .child("▾"),
                 ),
@@ -513,6 +537,7 @@ pub fn menu_button(
                 .flex()
                 .items_center()
                 .justify_start()
+                .overflow_hidden()
                 .rounded(px(theme.metrics.radius_small))
                 .font_family(theme.typography.interface_family)
                 .text_size(px(theme.typography.body_size))
@@ -536,7 +561,7 @@ pub fn menu_button(
                                 .hover(move |button| button.bg(theme.colors.surfaces.sidebar))
                         })
                 })
-                .child(label.into()),
+                .child(truncated_label(label.into()).w_full()),
         )
 }
 
