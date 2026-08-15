@@ -228,3 +228,29 @@ fn loads_and_indexes_more_than_one_thousand_requests() {
         Some("Request 1000")
     );
 }
+
+#[test]
+fn rejects_missing_or_unsupported_collection_headers() {
+    for source in [
+        "info: { name: Missing version }\nbundled: true\n",
+        "opencollection: 1.0.0\nbundled: true\n",
+        "opencollection: 1.0.0\ninfo: { name: Missing mode }\n",
+        "opencollection: 999.0.0\ninfo: { name: Future }\nbundled: true\n",
+    ] {
+        assert!(parse(source).is_err(), "unexpectedly accepted:\n{source}");
+    }
+}
+
+#[test]
+fn rejects_invalid_environment_inheritance_during_parse() {
+    let source = concat!(
+        "opencollection: 1.0.0\n",
+        "info: { name: Invalid environments }\n",
+        "bundled: true\n",
+        "config:\n",
+        "  environments:\n",
+        "    - { name: development, extends: missing }\n",
+    );
+
+    assert!(parse(source).is_err());
+}

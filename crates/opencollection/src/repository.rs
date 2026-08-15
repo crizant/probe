@@ -2,13 +2,17 @@ use std::{
     collections::BTreeMap,
     error::Error,
     fmt, fs,
+    fs::OpenOptions,
     io::{self, Write},
     path::{Path, PathBuf},
 };
 
 use atomic_write_file::AtomicWriteFile;
+#[cfg(any(unix, windows))]
+use fs4::FileExt;
 use probe_core::{
     CollectionItem, Environment, RequestKey, RequestUpdate, Workspace, WorkspaceItemRef,
+    validate_environments,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -96,6 +100,7 @@ impl LoadedWorkspace {
             .documents
             .get(&persistence.document_path)
             .expect("filesystem request must retain its source document");
+        let _save_lock = SaveLock::acquire(&persistence.document_path)?;
         let current = fs::read(&persistence.document_path).map_err(|source| SaveError::Io {
             path: persistence.document_path.clone(),
             source,
@@ -143,10 +148,14 @@ struct SourceDocument {
 /// Loads a bundled OpenCollection file or an unbundled collection directory.
 pub fn load_workspace(path: impl AsRef<Path>) -> Result<LoadedWorkspace, LoadError> {
     let path = path.as_ref();
-    if path.is_dir() {
-        load_unbundled(path)
+    let canonical_path = fs::canonicalize(path).map_err(|source| LoadError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    if canonical_path.is_dir() {
+        load_unbundled(&canonical_path)
     } else {
-        load_bundled(path)
+        load_bundled(&canonical_path)
     }
 }
 
@@ -169,6 +178,13 @@ pub enum LoadError {
     MissingRoot(PathBuf),
     /// A collection item has an unsupported shape for its filesystem location.
     InvalidItem { path: PathBuf, message: String },
+    /// The document mode does not match how the workspace was opened.
+    InvalidMode {
+        path: PathBuf,
+        expected_bundled: bool,
+    },
+    /// Cross-document workspace semantics are invalid.
+    Validation { path: PathBuf, message: String },
 }
 
 impl fmt::Display for LoadError {
@@ -188,6 +204,19 @@ impl fmt::Display for LoadError {
             Self::InvalidItem { path, message } => {
                 write!(formatter, "invalid item {}: {message}", path.display())
             }
+            Self::InvalidMode {
+                path,
+                expected_bundled,
+            } => write!(
+                formatter,
+                "{} declares bundled: {}, but this workspace requires bundled: {}",
+                path.display(),
+                !expected_bundled,
+                expected_bundled
+            ),
+            Self::Validation { path, message } => {
+                write!(formatter, "invalid workspace {}: {message}", path.display())
+            }
         }
     }
 }
@@ -197,7 +226,10 @@ impl Error for LoadError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Parse { source, .. } => Some(source),
-            Self::MissingRoot(_) | Self::InvalidItem { .. } => None,
+            Self::MissingRoot(_)
+            | Self::InvalidItem { .. }
+            | Self::InvalidMode { .. }
+            | Self::Validation { .. } => None,
         }
     }
 }
@@ -289,6 +321,12 @@ fn load_bundled_source(
         path: source_name.to_owned(),
         source,
     })?;
+    if !parsed.is_bundled() {
+        return Err(LoadError::InvalidMode {
+            path: source_name.to_owned(),
+            expected_bundled: true,
+        });
+    }
     let nodes = bundled_locator_nodes(parsed.document(), "items", document_path);
     let workspace = Workspace::from_collection(parsed.into_collection());
     let mut loaded = index_locators(workspace, &nodes);
@@ -308,15 +346,25 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
         .ok_or_else(|| LoadError::MissingRoot(root.to_owned()))?;
     let source = read_to_string(&root_config)?;
     let parsed = parse(&source).map_err(|source| LoadError::Parse {
-        path: root_config,
+        path: root_config.clone(),
         source,
     })?;
+    if parsed.is_bundled() {
+        return Err(LoadError::InvalidMode {
+            path: root_config,
+            expected_bundled: false,
+        });
+    }
     let mut collection = parsed.into_collection();
     let mut documents = BTreeMap::new();
     let loaded_items = read_items(root, root, "opencollection", &mut documents)?;
     let (items, nodes): (Vec<_>, Vec<_>) = loaded_items.into_iter().unzip();
     collection.items = items;
     collection.environments.extend(read_environments(root)?);
+    validate_environments(&collection.environments).map_err(|error| LoadError::Validation {
+        path: root.to_owned(),
+        message: error.to_string(),
+    })?;
 
     let workspace = Workspace::from_collection(collection);
     let mut loaded = index_locators(workspace, &nodes);
@@ -695,4 +743,73 @@ fn atomic_write(path: &Path, contents: &[u8], expected_source: &[u8]) -> Result<
     }
     file.commit().map_err(map_io)?;
     Ok(())
+}
+
+struct SaveLock {
+    file: fs::File,
+}
+
+impl SaveLock {
+    fn acquire(destination: &Path) -> Result<Self, SaveError> {
+        let directory = std::env::temp_dir().join("probe-persistence-locks");
+        fs::create_dir_all(&directory).map_err(|source| SaveError::Io {
+            path: destination.to_owned(),
+            source,
+        })?;
+        let path = directory.join(format!("{:016x}.lock", stable_path_hash(destination)));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|source| SaveError::Io {
+                path: destination.to_owned(),
+                source,
+            })?;
+        #[cfg(any(unix, windows))]
+        FileExt::lock(&file).map_err(|source| SaveError::Io {
+            path: destination.to_owned(),
+            source,
+        })?;
+        Ok(Self { file })
+    }
+}
+
+fn stable_path_hash(path: &Path) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        for byte in path.as_os_str().as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        for value in path.as_os_str().encode_wide() {
+            for byte in value.to_le_bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(PRIME);
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
+}
+
+impl Drop for SaveLock {
+    fn drop(&mut self) {
+        #[cfg(any(unix, windows))]
+        let _ = FileExt::unlock(&self.file);
+    }
 }

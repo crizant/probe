@@ -4,10 +4,8 @@ use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, HttpRequest, MultipartPartKind, MultipartValue,
     RawBodyKind, RequestBody, VariableValueType,
 };
-use probe_http::HttpResponse;
+use probe_http::{HttpResponse, MAX_IN_MEMORY_RESPONSE_BYTES};
 use serde_json::{Map, Value, json};
-
-const MAX_INLINE_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub(super) fn response_human(
     request: &HttpRequest,
@@ -34,10 +32,10 @@ pub(super) fn response_human(
     rendered.push('\n');
     if let Some(output) = output {
         rendered.push_str(&format!("Response body written to {}\n", output.display()));
-    } else if response.size > MAX_INLINE_RESPONSE_BYTES {
+    } else if !response.body_complete {
         rendered.push_str(&format!(
             "Response body omitted because it exceeds {} bytes; use --output <file>.\n",
-            MAX_INLINE_RESPONSE_BYTES
+            MAX_IN_MEMORY_RESPONSE_BYTES
         ));
     } else if let Ok(body) = std::str::from_utf8(&response.body) {
         rendered.push_str(body);
@@ -58,7 +56,7 @@ pub(super) fn response_json(
     let output_path = output.map(|path| path.to_string_lossy().into_owned());
     let (content, encoding, omitted, omission_reason) = if output.is_some() {
         (None, None, false, None)
-    } else if response.size > MAX_INLINE_RESPONSE_BYTES {
+    } else if !response.body_complete {
         (None, None, true, Some("too_large"))
     } else if let Ok(body) = std::str::from_utf8(&response.body) {
         (Some(body), Some("utf8"), false, None)

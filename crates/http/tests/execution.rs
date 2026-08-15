@@ -10,7 +10,7 @@ use probe_core::{
     Header, HttpRequest, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBody,
     RawBodyKind, RequestBody, RequestSettings,
 };
-use probe_http::{ExecutionOptions, HttpEngine, HttpError};
+use probe_http::{ExecutionOptions, HttpEngine, HttpError, MAX_IN_MEMORY_RESPONSE_BYTES};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -477,6 +477,42 @@ async fn reports_timeout_and_cancellation_separately() {
         .unwrap_err();
     assert_eq!(error, HttpError::Cancelled);
     cancel_server.abort();
+}
+
+#[tokio::test]
+async fn bounds_in_memory_responses_and_streams_file_output() {
+    let body = vec![b'x'; MAX_IN_MEMORY_RESPONSE_BYTES + 32 * 1024];
+    let (base_url, captured) = serve_once("200 OK", &[], &body).await.unwrap();
+    let response = HttpEngine::new()
+        .unwrap()
+        .execute(
+            &request("GET", format!("{base_url}/bounded")),
+            &ExecutionOptions::default(),
+        )
+        .await
+        .unwrap();
+    captured.await.unwrap().unwrap();
+    assert_eq!(response.size, body.len());
+    assert!(response.body.is_empty());
+    assert!(!response.body_complete);
+
+    let output = temporary_file("streamed-response.bin");
+    let (base_url, captured) = serve_once("200 OK", &[], &body).await.unwrap();
+    let response = HttpEngine::new()
+        .unwrap()
+        .execute_to_file(
+            &request("GET", format!("{base_url}/file")),
+            &ExecutionOptions::default(),
+            &output,
+        )
+        .await
+        .unwrap();
+    captured.await.unwrap().unwrap();
+    assert_eq!(response.size, body.len());
+    assert!(response.body.is_empty());
+    assert!(!response.body_complete);
+    assert_eq!(std::fs::read(&output).unwrap(), body);
+    std::fs::remove_file(output).unwrap();
 }
 
 async fn delayed_server() -> (String, JoinHandle<io::Result<()>>) {

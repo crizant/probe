@@ -167,7 +167,7 @@ fn unbundled_update_preserves_request_extensions() {
     fs::create_dir(&root).unwrap();
     fs::write(
         root.join("opencollection.yml"),
-        "opencollection: 1.0.0\ninfo:\n  name: Persistence\n",
+        "opencollection: 1.0.0\ninfo:\n  name: Persistence\nbundled: false\n",
     )
     .unwrap();
     fs::write(
@@ -236,4 +236,88 @@ fn refuses_to_overwrite_an_externally_modified_document() {
         Some("https://should-not-be-written.example")
     );
     fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn independently_loaded_writers_detect_the_first_save() {
+    let path = temporary_path("two-writers.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &path).unwrap();
+    let mut first = load_workspace(&path).unwrap();
+    let mut second = load_workspace(&path).unwrap();
+
+    first
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                name: Some("First writer".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    let error = second
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                name: Some("Second writer".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, SaveError::ConcurrentModification(_)));
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("name: First writer")
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn bundled_update_preserves_a_symlink_and_updates_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let target = temporary_path("symlink-target.yml");
+    let link = temporary_path("symlink.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &target).unwrap();
+    symlink(&target, &link).unwrap();
+    let mut loaded = load_workspace(&link).unwrap();
+
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                name: Some("Updated through symlink".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        fs::read_to_string(&target)
+            .unwrap()
+            .contains("name: Updated through symlink")
+    );
+    fs::remove_file(link).unwrap();
+    fs::remove_file(target).unwrap();
+}
+
+#[test]
+fn rejects_a_bundled_flag_that_disagrees_with_the_source_kind() {
+    let error = load_workspace_from_str(
+        "opencollection: 1.0.0\ninfo: { name: Wrong mode }\nbundled: false\n",
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        probe_opencollection::LoadError::InvalidMode { .. }
+    ));
 }

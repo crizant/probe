@@ -93,6 +93,72 @@ pub enum EnvironmentResolutionError {
     MalformedInterpolation,
 }
 
+/// Validates environment identity and inheritance independently of variable use.
+///
+/// This is suitable for workspace validation because it does not require selecting an
+/// environment or resolving variables that a request may never reference.
+pub fn validate_environments(
+    environments: &[Environment],
+) -> Result<(), EnvironmentResolutionError> {
+    let mut by_name = BTreeMap::new();
+    for environment in environments {
+        if by_name
+            .insert(environment.name.as_str(), environment)
+            .is_some()
+        {
+            return Err(EnvironmentResolutionError::DuplicateEnvironment(
+                environment.name.clone(),
+            ));
+        }
+    }
+
+    let mut validated = BTreeSet::new();
+    for environment in environments {
+        validate_environment_inheritance(
+            &environment.name,
+            &by_name,
+            &mut Vec::new(),
+            &mut validated,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_environment_inheritance<'a>(
+    name: &'a str,
+    environments: &BTreeMap<&'a str, &'a Environment>,
+    stack: &mut Vec<String>,
+    validated: &mut BTreeSet<String>,
+) -> Result<(), EnvironmentResolutionError> {
+    if validated.contains(name) {
+        return Ok(());
+    }
+    if let Some(position) = stack.iter().position(|item| item == name) {
+        let mut cycle = stack[position..].to_vec();
+        cycle.push(name.to_owned());
+        return Err(EnvironmentResolutionError::EnvironmentInheritanceCycle(
+            cycle,
+        ));
+    }
+
+    let environment = environments
+        .get(name)
+        .expect("environment name must exist during validation");
+    stack.push(name.to_owned());
+    if let Some(parent) = environment.extends.as_deref() {
+        if !environments.contains_key(parent) {
+            return Err(EnvironmentResolutionError::ParentEnvironmentNotFound {
+                environment: environment.name.clone(),
+                parent: parent.to_owned(),
+            });
+        }
+        validate_environment_inheritance(parent, environments, stack, validated)?;
+    }
+    stack.pop();
+    validated.insert(name.to_owned());
+    Ok(())
+}
+
 impl fmt::Display for EnvironmentResolutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -156,16 +222,10 @@ pub fn resolve_environment(
     environments: &[Environment],
     selected: &str,
 ) -> Result<ResolvedEnvironment, EnvironmentResolutionError> {
+    validate_environments(environments)?;
     let mut by_name = BTreeMap::new();
     for environment in environments {
-        if by_name
-            .insert(environment.name.as_str(), environment)
-            .is_some()
-        {
-            return Err(EnvironmentResolutionError::DuplicateEnvironment(
-                environment.name.clone(),
-            ));
-        }
+        by_name.insert(environment.name.as_str(), environment);
     }
     if !by_name.contains_key(selected) {
         return Err(EnvironmentResolutionError::EnvironmentNotFound(

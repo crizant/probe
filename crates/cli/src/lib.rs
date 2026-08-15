@@ -3,7 +3,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    fs,
     io::{self, Read},
     path::PathBuf,
 };
@@ -326,9 +325,10 @@ impl CliError {
         let category = if error.is_configuration() {
             "request_configuration"
         } else {
-            match error {
+            match &error {
                 HttpError::Timeout => "request_timeout",
                 HttpError::Cancelled => "request_cancelled",
+                HttpError::ResponseOutput { .. } => "output_error",
                 _ => "network_execution",
             }
         };
@@ -340,17 +340,6 @@ impl CliError {
             } else {
                 EXECUTION_EXIT_CODE
             },
-        }
-    }
-
-    fn output(path: &std::path::Path, error: &std::io::Error) -> Self {
-        Self {
-            category: "output_error",
-            message: format!(
-                "cannot write response body to '{}': {error}",
-                path.display()
-            ),
-            exit_code: EXECUTION_EXIT_CODE,
         }
     }
 
@@ -623,18 +612,19 @@ fn run_request(
         .map_err(|error| CliError::runtime(&error))?;
     let response = runtime.block_on(async {
         let engine = HttpEngine::new().map_err(CliError::http)?;
-        engine
-            .execute_cancellable(
-                &request,
-                &ExecutionOptions { base_directory },
-                tokio::signal::ctrl_c(),
-            )
-            .await
-            .map_err(CliError::http)
+        let options = ExecutionOptions { base_directory };
+        if let Some(output) = output {
+            engine
+                .execute_cancellable_to_file(&request, &options, output, tokio::signal::ctrl_c())
+                .await
+                .map_err(CliError::http)
+        } else {
+            engine
+                .execute_cancellable(&request, &options, tokio::signal::ctrl_c())
+                .await
+                .map_err(CliError::http)
+        }
     })?;
-    if let Some(output) = output {
-        fs::write(output, &response.body).map_err(|error| CliError::output(output, &error))?;
-    }
     Ok(response_output(&request, &response, output))
 }
 
@@ -773,7 +763,11 @@ fn pretty_json(value: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{INVALID_ARGUMENTS_EXIT_CODE, help, run};
+    use std::io::Cursor;
+
+    use super::{
+        INVALID_ARGUMENTS_EXIT_CODE, INVALID_WORKSPACE_EXIT_CODE, help, run, run_with_stdin,
+    };
 
     #[test]
     fn help_option_returns_usage() {
@@ -789,5 +783,14 @@ mod tests {
         assert_eq!(output.exit_code, INVALID_ARGUMENTS_EXIT_CODE);
         assert!(output.stdout.is_empty());
         assert!(output.stderr.contains("invalid_arguments"));
+    }
+
+    #[test]
+    fn validate_rejects_yaml_without_opencollection_headers() {
+        let mut stdin = Cursor::new(b"{}\n");
+        let output = run_with_stdin(["collection", "validate", "-", "--json"], &mut stdin);
+
+        assert_eq!(output.exit_code, INVALID_WORKSPACE_EXIT_CODE);
+        assert!(output.stdout.contains("invalid_workspace"));
     }
 }

@@ -4,9 +4,11 @@
 
 use std::{
     error::Error,
+    ffi::OsString,
     fmt,
     future::{Future, pending},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -15,13 +17,17 @@ use probe_core::{
     MultipartValue, RawBodyKind, RequestBody, RequestSettings,
 };
 use reqwest::{
-    Client, Method, RequestBuilder,
+    Client, Method, RequestBuilder, Response,
     header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue},
     multipart::{Form, Part},
     redirect::Policy,
 };
+use tokio::io::AsyncWriteExt;
 
 const DEFAULT_MAX_REDIRECTS: usize = 10;
+/// Maximum response body retained by the default in-memory execution methods.
+pub const MAX_IN_MEMORY_RESPONSE_BYTES: usize = 1024 * 1024;
+static RESPONSE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Filesystem context used while constructing request bodies.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -56,6 +62,8 @@ pub struct HttpResponse {
     pub headers: Vec<ResponseHeader>,
     /// Raw response body.
     pub body: Vec<u8>,
+    /// Whether `body` contains the complete response body.
+    pub body_complete: bool,
 }
 
 /// A request-construction, cancellation, timeout, or transport failure.
@@ -101,6 +109,13 @@ pub enum HttpError {
     Cancelled,
     /// Connection, protocol, or response-body failure.
     Transport(String),
+    /// A response body could not be written to its requested destination.
+    ResponseOutput {
+        /// Requested final output path.
+        path: PathBuf,
+        /// Underlying diagnostic.
+        message: String,
+    },
 }
 
 impl HttpError {
@@ -158,6 +173,11 @@ impl fmt::Display for HttpError {
             Self::Timeout => write!(formatter, "HTTP request timed out"),
             Self::Cancelled => write!(formatter, "HTTP request was cancelled"),
             Self::Transport(message) => write!(formatter, "HTTP execution failed: {message}"),
+            Self::ResponseOutput { path, message } => write!(
+                formatter,
+                "cannot write response body to '{}': {message}",
+                path.display()
+            ),
         }
     }
 }
@@ -187,6 +207,19 @@ impl HttpEngine {
             .await
     }
 
+    /// Executes a request while streaming its response body to a file.
+    ///
+    /// The destination is replaced only after the full response body has been written.
+    pub async fn execute_to_file(
+        &self,
+        request: &HttpRequest,
+        options: &ExecutionOptions,
+        output: &Path,
+    ) -> Result<HttpResponse, HttpError> {
+        self.execute_cancellable_to_file(request, options, output, pending::<()>())
+            .await
+    }
+
     /// Executes a request, cancelling it when `cancellation` completes.
     ///
     /// Dropping the execution future also cancels the underlying reqwest request.
@@ -203,7 +236,26 @@ impl HttpEngine {
         tokio::select! {
             biased;
             _ = &mut cancellation => Err(HttpError::Cancelled),
-            response = self.execute_inner(request, options) => response,
+            response = self.execute_inner(request, options, None) => response,
+        }
+    }
+
+    /// Executes a cancellable request while streaming its response body to a file.
+    pub async fn execute_cancellable_to_file<C>(
+        &self,
+        request: &HttpRequest,
+        options: &ExecutionOptions,
+        output: &Path,
+        cancellation: C,
+    ) -> Result<HttpResponse, HttpError>
+    where
+        C: Future + Send,
+    {
+        tokio::pin!(cancellation);
+        tokio::select! {
+            biased;
+            _ = &mut cancellation => Err(HttpError::Cancelled),
+            response = self.execute_inner(request, options, Some(output)) => response,
         }
     }
 
@@ -211,24 +263,31 @@ impl HttpEngine {
         &self,
         request: &HttpRequest,
         options: &ExecutionOptions,
+        output: Option<&Path>,
     ) -> Result<HttpResponse, HttpError> {
         let client = self.client_for(&request.settings)?;
         let builder = build_request(&client, request, options).await?;
         let started = Instant::now();
-        let response = builder.send().await.map_err(map_reqwest_error)?;
+        let mut response = builder.send().await.map_err(map_reqwest_error)?;
         let status = response.status();
         let url = response.url().to_string();
         let mut headers = response_headers(response.headers());
         headers.sort_by(|left, right| (&left.name, &left.value).cmp(&(&right.name, &right.value)));
-        let body = response.bytes().await.map_err(map_reqwest_error)?.to_vec();
+        let (body, size, body_complete) = if let Some(output) = output {
+            let size = stream_response_to_file(&mut response, output).await?;
+            (Vec::new(), size, false)
+        } else {
+            collect_bounded_response(&mut response).await?
+        };
         Ok(HttpResponse {
             status: status.as_u16(),
             reason: status.canonical_reason().unwrap_or_default().to_owned(),
             url,
             duration: started.elapsed(),
-            size: body.len(),
+            size,
             headers,
             body,
+            body_complete,
         })
     }
 
@@ -239,6 +298,130 @@ impl HttpEngine {
             Ok(self.default_client.clone())
         } else {
             build_client(follow, maximum)
+        }
+    }
+}
+
+async fn collect_bounded_response(
+    response: &mut Response,
+) -> Result<(Vec<u8>, usize, bool), HttpError> {
+    let mut body = Vec::new();
+    let mut size = 0_usize;
+    let mut complete = true;
+    while let Some(chunk) = response.chunk().await.map_err(map_reqwest_error)? {
+        size = size.checked_add(chunk.len()).ok_or_else(|| {
+            HttpError::Transport("response body size exceeds platform limits".to_owned())
+        })?;
+        if complete && size <= MAX_IN_MEMORY_RESPONSE_BYTES {
+            body.extend_from_slice(&chunk);
+        } else if complete {
+            body.clear();
+            complete = false;
+        }
+    }
+    Ok((body, size, complete))
+}
+
+async fn stream_response_to_file(
+    response: &mut Response,
+    output: &Path,
+) -> Result<usize, HttpError> {
+    let (mut file, mut temporary) = create_response_temp_file(output).await?;
+    let mut size = 0_usize;
+    while let Some(chunk) = response.chunk().await.map_err(map_reqwest_error)? {
+        size = size.checked_add(chunk.len()).ok_or_else(|| {
+            HttpError::Transport("response body size exceeds platform limits".to_owned())
+        })?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| response_output_error(output, error))?;
+    }
+    file.flush()
+        .await
+        .map_err(|error| response_output_error(output, error))?;
+    file.sync_all()
+        .await
+        .map_err(|error| response_output_error(output, error))?;
+    drop(file);
+    replace_response_output(temporary.path(), output).await?;
+    temporary.committed = true;
+    Ok(size)
+}
+
+async fn create_response_temp_file(
+    output: &Path,
+) -> Result<(tokio::fs::File, TemporaryResponseFile), HttpError> {
+    let file_name = output
+        .file_name()
+        .ok_or_else(|| HttpError::ResponseOutput {
+            path: output.to_owned(),
+            message: "output path has no file name".to_owned(),
+        })?;
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    loop {
+        let sequence = RESPONSE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let mut temporary_name = OsString::from(".");
+        temporary_name.push(file_name);
+        temporary_name.push(format!(".probe-{}-{sequence}.part", std::process::id()));
+        let temporary = parent.join(temporary_name);
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await
+        {
+            Ok(file) => {
+                return Ok((
+                    file,
+                    TemporaryResponseFile {
+                        path: temporary,
+                        committed: false,
+                    },
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(response_output_error(output, error)),
+        }
+    }
+}
+
+async fn replace_response_output(temporary: &Path, output: &Path) -> Result<(), HttpError> {
+    #[cfg(windows)]
+    if tokio::fs::try_exists(output)
+        .await
+        .map_err(|error| response_output_error(output, error))?
+    {
+        tokio::fs::remove_file(output)
+            .await
+            .map_err(|error| response_output_error(output, error))?;
+    }
+    tokio::fs::rename(temporary, output)
+        .await
+        .map_err(|error| response_output_error(output, error))
+}
+
+fn response_output_error(output: &Path, error: std::io::Error) -> HttpError {
+    HttpError::ResponseOutput {
+        path: output.to_owned(),
+        message: error.to_string(),
+    }
+}
+
+struct TemporaryResponseFile {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl TemporaryResponseFile {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryResponseFile {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }

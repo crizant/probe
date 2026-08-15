@@ -13,6 +13,7 @@ use probe_core::{
     FormField, Header, HttpRequest, ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue,
     QueryParameter, RawBody, RawBodyKind, RequestBody, RequestSettings, SecretVariable, Variable,
     VariableValue, VariableValueSet, VariableValueType, VariableValueVariant,
+    validate_environments,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -28,11 +29,16 @@ pub use repository::{
 pub struct ParsedCollection {
     collection: Collection,
     document: Value,
+    bundled: bool,
 }
 
 impl ParsedCollection {
     pub(crate) const fn document(&self) -> &Value {
         &self.document
+    }
+
+    pub(crate) const fn is_bundled(&self) -> bool {
+        self.bundled
     }
 
     /// Returns the serialization-independent collection model.
@@ -88,18 +94,35 @@ pub fn parse(source: &str) -> Result<ParsedCollection, ParseError> {
     let document: Value = serde_yaml_ng::from_str(source).map_err(ParseError::new)?;
     let wire: CollectionDocument =
         serde_yaml_ng::from_value(document.clone()).map_err(ParseError::new)?;
+    if wire.opencollection != "1.0.0" {
+        return Err(ParseError::new(
+            <serde_yaml_ng::Error as serde::de::Error>::custom(format!(
+                "unsupported OpenCollection version '{}'; supported version is 1.0.0",
+                wire.opencollection
+            )),
+        ));
+    }
+    let bundled = wire.bundled;
+    let collection = wire.into_domain().map_err(ParseError::new)?;
+    validate_environments(&collection.environments).map_err(|error| {
+        ParseError::new(<serde_yaml_ng::Error as serde::de::Error>::custom(
+            error.to_string(),
+        ))
+    })?;
 
     Ok(ParsedCollection {
-        collection: wire.into_domain().map_err(ParseError::new)?,
+        collection,
         document,
+        bundled,
     })
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CollectionDocument {
-    #[serde(default)]
+    opencollection: String,
     info: CollectionInfoDocument,
+    bundled: bool,
     #[serde(default)]
     items: Vec<Value>,
     #[serde(default)]

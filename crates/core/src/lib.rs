@@ -12,6 +12,7 @@ mod workspace;
 
 pub use environment::{
     EnvironmentResolutionError, ResolvedEnvironment, resolve_environment, resolve_request,
+    validate_environments,
 };
 pub use workspace::{FolderKey, RequestKey, Workspace, WorkspaceFolder, WorkspaceItemRef};
 

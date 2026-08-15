@@ -23,7 +23,8 @@ unresolved `{{variable}}` expressions.
 
 `request run` resolves the request and executes it through the shared asynchronous HTTP
 engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes the raw
-response body to the specified path; response metadata remains on stdout.
+response body to the specified path using bounded streaming; response metadata remains on
+stdout. The destination is replaced only after the complete response has been written.
 
 Use `-` instead of `<path>` to read a bundled OpenCollection YAML document from
 stdin. Stdin does not represent an unbundled directory, and requests loaded this way
@@ -157,6 +158,10 @@ from stdin uses `invalid_workspace` and exit code 3.
 Persistence failures use exit code 7. Stable categories are `workspace_modified` for
 external-modification conflicts, `persistence_read_only` for stdin sources, and
 `persistence_error` for serialization or filesystem failures.
+
+`collection validate` requires the OpenCollection `1.0.0` marker, explicit collection
+metadata, and a `bundled` flag matching whether the source is a bundled file/stdin document or
+an unbundled directory. Duplicate environments and invalid inheritance graphs are rejected.
 
 ## Exit Codes
 

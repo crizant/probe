@@ -280,10 +280,12 @@ dropping the execution future—cancels the request without coupling the engine 
 terminal signals or a GUI framework. The CLI adapts Ctrl-C to this boundary; desktop
 can later adapt task or view cancellation to the same API.
 
-Completed responses contain raw bytes plus status, reason, final URL, duration, size,
-and deterministically sorted headers. The CLI only inlines UTF-8 bodies up to 1 MiB and
-supports `--output` for large or binary data. Response retention and history policies
-remain outside the frontend and can evolve without changing request construction.
+Completed responses contain status, reason, final URL, duration, size, deterministically
+sorted headers, and at most 1 MiB of in-memory body data. Once that bound is crossed the
+engine drains the response without retaining partial bytes. `--output` streams chunks to a
+temporary file and replaces the requested destination only after the complete response is
+written and synced. Response retention and history policies remain outside the frontend and
+can evolve without changing request construction.
 
 
 ## Persistence
@@ -323,9 +325,23 @@ committed on Unix, Windows, and WASI through a focused filesystem dependency.
 Successful saves refresh the retained byte snapshot so subsequent edits from the same
 loaded workspace remain safe.
 
-The repository operation is synchronous and must be dispatched away from GPUI's UI
-thread by the future desktop adapter. This does not create a second persistence path;
-CLI and desktop use the same repository operation.
+Filesystem paths are canonicalized when the workspace opens, so saving through a symlink
+updates its target without replacing the symlink. A stable sidecar advisory lock serializes
+Probe writers across processes; the exact source-byte comparison and atomic replacement both
+happen while that lock is held. Non-cooperating third-party writers cannot be forced to honor
+the advisory lock, so the final compare-to-rename interval remains the smallest portable race
+window.
+
+The repository operation is synchronous and must be dispatched away from GPUI's UI thread by
+the future desktop adapter. This does not create a second persistence path; CLI and desktop use
+the same repository operation.
+
+## OpenCollection Validation
+
+Workspace loading requires the OpenCollection `1.0.0` format marker, collection metadata, and
+an explicit `bundled` mode matching the source kind. It also validates environment names and
+the complete inheritance graph, including duplicate names, missing parents, and cycles. This
+validation is shared by `collection validate` and every operation that loads a workspace.
 
 
 ## Repository Abstraction
