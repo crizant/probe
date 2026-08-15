@@ -11,7 +11,7 @@ use atomic_write_file::AtomicWriteFile;
 #[cfg(any(unix, windows))]
 use fs4::FileExt;
 use probe_core::{
-    CollectionItem, Environment, RequestKey, RequestUpdate, Workspace, WorkspaceItemRef,
+    CollectionItem, Environment, FolderKey, RequestKey, RequestUpdate, Workspace, WorkspaceItemRef,
     validate_environments,
 };
 use serde::Deserialize;
@@ -41,12 +41,37 @@ impl LocatedRequest {
     }
 }
 
+/// A folder and its repository-backed selector.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocatedFolder {
+    selector: String,
+    key: FolderKey,
+}
+
+impl LocatedFolder {
+    /// Returns the stable selector used to restore presentation state.
+    #[must_use]
+    pub fn selector(&self) -> &str {
+        &self.selector
+    }
+
+    /// Returns the folder's session-only workspace key.
+    #[must_use]
+    pub const fn key(&self) -> FolderKey {
+        self.key
+    }
+}
+
 /// A loaded OpenCollection workspace and its persistence-locator index.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedWorkspace {
     workspace: Workspace,
     requests: Vec<LocatedRequest>,
+    folders: Vec<LocatedFolder>,
     request_keys_by_selector: BTreeMap<String, RequestKey>,
+    folder_keys_by_selector: BTreeMap<String, FolderKey>,
+    request_selectors_by_key: BTreeMap<RequestKey, String>,
+    folder_selectors_by_key: BTreeMap<FolderKey, String>,
     documents: BTreeMap<PathBuf, SourceDocument>,
 }
 
@@ -63,10 +88,34 @@ impl LoadedWorkspace {
         &self.requests
     }
 
+    /// Returns folders in collection traversal order.
+    #[must_use]
+    pub fn folders(&self) -> &[LocatedFolder] {
+        &self.folders
+    }
+
     /// Resolves a repository-backed selector to a request key.
     #[must_use]
     pub fn request_key(&self, selector: &str) -> Option<RequestKey> {
         self.request_keys_by_selector.get(selector).copied()
+    }
+
+    /// Resolves a repository-backed selector to a folder key.
+    #[must_use]
+    pub fn folder_key(&self, selector: &str) -> Option<FolderKey> {
+        self.folder_keys_by_selector.get(selector).copied()
+    }
+
+    /// Returns the stable selector for a request key.
+    #[must_use]
+    pub fn request_selector(&self, key: RequestKey) -> Option<&str> {
+        self.request_selectors_by_key.get(&key).map(String::as_str)
+    }
+
+    /// Returns the stable selector for a folder key.
+    #[must_use]
+    pub fn folder_selector(&self, key: FolderKey) -> Option<&str> {
+        self.folder_selectors_by_key.get(&key).map(String::as_str)
     }
 
     /// Applies an update in memory and atomically persists its OpenCollection document.
@@ -300,7 +349,10 @@ impl Error for SaveError {
 
 #[derive(Debug)]
 enum LocatorNode {
-    Folder(Vec<LocatorNode>),
+    Folder {
+        selector: String,
+        children: Vec<LocatorNode>,
+    },
     Request {
         selector: String,
         persistence: Option<RequestPersistence>,
@@ -411,7 +463,10 @@ fn read_items(
             folder.items = child_items;
             items.push((
                 CollectionItem::Folder(folder),
-                LocatorNode::Folder(child_nodes),
+                LocatorNode::Folder {
+                    selector: relative_selector(root, &path),
+                    children: child_nodes,
+                },
             ));
         } else if is_yaml_file(&path)
             && path.file_stem().and_then(|stem| stem.to_str()) != Some(reserved_stem)
@@ -559,12 +614,15 @@ fn locator_nodes_from_items(
                         item_path,
                     }),
                 }),
-                Some("folder") => Some(LocatorNode::Folder(locator_nodes_from_items(
-                    item.items,
-                    &format!("{prefix}/{index}/items"),
-                    document_path,
-                    &item_path,
-                ))),
+                Some("folder") => Some(LocatorNode::Folder {
+                    selector: format!("{prefix}/{index}"),
+                    children: locator_nodes_from_items(
+                        item.items,
+                        &format!("{prefix}/{index}/items"),
+                        document_path,
+                        &item_path,
+                    ),
+                }),
                 _ => None,
             }
         })
@@ -573,15 +631,38 @@ fn locator_nodes_from_items(
 
 fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspace {
     let mut requests = Vec::new();
-    index_locator_nodes(&workspace, workspace.root_items(), nodes, &mut requests);
+    let mut folders = Vec::new();
+    index_locator_nodes(
+        &workspace,
+        workspace.root_items(),
+        nodes,
+        &mut requests,
+        &mut folders,
+    );
     let request_keys_by_selector = requests
         .iter()
         .map(|request: &LocatedRequest| (request.selector.clone(), request.key))
         .collect();
+    let folder_keys_by_selector = folders
+        .iter()
+        .map(|folder: &LocatedFolder| (folder.selector.clone(), folder.key))
+        .collect();
+    let request_selectors_by_key = requests
+        .iter()
+        .map(|request: &LocatedRequest| (request.key, request.selector.clone()))
+        .collect();
+    let folder_selectors_by_key = folders
+        .iter()
+        .map(|folder: &LocatedFolder| (folder.key, folder.selector.clone()))
+        .collect();
     LoadedWorkspace {
         workspace,
         requests,
+        folders,
         request_keys_by_selector,
+        folder_keys_by_selector,
+        request_selectors_by_key,
+        folder_selectors_by_key,
         documents: BTreeMap::new(),
     }
 }
@@ -591,6 +672,7 @@ fn index_locator_nodes(
     items: &[WorkspaceItemRef],
     nodes: &[LocatorNode],
     requests: &mut Vec<LocatedRequest>,
+    folders: &mut Vec<LocatedFolder>,
 ) {
     assert_eq!(
         items.len(),
@@ -612,11 +694,15 @@ fn index_locator_nodes(
                     persistence: persistence.clone(),
                 });
             }
-            (WorkspaceItemRef::Folder(key), LocatorNode::Folder(children)) => {
+            (WorkspaceItemRef::Folder(key), LocatorNode::Folder { selector, children }) => {
+                folders.push(LocatedFolder {
+                    selector: selector.clone(),
+                    key: *key,
+                });
                 let folder = workspace
                     .folder(*key)
                     .expect("workspace folder reference must resolve");
-                index_locator_nodes(workspace, &folder.children, children, requests);
+                index_locator_nodes(workspace, &folder.children, children, requests, folders);
             }
             _ => unreachable!("locator node type must match workspace item type"),
         }

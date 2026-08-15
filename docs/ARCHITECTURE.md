@@ -245,6 +245,33 @@ filesystem traversal to the OpenCollection repository on a background executor;
 the GPUI adapter never parses YAML. Folder expansion, active tabs, and pane sizes are
 presentation state and do not modify the domain workspace.
 
+The window title bar owns workspace-level navigation. Its workspace switcher exposes
+recent collections plus explicit open and close actions, while collection content
+begins directly beneath the title bar without a duplicate application toolbar. The
+request editor and response viewer can be stacked vertically or placed side by side;
+the orientation and independent response-pane dimensions are presentation state.
+
+The request tree keeps a flat list of lightweight references for currently visible
+expanded nodes. Its fixed-height GPUI list is virtualized, so scrolling constructs and
+paints only the viewport range rather than every request in a large workspace. Folder
+expansion rebuilds this in-memory visible-row index without filesystem access.
+
+### Desktop Session Restoration
+
+Probe stores a small, versioned desktop-session document in the operating system's
+local application-data directory. The document may contain the active and recent
+collection paths, open and active request selectors, collapsed folder selectors, and
+pane sizes and orientation. It is local presentation metadata and is never written into an
+OpenCollection workspace.
+
+Session writes are atomic and run off the GPUI thread. On launch, the desktop loads the
+session and active collection on a background executor, rebuilds the in-memory
+workspace, and resolves repository selectors to fresh runtime keys. Invalid selectors
+are ignored because the underlying item may have been removed. A missing or invalid
+collection produces a recoverable diagnostic and remains available in the recent list;
+it does not prevent the application from opening. Explicitly closing a collection
+clears the active session without deleting collection files.
+
 ### Runtime Identity and Persistence Locators
 
 OpenCollection does not define durable IDs for requests or folders. The active

@@ -6,6 +6,15 @@ const MIN_SIDEBAR_WIDTH: f32 = 180.0;
 const MAX_SIDEBAR_WIDTH: f32 = 520.0;
 const MIN_RESPONSE_HEIGHT: f32 = 120.0;
 const MAX_RESPONSE_HEIGHT: f32 = 560.0;
+const MIN_RESPONSE_WIDTH: f32 = 240.0;
+const MAX_RESPONSE_WIDTH: f32 = 760.0;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum PaneLayout {
+    #[default]
+    Vertical,
+    Horizontal,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResizePane {
@@ -20,6 +29,8 @@ pub(crate) struct ShellState {
     collapsed_folders: HashSet<FolderKey>,
     pub(crate) sidebar_width: f32,
     pub(crate) response_height: f32,
+    pub(crate) response_width: f32,
+    pub(crate) pane_layout: PaneLayout,
     pub(crate) resizing: Option<ResizePane>,
 }
 
@@ -31,6 +42,8 @@ impl Default for ShellState {
             collapsed_folders: HashSet::new(),
             sidebar_width: 260.0,
             response_height: 220.0,
+            response_width: 440.0,
+            pane_layout: PaneLayout::Vertical,
             resizing: None,
         }
     }
@@ -76,6 +89,14 @@ impl ShellState {
         !self.collapsed_folders.contains(&key)
     }
 
+    pub(crate) fn collapsed_folders(&self) -> impl Iterator<Item = FolderKey> + '_ {
+        self.collapsed_folders.iter().copied()
+    }
+
+    pub(crate) fn collapse_folder(&mut self, key: FolderKey) {
+        self.collapsed_folders.insert(key);
+    }
+
     pub(crate) fn resize_sidebar(&mut self, position: f32) {
         self.sidebar_width = position.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
     }
@@ -83,6 +104,26 @@ impl ShellState {
     pub(crate) fn resize_response(&mut self, window_height: f32, position: f32) {
         self.response_height =
             (window_height - position).clamp(MIN_RESPONSE_HEIGHT, MAX_RESPONSE_HEIGHT);
+    }
+
+    pub(crate) fn resize_response_width(&mut self, window_width: f32, position: f32) {
+        self.response_width =
+            (window_width - position).clamp(MIN_RESPONSE_WIDTH, MAX_RESPONSE_WIDTH);
+    }
+
+    pub(crate) fn set_pane_layout(&mut self, layout: PaneLayout) {
+        self.pane_layout = layout;
+    }
+
+    pub(crate) fn restore_pane_sizes(
+        &mut self,
+        sidebar_width: f32,
+        response_height: f32,
+        response_width: f32,
+    ) {
+        self.sidebar_width = sidebar_width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+        self.response_height = response_height.clamp(MIN_RESPONSE_HEIGHT, MAX_RESPONSE_HEIGHT);
+        self.response_width = response_width.clamp(MIN_RESPONSE_WIDTH, MAX_RESPONSE_WIDTH);
     }
 
     pub(crate) fn reset_for_workspace(&mut self) {
@@ -99,7 +140,7 @@ mod tests {
         Collection, CollectionItem, Folder, HttpRequest, Workspace, WorkspaceItemRef,
     };
 
-    use super::ShellState;
+    use super::{PaneLayout, ShellState};
 
     fn keys() -> (
         probe_core::RequestKey,
@@ -161,5 +202,10 @@ mod tests {
         state.resize_response(800.0, 790.0);
         assert_eq!(state.sidebar_width, 180.0);
         assert_eq!(state.response_height, 120.0);
+
+        state.resize_response_width(1000.0, 990.0);
+        state.set_pane_layout(PaneLayout::Horizontal);
+        assert_eq!(state.response_width, 240.0);
+        assert_eq!(state.pane_layout, PaneLayout::Horizontal);
     }
 }

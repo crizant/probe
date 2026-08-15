@@ -101,7 +101,10 @@ The repository is a Cargo workspace. It currently includes OpenCollection parsin
 bundled and unbundled filesystem loading, an indexed in-memory workspace, shared
 environment resolution, asynchronous HTTP execution, a versioned automation-safe CLI
 contract, and a native GPUI desktop shell with semantic light/dark themes,
-OpenCollection-backed browsing, request tabs, and resizable editor/response panes.
+OpenCollection-backed browsing, request tabs, resizable editor/response panes, and
+a title-bar workspace switcher. The editor and response viewer support vertical or
+horizontal layouts, and the local desktop session restores the active workspace,
+tabs, collapsed folders, pane orientation, and pane sizes automatically.
 
 ```bash
 cargo run -p probe-cli -- --help

@@ -357,11 +357,16 @@ implicitly approved by this requirement.
 Implement:
 
 - workspace sidebar
+- title-bar workspace switcher with recent, open, and close actions
 - folder/request tree
 - tabs
 - request editor area
 - response panel
 - resizable panes
+- vertical and horizontal editor/response layouts
+- local desktop-session persistence
+- automatic restoration of the last active collection
+- recent collections and explicit close-without-delete behavior
 
 No duplicate OpenCollection parsing logic is allowed.
 
@@ -370,9 +375,23 @@ The desktop application consumes the same core used by the CLI.
 Exit criteria:
 
 - open collection
+- switch or open a workspace from the title bar
 - browse requests
 - switch requests instantly
 - open/close tabs
+- relaunch without choosing the active collection again
+- restore tabs using repository selectors rather than runtime keys
+- restore collapsed folders and pane sizes
+- restore the selected editor/response layout and its size in each orientation
+- recover safely when a remembered collection is missing or invalid
+
+Desktop session state is local presentation metadata. Store it in the platform
+application-data directory, not in OpenCollection YAML or a proprietary collection
+database. Writes must be atomic and must not block the GPUI thread. Persist collection
+paths plus repository-owned request/folder selectors; never serialize `RequestKey` or
+`FolderKey`. Opening a remembered collection rebuilds the workspace and resolves fresh
+runtime keys on every launch. Closing a collection forgets it as active without
+deleting its files.
 
 
 ## Phase 11 — Desktop Request Editor

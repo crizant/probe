@@ -60,8 +60,22 @@ fn loads_unbundled_directory_with_relative_path_selectors() {
     assert_eq!(selectors, ["health.yml", "users/list-users.yml"]);
     assert_eq!(loaded.workspace().request_count(), 2);
     assert_eq!(loaded.workspace().folder_count(), 1);
+    assert_eq!(loaded.folders()[0].selector(), "users");
+    assert_eq!(loaded.folder_key("users"), Some(loaded.folders()[0].key()));
     assert_eq!(loaded.workspace().environments().len(), 1);
     assert_eq!(loaded.workspace().environments()[0].name, "development");
+}
+
+#[test]
+fn bundled_folders_have_structural_selectors() {
+    let loaded = load_workspace(fixture("phase1-bundled.yml"))
+        .expect("bundled workspace fixture should load");
+
+    assert_eq!(loaded.folders()[0].selector(), "items/0");
+    assert_eq!(
+        loaded.folder_selector(loaded.folders()[0].key()),
+        Some("items/0")
+    );
 }
 
 #[test]
