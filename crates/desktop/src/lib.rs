@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod caret;
 pub mod components;
 mod execution;
 mod multiline_input;

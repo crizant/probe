@@ -756,12 +756,13 @@ impl Element for MultilineTextElement {
 
         let mut selections = Vec::new();
         let mut cursor_quad = None;
+        let caret_visible = crate::caret::CaretBlink::is_visible(cx);
         if focused && !empty {
             if selected_range.is_empty() {
-                if let Some((index, layout)) = lines
-                    .iter()
-                    .enumerate()
-                    .find(|(_, layout)| cursor >= layout.span.start && cursor <= layout.span.end)
+                if caret_visible
+                    && let Some((index, layout)) = lines.iter().enumerate().find(|(_, layout)| {
+                        cursor >= layout.span.start && cursor <= layout.span.end
+                    })
                 {
                     let cursor_x = layout.line.x_for_index(cursor - layout.span.start);
                     cursor_quad = Some(fill(
@@ -809,7 +810,7 @@ impl Element for MultilineTextElement {
                     ));
                 }
             }
-        } else if focused && empty {
+        } else if focused && empty && caret_visible {
             cursor_quad = Some(fill(
                 Bounds::new(
                     point(bounds.left(), bounds.top()),
@@ -1168,9 +1169,10 @@ impl Element for ReadOnlyLineElement {
 
         let mut selection = None;
         let mut cursor_quad = None;
+        let caret_visible = crate::caret::CaretBlink::is_visible(cx);
         if focused && !self.placeholder {
             if selected_range.is_empty() {
-                if cursor >= self.span.start && cursor <= self.span.end {
+                if caret_visible && cursor >= self.span.start && cursor <= self.span.end {
                     let cursor_x = shaped.x_for_index(cursor - self.span.start);
                     cursor_quad = Some(fill(
                         Bounds::new(
@@ -1205,7 +1207,7 @@ impl Element for ReadOnlyLineElement {
                     ));
                 }
             }
-        } else if focused && self.placeholder {
+        } else if focused && self.placeholder && caret_visible {
             cursor_quad = Some(fill(
                 Bounds::new(
                     point(bounds.left(), bounds.top()),

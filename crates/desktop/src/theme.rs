@@ -161,6 +161,18 @@ impl Theme {
     }
 
     #[must_use]
+    pub fn method_color(self, method: &str) -> Rgba {
+        match method.to_ascii_uppercase().as_str() {
+            "GET" => self.colors.methods.get,
+            "POST" => self.colors.methods.post,
+            "PUT" => self.colors.methods.put,
+            "PATCH" => self.colors.methods.patch,
+            "DELETE" => self.colors.methods.delete,
+            _ => self.colors.methods.other,
+        }
+    }
+
+    #[must_use]
     pub fn light() -> Self {
         Self {
             appearance: ThemeAppearance::Light,
@@ -417,6 +429,9 @@ mod tests {
                 theme.colors.selection.inactive_background
             );
             assert!(theme.metrics.control_height >= 28.0);
+            assert_eq!(theme.method_color("GET"), theme.colors.methods.get);
+            assert_eq!(theme.method_color("post"), theme.colors.methods.post);
+            assert_ne!(theme.method_color("GET"), theme.method_color("DELETE"));
         }
     }
 

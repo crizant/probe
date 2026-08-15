@@ -10,9 +10,9 @@ use base_gpui::popover::{
 use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, FontWeight, InteractiveElement as _,
     IntoElement, MouseButton, MouseMoveEvent, ParentElement as _, PathPromptOptions, Render,
-    ScrollStrategy, StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions,
-    UniformListScrollHandle, Window, WindowBounds, WindowControlArea, WindowOptions, div, point,
-    prelude::FluentBuilder as _, px, relative, size, uniform_list,
+    ScrollHandle, ScrollStrategy, StatefulInteractiveElement as _, Styled as _, Task,
+    TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowControlArea,
+    WindowOptions, div, point, prelude::FluentBuilder as _, px, relative, size, uniform_list,
 };
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, FileReference, FormField, Header, HttpRequest,
@@ -62,10 +62,14 @@ pub struct ProbeApp {
     execution: ExecutionState,
     response_viewer: ResponseViewerState,
     response_scroll: UniformListScrollHandle,
+    tab_bar_scroll: ScrollHandle,
+    pending_tab_reveal: bool,
     #[cfg(test)]
     rendered_sidebar_rows: usize,
     #[cfg(test)]
     rendered_response_rows: usize,
+    _caret_blink: Task<()>,
+    _keystrokes: gpui::Subscription,
     _quit_subscription: gpui::Subscription,
 }
 
@@ -84,6 +88,10 @@ impl ProbeApp {
                 }
             }
         });
+        crate::caret::CaretBlink::show(cx);
+        let keystrokes = cx.observe_keystrokes(|this, _, _, cx| {
+            this.reset_caret_blink(cx);
+        });
 
         Self {
             loaded_workspace: None,
@@ -100,11 +108,43 @@ impl ProbeApp {
             execution: ExecutionState::default(),
             response_viewer: ResponseViewerState::default(),
             response_scroll: UniformListScrollHandle::new(),
+            tab_bar_scroll: ScrollHandle::new(),
+            pending_tab_reveal: false,
             #[cfg(test)]
             rendered_sidebar_rows: 0,
             #[cfg(test)]
             rendered_response_rows: 0,
+            _caret_blink: Self::spawn_caret_blink(cx),
+            _keystrokes: keystrokes,
             _quit_subscription: quit_subscription,
+        }
+    }
+
+    fn spawn_caret_blink(cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(crate::caret::CARET_BLINK_INTERVAL)
+                    .await;
+                if this
+                    .update(cx, |_, cx| {
+                        crate::caret::CaretBlink::toggle(cx);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+    }
+
+    fn reset_caret_blink(&mut self, cx: &mut Context<Self>) {
+        let was_visible = crate::caret::CaretBlink::is_visible(cx);
+        crate::caret::CaretBlink::show(cx);
+        self._caret_blink = Self::spawn_caret_blink(cx);
+        if !was_visible {
+            cx.notify();
         }
     }
 
@@ -276,6 +316,7 @@ impl ProbeApp {
             self.shell.collapse_folder(key);
         }
         self.rebuild_visible_tree_rows();
+        self.reveal_active_tab();
     }
 
     fn capture_session(&mut self) {
@@ -344,6 +385,7 @@ impl ProbeApp {
             .is_some_and(|loaded| loaded.workspace().request(key).is_some())
         {
             self.shell.open_request(key);
+            self.reveal_active_tab();
             self.persist_session(cx);
             cx.notify();
         }
@@ -351,8 +393,24 @@ impl ProbeApp {
 
     fn close_tab(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         self.shell.close_tab(key);
+        self.reveal_active_tab();
         self.persist_session(cx);
         cx.notify();
+    }
+
+    fn reveal_active_tab(&mut self) {
+        self.scroll_active_tab_into_view();
+        self.pending_tab_reveal = true;
+    }
+
+    fn scroll_active_tab_into_view(&self) {
+        let Some(active) = self.shell.active_tab() else {
+            return;
+        };
+        let Some(index) = self.shell.tabs().iter().position(|tab| *tab == active) else {
+            return;
+        };
+        self.tab_bar_scroll.scroll_to_item(index);
     }
 
     fn send_request(&mut self, key: RequestKey, cx: &mut Context<Self>) {
@@ -562,7 +620,7 @@ impl ProbeApp {
                             .text_color(if selected {
                                 theme.colors.selection.active_foreground
                             } else {
-                                method_color(theme, &method)
+                                theme.method_color(&method)
                             })
                             .child(method),
                     )
@@ -733,7 +791,8 @@ impl ProbeApp {
             .h_full()
             .flex()
             .items_end()
-            .overflow_x_scroll();
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_bar_scroll);
         let Some(loaded) = &self.loaded_workspace else {
             return div()
                 .id("request-tabs")
@@ -958,35 +1017,31 @@ impl ProbeApp {
                             .w_full()
                             .flex()
                             .items_center()
-                            .child(
-                                div()
-                                    .w(px(92.0))
-                                    .mr(px(theme.metrics.spacing_2))
-                                    .text_color(method_color(theme, &method))
-                                    .child(components::dropdown(
-                                        theme,
-                                        "request-method",
-                                        "HTTP method",
-                                        Some(method.clone()),
-                                        request_method_options(&method),
-                                        92.0,
-                                        {
-                                            let method_view = cx.weak_entity();
-                                            move |value, _, cx| {
-                                                let Some(value) = value.cloned() else {
-                                                    return;
-                                                };
-                                                let _ = method_view.update(cx, |view, cx| {
-                                                    view.edit_request(
-                                                        key,
-                                                        |request| request.method = Some(value),
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        },
-                                    )),
-                            )
+                            .child(div().w(px(92.0)).mr(px(theme.metrics.spacing_2)).child(
+                                components::dropdown_with_option_colors(
+                                    theme,
+                                    "request-method",
+                                    "HTTP method",
+                                    Some(method.clone()),
+                                    request_method_options(theme, &method),
+                                    92.0,
+                                    {
+                                        let method_view = cx.weak_entity();
+                                        move |value, _, cx| {
+                                            let Some(value) = value.cloned() else {
+                                                return;
+                                            };
+                                            let _ = method_view.update(cx, |view, cx| {
+                                                view.edit_request(
+                                                    key,
+                                                    |request| request.method = Some(value),
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    },
+                                ),
+                            ))
                             .child(div().flex_1().min_w(px(0.0)).child(
                                 components::variable_text_input(
                                     theme,
@@ -1131,11 +1186,10 @@ impl ProbeApp {
                                 });
                             },
                         ))
-                        .child(components::editor_button(
+                        .child(components::remove_row_button(
                             theme,
                             ("remove-query", index),
-                            "−",
-                            false,
+                            "Remove query parameter",
                             move |_, _, cx| {
                                 let _ = remove_view.update(cx, |view, cx| {
                                     view.edit_request(
@@ -1261,11 +1315,10 @@ impl ProbeApp {
                                 });
                             },
                         ))
-                        .child(components::editor_button(
+                        .child(components::remove_row_button(
                             theme,
                             ("remove-header", index),
-                            "−",
-                            false,
+                            "Remove header",
                             move |_, _, cx| {
                                 let _ = remove_view.update(cx, |view, cx| {
                                     view.edit_request(
@@ -1512,11 +1565,10 @@ impl ProbeApp {
                                 });
                             },
                         ))
-                        .child(components::editor_button(
+                        .child(components::remove_row_button(
                             theme,
                             ("remove-form-field", index),
-                            "−",
-                            false,
+                            "Remove form field",
                             move |_, _, cx| {
                                 let _ = remove_view.update(cx, |view, cx| {
                                     view.edit_request(
@@ -1695,11 +1747,10 @@ impl ProbeApp {
                                 });
                             },
                         ))
-                        .child(components::editor_button(
+                        .child(components::remove_row_button(
                             theme,
                             ("remove-multipart-part", index),
-                            "−",
-                            false,
+                            "Remove multipart part",
                             move |_, _, cx| {
                                 let _ = remove_view.update(cx, |view, cx| {
                                     view.edit_request(
@@ -1841,11 +1892,10 @@ impl ProbeApp {
                                 });
                             },
                         ))
-                        .child(components::editor_button(
+                        .child(components::remove_row_button(
                             theme,
                             ("remove-body-file", index),
-                            "−",
-                            false,
+                            "Remove file",
                             move |_, _, cx| {
                                 let _ = remove_view.update(cx, |view, cx| {
                                     view.edit_request(
@@ -2010,11 +2060,10 @@ impl ProbeApp {
                                 },
                             ),
                         ))
-                        .child(components::editor_button(
+                        .child(components::remove_row_button(
                             theme,
                             ("remove-authentication-property", index),
-                            "−",
-                            false,
+                            "Remove authentication property",
                             move |_, _, cx| {
                                 let remove_name = remove_name.clone();
                                 let _ = remove_view.update(cx, |view, cx| {
@@ -2711,8 +2760,15 @@ impl ProbeApp {
 }
 
 impl Render for ProbeApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::for_window_appearance(_window.appearance());
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.pending_tab_reveal {
+            self.pending_tab_reveal = false;
+            cx.on_next_frame(window, |this, _, cx| {
+                this.scroll_active_tab_into_view();
+                cx.notify();
+            });
+        }
+        let theme = Theme::for_window_appearance(window.appearance());
         let sidebar_view = cx.weak_entity();
         let status_message = self.message.clone();
 
@@ -2725,6 +2781,10 @@ impl Render for ProbeApp {
             .line_height(relative(theme.typography.body_line_height))
             .flex()
             .flex_col()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _, _, cx| view.reset_caret_blink(cx)),
+            )
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
                 MouseButton::Left,
@@ -2811,25 +2871,23 @@ fn placeholder_message(theme: Theme, message: &str) -> gpui::AnyElement {
         .into_any_element()
 }
 
-fn method_color(theme: Theme, method: &str) -> gpui::Rgba {
-    match method {
-        "GET" => theme.colors.methods.get,
-        "POST" => theme.colors.methods.post,
-        "PUT" => theme.colors.methods.put,
-        "PATCH" => theme.colors.methods.patch,
-        "DELETE" => theme.colors.methods.delete,
-        _ => theme.colors.methods.other,
-    }
-}
-
-fn request_method_options(active_method: &str) -> Vec<(String, String)> {
+fn request_method_options(
+    theme: Theme,
+    active_method: &str,
+) -> Vec<(String, String, Option<gpui::Rgba>)> {
     let mut methods = vec!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
     if !methods.contains(&active_method) {
         methods.push(active_method);
     }
     methods
         .into_iter()
-        .map(|method| (method.to_owned(), method.to_owned()))
+        .map(|method| {
+            (
+                method.to_owned(),
+                method.to_owned(),
+                Some(theme.method_color(method)),
+            )
+        })
         .collect()
 }
 
@@ -3422,6 +3480,87 @@ mod tests {
             tab_label.size.width <= px(220.0),
             "request tab label exceeded the tab max width: {:?}",
             tab_label.size
+        );
+    }
+
+    #[gpui::test]
+    fn opening_many_request_tabs_scrolls_to_the_active_tab(cx: &mut TestAppContext) {
+        cx.update(base_gpui::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = large_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("large fixture should load");
+        let keys: Vec<_> = workspace
+            .requests()
+            .iter()
+            .take(12)
+            .map(|request| request.key())
+            .collect();
+        assert!(keys.len() >= 12, "large fixture should have many requests");
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, cx| {
+                for key in &keys {
+                    view.select_request(*key, cx);
+                }
+            })
+            .expect("test window should remain open");
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.update(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
+        cx.run_until_parked();
+
+        let (offset, max_offset, child_count, last_visible) = window
+            .update(cx, |view, _, _| {
+                let last = view.tab_bar_scroll.children_count().saturating_sub(1);
+                let viewport = view.tab_bar_scroll.bounds();
+                let offset = view.tab_bar_scroll.offset();
+                let last_visible =
+                    view.tab_bar_scroll
+                        .bounds_for_item(last)
+                        .is_some_and(|bounds| {
+                            bounds.right() + offset.x <= viewport.right() + px(1.0)
+                                && bounds.left() + offset.x >= viewport.left() - viewport.size.width
+                        });
+                (
+                    offset,
+                    view.tab_bar_scroll.max_offset(),
+                    view.tab_bar_scroll.children_count(),
+                    last_visible,
+                )
+            })
+            .expect("test window should remain open");
+
+        assert!(
+            child_count >= 12,
+            "tab strip should track opened request tabs, got {child_count}"
+        );
+        assert!(
+            max_offset.x > px(0.0),
+            "opening many tabs should overflow the tab bar, max_offset={max_offset:?}"
+        );
+        assert!(
+            offset.x < px(0.0),
+            "tab bar should scroll right to reveal the newest tab, offset={offset:?}"
+        );
+        assert!(
+            last_visible,
+            "the newly opened tab should be visible in the tab bar"
         );
     }
 }

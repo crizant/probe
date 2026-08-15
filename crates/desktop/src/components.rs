@@ -150,9 +150,11 @@ pub(crate) fn search_input(
     on_value_change: impl Fn(SharedString, &mut Window, &mut gpui::Context<InputRuntime>) + 'static,
     on_enter: impl Fn(SharedString, &mut Window, &mut gpui::Context<InputRuntime>) + 'static,
 ) -> impl IntoElement {
-    Input::new()
-        .id(id)
-        .value(single_line(value))
+    let id = id.into();
+    let value = single_line(value);
+    let input = Input::new()
+        .id(id.clone())
+        .value(value.clone())
         .placeholder(placeholder)
         .on_value_change_with_context(on_value_change)
         .on_enter_with_context(on_enter)
@@ -175,7 +177,18 @@ pub(crate) fn search_input(
                 } else {
                     theme.colors.borders.standard
                 })
-        })
+        });
+    div()
+        .relative()
+        .child(input)
+        .child(variable_highlight_layer(
+            theme,
+            id,
+            value,
+            Vec::new(),
+            theme.typography.interface_family,
+            theme.typography.caption_size,
+        ))
 }
 
 fn text_input_with_variables(
@@ -261,6 +274,65 @@ pub(crate) fn editor_button(
         .child(label)
 }
 
+pub(crate) fn remove_row_button(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    aria_label: impl Into<SharedString>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let color = theme.colors.text.secondary;
+    ButtonRoot::new()
+        .id(id)
+        .aria_label(aria_label)
+        .w(px(30.0))
+        .h(px(30.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.metrics.radius_small))
+        .on_click(on_click)
+        .style_with_state(move |state, button| {
+            button
+                .bg(theme.colors.surfaces.window)
+                .border_1()
+                .border_color(if state.focused {
+                    theme.colors.borders.focused
+                } else {
+                    theme.colors.borders.standard
+                })
+                .cursor_pointer()
+                .hover(move |button| button.bg(theme.colors.surfaces.raised))
+        })
+        .child(trash_icon(color))
+}
+
+fn trash_icon(color: gpui::Rgba) -> gpui::Div {
+    div()
+        .w(px(12.0))
+        .h(px(13.0))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(1.0))
+        .child(div().w(px(4.0)).h(px(1.5)).rounded(px(1.0)).bg(color))
+        .child(div().w(px(12.0)).h(px(1.5)).rounded(px(0.5)).bg(color))
+        .child(
+            div()
+                .w(px(10.0))
+                .h(px(8.0))
+                .rounded(px(1.5))
+                .border_1()
+                .border_color(color)
+                .overflow_hidden()
+                .flex()
+                .justify_center()
+                .gap(px(1.5))
+                .pt(px(1.5))
+                .child(div().w(px(1.0)).h(px(4.5)).bg(color))
+                .child(div().w(px(1.0)).h(px(4.5)).bg(color)),
+        )
+}
+
 pub(crate) fn dropdown<T: Clone + Eq + 'static>(
     theme: Theme,
     id: &'static str,
@@ -270,8 +342,38 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
     width: f32,
     on_value_change: impl Fn(Option<&T>, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    dropdown_with_option_colors(
+        theme,
+        id,
+        aria_label,
+        value,
+        options
+            .into_iter()
+            .map(|(value, label)| (value, label, None))
+            .collect(),
+        width,
+        on_value_change,
+    )
+}
+
+pub(crate) fn dropdown_with_option_colors<T: Clone + Eq + 'static>(
+    theme: Theme,
+    id: &'static str,
+    aria_label: &'static str,
+    value: Option<T>,
+    options: Vec<(T, String, Option<gpui::Rgba>)>,
+    width: f32,
+    on_value_change: impl Fn(Option<&T>, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let option_colors = Rc::new(
+        options
+            .iter()
+            .filter_map(|(value, _, color)| color.map(|color| (value.clone(), color)))
+            .collect::<Vec<_>>(),
+    );
     let mut list = SelectList::new().flex().flex_col().gap(px(2.0));
-    for (index, (value, label)) in options.into_iter().enumerate() {
+    for (index, (value, label, color)) in options.into_iter().enumerate() {
+        let color = color.unwrap_or(theme.colors.text.primary);
         list = list.child(
             SelectItem::new()
                 .id(format!("{id}-item-{index}"))
@@ -284,7 +386,7 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
                 .gap(px(theme.metrics.spacing_2))
                 .overflow_hidden()
                 .rounded(px(theme.metrics.radius_small))
-                .text_color(theme.colors.text.primary)
+                .text_color(color)
                 .style_with_state(move |state, item| {
                     item.debug_selector(move || format!("{id}-item-{index}"))
                         .when(state.highlighted, |item| {
@@ -315,6 +417,7 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
         );
     }
 
+    let value_colors = option_colors;
     SelectRoot::<T>::new()
         .id(id)
         .value(value)
@@ -354,7 +457,20 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
                         .placeholder("None")
                         .min_w(px(0.0))
                         .flex_1()
-                        .truncate(),
+                        .truncate()
+                        .style_with_state(move |state, value| {
+                            let color = state
+                                .selected_value
+                                .as_ref()
+                                .and_then(|selected| {
+                                    value_colors
+                                        .iter()
+                                        .find(|(value, _)| value == selected)
+                                        .map(|(_, color)| *color)
+                                })
+                                .unwrap_or(theme.colors.text.primary);
+                            value.text_color(color)
+                        }),
                 )
                 .child(
                     SelectIcon::new()
@@ -612,24 +728,26 @@ fn variable_input_overlay(
     variables: VariableContext,
 ) -> gpui::AnyElement {
     let ranges = variable_ranges(&value);
+    // Input paints first so it keeps native caret, selection, and scroll.
+    // The overlay sits on top, recolors `{{variable}}` spans, and covers the
+    // native caret while blink is off.
     let wrapper = div()
         .id(tooltip_id)
         .relative()
         .debug_selector(|| "variable-input-tooltip-trigger".into())
-        .w_full();
+        .w_full()
+        .child(input)
+        .child(variable_highlight_layer(
+            theme,
+            input_id,
+            value,
+            ranges.clone(),
+            theme.typography.monospace_family,
+            theme.typography.body_size,
+        ));
     if ranges.is_empty() {
-        return wrapper.child(input).into_any_element();
+        return wrapper.into_any_element();
     }
-
-    // Input paints first so it keeps native caret, selection, and scroll.
-    // The overlay sits on top and recolors only `{{variable}}` spans; the
-    // previous behind-the-input layer was covered by the field background.
-    let wrapper = wrapper.child(input).child(variable_highlight_layer(
-        theme,
-        input_id,
-        value,
-        ranges.clone(),
-    ));
 
     let rows = ranges
         .into_iter()
@@ -662,9 +780,12 @@ fn variable_highlight_layer(
     input_id: ElementId,
     value: SharedString,
     ranges: Vec<(Range<usize>, String)>,
+    font_family: &'static str,
+    text_size: f32,
 ) -> impl IntoElement {
     let highlight_color = theme.colors.syntax.string.into();
     let caret_color = theme.colors.text.primary.into();
+    let mask_color = theme.colors.surfaces.window.into();
     div()
         .absolute()
         .top(px(0.0))
@@ -679,9 +800,11 @@ fn variable_highlight_layer(
         .items_center()
         .flex()
         .overflow_hidden()
-        .font_family(theme.typography.monospace_family)
-        .text_size(px(theme.typography.body_size))
-        .debug_selector(|| "variable-highlight-overlay".into())
+        .font_family(font_family)
+        .text_size(px(text_size))
+        .when(!ranges.is_empty(), |layer| {
+            layer.debug_selector(|| "variable-highlight-overlay".into())
+        })
         .child(VariableHighlightElement {
             input_id: Some(input_id),
             state: None,
@@ -689,6 +812,7 @@ fn variable_highlight_layer(
             ranges: ranges.into_iter().map(|(range, _)| range).collect(),
             highlight_color,
             caret_color,
+            mask_color,
         })
 }
 
@@ -699,6 +823,7 @@ struct VariableHighlightElement {
     ranges: Vec<Range<usize>>,
     highlight_color: Hsla,
     caret_color: Hsla,
+    mask_color: Hsla,
 }
 
 struct VariableHighlightPrepaintState {
@@ -774,12 +899,17 @@ impl Element for VariableHighlightElement {
         let visible_width = bounds.right() - bounds.left();
         let scroll_offset = input_text_scroll_offset(cursor_x, visible_width);
         let caret = if focused && selected_range.is_empty() {
+            let bounds = Bounds::new(
+                point(bounds.left() + scroll_offset + cursor_x, bounds.top()),
+                size(px(1.0), bounds.bottom() - bounds.top()),
+            );
             Some(fill(
-                Bounds::new(
-                    point(bounds.left() + scroll_offset + cursor_x, bounds.top()),
-                    size(px(1.0), bounds.bottom() - bounds.top()),
-                ),
-                self.caret_color,
+                bounds,
+                if crate::caret::CaretBlink::is_visible(cx) {
+                    self.caret_color
+                } else {
+                    self.mask_color
+                },
             ))
         } else {
             None
@@ -1047,35 +1177,34 @@ pub(crate) fn pane_layout_toggle(
         PaneLayout::Vertical => "vertical",
         PaneLayout::Horizontal => "horizontal",
     };
-    let item =
-        move |index: usize, value: &'static str, label: &'static str, glyph: &'static str| {
-            Toggle::new()
-                .id(("pane-layout", index))
-                .value(value)
-                .aria_label(label)
-                .w(px(30.0))
-                .h(px(26.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(theme.metrics.radius_small))
-                .text_size(px(theme.typography.body_size))
-                .style_with_state(move |state, toggle| {
-                    toggle
-                        .text_color(if state.pressed {
-                            theme.colors.selection.active_foreground
-                        } else {
-                            theme.colors.text.secondary
-                        })
-                        .when(state.pressed, |toggle| {
-                            toggle.bg(theme.colors.selection.active_background)
-                        })
-                        .when(!state.pressed, |toggle| {
-                            toggle.hover(move |toggle| toggle.bg(theme.colors.surfaces.raised))
-                        })
-                })
-                .child(glyph)
-        };
+    let item = move |index: usize, value: &'static str, label: &'static str, layout: PaneLayout| {
+        Toggle::new()
+            .id(("pane-layout", index))
+            .value(value)
+            .aria_label(label)
+            .w(px(30.0))
+            .h(px(26.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(theme.metrics.radius_small))
+            .style_with_state(move |state, toggle| {
+                let color = if state.pressed {
+                    theme.colors.selection.active_foreground
+                } else {
+                    theme.colors.text.secondary
+                };
+                toggle
+                    .text_color(color)
+                    .when(state.pressed, |toggle| {
+                        toggle.bg(theme.colors.selection.active_background)
+                    })
+                    .when(!state.pressed, |toggle| {
+                        toggle.hover(move |toggle| toggle.bg(theme.colors.surfaces.raised))
+                    })
+                    .child(pane_layout_icon(layout, color))
+            })
+    };
 
     ToggleGroup::<&'static str>::new()
         .id("pane-layout-toggle")
@@ -1099,8 +1228,37 @@ pub(crate) fn pane_layout_toggle(
         .border_1()
         .border_color(theme.colors.borders.standard)
         .bg(theme.colors.surfaces.window)
-        .child(item(0, "vertical", "Stack response below request", "↕"))
-        .child(item(1, "horizontal", "Place response beside request", "↔"))
+        .child(item(
+            0,
+            "vertical",
+            "Stack response below request",
+            PaneLayout::Vertical,
+        ))
+        .child(item(
+            1,
+            "horizontal",
+            "Place response beside request",
+            PaneLayout::Horizontal,
+        ))
+}
+
+fn pane_layout_icon(layout: PaneLayout, color: gpui::Rgba) -> gpui::Div {
+    let divider = match layout {
+        PaneLayout::Vertical => div().w_full().h(px(1.0)).bg(color),
+        PaneLayout::Horizontal => div().h_full().w(px(1.0)).bg(color),
+    };
+    div()
+        .w(px(14.0))
+        .h(px(12.0))
+        .rounded(px(2.0))
+        .border_1()
+        .border_color(color)
+        .overflow_hidden()
+        .flex()
+        .when(layout == PaneLayout::Vertical, |icon| icon.flex_col())
+        .child(div().flex_1())
+        .child(divider)
+        .child(div().flex_1())
 }
 
 #[cfg(test)]
@@ -1448,6 +1606,7 @@ mod tests {
                 ranges,
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
                 caret_color: hsla(0.0, 0.0, 1.0, 1.0),
+                mask_color: hsla(0.0, 0.0, 0.2, 1.0),
             }
         });
 
@@ -1491,6 +1650,7 @@ mod tests {
                 ranges,
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
                 caret_color: hsla(0.0, 0.0, 1.0, 1.0),
+                mask_color: hsla(0.0, 0.0, 0.2, 1.0),
             },
         );
 
@@ -1525,6 +1685,7 @@ mod tests {
                 ranges,
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
                 caret_color: hsla(0.0, 0.0, 1.0, 1.0),
+                mask_color: hsla(0.0, 0.0, 0.2, 1.0),
             },
         );
     }
