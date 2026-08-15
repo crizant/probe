@@ -109,6 +109,11 @@ cargo clippy --all-targets --all-features
 cargo test
 ```
 
+Core performance baselines cover parsing, workspace construction, request lookup,
+CLI startup, and practical peak-memory profiling at 100, 1,000, and 10,000 requests.
+See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for reproducible commands and fixture
+generation.
+
 Try the current CLI against the included unbundled fixture:
 
 ```bash

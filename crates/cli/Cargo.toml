@@ -9,6 +9,10 @@ rust-version.workspace = true
 name = "probe"
 path = "src/main.rs"
 
+[[bench]]
+name = "performance"
+harness = false
+
 [dependencies]
 probe-core = { path = "../core" }
 probe-http = { path = "../http" }
@@ -18,3 +22,6 @@ tokio = { version = "1.53.1", features = ["rt", "time", "signal"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion = "0.7.0"
