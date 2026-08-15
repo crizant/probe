@@ -251,6 +251,14 @@ begins directly beneath the title bar without a duplicate application toolbar. T
 request editor and response viewer can be stacked vertically or placed side by side;
 the orientation and independent response-pane dimensions are presentation state.
 
+Request editor controls mutate the repository-loaded in-memory `HttpRequest` directly
+through its runtime `RequestKey`; they do not reload or parse collection files. The tab
+is the single request-name label above the editor, so the URL bar is not preceded by a
+duplicate title. Persistence remains a separate repository operation and is not
+implicitly coupled to individual keystrokes. Environment selection lives at the fixed
+right edge of the request tab bar. Unsaved body representations are retained as local
+editor drafts per request, allowing users to switch body types without losing work.
+
 The request tree keeps a flat list of lightweight references for currently visible
 expanded nodes. Its fixed-height GPUI list is virtualized, so scrolling constructs and
 paints only the viewport range rather than every request in a large workspace. Folder

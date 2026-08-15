@@ -13,11 +13,19 @@ use gpui::{
     WindowControlArea, WindowOptions, div, point, prelude::FluentBuilder as _, px, relative, size,
     uniform_list,
 };
-use probe_core::{HttpRequest, RequestKey, Workspace, WorkspaceItemRef};
+use probe_core::{
+    AuthenticationKind, AuthenticationValue, Body, FileReference, FormField, Header, HttpRequest,
+    MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RequestBody, RequestKey,
+    Workspace, WorkspaceItemRef, resolve_environment,
+};
 use probe_opencollection::{LoadedWorkspace, load_workspace};
 
 use crate::{
     components,
+    request_editor::{
+        BodyEditorKind, EditorSection, RequestEditorState, auth_label, auth_value, body_kind,
+        raw_body_mut, set_auth_property, set_authentication,
+    },
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
     theme::Theme,
@@ -40,6 +48,7 @@ pub struct ProbeApp {
     save_task: Option<Task<()>>,
     workspace_switcher_open: bool,
     visible_tree_rows: Vec<TreeRow>,
+    request_editor: RequestEditorState,
     #[cfg(test)]
     rendered_sidebar_rows: usize,
     _quit_subscription: gpui::Subscription,
@@ -72,6 +81,7 @@ impl ProbeApp {
             save_task: None,
             workspace_switcher_open: false,
             visible_tree_rows: Vec::new(),
+            request_editor: RequestEditorState::default(),
             #[cfg(test)]
             rendered_sidebar_rows: 0,
             _quit_subscription: quit_subscription,
@@ -196,6 +206,7 @@ impl ProbeApp {
         self.loaded_workspace = Some(workspace);
         self.workspace_path = Some(path);
         self.shell.reset_for_workspace();
+        self.request_editor.clear();
         self.rebuild_visible_tree_rows();
         self.message = None;
     }
@@ -295,6 +306,7 @@ impl ProbeApp {
         self.loaded_workspace = None;
         self.workspace_path = None;
         self.shell.reset_for_workspace();
+        self.request_editor.clear();
         self.visible_tree_rows.clear();
         self.session.clear_active_collection();
         self.persist_session(cx);
@@ -571,18 +583,22 @@ impl ProbeApp {
     }
 
     fn render_tabs(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let mut tabs = div()
-            .id("request-tabs")
-            .h(px(38.0))
-            .w_full()
+        let mut tab_strip = div()
+            .id("request-tabs-scroll")
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
             .flex()
             .items_end()
-            .overflow_x_scroll()
-            .bg(theme.colors.surfaces.raised)
-            .border_b_1()
-            .border_color(theme.colors.borders.subtle);
+            .overflow_x_scroll();
         let Some(loaded) = &self.loaded_workspace else {
-            return tabs;
+            return div()
+                .id("request-tabs")
+                .h(px(38.0))
+                .w_full()
+                .bg(theme.colors.surfaces.raised)
+                .border_b_1()
+                .border_color(theme.colors.borders.subtle);
         };
         for key in self.shell.tabs() {
             let Some(request) = loaded.workspace().request(*key) else {
@@ -597,7 +613,7 @@ impl ProbeApp {
             let select_view = cx.weak_entity();
             let close_view = cx.weak_entity();
             let tab_key = *key;
-            tabs = tabs.child(
+            tab_strip = tab_strip.child(
                 div()
                     .id(("request-tab", key.slot()))
                     .h_full()
@@ -634,11 +650,85 @@ impl ProbeApp {
                     ),
             );
         }
+
+        let mut tabs = div()
+            .id("request-tabs")
+            .h(px(38.0))
+            .w_full()
+            .flex()
+            .items_center()
+            .bg(theme.colors.surfaces.raised)
+            .border_b_1()
+            .border_color(theme.colors.borders.subtle)
+            .child(tab_strip);
+        if let Some(key) = self.shell.active_tab() {
+            let selected = self
+                .request_editor
+                .selected_environment(key)
+                .unwrap_or("")
+                .to_owned();
+            let mut options = vec![(String::new(), "No environment".to_owned())];
+            options.extend(
+                loaded
+                    .workspace()
+                    .environments()
+                    .iter()
+                    .map(|environment| (environment.name.clone(), environment.name.clone())),
+            );
+            let environment_view = cx.weak_entity();
+            tabs = tabs.child(div().flex_none().px(px(theme.metrics.spacing_2)).child(
+                components::dropdown(
+                    theme,
+                    "request-environment",
+                    "Request environment",
+                    Some(selected),
+                    options,
+                    170.0,
+                    move |value, _, cx| {
+                        let value = value.cloned().unwrap_or_default();
+                        let _ = environment_view.update(cx, |view, cx| {
+                            view.request_editor
+                                .select_environment(key, (!value.is_empty()).then_some(value));
+                            cx.notify();
+                        });
+                    },
+                ),
+            ));
+        }
         tabs
     }
 
-    fn render_request_editor(&self, theme: Theme) -> gpui::Div {
-        let Some(request) = self.active_request() else {
+    fn edit_request(
+        &mut self,
+        key: RequestKey,
+        edit: impl FnOnce(&mut HttpRequest),
+        cx: &mut Context<Self>,
+    ) {
+        let Some(request) = self
+            .loaded_workspace
+            .as_mut()
+            .and_then(|loaded| loaded.request_mut(key))
+        else {
+            return;
+        };
+        edit(request);
+        cx.notify();
+    }
+
+    fn change_body_kind(&mut self, key: RequestKey, kind: BodyEditorKind, cx: &mut Context<Self>) {
+        let Some(request) = self
+            .loaded_workspace
+            .as_mut()
+            .and_then(|loaded| loaded.request_mut(key))
+        else {
+            return;
+        };
+        self.request_editor.switch_body_kind(key, request, kind);
+        cx.notify();
+    }
+
+    fn render_request_editor(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(key) = self.shell.active_tab() else {
             return div()
                 .flex_1()
                 .min_w(px(0.0))
@@ -650,76 +740,1160 @@ impl ProbeApp {
                 .text_color(theme.colors.text.muted)
                 .child("Select a request from the collection sidebar.");
         };
+        let Some(request) = self.active_request().cloned() else {
+            return div().flex_1();
+        };
         let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
-        let url = request.url.as_deref().unwrap_or("No URL configured");
+        let url = request.url.clone().unwrap_or_default();
+        let url_view = cx.weak_entity();
+        let mut section_tabs = div().flex().items_center().gap(px(theme.metrics.spacing_1));
+        for (index, section) in EditorSection::ALL.into_iter().enumerate() {
+            let section_view = cx.weak_entity();
+            section_tabs = section_tabs.child(components::editor_button(
+                theme,
+                ("request-editor-section", index),
+                format!(
+                    "{}{}",
+                    section.label(),
+                    match section {
+                        EditorSection::Query => format!("  {}", request.query_parameters.len()),
+                        EditorSection::Headers => format!("  {}", request.headers.len()),
+                        EditorSection::Body | EditorSection::Authentication => String::new(),
+                    }
+                ),
+                self.request_editor.section == section,
+                move |_, _, cx| {
+                    let _ = section_view.update(cx, |view, cx| {
+                        view.request_editor.section = section;
+                        cx.notify();
+                    });
+                },
+            ));
+        }
+
+        let section = match self.request_editor.section {
+            EditorSection::Query => self.render_query_editor(key, &request, theme, cx),
+            EditorSection::Headers => self.render_header_editor(key, &request, theme, cx),
+            EditorSection::Body => self.render_body_editor(key, &request, theme, cx),
+            EditorSection::Authentication => {
+                self.render_authentication_editor(key, &request, theme, cx)
+            }
+        };
+
         div()
             .flex_1()
             .min_w(px(0.0))
             .min_h(px(120.0))
-            .p(px(theme.metrics.spacing_4))
             .flex()
             .flex_col()
-            .gap(px(theme.metrics.spacing_4))
             .bg(theme.colors.surfaces.editor)
             .child(
                 div()
-                    .text_size(px(theme.typography.title_size))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .p(px(theme.metrics.spacing_3))
+                    .pb(px(theme.metrics.spacing_2))
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme.metrics.spacing_2))
                     .child(
-                        request
-                            .metadata
-                            .name
-                            .as_deref()
-                            .unwrap_or("Untitled request")
-                            .to_owned(),
-                    ),
+                        div()
+                            .id("request-url-bar")
+                            .debug_selector(|| "request-url-bar".into())
+                            .h(px(40.0))
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .child(
+                                div()
+                                    .w(px(92.0))
+                                    .mr(px(theme.metrics.spacing_2))
+                                    .text_color(method_color(theme, &method))
+                                    .child(components::dropdown(
+                                        theme,
+                                        "request-method",
+                                        "HTTP method",
+                                        Some(method.clone()),
+                                        request_method_options(&method),
+                                        92.0,
+                                        {
+                                            let method_view = cx.weak_entity();
+                                            move |value, _, cx| {
+                                                let Some(value) = value.cloned() else {
+                                                    return;
+                                                };
+                                                let _ = method_view.update(cx, |view, cx| {
+                                                    view.edit_request(
+                                                        key,
+                                                        |request| request.method = Some(value),
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        },
+                                    )),
+                            )
+                            .child(div().flex_1().min_w(px(0.0)).child(
+                                components::variable_text_input(
+                                    theme,
+                                    ("request-url", key.slot()),
+                                    url.clone(),
+                                    "https://api.example.com/path",
+                                    self.variable_context(key),
+                                    move |value, _, input_cx| {
+                                        let _ = url_view.update(input_cx, |view, cx| {
+                                            view.edit_request(
+                                                key,
+                                                |request| request.url = Some(value.to_string()),
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                ),
+                            )),
+                    )
+                    .child(section_tabs),
             )
             .child(
                 div()
-                    .h(px(40.0))
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .border_1()
-                    .border_color(theme.colors.borders.standard)
-                    .rounded(px(theme.metrics.radius_medium))
+                    .id("request-editor-section-content")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .px(px(theme.metrics.spacing_3))
+                    .pb(px(theme.metrics.spacing_3))
+                    .when(
+                        self.request_editor.section != EditorSection::Body,
+                        |content| content.overflow_y_scroll(),
+                    )
+                    .child(section),
+            )
+    }
+
+    fn render_query_editor(
+        &self,
+        key: RequestKey,
+        request: &HttpRequest,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
+        for (index, parameter) in request.query_parameters.iter().enumerate() {
+            let name_view = cx.weak_entity();
+            let value_view = cx.weak_entity();
+            let enabled_view = cx.weak_entity();
+            let remove_view = cx.weak_entity();
+            rows =
+                rows.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_2))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("query-name", index),
+                                parameter.name.clone(),
+                                "Parameter",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = name_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                if let Some(parameter) =
+                                                    request.query_parameters.get_mut(index)
+                                                {
+                                                    parameter.name = value.to_string();
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("query-value", index),
+                                parameter.value.clone(),
+                                "Value",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = value_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                if let Some(parameter) =
+                                                    request.query_parameters.get_mut(index)
+                                                {
+                                                    parameter.value = value.to_string();
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(components::switch(
+                            theme,
+                            ("query-enabled", index),
+                            "Enable query parameter",
+                            !parameter.disabled,
+                            move |enabled, _, cx| {
+                                let _ = enabled_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if let Some(parameter) =
+                                                request.query_parameters.get_mut(index)
+                                            {
+                                                parameter.disabled = !enabled;
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        ))
+                        .child(components::editor_button(
+                            theme,
+                            ("remove-query", index),
+                            "−",
+                            false,
+                            move |_, _, cx| {
+                                let _ = remove_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if index < request.query_parameters.len() {
+                                                request.query_parameters.remove(index);
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        )),
+                );
+        }
+        let add_view = cx.weak_entity();
+        rows.child(components::editor_button(
+            theme,
+            "add-query-parameter",
+            "+ Add parameter",
+            false,
+            move |_, _, cx| {
+                let _ = add_view.update(cx, |view, cx| {
+                    view.edit_request(
+                        key,
+                        |request| {
+                            request.query_parameters.push(QueryParameter {
+                                name: String::new(),
+                                value: String::new(),
+                                disabled: false,
+                            })
+                        },
+                        cx,
+                    );
+                });
+            },
+        ))
+        .into_any_element()
+    }
+
+    fn render_header_editor(
+        &self,
+        key: RequestKey,
+        request: &HttpRequest,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
+        for (index, header) in request.headers.iter().enumerate() {
+            let name_view = cx.weak_entity();
+            let value_view = cx.weak_entity();
+            let enabled_view = cx.weak_entity();
+            let remove_view = cx.weak_entity();
+            rows =
+                rows.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_2))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("header-name", index),
+                                header.name.clone(),
+                                "Header",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = name_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                if let Some(header) = request.headers.get_mut(index)
+                                                {
+                                                    header.name = value.to_string();
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("header-value", index),
+                                header.value.clone(),
+                                "Value",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = value_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                if let Some(header) = request.headers.get_mut(index)
+                                                {
+                                                    header.value = value.to_string();
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(components::switch(
+                            theme,
+                            ("header-enabled", index),
+                            "Enable header",
+                            !header.disabled,
+                            move |enabled, _, cx| {
+                                let _ = enabled_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if let Some(header) = request.headers.get_mut(index) {
+                                                header.disabled = !enabled;
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        ))
+                        .child(components::editor_button(
+                            theme,
+                            ("remove-header", index),
+                            "−",
+                            false,
+                            move |_, _, cx| {
+                                let _ = remove_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if index < request.headers.len() {
+                                                request.headers.remove(index);
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        )),
+                );
+        }
+        let add_view = cx.weak_entity();
+        rows.child(components::editor_button(
+            theme,
+            "add-header",
+            "+ Add header",
+            false,
+            move |_, _, cx| {
+                let _ = add_view.update(cx, |view, cx| {
+                    view.edit_request(
+                        key,
+                        |request| {
+                            request.headers.push(Header {
+                                name: String::new(),
+                                value: String::new(),
+                                disabled: false,
+                            })
+                        },
+                        cx,
+                    );
+                });
+            },
+        ))
+        .into_any_element()
+    }
+
+    fn render_body_editor(
+        &self,
+        key: RequestKey,
+        request: &HttpRequest,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let active_kind = body_kind(request);
+        let choices = [
+            ("None", BodyEditorKind::None),
+            ("JSON", BodyEditorKind::Json),
+            ("Text", BodyEditorKind::Text),
+            ("XML", BodyEditorKind::Xml),
+            ("SPARQL", BodyEditorKind::Sparql),
+            ("Form", BodyEditorKind::Form),
+            ("Multipart", BodyEditorKind::Multipart),
+            ("File", BodyEditorKind::File),
+        ];
+        let mut kind_buttons = div().flex().flex_wrap().gap(px(theme.metrics.spacing_1));
+        for (index, (label, kind)) in choices.into_iter().enumerate() {
+            let kind_view = cx.weak_entity();
+            kind_buttons = kind_buttons.child(components::editor_button(
+                theme,
+                ("body-kind", index),
+                label,
+                active_kind == label,
+                move |_, _, cx| {
+                    let _ = kind_view.update(cx, |view, cx| {
+                        view.change_body_kind(key, kind, cx);
+                    });
+                },
+            ));
+        }
+
+        let mut editor = div()
+            .size_full()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(theme.metrics.spacing_3))
+            .child(kind_buttons);
+        match request.body.as_ref() {
+            Some(RequestBody::Single(Body::Raw(raw))) => {
+                let body_view = cx.weak_entity();
+                editor = editor
                     .child(
                         div()
-                            .h_full()
-                            .px(px(theme.metrics.spacing_3))
-                            .flex()
-                            .items_center()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(method_color(theme, &method))
-                            .border_r_1()
-                            .border_color(theme.colors.borders.standard)
-                            .child(method),
+                            .text_size(px(theme.typography.caption_size))
+                            .text_color(theme.colors.text.muted)
+                            .child("Request body"),
                     )
                     .child(
                         div()
-                            .px(px(theme.metrics.spacing_3))
-                            .font_family(theme.typography.monospace_family)
-                            .child(url.to_owned()),
-                    ),
-            )
-            .child(
+                            .id("request-body-editor")
+                            .debug_selector(|| "request-body-editor".into())
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .child(components::body_text_input(
+                                theme,
+                                ("request-body", key.slot()),
+                                raw.data.clone(),
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = body_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                if let Some(data) = raw_body_mut(request) {
+                                                    *data = value.to_string();
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            )),
+                    );
+            }
+            Some(RequestBody::Single(Body::FormUrlEncoded(fields))) => {
+                editor = editor.child(self.render_form_body_editor(key, fields, theme, cx));
+            }
+            Some(RequestBody::Single(Body::Multipart(parts))) => {
+                editor = editor.child(self.render_multipart_body_editor(key, parts, theme, cx));
+            }
+            Some(RequestBody::Single(Body::File(files))) => {
+                editor = editor.child(self.render_file_body_editor(key, files, theme, cx));
+            }
+            Some(_) => {
+                editor = editor.child(
+                    div()
+                        .p(px(theme.metrics.spacing_3))
+                        .rounded(px(theme.metrics.radius_small))
+                        .bg(theme.colors.surfaces.window)
+                        .text_color(theme.colors.text.secondary)
+                        .child(format!(
+                            "This request uses a {active_kind} body. Choose a raw body type to replace it."
+                        )),
+                );
+            }
+            None => {
+                editor = editor.child(
+                    div()
+                        .text_color(theme.colors.text.muted)
+                        .child("This request has no body."),
+                );
+            }
+        }
+        editor.into_any_element()
+    }
+
+    fn render_form_body_editor(
+        &self,
+        key: RequestKey,
+        fields: &[FormField],
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
+        for (index, field) in fields.iter().enumerate() {
+            let name_view = cx.weak_entity();
+            let value_view = cx.weak_entity();
+            let enabled_view = cx.weak_entity();
+            let remove_view = cx.weak_entity();
+            rows =
+                rows.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_2))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("form-field-name", index),
+                                field.name.clone(),
+                                "Field",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = name_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                if let Some(RequestBody::Single(
+                                                    Body::FormUrlEncoded(fields),
+                                                )) = request.body.as_mut()
+                                                    && let Some(field) = fields.get_mut(index)
+                                                {
+                                                    field.name = value.to_string();
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("form-field-value", index),
+                                field.value.clone(),
+                                "Value",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = value_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                if let Some(RequestBody::Single(
+                                                    Body::FormUrlEncoded(fields),
+                                                )) = request.body.as_mut()
+                                                    && let Some(field) = fields.get_mut(index)
+                                                {
+                                                    field.value = value.to_string();
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(components::switch(
+                            theme,
+                            ("form-field-enabled", index),
+                            "Enable form field",
+                            !field.disabled,
+                            move |enabled, _, cx| {
+                                let _ = enabled_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if let Some(RequestBody::Single(Body::FormUrlEncoded(
+                                                fields,
+                                            ))) = request.body.as_mut()
+                                                && let Some(field) = fields.get_mut(index)
+                                            {
+                                                field.disabled = !enabled;
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        ))
+                        .child(components::editor_button(
+                            theme,
+                            ("remove-form-field", index),
+                            "−",
+                            false,
+                            move |_, _, cx| {
+                                let _ = remove_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if let Some(RequestBody::Single(Body::FormUrlEncoded(
+                                                fields,
+                                            ))) = request.body.as_mut()
+                                                && index < fields.len()
+                                            {
+                                                fields.remove(index);
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        )),
+                );
+        }
+        let add_view = cx.weak_entity();
+        rows.child(components::editor_button(
+            theme,
+            "add-form-field",
+            "+ Add field",
+            false,
+            move |_, _, cx| {
+                let _ = add_view.update(cx, |view, cx| {
+                    view.edit_request(
+                        key,
+                        |request| {
+                            if let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) =
+                                request.body.as_mut()
+                            {
+                                fields.push(FormField {
+                                    name: String::new(),
+                                    value: String::new(),
+                                    disabled: false,
+                                });
+                            }
+                        },
+                        cx,
+                    );
+                });
+            },
+        ))
+        .into_any_element()
+    }
+
+    fn render_multipart_body_editor(
+        &self,
+        key: RequestKey,
+        parts: &[MultipartPart],
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
+        for (index, part) in parts.iter().enumerate() {
+            let value = match &part.value {
+                MultipartValue::Single(value) => value.clone(),
+                MultipartValue::Multiple(values) => values.join(", "),
+            };
+            let name_view = cx.weak_entity();
+            let value_view = cx.weak_entity();
+            let kind_view = cx.weak_entity();
+            let enabled_view = cx.weak_entity();
+            let remove_view = cx.weak_entity();
+            rows =
+                rows.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_2))
+                        .child(components::editor_button(
+                            theme,
+                            ("multipart-kind", index),
+                            if part.kind == MultipartPartKind::File {
+                                "File"
+                            } else {
+                                "Text"
+                            },
+                            part.kind == MultipartPartKind::File,
+                            move |_, _, cx| {
+                                let _ = kind_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                    key,
+                                    |request| {
+                                        if let Some(RequestBody::Single(Body::Multipart(parts))) =
+                                            request.body.as_mut()
+                                            && let Some(part) = parts.get_mut(index)
+                                        {
+                                            part.kind = if part.kind == MultipartPartKind::Text {
+                                                MultipartPartKind::File
+                                            } else {
+                                                MultipartPartKind::Text
+                                            };
+                                        }
+                                    },
+                                    cx,
+                                );
+                                });
+                            },
+                        ))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("multipart-name", index),
+                                part.name.clone(),
+                                "Part",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = name_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                if let Some(RequestBody::Single(Body::Multipart(
+                                                    parts,
+                                                ))) = request.body.as_mut()
+                                                    && let Some(part) = parts.get_mut(index)
+                                                {
+                                                    part.name = value.to_string();
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("multipart-value", index),
+                                value,
+                                "Value or file path",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = value_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                if let Some(RequestBody::Single(Body::Multipart(
+                                                    parts,
+                                                ))) = request.body.as_mut()
+                                                    && let Some(part) = parts.get_mut(index)
+                                                {
+                                                    part.value =
+                                                        MultipartValue::Single(value.to_string());
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(components::switch(
+                            theme,
+                            ("multipart-enabled", index),
+                            "Enable multipart part",
+                            !part.disabled,
+                            move |enabled, _, cx| {
+                                let _ = enabled_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                    key,
+                                    |request| {
+                                        if let Some(RequestBody::Single(Body::Multipart(parts))) =
+                                            request.body.as_mut()
+                                            && let Some(part) = parts.get_mut(index)
+                                        {
+                                            part.disabled = !enabled;
+                                        }
+                                    },
+                                    cx,
+                                );
+                                });
+                            },
+                        ))
+                        .child(components::editor_button(
+                            theme,
+                            ("remove-multipart-part", index),
+                            "−",
+                            false,
+                            move |_, _, cx| {
+                                let _ = remove_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                    key,
+                                    |request| {
+                                        if let Some(RequestBody::Single(Body::Multipart(parts))) =
+                                            request.body.as_mut()
+                                            && index < parts.len()
+                                        {
+                                            parts.remove(index);
+                                        }
+                                    },
+                                    cx,
+                                );
+                                });
+                            },
+                        )),
+                );
+        }
+        let add_view = cx.weak_entity();
+        rows.child(components::editor_button(
+            theme,
+            "add-multipart-part",
+            "+ Add part",
+            false,
+            move |_, _, cx| {
+                let _ = add_view.update(cx, |view, cx| {
+                    view.edit_request(
+                        key,
+                        |request| {
+                            if let Some(RequestBody::Single(Body::Multipart(parts))) =
+                                request.body.as_mut()
+                            {
+                                parts.push(MultipartPart {
+                                    name: String::new(),
+                                    kind: MultipartPartKind::Text,
+                                    value: MultipartValue::Single(String::new()),
+                                    content_type: None,
+                                    disabled: false,
+                                });
+                            }
+                        },
+                        cx,
+                    );
+                });
+            },
+        ))
+        .into_any_element()
+    }
+
+    fn render_file_body_editor(
+        &self,
+        key: RequestKey,
+        files: &[FileReference],
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
+        for (index, file) in files.iter().enumerate() {
+            let path_view = cx.weak_entity();
+            let type_view = cx.weak_entity();
+            let selected_view = cx.weak_entity();
+            let remove_view = cx.weak_entity();
+            rows =
+                rows.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_2))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("body-file-path", index),
+                                file.file_path.clone(),
+                                "File path",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = path_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                    key,
+                                    |request| {
+                                        if let Some(RequestBody::Single(Body::File(files))) =
+                                            request.body.as_mut()
+                                            && let Some(file) = files.get_mut(index)
+                                        {
+                                            file.file_path = value.to_string();
+                                        }
+                                    },
+                                    cx,
+                                );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("body-file-content-type", index),
+                                file.content_type.clone(),
+                                "Content type",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let _ = type_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                    key,
+                                    |request| {
+                                        if let Some(RequestBody::Single(Body::File(files))) =
+                                            request.body.as_mut()
+                                            && let Some(file) = files.get_mut(index)
+                                        {
+                                            file.content_type = value.to_string();
+                                        }
+                                    },
+                                    cx,
+                                );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(components::switch(
+                            theme,
+                            ("body-file-selected", index),
+                            "Select body file",
+                            file.selected,
+                            move |selected, _, cx| {
+                                let _ = selected_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if let Some(RequestBody::Single(Body::File(files))) =
+                                                request.body.as_mut()
+                                                && let Some(file) = files.get_mut(index)
+                                            {
+                                                file.selected = selected;
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        ))
+                        .child(components::editor_button(
+                            theme,
+                            ("remove-body-file", index),
+                            "−",
+                            false,
+                            move |_, _, cx| {
+                                let _ = remove_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if let Some(RequestBody::Single(Body::File(files))) =
+                                                request.body.as_mut()
+                                                && index < files.len()
+                                            {
+                                                files.remove(index);
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        )),
+                );
+        }
+        let add_view = cx.weak_entity();
+        rows.child(components::editor_button(
+            theme,
+            "add-body-file",
+            "+ Add file",
+            false,
+            move |_, _, cx| {
+                let _ = add_view.update(cx, |view, cx| {
+                    view.edit_request(
+                        key,
+                        |request| {
+                            if let Some(RequestBody::Single(Body::File(files))) =
+                                request.body.as_mut()
+                            {
+                                files.push(FileReference {
+                                    file_path: String::new(),
+                                    content_type: "application/octet-stream".to_owned(),
+                                    selected: files.is_empty(),
+                                });
+                            }
+                        },
+                        cx,
+                    );
+                });
+            },
+        ))
+        .into_any_element()
+    }
+
+    fn render_authentication_editor(
+        &self,
+        key: RequestKey,
+        request: &HttpRequest,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let active = request
+            .authentication
+            .as_ref()
+            .map(|auth| auth_label(&auth.kind));
+        let choices = [
+            ("None", None),
+            ("Inherit", Some(AuthenticationKind::Inherit)),
+            ("Basic", Some(AuthenticationKind::Basic)),
+            ("Bearer", Some(AuthenticationKind::Bearer)),
+            ("API Key", Some(AuthenticationKind::ApiKey)),
+            ("OAuth 1", Some(AuthenticationKind::OAuth1)),
+            ("OAuth 2", Some(AuthenticationKind::OAuth2)),
+            ("AWS v4", Some(AuthenticationKind::AwsV4)),
+            ("WSSE", Some(AuthenticationKind::Wsse)),
+            ("Digest", Some(AuthenticationKind::Digest)),
+            ("NTLM", Some(AuthenticationKind::Ntlm)),
+        ];
+        let mut kind_buttons = div().flex().flex_wrap().gap(px(theme.metrics.spacing_1));
+        for (index, (label, kind)) in choices.into_iter().enumerate() {
+            let kind_view = cx.weak_entity();
+            kind_buttons = kind_buttons.child(components::editor_button(
+                theme,
+                ("authentication-kind", index),
+                label,
+                active == Some(label) || (active.is_none() && label == "None"),
+                move |_, _, cx| {
+                    let kind = kind.clone();
+                    let _ = kind_view.update(cx, |view, cx| {
+                        view.edit_request(key, |request| set_authentication(request, kind), cx);
+                    });
+                },
+            ));
+        }
+
+        let mut editor = div()
+            .flex()
+            .flex_col()
+            .gap(px(theme.metrics.spacing_3))
+            .child(kind_buttons);
+        if let Some(authentication) = &request.authentication {
+            for (index, (property_name, value)) in authentication.properties.iter().enumerate() {
+                let old_name = property_name.clone();
+                let name_view = cx.weak_entity();
+                let value_name = property_name.clone();
+                let value_view = cx.weak_entity();
+                let remove_name = property_name.clone();
+                let remove_view = cx.weak_entity();
+                editor = editor.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_2))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("authentication-property-name", index),
+                                property_name.clone(),
+                                "Property",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let old_name = old_name.clone();
+                                    let _ = name_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                let Some(authentication) =
+                                                    request.authentication.as_mut()
+                                                else {
+                                                    return;
+                                                };
+                                                if let Some(old_value) =
+                                                    authentication.properties.remove(&old_name)
+                                                {
+                                                    authentication
+                                                        .properties
+                                                        .insert(value.to_string(), old_value);
+                                                }
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(div().flex_1().min_w(px(0.0)).child(
+                            components::variable_text_input(
+                                theme,
+                                ("authentication-property-value", index),
+                                auth_value(value),
+                                "Value",
+                                self.variable_context(key),
+                                move |value, _, input_cx| {
+                                    let value_name = value_name.clone();
+                                    let _ = value_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                set_auth_property(
+                                                    request,
+                                                    value_name,
+                                                    value.to_string(),
+                                                )
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            ),
+                        ))
+                        .child(components::editor_button(
+                            theme,
+                            ("remove-authentication-property", index),
+                            "−",
+                            false,
+                            move |_, _, cx| {
+                                let remove_name = remove_name.clone();
+                                let _ = remove_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if let Some(authentication) =
+                                                request.authentication.as_mut()
+                                            {
+                                                authentication.properties.remove(&remove_name);
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        )),
+                );
+            }
+            let add_view = cx.weak_entity();
+            editor = editor.child(components::editor_button(
+                theme,
+                "add-authentication-property",
+                "+ Add property",
+                false,
+                move |_, _, cx| {
+                    let _ = add_view.update(cx, |view, cx| {
+                        view.edit_request(
+                            key,
+                            |request| {
+                                let Some(authentication) = request.authentication.as_mut() else {
+                                    return;
+                                };
+                                let mut index = authentication.properties.len() + 1;
+                                let mut name = "property".to_owned();
+                                while authentication.properties.contains_key(&name) {
+                                    name = format!("property{index}");
+                                    index += 1;
+                                }
+                                authentication
+                                    .properties
+                                    .insert(name, AuthenticationValue::String(String::new()));
+                            },
+                            cx,
+                        );
+                    });
+                },
+            ));
+        } else {
+            editor = editor.child(
                 div()
-                    .flex()
-                    .gap(px(theme.metrics.spacing_4))
-                    .text_color(theme.colors.text.secondary)
-                    .child(format!("Query  {}", request.query_parameters.len()))
-                    .child(format!("Headers  {}", request.headers.len()))
-                    .child(if request.body.is_some() {
-                        "Body"
-                    } else {
-                        "No body"
-                    })
-                    .child(if request.authentication.is_some() {
-                        "Authentication"
-                    } else {
-                        "No authentication"
-                    }),
-            )
+                    .text_color(theme.colors.text.muted)
+                    .child("This request does not use authentication."),
+            );
+        }
+        editor.into_any_element()
     }
 
     fn render_response_panel(&self, theme: Theme) -> gpui::Div {
@@ -793,7 +1967,7 @@ impl ProbeApp {
             .flex()
             .when(horizontal, |work_area| work_area.flex_row())
             .when(!horizontal, |work_area| work_area.flex_col())
-            .child(self.render_request_editor(theme))
+            .child(self.render_request_editor(theme, cx))
             .child(handle)
             .child(self.render_response_panel(theme))
     }
@@ -977,6 +2151,28 @@ impl ProbeApp {
         self.loaded_workspace.as_ref()?.workspace().request(key)
     }
 
+    fn variable_context(&self, key: RequestKey) -> components::VariableContext {
+        let Some(selected) = self.request_editor.selected_environment(key) else {
+            return components::VariableContext {
+                values: Default::default(),
+                unavailable_message: "Select an environment to resolve this variable".to_owned(),
+            };
+        };
+        let Some(loaded) = &self.loaded_workspace else {
+            return components::VariableContext::default();
+        };
+        match resolve_environment(loaded.workspace().environments(), selected) {
+            Ok(environment) => components::VariableContext {
+                values: environment.variables().clone(),
+                unavailable_message: "Variable value is unavailable".to_owned(),
+            },
+            Err(error) => components::VariableContext {
+                values: Default::default(),
+                unavailable_message: error.to_string(),
+            },
+        }
+    }
+
     fn request_count_label(&self) -> String {
         self.loaded_workspace.as_ref().map_or_else(
             || "No workspace".to_owned(),
@@ -1101,6 +2297,17 @@ fn method_color(theme: Theme, method: &str) -> gpui::Rgba {
     }
 }
 
+fn request_method_options(active_method: &str) -> Vec<(String, String)> {
+    let mut methods = vec!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+    if !methods.contains(&active_method) {
+        methods.push(active_method);
+    }
+    methods
+        .into_iter()
+        .map(|method| (method.to_owned(), method.to_owned()))
+        .collect()
+}
+
 #[cfg(target_os = "windows")]
 fn render_windows_controls(theme: Theme) -> gpui::Div {
     let control = move |id: &'static str, label: &'static str, area, action: fn(&mut Window)| {
@@ -1193,6 +2400,7 @@ mod tests {
     use gpui::{Modifiers, TestAppContext, VisualTestContext, px, size};
 
     use super::ProbeApp;
+    use crate::request_editor::{BodyEditorKind, EditorSection};
 
     fn bundled_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1202,6 +2410,11 @@ mod tests {
     fn large_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/opencollection/phase2-large-workspace.yml")
+    }
+
+    fn environment_fixture() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/opencollection/phase4-environments.yml")
     }
 
     #[gpui::test]
@@ -1276,5 +2489,114 @@ mod tests {
             rendered_rows < total_rows,
             "virtualized sidebar rendered all {total_rows} rows"
         );
+    }
+
+    #[gpui::test]
+    fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
+        cx.update(base_gpui::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(request_key, cx);
+            })
+            .expect("test window should be open");
+
+        for section in EditorSection::ALL {
+            window
+                .update(cx, |view, _, cx| {
+                    view.request_editor.section = section;
+                    if section == EditorSection::Body {
+                        view.change_body_kind(request_key, BodyEditorKind::Json, cx);
+                    }
+                    cx.notify();
+                })
+                .expect("test window should remain open");
+            cx.run_until_parked();
+            {
+                let mut visual = VisualTestContext::from_window(window.into(), cx);
+                assert!(visual.debug_bounds("request-url-bar").is_some());
+                assert!(visual.debug_bounds("request-method-trigger").is_some());
+                assert!(visual.debug_bounds("request-environment-trigger").is_some());
+                if section == EditorSection::Body {
+                    let body = visual
+                        .debug_bounds("request-body-editor")
+                        .expect("JSON body editor should render");
+                    assert!(body.size.height > px(120.0));
+                }
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn request_variables_render_inline_and_show_resolved_tooltips(cx: &mut TestAppContext) {
+        cx.update(base_gpui::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = environment_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(request_key, cx);
+                view.request_editor
+                    .select_environment(request_key, Some("development".to_owned()));
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let input_point = {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds("variable-highlight-overlay").is_some());
+            let url_bar = visual
+                .debug_bounds("request-url-bar")
+                .expect("request URL bar should render");
+            gpui::point(url_bar.right() - px(40.0), url_bar.center().y)
+        };
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual.simulate_mouse_move(input_point, None, Modifiers::default());
+            visual.run_until_parked();
+        }
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.run_until_parked();
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(
+                visual
+                    .debug_bounds("variable-input-tooltip-popup")
+                    .is_some()
+            );
+            visual.simulate_click(input_point, Modifiers::default());
+            visual.run_until_parked();
+        }
+        cx.simulate_keystrokes(window.into(), "cmd-a");
+        cx.simulate_input(window.into(), "https://changed.example");
+        cx.run_until_parked();
+        let edited_url = window
+            .update(cx, |view, _, _| {
+                view.active_request()
+                    .and_then(|request| request.url.clone())
+            })
+            .expect("test window should remain open");
+        assert_eq!(edited_url.as_deref(), Some("https://changed.example"));
     }
 }

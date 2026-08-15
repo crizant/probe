@@ -102,9 +102,11 @@ bundled and unbundled filesystem loading, an indexed in-memory workspace, shared
 environment resolution, asynchronous HTTP execution, a versioned automation-safe CLI
 contract, and a native GPUI desktop shell with semantic light/dark themes,
 OpenCollection-backed browsing, request tabs, resizable editor/response panes, and
-a title-bar workspace switcher. The editor and response viewer support vertical or
-horizontal layouts, and the local desktop session restores the active workspace,
-tabs, collapsed folders, pane orientation, and pane sizes automatically.
+a title-bar workspace switcher. The request editor updates method, URL, query
+parameters, headers, body, authentication, and environment selection in memory as
+the user works. The editor and response viewer support vertical or horizontal layouts,
+and the local desktop session restores the active workspace, tabs, collapsed folders,
+pane orientation, and pane sizes automatically.
 
 ```bash
 cargo run -p probe-cli -- --help

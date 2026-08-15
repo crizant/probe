@@ -7,6 +7,7 @@
 
 mod app;
 pub mod components;
+mod request_editor;
 mod session;
 mod shell;
 pub mod theme;

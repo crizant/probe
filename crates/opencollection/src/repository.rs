@@ -82,6 +82,14 @@ impl LoadedWorkspace {
         &self.workspace
     }
 
+    /// Mutably looks up a request in the loaded in-memory workspace.
+    ///
+    /// Desktop editors use this fast path to apply draft changes immediately. Saving
+    /// remains an explicit, separate repository operation.
+    pub fn request_mut(&mut self, key: RequestKey) -> Option<&mut probe_core::HttpRequest> {
+        self.workspace.request_mut(key)
+    }
+
     /// Returns requests in collection traversal order.
     #[must_use]
     pub fn requests(&self) -> &[LocatedRequest] {
