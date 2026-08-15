@@ -119,6 +119,13 @@ Structured stdout must contain only structured command output.
 
 Logs and diagnostics belong on stderr.
 
+The CLI's JSON documents carry an explicit schema version. Automation should branch
+on stable error categories and exit codes, never parse human diagnostic messages.
+Bundled collections may be supplied through stdin without moving YAML parsing into
+the frontend: the OpenCollection repository projects the in-memory document and
+builds the same structural selectors used for bundled files. Quiet mode is a
+presentation concern and suppresses only successful command output.
+
 
 ## Desktop Presentation
 

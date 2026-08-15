@@ -70,6 +70,14 @@ pub fn load_workspace(path: impl AsRef<Path>) -> Result<LoadedWorkspace, LoadErr
     }
 }
 
+/// Loads a bundled OpenCollection workspace from an in-memory YAML document.
+///
+/// Structural selectors are identical to selectors produced when the same bundled
+/// document is loaded from a file.
+pub fn load_workspace_from_str(source: &str) -> Result<LoadedWorkspace, LoadError> {
+    load_bundled_source(source, Path::new("<memory>"))
+}
+
 /// An error raised while loading an OpenCollection workspace.
 #[derive(Debug)]
 pub enum LoadError {
@@ -122,8 +130,12 @@ enum LocatorNode {
 
 fn load_bundled(path: &Path) -> Result<LoadedWorkspace, LoadError> {
     let source = read_to_string(path)?;
-    let parsed = parse(&source).map_err(|source| LoadError::Parse {
-        path: path.to_owned(),
+    load_bundled_source(&source, path)
+}
+
+fn load_bundled_source(source: &str, source_name: &Path) -> Result<LoadedWorkspace, LoadError> {
+    let parsed = parse(source).map_err(|source| LoadError::Parse {
+        path: source_name.to_owned(),
         source,
     })?;
     let nodes = bundled_locator_nodes(parsed.document(), "items");

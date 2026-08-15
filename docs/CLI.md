@@ -24,6 +24,14 @@ unresolved `{{variable}}` expressions.
 engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes the raw
 response body to the specified path; response metadata remains on stdout.
 
+Use `-` instead of `<path>` to read a bundled OpenCollection YAML document from
+stdin. Stdin does not represent an unbundled directory, and requests loaded this way
+use bundled structural selectors.
+
+`--quiet` (or `-q`) suppresses stdout for successful commands, which is useful when
+only the exit status matters. Failure diagnostics remain on stderr. `--quiet` and
+`--json` are mutually exclusive because structured mode always emits a result.
+
 ## Request Selectors
 
 Selectors are repository locators, not session-only `RequestKey` values:
@@ -41,6 +49,7 @@ identity.
 
 ```json
 {
+  "schemaVersion": 1,
   "collection": {
     "name": "Example",
     "summary": null,
@@ -55,8 +64,12 @@ identity.
 }
 ```
 
-`request list --json` returns a `requests` array. Each entry has `method`, `name`,
-`selector`, and `url` fields.
+Every JSON success and error document has top-level `schemaVersion: 1`. Fields may be
+added compatibly within schema version 1, but documented fields will not be removed or
+change type without incrementing the version.
+
+`request list --json` returns a `requests` array. Each entry has nullable `method`,
+`name`, and `url` fields plus a string `selector`.
 
 `request get --json` returns `authentication`, `body`, `environment`, `headers`,
 `method`, `name`, `queryParameters`, `selector`, and `url`. `environment` is the
@@ -67,6 +80,7 @@ query parameters contain stable `disabled`, `name`, and `value` fields.
 
 ```json
 {
+  "schemaVersion": 1,
   "request": {
     "method": "GET",
     "url": "https://api.example.com/users"
@@ -99,14 +113,19 @@ Structured errors use:
 
 ```json
 {
+  "schemaVersion": 1,
   "error": {
     "category": "request_not_found",
+    "exitCode": 4,
     "message": "request selector not found: missing.yml"
   }
 }
 ```
 
-JSON stdout never contains progress output, terminal escape sequences, or logs.
+`error.category` and `error.exitCode` are the stable programmatic failure contract.
+`error.message` is a human diagnostic and may include platform-specific paths or I/O
+text, so automation must not parse it. JSON stdout never contains progress output,
+terminal escape sequences, or logs.
 
 Environment failures use exit code 5 and stable categories including
 `environment_not_found`, `missing_variable`, `secret_variable_unavailable`, and
@@ -118,6 +137,8 @@ HTTP request configuration errors use exit code 5 and category
 `request_configuration`. Timeout, cancellation, connection, protocol, and response
 body failures use exit code 6 with categories such as `request_timeout`,
 `request_cancelled`, and `network_execution`. Output-file failures use `output_error`.
+Failure to read a stdin workspace uses `stdin_error` and exit code 3; invalid YAML read
+from stdin uses `invalid_workspace` and exit code 3.
 
 ## Exit Codes
 

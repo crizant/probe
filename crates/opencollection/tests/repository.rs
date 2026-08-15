@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use probe_opencollection::load_workspace;
+use probe_opencollection::{load_workspace, load_workspace_from_str};
 
 fn fixture(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -55,4 +55,17 @@ fn bundled_selector_uses_source_position_when_unsupported_items_are_skipped() {
 
     assert_eq!(loaded.requests().len(), 1);
     assert_eq!(loaded.requests()[0].selector(), "items/1");
+}
+
+#[test]
+fn loads_bundled_workspace_from_yaml_source() {
+    let source = std::fs::read_to_string(fixture("phase1-bundled.yml")).unwrap();
+    let loaded = load_workspace_from_str(&source).expect("source workspace should load");
+
+    let selectors: Vec<_> = loaded
+        .requests()
+        .iter()
+        .map(|request| request.selector())
+        .collect();
+    assert_eq!(selectors, ["items/0/items/0", "items/1"]);
 }

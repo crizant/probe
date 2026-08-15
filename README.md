@@ -62,6 +62,8 @@ Examples:
 ```bash
 probe collection validate ./api
 
+cat collection.yml | probe collection validate - --json
+
 probe request list ./api --json
 
 probe request get ./api users/list-users.yml --json
@@ -83,6 +85,8 @@ probe request run ./api users/list-users.yml \
 
 probe request run ./api reports/download.yml \
   --environment development --output ./report.pdf --json
+
+probe collection validate ./api --quiet
 ```
 
 `--environment <name>` selects an OpenCollection environment, applies its `extends`
@@ -92,7 +96,8 @@ chain, and interpolates request variables before output or execution preflight.
 
 The repository is a Cargo workspace. It currently includes OpenCollection parsing,
 bundled and unbundled filesystem loading, an indexed in-memory workspace, shared
-environment resolution, and asynchronous HTTP execution used by the CLI.
+environment resolution, asynchronous HTTP execution, and a versioned automation-safe
+CLI contract with stdin and quiet-mode support.
 
 ```bash
 cargo run -p probe-cli -- --help

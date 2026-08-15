@@ -2,11 +2,15 @@
 
 #![forbid(unsafe_code)]
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    io::{self, Read},
+    path::PathBuf,
+};
 
 use probe_core::{EnvironmentResolutionError, resolve_environment, resolve_request};
 use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpResponse};
-use probe_opencollection::{LoadedWorkspace, load_workspace};
+use probe_opencollection::{LoadedWorkspace, load_workspace, load_workspace_from_str};
 use serde_json::json;
 
 mod presentation;
@@ -23,6 +27,8 @@ pub const REQUEST_NOT_FOUND_EXIT_CODE: u8 = 4;
 pub const CONFIGURATION_EXIT_CODE: u8 = 5;
 /// Exit code used for request execution and output errors.
 pub const EXECUTION_EXIT_CODE: u8 = 6;
+/// Version of the documented machine-readable JSON contracts.
+pub const JSON_SCHEMA_VERSION: u64 = 1;
 
 /// Captured CLI output and process status.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,8 +54,10 @@ impl RunOutput {
         if json_output {
             Self {
                 stdout: pretty_json(&json!({
+                    "schemaVersion": JSON_SCHEMA_VERSION,
                     "error": {
                         "category": error.category,
+                        "exitCode": error.exit_code,
                         "message": error.message,
                     }
                 })),
@@ -83,24 +91,25 @@ pub const fn help() -> &'static str {
         "Options:\n",
         "      --environment <name>  Resolve request variables with an environment\n",
         "      --output <file>        Write the response body to a file\n",
-        "      --json               Emit deterministic JSON\n",
-        "  -h, --help               Print help\n",
+        "      --json                Emit versioned deterministic JSON\n",
+        "  -q, --quiet               Suppress successful command output\n",
+        "  -h, --help                Print help\n",
     )
 }
 
 const COLLECTION_HELP: &str = concat!(
-    "Usage: probe collection validate <path> [--json]\n",
+    "Usage: probe collection validate <path|-> [--json] [--quiet]\n",
     "\n",
-    "Validate a bundled OpenCollection YAML file or an unbundled directory.\n",
+    "Validate a bundled OpenCollection YAML file, stdin (-), or an unbundled directory.\n",
 );
 
 const REQUEST_HELP: &str = concat!(
     "Usage: probe request <COMMAND>\n",
     "\n",
     "Commands:\n",
-    "  list <path>                 List requests and repository selectors\n",
-    "  get <path> <selector> [--environment <name>]  Inspect one request\n",
-    "  run <path> <selector> [--environment <name>] [--output <file>]\n",
+    "  list <path|->                 List requests and repository selectors\n",
+    "  get <path|-> <selector> [--environment <name>]  Inspect one request\n",
+    "  run <path|-> <selector> [--environment <name>] [--output <file>]\n",
 );
 
 /// Runs the CLI adapter for arguments that exclude the executable name.
@@ -110,6 +119,17 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
+    run_with_stdin(args, &mut io::empty())
+}
+
+/// Runs the CLI adapter with a reader used when the workspace path is `-`.
+#[must_use]
+pub fn run_with_stdin<I, S, R>(args: I, stdin: &mut R) -> RunOutput
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+    R: Read,
+{
     let mut args: Vec<String> = args
         .into_iter()
         .map(|argument| argument.as_ref().to_owned())
@@ -118,9 +138,28 @@ where
     let json_output = json_count == 1;
     args.retain(|argument| argument != "--json");
 
+    let quiet_count = args
+        .iter()
+        .filter(|argument| matches!(argument.as_str(), "-q" | "--quiet"))
+        .count();
+    let quiet = quiet_count == 1;
+    args.retain(|argument| !matches!(argument.as_str(), "-q" | "--quiet"));
+
     if json_count > 1 {
         return RunOutput::failure(
             CliError::invalid_arguments("--json may only be specified once"),
+            true,
+        );
+    }
+    if quiet_count > 1 {
+        return RunOutput::failure(
+            CliError::invalid_arguments("--quiet may only be specified once"),
+            json_output,
+        );
+    }
+    if json_output && quiet {
+        return RunOutput::failure(
+            CliError::invalid_arguments("--json and --quiet cannot be used together"),
             true,
         );
     }
@@ -149,8 +188,8 @@ where
         Err(error) => return RunOutput::failure(error, json_output),
     };
 
-    match parse_command(&args, environment, output).and_then(execute) {
-        Ok(output) => RunOutput::success(output.render(json_output)),
+    match parse_command(&args, environment, output).and_then(|command| execute(command, stdin)) {
+        Ok(output) => RunOutput::success(output.render(json_output, quiet)),
         Err(error) => RunOutput::failure(error, json_output),
     }
 }
@@ -158,22 +197,46 @@ where
 #[derive(Debug)]
 enum Command {
     Validate {
-        path: PathBuf,
+        input: WorkspaceInput,
     },
     List {
-        path: PathBuf,
+        input: WorkspaceInput,
     },
     Get {
-        path: PathBuf,
+        input: WorkspaceInput,
         selector: String,
         environment: Option<String>,
     },
     Run {
-        path: PathBuf,
+        input: WorkspaceInput,
         selector: String,
         environment: Option<String>,
         output: Option<PathBuf>,
     },
+}
+
+#[derive(Debug)]
+enum WorkspaceInput {
+    Path(PathBuf),
+    Stdin,
+}
+
+impl WorkspaceInput {
+    fn from_argument(argument: &str) -> Self {
+        if argument == "-" {
+            Self::Stdin
+        } else {
+            Self::Path(PathBuf::from(argument))
+        }
+    }
+
+    fn base_directory(&self) -> Option<PathBuf> {
+        match self {
+            Self::Path(path) if path.is_dir() => Some(path.clone()),
+            Self::Path(path) => path.parent().map(std::path::Path::to_owned),
+            Self::Stdin => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -183,9 +246,11 @@ struct CommandOutput {
 }
 
 impl CommandOutput {
-    fn render(self, json_output: bool) -> String {
-        if json_output {
-            pretty_json(&self.json)
+    fn render(self, json_output: bool, quiet: bool) -> String {
+        if quiet {
+            String::new()
+        } else if json_output {
+            pretty_json(&versioned_json(self.json))
         } else {
             self.human
         }
@@ -279,6 +344,14 @@ impl CliError {
             exit_code: EXECUTION_EXIT_CODE,
         }
     }
+
+    fn stdin(error: &std::io::Error) -> Self {
+        Self {
+            category: "stdin_error",
+            message: format!("cannot read OpenCollection YAML from stdin: {error}"),
+            exit_code: INVALID_WORKSPACE_EXIT_CODE,
+        }
+    }
 }
 
 fn extract_environment(args: &mut Vec<String>) -> Result<Option<String>, CliError> {
@@ -342,7 +415,7 @@ fn parse_command(
                 && output.is_none() =>
         {
             Ok(Command::Validate {
-                path: PathBuf::from(path),
+                input: WorkspaceInput::from_argument(path),
             })
         }
         [group, action, path]
@@ -352,21 +425,21 @@ fn parse_command(
                 && output.is_none() =>
         {
             Ok(Command::List {
-                path: PathBuf::from(path),
+                input: WorkspaceInput::from_argument(path),
             })
         }
         [group, action, path, selector]
             if group == "request" && action == "get" && output.is_none() =>
         {
             Ok(Command::Get {
-                path: PathBuf::from(path),
+                input: WorkspaceInput::from_argument(path),
                 selector: selector.clone(),
                 environment,
             })
         }
         [group, action, path, selector] if group == "request" && action == "run" => {
             Ok(Command::Run {
-                path: PathBuf::from(path),
+                input: WorkspaceInput::from_argument(path),
                 selector: selector.clone(),
                 environment,
                 output,
@@ -378,31 +451,38 @@ fn parse_command(
     }
 }
 
-fn execute(command: Command) -> Result<CommandOutput, CliError> {
+fn execute(command: Command, stdin: &mut impl Read) -> Result<CommandOutput, CliError> {
     match command {
-        Command::Validate { path } => validate(&path),
-        Command::List { path } => list_requests(&path),
+        Command::Validate { input } => validate(&input, stdin),
+        Command::List { input } => list_requests(&input, stdin),
         Command::Get {
-            path,
+            input,
             selector,
             environment,
-        } => get_request(&path, &selector, environment.as_deref()),
+        } => get_request(&input, &selector, environment.as_deref(), stdin),
         Command::Run {
-            path,
+            input,
             selector,
             environment,
             output,
-        } => run_request(&path, &selector, environment.as_deref(), output.as_ref()),
+        } => run_request(
+            &input,
+            &selector,
+            environment.as_deref(),
+            output.as_ref(),
+            stdin,
+        ),
     }
 }
 
 fn run_request(
-    path: &PathBuf,
+    input: &WorkspaceInput,
     selector: &str,
     environment: Option<&str>,
     output: Option<&PathBuf>,
+    stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
-    let loaded = load(path)?;
+    let loaded = load(input, stdin)?;
     let key = loaded
         .request_key(selector)
         .ok_or_else(|| CliError::request_not_found(selector))?;
@@ -415,11 +495,7 @@ fn run_request(
             .expect("repository request key must resolve")
             .clone()
     };
-    let base_directory = if path.is_dir() {
-        Some(path.clone())
-    } else {
-        path.parent().map(std::path::Path::to_owned)
-    };
+    let base_directory = input.base_directory();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -452,8 +528,8 @@ fn response_output(
     }
 }
 
-fn validate(path: &PathBuf) -> Result<CommandOutput, CliError> {
-    let loaded = load(path)?;
+fn validate(input: &WorkspaceInput, stdin: &mut impl Read) -> Result<CommandOutput, CliError> {
+    let loaded = load(input, stdin)?;
     let workspace = loaded.workspace();
     let name = workspace.metadata().name.as_deref().unwrap_or("<unnamed>");
     Ok(CommandOutput {
@@ -479,8 +555,8 @@ fn validate(path: &PathBuf) -> Result<CommandOutput, CliError> {
     })
 }
 
-fn list_requests(path: &PathBuf) -> Result<CommandOutput, CliError> {
-    let loaded = load(path)?;
+fn list_requests(input: &WorkspaceInput, stdin: &mut impl Read) -> Result<CommandOutput, CliError> {
+    let loaded = load(input, stdin)?;
     let mut lines = vec!["SELECTOR\tMETHOD\tNAME\tURL".to_owned()];
     let mut requests = Vec::with_capacity(loaded.requests().len());
     for located in loaded.requests() {
@@ -506,11 +582,12 @@ fn list_requests(path: &PathBuf) -> Result<CommandOutput, CliError> {
 }
 
 fn get_request(
-    path: &PathBuf,
+    input: &WorkspaceInput,
     selector: &str,
     environment: Option<&str>,
+    stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
-    let loaded = load(path)?;
+    let loaded = load(input, stdin)?;
     let key = loaded
         .request_key(selector)
         .ok_or_else(|| CliError::request_not_found(selector))?;
@@ -544,8 +621,26 @@ fn resolve_loaded_request(
     resolve_request(request, &environment).map_err(CliError::configuration)
 }
 
-fn load(path: &PathBuf) -> Result<LoadedWorkspace, CliError> {
-    load_workspace(path).map_err(|error| CliError::invalid_workspace(error.to_string()))
+fn load(input: &WorkspaceInput, stdin: &mut impl Read) -> Result<LoadedWorkspace, CliError> {
+    match input {
+        WorkspaceInput::Path(path) => load_workspace(path),
+        WorkspaceInput::Stdin => {
+            let mut source = String::new();
+            stdin
+                .read_to_string(&mut source)
+                .map_err(|error| CliError::stdin(&error))?;
+            load_workspace_from_str(&source)
+        }
+    }
+    .map_err(|error| CliError::invalid_workspace(error.to_string()))
+}
+
+fn versioned_json(mut value: serde_json::Value) -> serde_json::Value {
+    value
+        .as_object_mut()
+        .expect("command JSON output must be an object")
+        .insert("schemaVersion".to_owned(), json!(JSON_SCHEMA_VERSION));
+    value
 }
 
 fn pretty_json(value: &serde_json::Value) -> String {

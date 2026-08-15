@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     path::PathBuf,
-    process::Command,
+    process::{Command, Stdio},
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -111,6 +111,7 @@ fn validates_unbundled_workspace_as_json() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["schemaVersion"], 1);
     assert_eq!(value["valid"], true);
     assert_eq!(value["collection"]["name"], "Unbundled fixture");
     assert_eq!(value["counts"]["requests"], 2);
@@ -140,6 +141,48 @@ fn lists_requests_deterministically_as_json() {
     let value: Value = serde_json::from_slice(&first.stdout).expect("stdout should be JSON");
     assert_eq!(value["requests"][0]["selector"], "health.yml");
     assert_eq!(value["requests"][1]["selector"], "users/list-users.yml");
+}
+
+#[test]
+fn reads_a_bundled_workspace_from_stdin() {
+    let source = fs::read(fixture("phase1-bundled.yml")).unwrap();
+    let mut child = probe()
+        .args(["request", "list", "-", "--json"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("list command should start");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&source)
+        .expect("fixture should be written to stdin");
+    let output = child
+        .wait_with_output()
+        .expect("list command should finish");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["requests"][0]["selector"], "items/0/items/0");
+    assert_eq!(value["requests"][1]["selector"], "items/1");
+}
+
+#[test]
+fn quiet_mode_suppresses_success_output() {
+    let output = probe()
+        .args(["collection", "validate"])
+        .arg(fixture("unbundled"))
+        .arg("--quiet")
+        .output()
+        .expect("validate command should run");
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -239,7 +282,24 @@ fn reports_request_not_found_as_structured_error() {
     assert_eq!(output.status.code(), Some(4));
     assert!(output.stderr.is_empty());
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["error"]["exitCode"], 4);
     assert_eq!(value["error"]["category"], "request_not_found");
+}
+
+#[test]
+fn quiet_mode_preserves_failure_diagnostics_and_status() {
+    let output = probe()
+        .args(["request", "get"])
+        .arg(fixture("unbundled"))
+        .arg("missing.yml")
+        .arg("--quiet")
+        .output()
+        .expect("get command should run");
+
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("request_not_found"));
 }
 
 #[test]
@@ -371,5 +431,23 @@ fn distinguishes_invalid_arguments() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stderr.is_empty());
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["error"]["exitCode"], 2);
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+}
+
+#[test]
+fn rejects_json_and_quiet_together_as_structured_error() {
+    let output = probe()
+        .args(["collection", "validate"])
+        .arg(fixture("unbundled"))
+        .args(["--json", "--quiet"])
+        .output()
+        .expect("validate command should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["schemaVersion"], 1);
     assert_eq!(value["error"]["category"], "invalid_arguments");
 }

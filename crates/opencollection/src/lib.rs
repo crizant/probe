@@ -19,7 +19,9 @@ use serde_yaml_ng::Value;
 
 mod repository;
 
-pub use repository::{LoadError, LoadedWorkspace, LocatedRequest, load_workspace};
+pub use repository::{
+    LoadError, LoadedWorkspace, LocatedRequest, load_workspace, load_workspace_from_str,
+};
 
 /// An OpenCollection document together with its supported domain projection.
 #[derive(Clone, Debug)]
