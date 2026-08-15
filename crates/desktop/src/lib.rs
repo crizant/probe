@@ -9,6 +9,7 @@ mod app;
 pub mod components;
 mod execution;
 mod request_editor;
+mod response_viewer;
 mod session;
 mod shell;
 pub mod theme;

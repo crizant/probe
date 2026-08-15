@@ -8,18 +8,19 @@ use base_gpui::popover::{
     PopoverPopup, PopoverPortal, PopoverPositioner, PopoverRoot, PopoverTrigger,
 };
 use gpui::{
-    App, AppContext as _, Bounds, Context, CursorStyle, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, MouseMoveEvent, ParentElement as _, PathPromptOptions, Render,
-    StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions, Window, WindowBounds,
-    WindowControlArea, WindowOptions, div, point, prelude::FluentBuilder as _, px, relative, size,
-    uniform_list,
+    App, AppContext as _, Bounds, Context, CursorStyle, FontWeight, HighlightStyle,
+    InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, ParentElement as _,
+    PathPromptOptions, Render, ScrollStrategy, StatefulInteractiveElement as _, Styled as _,
+    StyledText, Task, TitlebarOptions, UniformListScrollHandle, Window, WindowBounds,
+    WindowControlArea, WindowOptions, combine_highlights, div, point, prelude::FluentBuilder as _,
+    px, relative, size, uniform_list,
 };
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, FileReference, FormField, Header, HttpRequest,
     MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RequestBody, RequestKey,
     Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
 };
-use probe_http::{ExecutionOptions, HttpError};
+use probe_http::{ExecutionOptions, HttpError, HttpResponse};
 use probe_opencollection::{LoadedWorkspace, load_workspace};
 
 use crate::{
@@ -31,6 +32,10 @@ use crate::{
     request_editor::{
         BodyEditorKind, EditorSection, RequestEditorState, auth_label, auth_value, body_kind,
         raw_body_mut, set_auth_property, set_authentication,
+    },
+    response_viewer::{
+        PreparedDocument, ResponseViewerState, ResponseViewerTab, SearchColumn, SearchMatch,
+        SyntaxRole, prepare_document, pretty_json_body,
     },
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
@@ -56,8 +61,12 @@ pub struct ProbeApp {
     visible_tree_rows: Vec<TreeRow>,
     request_editor: RequestEditorState,
     execution: ExecutionState,
+    response_viewer: ResponseViewerState,
+    response_scroll: UniformListScrollHandle,
     #[cfg(test)]
     rendered_sidebar_rows: usize,
+    #[cfg(test)]
+    rendered_response_rows: usize,
     _quit_subscription: gpui::Subscription,
 }
 
@@ -90,8 +99,12 @@ impl ProbeApp {
             visible_tree_rows: Vec::new(),
             request_editor: RequestEditorState::default(),
             execution: ExecutionState::default(),
+            response_viewer: ResponseViewerState::default(),
+            response_scroll: UniformListScrollHandle::new(),
             #[cfg(test)]
             rendered_sidebar_rows: 0,
+            #[cfg(test)]
+            rendered_response_rows: 0,
             _quit_subscription: quit_subscription,
         }
     }
@@ -212,6 +225,7 @@ impl ProbeApp {
 
     fn set_workspace(&mut self, path: PathBuf, workspace: LoadedWorkspace) {
         self.execution.clear();
+        self.response_viewer.clear();
         self.loaded_workspace = Some(workspace);
         self.workspace_path = Some(path);
         self.shell.reset_for_workspace();
@@ -313,6 +327,7 @@ impl ProbeApp {
 
     fn close_workspace(&mut self, cx: &mut Context<Self>) {
         self.execution.clear();
+        self.response_viewer.clear();
         self.loaded_workspace = None;
         self.workspace_path = None;
         self.shell.reset_for_workspace();
@@ -364,6 +379,7 @@ impl ProbeApp {
                 Ok(request) => request,
                 Err(error) => {
                     self.execution.fail(key, error.to_string());
+                    self.response_viewer.remove(key);
                     cx.notify();
                     return;
                 }
@@ -389,6 +405,7 @@ impl ProbeApp {
         if let Err(error) = spawn_result {
             self.execution
                 .fail(key, format!("Could not start HTTP execution: {error}"));
+            self.response_viewer.remove(key);
             cx.notify();
             return;
         }
@@ -400,7 +417,7 @@ impl ProbeApp {
                 ))
             });
             let _ = view.update(cx, |view, cx| {
-                view.execution.finish(key, generation, result);
+                view.complete_execution(key, generation, result, cx);
                 cx.notify();
             });
         })
@@ -408,8 +425,44 @@ impl ProbeApp {
         cx.notify();
     }
 
+    fn complete_execution(
+        &mut self,
+        key: RequestKey,
+        generation: u64,
+        result: Result<HttpResponse, HttpError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.execution.finish(key, generation, result);
+        self.refresh_response_document(key, cx);
+    }
+
+    fn refresh_response_document(&mut self, key: RequestKey, cx: &mut Context<Self>) {
+        let Some(ResponseState::Complete(response)) = self.execution.response(key) else {
+            self.response_viewer.remove(key);
+            return;
+        };
+        let generation = self.response_viewer.allocate_generation();
+        let (document, pending) = prepare_document(response, generation);
+        let body = pending.then(|| response.body.clone());
+        self.response_viewer.insert(key, document);
+        let Some(body) = body else {
+            return;
+        };
+        cx.spawn(async move |view, cx| {
+            let pretty = cx
+                .background_spawn(async move { pretty_json_body(&body) })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                view.response_viewer.apply_pretty(key, generation, pretty);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn cancel_request(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         self.execution.cancel(key);
+        self.response_viewer.remove(key);
         cx.notify();
     }
 
@@ -2003,12 +2056,9 @@ impl ProbeApp {
         editor.into_any_element()
     }
 
-    fn render_response_panel(&self, theme: Theme) -> gpui::Div {
-        let state = self
-            .shell
-            .active_tab()
-            .and_then(|key| self.execution.response(key))
-            .cloned();
+    fn render_response_panel(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let active_key = self.shell.active_tab();
+        let state = active_key.and_then(|key| self.execution.response(key));
         let (summary, content) = match state {
             Some(ResponseState::Running) => (
                 "Sending…".to_owned(),
@@ -2040,7 +2090,7 @@ impl ProbeApp {
                     .p(px(theme.metrics.spacing_3))
                     .overflow_y_scroll()
                     .text_color(theme.colors.status.error)
-                    .child(error)
+                    .child(error.clone())
                     .into_any_element(),
             ),
             Some(ResponseState::Complete(response)) => {
@@ -2051,83 +2101,10 @@ impl ProbeApp {
                     format_duration(response.duration),
                     format_size(response.size)
                 );
-                let mut headers = div().flex().flex_col().gap(px(theme.metrics.spacing_1));
-                for header in &response.headers {
-                    headers = headers.child(
-                        div()
-                            .flex()
-                            .gap(px(theme.metrics.spacing_2))
-                            .child(
-                                div()
-                                    .min_w(px(150.0))
-                                    .text_color(theme.colors.text.secondary)
-                                    .child(header.name.clone()),
-                            )
-                            .child(header.value.clone()),
-                    );
-                }
-                if response.headers.is_empty() {
-                    headers = headers.child(
-                        div()
-                            .text_color(theme.colors.text.muted)
-                            .child("No response headers"),
-                    );
-                }
-                let body = String::from_utf8_lossy(&response.body).into_owned();
-                let truncation = (!response.body_complete)
-                    .then_some("Response body is truncated at the in-memory limit.");
+                let document = active_key.and_then(|key| self.response_viewer.document(key));
                 (
                     summary,
-                    div()
-                        .id("response-content-scroll")
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .p(px(theme.metrics.spacing_3))
-                        .flex()
-                        .flex_col()
-                        .gap(px(theme.metrics.spacing_3))
-                        .overflow_y_scroll()
-                        .child(
-                            div()
-                                .id("response-status")
-                                .debug_selector(|| "response-status".into())
-                                .text_color(response_status_color(theme, response.status))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(status),
-                        )
-                        .child(
-                            div()
-                                .id("response-headers")
-                                .debug_selector(|| "response-headers".into())
-                                .flex()
-                                .flex_col()
-                                .gap(px(theme.metrics.spacing_1))
-                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Headers"))
-                                .child(headers),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(theme.metrics.spacing_1))
-                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Body"))
-                                .when_some(truncation, |body, message| {
-                                    body.child(
-                                        div()
-                                            .text_color(theme.colors.status.warning)
-                                            .child(message),
-                                    )
-                                })
-                                .child(
-                                    div()
-                                        .id("response-body")
-                                        .debug_selector(|| "response-body".into())
-                                        .font_family(theme.typography.monospace_family)
-                                        .text_size(px(theme.typography.caption_size))
-                                        .child(body),
-                                ),
-                        )
-                        .into_any_element(),
+                    self.render_response_document(theme, response.status, &status, document, cx),
                 )
             }
             None => (
@@ -2161,17 +2138,355 @@ impl ProbeApp {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap(px(theme.metrics.spacing_2))
                     .border_b_1()
                     .border_color(theme.colors.borders.subtle)
                     .child(div().font_weight(FontWeight::SEMIBOLD).child("Response"))
                     .child(
                         div()
+                            .id("response-status")
+                            .debug_selector(|| "response-status".into())
+                            .min_w(px(0.0))
+                            .flex_1()
                             .text_size(px(theme.typography.caption_size))
                             .text_color(theme.colors.text.muted)
+                            .overflow_hidden()
                             .child(summary),
                     ),
             )
             .child(content)
+    }
+
+    fn render_response_document(
+        &self,
+        theme: Theme,
+        status: u16,
+        status_label: &str,
+        document: Option<&PreparedDocument>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(key) = self.shell.active_tab() else {
+            return div().into_any_element();
+        };
+        let Some(document) = document else {
+            return div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(theme.colors.text.muted)
+                .child("Preparing response…")
+                .into_any_element();
+        };
+
+        let mut tabs = div().flex().items_center().gap(px(theme.metrics.spacing_1));
+        for (index, tab) in ResponseViewerTab::ALL.into_iter().enumerate() {
+            let tab_view = cx.weak_entity();
+            let selected = self.response_viewer.tab() == tab;
+            tabs = tabs.child(
+                div()
+                    .debug_selector(move || {
+                        format!("response-tab-{}", tab.label().to_ascii_lowercase())
+                    })
+                    .child(components::editor_button(
+                        theme,
+                        ("response-view-tab", index),
+                        tab.label(),
+                        selected,
+                        move |_, _, cx| {
+                            let _ = tab_view.update(cx, |view, cx| {
+                                view.response_viewer.set_tab(tab);
+                                view.response_scroll.scroll_to_item(0, ScrollStrategy::Top);
+                                cx.notify();
+                            });
+                        },
+                    )),
+            );
+        }
+
+        let matches = self.response_viewer.matches(key);
+        let match_count = matches.len();
+        let search_label = if self.response_viewer.search().is_empty() {
+            String::new()
+        } else if match_count == 0 {
+            "No matches".to_owned()
+        } else {
+            format!(
+                "{} of {match_count}",
+                self.response_viewer.active_match() + 1
+            )
+        };
+        let search_view = cx.weak_entity();
+        let enter_view = cx.weak_entity();
+        let previous_view = cx.weak_entity();
+        let next_view = cx.weak_entity();
+        let search = div()
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1))
+            .child(components::search_input(
+                theme,
+                "response-search-input",
+                self.response_viewer.search().to_owned(),
+                "Search",
+                move |value, _, input_cx| {
+                    let _ = search_view.update(input_cx, |view, cx| {
+                        view.response_viewer.set_search(value.to_string());
+                        if let Some(first) = view.response_viewer.matches(key).first() {
+                            view.response_scroll
+                                .scroll_to_item(first.row, ScrollStrategy::Center);
+                        }
+                        cx.notify();
+                    });
+                },
+                move |_, _, input_cx| {
+                    let _ = enter_view.update(input_cx, |view, cx| {
+                        view.step_response_match(key, 1);
+                        cx.notify();
+                    });
+                },
+            ))
+            .child(
+                div()
+                    .id("response-search-count")
+                    .debug_selector(|| "response-search-count".into())
+                    .text_size(px(theme.typography.caption_size))
+                    .text_color(theme.colors.text.muted)
+                    .child(search_label),
+            )
+            .child(components::editor_button(
+                theme,
+                "response-search-previous",
+                "↑",
+                false,
+                move |_, _, cx| {
+                    let _ = previous_view.update(cx, |view, cx| {
+                        view.step_response_match(key, -1);
+                        cx.notify();
+                    });
+                },
+            ))
+            .child(components::editor_button(
+                theme,
+                "response-search-next",
+                "↓",
+                false,
+                move |_, _, cx| {
+                    let _ = next_view.update(cx, |view, cx| {
+                        view.step_response_match(key, 1);
+                        cx.notify();
+                    });
+                },
+            ));
+
+        let mut banners = div()
+            .px(px(theme.metrics.spacing_3))
+            .pt(px(theme.metrics.spacing_2))
+            .flex()
+            .flex_col()
+            .gap(px(theme.metrics.spacing_1))
+            .child(
+                div()
+                    .text_color(response_status_color(theme, status))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(status_label.to_owned()),
+            );
+        if document.truncated {
+            banners = banners.child(
+                div()
+                    .text_color(theme.colors.status.warning)
+                    .text_size(px(theme.typography.caption_size))
+                    .child("Response body is truncated at the in-memory limit."),
+            );
+        }
+        if let Some(notice) = &document.pretty_notice
+            && self.response_viewer.tab() != ResponseViewerTab::Headers
+        {
+            banners = banners.child(
+                div()
+                    .text_color(theme.colors.text.muted)
+                    .text_size(px(theme.typography.caption_size))
+                    .child(notice.clone()),
+            );
+        }
+
+        let list = match self.response_viewer.tab() {
+            ResponseViewerTab::Headers => self.render_response_headers(theme, document, cx),
+            ResponseViewerTab::Pretty | ResponseViewerTab::Raw => {
+                self.render_response_body(theme, key, document, cx)
+            }
+        };
+
+        div()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .px(px(theme.metrics.spacing_3))
+                    .py(px(theme.metrics.spacing_1))
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(theme.metrics.spacing_2))
+                    .border_b_1()
+                    .border_color(theme.colors.borders.subtle)
+                    .child(tabs)
+                    .child(search),
+            )
+            .child(banners)
+            .child(list)
+            .into_any_element()
+    }
+
+    fn step_response_match(&mut self, key: probe_core::RequestKey, delta: isize) {
+        if let Some(index) = self.response_viewer.step_match(key, delta)
+            && let Some(found) = self.response_viewer.matches(key).get(index)
+        {
+            self.response_scroll
+                .scroll_to_item(found.row, ScrollStrategy::Center);
+        }
+    }
+
+    fn render_response_body(
+        &self,
+        theme: Theme,
+        key: probe_core::RequestKey,
+        document: &PreparedDocument,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if document.binary {
+            return placeholder_message(theme, "Binary response body cannot be displayed as text.");
+        }
+        let lines = self.response_viewer.visible_lines(key);
+        if lines.is_empty() {
+            return placeholder_message(theme, "Empty response body.");
+        }
+        let row_count = lines.len();
+        div()
+            .id("response-body")
+            .debug_selector(|| "response-body".into())
+            .flex_1()
+            .min_h(px(0.0))
+            .px(px(theme.metrics.spacing_3))
+            .pb(px(theme.metrics.spacing_2))
+            .child(
+                uniform_list("response-body-list", row_count, {
+                    cx.processor(move |view, range: std::ops::Range<usize>, _, _cx| {
+                        #[cfg(test)]
+                        {
+                            view.rendered_response_rows = range.len();
+                        }
+                        let key = view.shell.active_tab();
+                        let lines = key
+                            .map(|key| view.response_viewer.visible_lines(key))
+                            .unwrap_or_default();
+                        let matches = key
+                            .map(|key| view.response_viewer.matches(key))
+                            .unwrap_or_default();
+                        let active_match = view.response_viewer.active_match();
+                        range
+                            .filter_map(|index| {
+                                lines.get(index).map(|line| {
+                                    render_response_line(
+                                        theme,
+                                        index,
+                                        &line.text,
+                                        &line.syntax,
+                                        SearchColumn::Body,
+                                        &matches,
+                                        active_match,
+                                    )
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .size_full()
+                .track_scroll(&self.response_scroll),
+            )
+            .into_any_element()
+    }
+
+    fn render_response_headers(
+        &self,
+        theme: Theme,
+        document: &PreparedDocument,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if document.headers.is_empty() {
+            return placeholder_message(theme, "No response headers");
+        }
+        let row_count = document.headers.len();
+        div()
+            .id("response-headers")
+            .debug_selector(|| "response-headers".into())
+            .flex_1()
+            .min_h(px(0.0))
+            .px(px(theme.metrics.spacing_3))
+            .pb(px(theme.metrics.spacing_2))
+            .child(
+                uniform_list("response-headers-list", row_count, {
+                    cx.processor(move |view, range: std::ops::Range<usize>, _, _cx| {
+                        #[cfg(test)]
+                        {
+                            view.rendered_response_rows = range.len();
+                        }
+                        let Some(key) = view.shell.active_tab() else {
+                            return Vec::new();
+                        };
+                        let Some(document) = view.response_viewer.document(key) else {
+                            return Vec::new();
+                        };
+                        let matches = view.response_viewer.matches(key);
+                        let active_match = view.response_viewer.active_match();
+                        range
+                            .filter_map(|index| {
+                                document.headers.get(index).map(|header| {
+                                    div()
+                                        .id(("response-header-row", index))
+                                        .w_full()
+                                        .h(px(RESPONSE_LINE_HEIGHT))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(theme.metrics.spacing_2))
+                                        .font_family(theme.typography.monospace_family)
+                                        .text_size(px(theme.typography.caption_size))
+                                        .child(
+                                            div()
+                                                .min_w(px(140.0))
+                                                .text_color(theme.colors.text.secondary)
+                                                .child(highlighted_text(
+                                                    theme,
+                                                    &header.name,
+                                                    &[],
+                                                    SearchColumn::HeaderName,
+                                                    index,
+                                                    &matches,
+                                                    active_match,
+                                                )),
+                                        )
+                                        .child(highlighted_text(
+                                            theme,
+                                            &header.value,
+                                            &[],
+                                            SearchColumn::HeaderValue,
+                                            index,
+                                            &matches,
+                                            active_match,
+                                        ))
+                                        .into_any_element()
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .size_full()
+                .track_scroll(&self.response_scroll),
+            )
+            .into_any_element()
     }
 
     fn render_editor_response(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
@@ -2207,7 +2522,7 @@ impl ProbeApp {
             .when(!horizontal, |work_area| work_area.flex_col())
             .child(self.render_request_editor(theme, cx))
             .child(handle)
-            .child(self.render_response_panel(theme))
+            .child(self.render_response_panel(theme, cx))
     }
 
     fn render_titlebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
@@ -2524,6 +2839,103 @@ fn flatten_visible_tree_rows(
     }
 }
 
+const RESPONSE_LINE_HEIGHT: f32 = 20.0;
+
+fn placeholder_message(theme: Theme, message: &str) -> gpui::AnyElement {
+    div()
+        .flex_1()
+        .flex()
+        .items_center()
+        .justify_center()
+        .p(px(theme.metrics.spacing_3))
+        .text_color(theme.colors.text.muted)
+        .child(message.to_owned())
+        .into_any_element()
+}
+
+fn render_response_line(
+    theme: Theme,
+    index: usize,
+    text: &str,
+    syntax: &[(std::ops::Range<usize>, SyntaxRole)],
+    column: SearchColumn,
+    matches: &[SearchMatch],
+    active_match: usize,
+) -> gpui::AnyElement {
+    div()
+        .id(("response-line", index))
+        .w_full()
+        .h(px(RESPONSE_LINE_HEIGHT))
+        .flex()
+        .items_center()
+        .font_family(theme.typography.monospace_family)
+        .text_size(px(theme.typography.caption_size))
+        .text_color(theme.colors.syntax.plain)
+        .overflow_hidden()
+        .child(highlighted_text(
+            theme,
+            text,
+            syntax,
+            column,
+            index,
+            matches,
+            active_match,
+        ))
+        .into_any_element()
+}
+
+fn highlighted_text(
+    theme: Theme,
+    text: &str,
+    syntax: &[(std::ops::Range<usize>, SyntaxRole)],
+    column: SearchColumn,
+    row: usize,
+    matches: &[SearchMatch],
+    active_match: usize,
+) -> StyledText {
+    let syntax_highlights = syntax
+        .iter()
+        .map(|(range, role)| (range.clone(), syntax_highlight_style(theme, *role)));
+    let search_highlights = matches.iter().enumerate().filter_map(|(index, found)| {
+        (found.row == row && found.column == column).then_some((
+            found.range.clone(),
+            search_highlight_style(theme, index == active_match),
+        ))
+    });
+    StyledText::new(text.to_owned())
+        .with_highlights(combine_highlights(syntax_highlights, search_highlights))
+}
+
+fn syntax_highlight_style(theme: Theme, role: SyntaxRole) -> HighlightStyle {
+    let color = match role {
+        SyntaxRole::Property => theme.colors.syntax.property,
+        SyntaxRole::String => theme.colors.syntax.string,
+        SyntaxRole::Number => theme.colors.syntax.number,
+        SyntaxRole::Boolean => theme.colors.syntax.boolean,
+        SyntaxRole::Null => theme.colors.syntax.null,
+        SyntaxRole::Punctuation => theme.colors.syntax.punctuation,
+    };
+    HighlightStyle {
+        color: Some(color.into()),
+        ..HighlightStyle::default()
+    }
+}
+
+fn search_highlight_style(theme: Theme, active: bool) -> HighlightStyle {
+    if active {
+        HighlightStyle {
+            color: Some(theme.colors.selection.active_foreground.into()),
+            background_color: Some(theme.colors.selection.active_background.into()),
+            ..HighlightStyle::default()
+        }
+    } else {
+        HighlightStyle {
+            background_color: Some(theme.colors.selection.inactive_background.into()),
+            ..HighlightStyle::default()
+        }
+    }
+}
+
 fn method_color(theme: Theme, method: &str) -> gpui::Rgba {
     match method {
         "GET" => theme.colors.methods.get,
@@ -2657,7 +3069,10 @@ mod tests {
     use probe_http::{HttpResponse, ResponseHeader};
 
     use super::ProbeApp;
-    use crate::request_editor::{BodyEditorKind, EditorSection};
+    use crate::{
+        request_editor::{BodyEditorKind, EditorSection},
+        response_viewer::ResponseViewerTab,
+    };
 
     fn bundled_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2795,7 +3210,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn completed_response_renders_metadata_headers_and_body(cx: &mut TestAppContext) {
+    fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppContext) {
         cx.update(base_gpui::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
@@ -2813,7 +3228,7 @@ mod tests {
                 view.select_request(request_key, cx);
                 let (cancellation, _) = tokio::sync::oneshot::channel();
                 let generation = view.execution.begin(request_key, cancellation);
-                view.execution.finish(
+                view.complete_execution(
                     request_key,
                     generation,
                     Ok(HttpResponse {
@@ -2829,16 +3244,121 @@ mod tests {
                         body: br#"{"ok":true}"#.to_vec(),
                         body_complete: true,
                     }),
+                    cx,
                 );
                 cx.notify();
             })
             .expect("test window should be open");
         cx.run_until_parked();
 
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        assert!(visual.debug_bounds("response-status").is_some());
-        assert!(visual.debug_bounds("response-headers").is_some());
-        assert!(visual.debug_bounds("response-body").is_some());
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds("response-status").is_some());
+            assert!(visual.debug_bounds("response-tab-pretty").is_some());
+            assert!(visual.debug_bounds("response-tab-raw").is_some());
+            assert!(visual.debug_bounds("response-tab-headers").is_some());
+            assert!(visual.debug_bounds("response-search").is_some());
+            assert!(visual.debug_bounds("response-body").is_some());
+            assert!(visual.debug_bounds("response-headers").is_none());
+        }
+
+        window
+            .update(cx, |view, _, cx| {
+                view.response_viewer.set_tab(ResponseViewerTab::Headers);
+                cx.notify();
+            })
+            .expect("test window should remain open");
+        cx.run_until_parked();
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds("response-headers").is_some());
+            assert!(visual.debug_bounds("response-body").is_none());
+        }
+
+        window
+            .update(cx, |view, _, cx| {
+                view.response_viewer.set_tab(ResponseViewerTab::Pretty);
+                view.response_viewer.set_search("ok".to_owned());
+                cx.notify();
+            })
+            .expect("test window should remain open");
+        cx.run_until_parked();
+        let match_count = window
+            .update(cx, |view, _, _| {
+                view.response_viewer.matches(request_key).len()
+            })
+            .expect("test window should remain open");
+        assert!(match_count >= 1);
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds("response-search-count").is_some());
+            assert!(visual.debug_bounds("response-body").is_some());
+        }
+    }
+
+    #[gpui::test]
+    fn large_response_body_only_renders_visible_rows(cx: &mut TestAppContext) {
+        cx.update(base_gpui::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        let body = (0..20_000)
+            .map(|index| format!("line-{index:05}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into_bytes();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(request_key, cx);
+                view.shell.response_height = 220.0;
+                let (cancellation, _) = tokio::sync::oneshot::channel();
+                let generation = view.execution.begin(request_key, cancellation);
+                view.complete_execution(
+                    request_key,
+                    generation,
+                    Ok(HttpResponse {
+                        status: 200,
+                        reason: "OK".to_owned(),
+                        url: "https://api.example.test/lines".to_owned(),
+                        duration: Duration::from_millis(12),
+                        size: body.len(),
+                        headers: vec![ResponseHeader {
+                            name: "content-type".to_owned(),
+                            value: "text/plain".to_owned(),
+                        }],
+                        body,
+                        body_complete: true,
+                    }),
+                    cx,
+                );
+                view.response_viewer.set_tab(ResponseViewerTab::Raw);
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let (total_rows, rendered_rows) = window
+            .update(cx, |view, _, _| {
+                (
+                    view.response_viewer.visible_lines(request_key).len(),
+                    view.rendered_response_rows,
+                )
+            })
+            .expect("test window should remain open");
+        assert!(total_rows >= 20_000);
+        assert!(rendered_rows > 0);
+        assert!(
+            rendered_rows < total_rows,
+            "virtualized response viewer rendered all {total_rows} rows"
+        );
     }
 
     #[gpui::test]

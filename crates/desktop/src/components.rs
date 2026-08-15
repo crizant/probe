@@ -128,6 +128,42 @@ pub(crate) fn variable_text_input(
     text_input_with_variables(theme, id, value, placeholder, variables, on_value_change)
 }
 
+pub(crate) fn search_input(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    value: impl Into<SharedString>,
+    placeholder: impl Into<SharedString>,
+    on_value_change: impl Fn(SharedString, &mut Window, &mut gpui::Context<InputRuntime>) + 'static,
+    on_enter: impl Fn(SharedString, &mut Window, &mut gpui::Context<InputRuntime>) + 'static,
+) -> impl IntoElement {
+    Input::new()
+        .id(id)
+        .value(value)
+        .placeholder(placeholder)
+        .on_value_change_with_context(on_value_change)
+        .on_enter_with_context(on_enter)
+        .h(px(theme.metrics.control_height - 4.0))
+        .w(px(180.0))
+        .px(px(theme.metrics.spacing_2))
+        .flex()
+        .items_center()
+        .rounded(px(theme.metrics.radius_small))
+        .font_family(theme.typography.interface_family)
+        .text_size(px(theme.typography.caption_size))
+        .text_color(theme.colors.text.primary)
+        .style_with_state(move |state, input| {
+            input
+                .debug_selector(|| "response-search".into())
+                .bg(theme.colors.surfaces.window)
+                .border_1()
+                .border_color(if state.focused {
+                    theme.colors.borders.focused
+                } else {
+                    theme.colors.borders.standard
+                })
+        })
+}
+
 fn text_input_with_variables(
     theme: Theme,
     id: impl Into<ElementId>,

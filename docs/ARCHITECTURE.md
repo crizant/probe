@@ -265,6 +265,13 @@ forwarded into that engine. Execution and response state is retained per runtime
 key, while generation checks prevent a superseded request from replacing a newer result.
 Response state is presentation-only and is not written into OpenCollection YAML.
 
+The response viewer is a specialized read-only renderer, not a gpui-base text editor.
+Pinned gpui-base `Input` shapes a single line and retains the full buffer, so it is not
+used for response bodies. The viewer splits bodies into bounded display rows, virtualizes
+them with GPUI `uniform_list` (the same primitive as the request tree), pretty-prints JSON
+with semantic syntax tokens, and searches those prepared rows. JSON larger than 64 KiB is
+pretty-printed on a background executor so request switching stays responsive.
+
 The request tree keeps a flat list of lightweight references for currently visible
 expanded nodes. Its fixed-height GPUI list is virtualized, so scrolling constructs and
 paints only the viewport range rather than every request in a large workspace. Folder
