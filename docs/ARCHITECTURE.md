@@ -256,8 +256,10 @@ through its runtime `RequestKey`; they do not reload or parse collection files. 
 is the single request-name label above the editor, so the URL bar is not preceded by a
 duplicate title. Persistence remains a separate repository operation and is not
 implicitly coupled to individual keystrokes. Environment selection lives at the fixed
-right edge of the request tab bar. Unsaved body representations are retained as local
-editor drafts per request, allowing users to switch body types without losing work.
+right edge of the request tab bar and is workspace-scoped presentation state, so every
+open request shares the same selected environment. Unsaved body representations are
+retained as local editor drafts per request, allowing users to switch body types without
+losing work.
 
 Desktop HTTP execution resolves the selected environment against an in-memory request,
 then runs the shared `probe-http` engine away from the GPUI thread. Cancellation is
