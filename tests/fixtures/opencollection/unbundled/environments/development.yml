@@ -1,0 +1,6 @@
+name: development
+color: green
+variables:
+  - name: baseUrl
+    value: https://api.example.com
+

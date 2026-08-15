@@ -1,0 +1,18 @@
+opencollection: 1.0.0
+info:
+  name: Bundled selector fixture
+bundled: true
+items:
+  - info:
+      name: Unsupported GraphQL request
+      type: graphql
+    graphql:
+      method: POST
+      url: https://api.example.com/graphql
+  - info:
+      name: Supported HTTP request
+      type: http
+    http:
+      method: GET
+      url: https://api.example.com/users
+

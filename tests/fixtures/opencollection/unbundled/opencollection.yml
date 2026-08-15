@@ -1,0 +1,6 @@
+opencollection: 1.0.0
+info:
+  name: Unbundled fixture
+  summary: Filesystem repository coverage
+bundled: false
+

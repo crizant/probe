@@ -45,9 +45,7 @@ not to the component library.
 
 ### CLI
 
-The CLI is a first-class product interface.
-
-It is intended for:
+The CLI is a first-class product interface intended for:
 
 - AI coding agents
 - shell scripts
@@ -57,25 +55,38 @@ It is intended for:
 - debugging
 - headless environments
 
-The CLI should support both human-readable and structured output.
+It supports human-readable and deterministic JSON output.
 
-Example:
+Examples:
 
 ```bash
-<app> collection validate ./api
+probe collection validate ./api
 
-<app> request list ./api
+probe request list ./api --json
 
-<app> request get ./api req_users --json
+probe request get ./api users/list-users.yml --json
+```
 
-<app> request run ./api req_users --json
+Unbundled collections use workspace-relative request paths as selectors. Bundled
+collections use structural selectors:
+
+```bash
+probe request get ./collection.yml items/0/items/0 --json
+```
+
+`request run` is reserved but does not execute HTTP until the shared HTTP engine is
+implemented in Phase 5:
+
+```bash
+probe request run ./api users/list-users.yml --json
 ```
 
 ## Development
 
-The repository is a Cargo workspace. Phase 0 provides the shared crate boundaries
-and a minimal CLI entry point; OpenCollection and HTTP behavior are intentionally
-deferred to later phases.
+The repository is a Cargo workspace. It currently includes OpenCollection parsing,
+bundled and unbundled filesystem loading, an indexed in-memory workspace, and the
+Phase 3 CLI foundation. Environment resolution and HTTP execution are deferred to
+later phases.
 
 ```bash
 cargo run -p probe-cli -- --help
@@ -83,3 +94,18 @@ cargo fmt --check
 cargo clippy --all-targets --all-features
 cargo test
 ```
+
+Try the current CLI against the included unbundled fixture:
+
+```bash
+cargo run -p probe-cli -- collection validate \
+  tests/fixtures/opencollection/unbundled --json
+
+cargo run -p probe-cli -- request list \
+  tests/fixtures/opencollection/unbundled --json
+
+cargo run -p probe-cli -- request get \
+  tests/fixtures/opencollection/unbundled users/list-users.yml --json
+```
+
+See [docs/CLI.md](docs/CLI.md) for selectors, JSON fields, and exit codes.

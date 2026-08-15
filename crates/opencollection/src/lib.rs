@@ -17,6 +17,10 @@ use probe_core::{
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 
+mod repository;
+
+pub use repository::{LoadError, LoadedWorkspace, LocatedRequest, load_workspace};
+
 /// An OpenCollection document together with its supported domain projection.
 #[derive(Clone, Debug)]
 pub struct ParsedCollection {
@@ -25,6 +29,10 @@ pub struct ParsedCollection {
 }
 
 impl ParsedCollection {
+    pub(crate) const fn document(&self) -> &Value {
+        &self.document
+    }
+
     /// Returns the serialization-independent collection model.
     #[must_use]
     pub const fn collection(&self) -> &Collection {
