@@ -29,8 +29,9 @@ Criterion stores machine-local reports under `target/criterion`. Compare results
 the same machine and build profile; absolute timings from different machines are not
 directly comparable.
 
-Criterion 0.7 is the newest release compatible with the workspace's declared Rust
-1.85 minimum; Criterion 0.8 requires Rust 1.86.
+Criterion 0.7 remains pinned from the Phase 8 baseline. Phase 9 raised the workspace
+minimum to Rust 1.95 to match the exact GPUI revision; dependency upgrades remain
+outside this baseline phase.
 
 ## Representative fixture files
 

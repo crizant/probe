@@ -1,5 +1,12 @@
-//! Desktop presentation adapter for Probe.
+//! Native GPUI presentation adapter for Probe.
 //!
-//! This crate remains a placeholder until GPUI desktop work begins in Phase 9.
+//! Presentation and interaction live here. Workspace and request behavior remains in
+//! [`probe_core`] so the desktop and CLI continue to share the same application model.
 
 #![forbid(unsafe_code)]
+
+mod app;
+pub mod components;
+pub mod theme;
+
+pub use app::{ProbeApp, run};

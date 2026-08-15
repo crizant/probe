@@ -99,11 +99,13 @@ chain, and interpolates request variables before output or execution preflight.
 
 The repository is a Cargo workspace. It currently includes OpenCollection parsing,
 bundled and unbundled filesystem loading, an indexed in-memory workspace, shared
-environment resolution, asynchronous HTTP execution, and a versioned automation-safe
-CLI contract with stdin, quiet mode, and atomic OpenCollection request updates.
+environment resolution, asynchronous HTTP execution, a versioned automation-safe CLI
+contract, and a native GPUI desktop foundation with semantic light/dark themes and
+headless gpui-base controls.
 
 ```bash
 cargo run -p probe-cli -- --help
+cargo run -p probe-desktop
 cargo fmt --check
 cargo clippy --all-targets --all-features
 cargo test
