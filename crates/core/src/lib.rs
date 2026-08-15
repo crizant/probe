@@ -98,6 +98,41 @@ pub struct HttpRequest {
     pub settings: RequestSettings,
 }
 
+/// A non-interactive update to editable request metadata.
+///
+/// `None` leaves a field unchanged. Persistence adapters apply this update to the
+/// in-memory request before attempting to save its repository representation.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RequestUpdate {
+    /// Replacement request name.
+    pub name: Option<String>,
+    /// Replacement HTTP method.
+    pub method: Option<String>,
+    /// Replacement request URL.
+    pub url: Option<String>,
+}
+
+impl RequestUpdate {
+    /// Returns whether the update leaves every field unchanged.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.name.is_none() && self.method.is_none() && self.url.is_none()
+    }
+
+    /// Applies the update to a domain request.
+    pub fn apply(&self, request: &mut HttpRequest) {
+        if let Some(name) = &self.name {
+            request.metadata.name = Some(name.clone());
+        }
+        if let Some(method) = &self.method {
+            request.method = Some(method.clone());
+        }
+        if let Some(url) = &self.url {
+            request.url = Some(url.clone());
+        }
+    }
+}
+
 /// HTTP execution settings projected from OpenCollection.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RequestSettings {

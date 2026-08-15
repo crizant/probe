@@ -206,6 +206,94 @@ fn gets_request_by_repository_selector() {
 }
 
 #[test]
+fn sets_and_persists_request_fields_as_json() {
+    let workspace = temporary_path("phase7-workspace.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
+    let output = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--name",
+            "Replace pet",
+            "--method",
+            "PUT",
+            "--url",
+            "https://api.example.com/pets/42",
+            "--json",
+        ])
+        .output()
+        .expect("set command should run");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["selector"], "items/0");
+    assert_eq!(value["name"], "Replace pet");
+    assert_eq!(value["method"], "PUT");
+    assert_eq!(value["url"], "https://api.example.com/pets/42");
+
+    let inspect = probe()
+        .args(["request", "get"])
+        .arg(&workspace)
+        .args(["items/0", "--json"])
+        .output()
+        .expect("saved request should be inspectable");
+    assert!(inspect.status.success());
+    let reloaded: Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(reloaded["name"], "Replace pet");
+    assert_eq!(reloaded["method"], "PUT");
+    assert_eq!(reloaded["url"], "https://api.example.com/pets/42");
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(saved.contains("vendor.example"));
+    assert!(saved.contains("runtime:"));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn set_requires_at_least_one_explicit_field() {
+    let output = probe()
+        .args(["request", "set"])
+        .arg(fixture("phase1-round-trip.yml"))
+        .args(["items/0", "--json"])
+        .output()
+        .expect("set command should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+}
+
+#[test]
+fn set_rejects_stdin_as_read_only() {
+    let source = fs::read(fixture("phase1-round-trip.yml")).unwrap();
+    let mut child = probe()
+        .args([
+            "request",
+            "set",
+            "-",
+            "items/0",
+            "--url",
+            "https://example.com/updated",
+            "--json",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("set command should start");
+    child.stdin.take().unwrap().write_all(&source).unwrap();
+    let output = child.wait_with_output().expect("set command should finish");
+
+    assert_eq!(output.status.code(), Some(7));
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["exitCode"], 7);
+    assert_eq!(value["error"]["category"], "persistence_read_only");
+}
+
+#[test]
 fn gets_request_resolved_with_selected_environment() {
     let output = probe()
         .args(["request", "get"])

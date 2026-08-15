@@ -7,14 +7,13 @@ Probe keeps errors structured until they reach an interface boundary.
 - The core/application layer coordinates errors without depending on CLI wording or
   desktop presentation types.
 - The CLI maps error categories to stable exit codes. Human diagnostics go to
-  stderr; command output, including future JSON output, goes to stdout.
+  stderr; versioned JSON command output goes to stdout.
 - The desktop adapter presents the same structured errors without reimplementing
   their meaning.
 - Libraries do not initialize global logging. Interfaces will configure logging and
   send diagnostics to stderr or an appropriate desktop sink.
 
-Phase 0 does not add an error or logging dependency because no fallible domain,
-repository, network, or persistence operations exist yet. The first phase that needs
-these capabilities should select lightweight, maintained crates at the boundary where
-they are required.
-
+Repository loading and saving, environment resolution, and HTTP execution expose typed
+library errors. Persistence distinguishes stale-source conflicts, read-only in-memory
+sources, invalid retained documents, serialization failures, and filesystem failures.
+Interfaces map these types without requiring callers to parse diagnostic messages.

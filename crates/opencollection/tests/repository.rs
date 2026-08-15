@@ -1,11 +1,27 @@
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use probe_opencollection::{load_workspace, load_workspace_from_str};
+use probe_core::RequestUpdate;
+use probe_opencollection::{SaveError, load_workspace, load_workspace_from_str};
 
 fn fixture(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/opencollection")
         .join(path)
+}
+
+fn temporary_path(suffix: &str) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "probe-persistence-{}-{unique}-{suffix}",
+        std::process::id()
+    ))
 }
 
 #[test]
@@ -68,4 +84,156 @@ fn loads_bundled_workspace_from_yaml_source() {
         .map(|request| request.selector())
         .collect();
     assert_eq!(selectors, ["items/0/items/0", "items/1"]);
+}
+
+#[test]
+fn bundled_update_save_reload_preserves_unknown_fields() {
+    let path = temporary_path("bundled.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).expect("workspace should load");
+
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                method: Some("PUT".to_owned()),
+                url: Some("https://api.example.com/pets/42".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .expect("request should save");
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                name: Some("Replace pet".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .expect("a second update should use the refreshed source snapshot");
+
+    let reloaded = load_workspace(&path).expect("saved workspace should reload");
+    let key = reloaded.request_key("items/0").unwrap();
+    let request = reloaded.workspace().request(key).unwrap();
+    assert_eq!(request.metadata.name.as_deref(), Some("Replace pet"));
+    assert_eq!(request.method.as_deref(), Some("PUT"));
+    assert_eq!(
+        request.url.as_deref(),
+        Some("https://api.example.com/pets/42")
+    );
+
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("vendor.example"));
+    assert!(saved.contains("description: Creates a pet"));
+    assert!(saved.contains("runtime:"));
+    assert!(saved.contains("encodeUrl: true"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn updates_a_nested_bundled_request_by_structural_locator() {
+    let path = temporary_path("nested-bundled.yml");
+    fs::copy(fixture("phase1-bundled.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).expect("workspace should load");
+
+    loaded
+        .update_request(
+            "items/0/items/0",
+            &RequestUpdate {
+                url: Some("https://api.example.com/v2/pets".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .expect("nested request should save");
+
+    let reloaded = load_workspace(&path).expect("saved workspace should reload");
+    let key = reloaded.request_key("items/0/items/0").unwrap();
+    assert_eq!(
+        reloaded
+            .workspace()
+            .request(key)
+            .and_then(|request| request.url.as_deref()),
+        Some("https://api.example.com/v2/pets")
+    );
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("name: ownerId"));
+    assert!(saved.contains("type: path"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn unbundled_update_preserves_request_extensions() {
+    let root = temporary_path("unbundled");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("opencollection.yml"),
+        "opencollection: 1.0.0\ninfo:\n  name: Persistence\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("health.yml"),
+        concat!(
+            "info:\n  name: Health\n  type: http\n",
+            "http:\n  method: GET\n  url: https://example.com/health\n",
+            "extensions:\n  vendor.example:\n    color: blue\n",
+        ),
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&root).expect("workspace should load");
+
+    loaded
+        .update_request(
+            "health.yml",
+            &RequestUpdate {
+                url: Some("https://example.com/ready".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .expect("request should save");
+
+    let reloaded = load_workspace(&root).expect("saved workspace should reload");
+    let key = reloaded.request_key("health.yml").unwrap();
+    assert_eq!(
+        reloaded
+            .workspace()
+            .request(key)
+            .and_then(|request| request.url.as_deref()),
+        Some("https://example.com/ready")
+    );
+    let saved = fs::read_to_string(root.join("health.yml")).unwrap();
+    assert!(saved.contains("vendor.example"));
+    assert!(saved.contains("color: blue"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn refuses_to_overwrite_an_externally_modified_document() {
+    let path = temporary_path("conflict.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).expect("workspace should load");
+    let mut external = fs::read_to_string(&path).unwrap();
+    external.push_str("external: true\n");
+    fs::write(&path, &external).unwrap();
+
+    let error = loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                url: Some("https://should-not-be-written.example".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .expect_err("external modification should be rejected");
+
+    assert!(matches!(error, SaveError::ConcurrentModification(_)));
+    assert_eq!(fs::read_to_string(&path).unwrap(), external);
+    let key = loaded.request_key("items/0").unwrap();
+    assert_eq!(
+        loaded
+            .workspace()
+            .request(key)
+            .and_then(|request| request.url.as_deref()),
+        Some("https://should-not-be-written.example")
+    );
+    fs::remove_file(path).unwrap();
 }

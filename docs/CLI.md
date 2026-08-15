@@ -10,6 +10,7 @@ probe collection validate <path> [--json]
 probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--json]
 probe request run <path> <selector> [--environment <name>] [--output <file>] [--json]
+probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--json]
 ```
 
 `<path>` may be a bundled OpenCollection YAML file or an unbundled collection
@@ -27,6 +28,16 @@ response body to the specified path; response metadata remains on stdout.
 Use `-` instead of `<path>` to read a bundled OpenCollection YAML document from
 stdin. Stdin does not represent an unbundled directory, and requests loaded this way
 use bundled structural selectors.
+
+`request set` is a deliberately small, non-interactive persistence command. At
+least one of `--name`, `--method`, or `--url` is required. It updates the in-memory
+request first, merges only those fields into the retained YAML document, and then
+atomically replaces the source file. It is unavailable for stdin workspaces.
+
+Before committing, Probe compares the source file with the exact bytes that were
+loaded. If another process changed it, the command fails with `workspace_modified`
+instead of overwriting the external edit. Unknown YAML fields are retained, although
+comments and original formatting may change when the YAML document is serialized.
 
 `--quiet` (or `-q`) suppresses stdout for successful commands, which is useful when
 only the exit status matters. Failure diagnostics remain on stderr. `--quiet` and
@@ -75,6 +86,9 @@ change type without incrementing the version.
 `method`, `name`, `queryParameters`, `selector`, and `url`. `environment` is the
 selected name or JSON `null`. Missing optional values are JSON `null`. Headers and
 query parameters contain stable `disabled`, `name`, and `value` fields.
+
+`request set --json` returns the same request shape after the persisted update,
+with `environment` set to JSON `null`.
 
 `request run --json` returns:
 
@@ -140,6 +154,10 @@ body failures use exit code 6 with categories such as `request_timeout`,
 Failure to read a stdin workspace uses `stdin_error` and exit code 3; invalid YAML read
 from stdin uses `invalid_workspace` and exit code 3.
 
+Persistence failures use exit code 7. Stable categories are `workspace_modified` for
+external-modification conflicts, `persistence_read_only` for stdin sources, and
+`persistence_error` for serialization or filesystem failures.
+
 ## Exit Codes
 
 | Code | Category |
@@ -150,3 +168,4 @@ from stdin uses `invalid_workspace` and exit code 3.
 | 4 | Request not found |
 | 5 | Configuration or environment error |
 | 6 | Network, cancellation, execution, or response-output error |
+| 7 | Persistence failure or external-modification conflict |

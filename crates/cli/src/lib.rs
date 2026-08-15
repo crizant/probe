@@ -8,9 +8,9 @@ use std::{
     path::PathBuf,
 };
 
-use probe_core::{EnvironmentResolutionError, resolve_environment, resolve_request};
+use probe_core::{EnvironmentResolutionError, RequestUpdate, resolve_environment, resolve_request};
 use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpResponse};
-use probe_opencollection::{LoadedWorkspace, load_workspace, load_workspace_from_str};
+use probe_opencollection::{LoadedWorkspace, SaveError, load_workspace, load_workspace_from_str};
 use serde_json::json;
 
 mod presentation;
@@ -27,6 +27,8 @@ pub const REQUEST_NOT_FOUND_EXIT_CODE: u8 = 4;
 pub const CONFIGURATION_EXIT_CODE: u8 = 5;
 /// Exit code used for request execution and output errors.
 pub const EXECUTION_EXIT_CODE: u8 = 6;
+/// Exit code used for persistence failures and external-modification conflicts.
+pub const PERSISTENCE_EXIT_CODE: u8 = 7;
 /// Version of the documented machine-readable JSON contracts.
 pub const JSON_SCHEMA_VERSION: u64 = 1;
 
@@ -87,10 +89,14 @@ pub const fn help() -> &'static str {
         "  request list <path>                 List HTTP requests\n",
         "  request get <path> <selector>       Inspect an HTTP request\n",
         "  request run <path> <selector>       Execute an HTTP request\n",
+        "  request set <path> <selector>       Set and persist HTTP request fields\n",
         "\n",
         "Options:\n",
         "      --environment <name>  Resolve request variables with an environment\n",
         "      --output <file>        Write the response body to a file\n",
+        "      --name <name>          Set a request name\n",
+        "      --method <method>      Set an HTTP method\n",
+        "      --url <url>            Set a request URL\n",
         "      --json                Emit versioned deterministic JSON\n",
         "  -q, --quiet               Suppress successful command output\n",
         "  -h, --help                Print help\n",
@@ -110,6 +116,7 @@ const REQUEST_HELP: &str = concat!(
     "  list <path|->                 List requests and repository selectors\n",
     "  get <path|-> <selector> [--environment <name>]  Inspect one request\n",
     "  run <path|-> <selector> [--environment <name>] [--output <file>]\n",
+    "  set <path> <selector> [--name <name>] [--method <method>] [--url <url>]\n",
 );
 
 /// Runs the CLI adapter for arguments that exclude the executable name.
@@ -187,8 +194,13 @@ where
         Ok(output) => output,
         Err(error) => return RunOutput::failure(error, json_output),
     };
-
-    match parse_command(&args, environment, output).and_then(|command| execute(command, stdin)) {
+    let update = match extract_request_update(&mut args) {
+        Ok(update) => update,
+        Err(error) => return RunOutput::failure(error, json_output),
+    };
+    match parse_command(&args, environment, output, update)
+        .and_then(|command| execute(command, stdin))
+    {
         Ok(output) => RunOutput::success(output.render(json_output, quiet)),
         Err(error) => RunOutput::failure(error, json_output),
     }
@@ -212,6 +224,11 @@ enum Command {
         selector: String,
         environment: Option<String>,
         output: Option<PathBuf>,
+    },
+    Set {
+        input: WorkspaceInput,
+        selector: String,
+        update: RequestUpdate,
     },
 }
 
@@ -352,6 +369,23 @@ impl CliError {
             exit_code: INVALID_WORKSPACE_EXIT_CODE,
         }
     }
+
+    fn persistence(error: SaveError) -> Self {
+        let (category, exit_code) = match &error {
+            SaveError::RequestNotFound(_) => ("request_not_found", REQUEST_NOT_FOUND_EXIT_CODE),
+            SaveError::EmptyUpdate => ("invalid_arguments", INVALID_ARGUMENTS_EXIT_CODE),
+            SaveError::ReadOnlySource => ("persistence_read_only", PERSISTENCE_EXIT_CODE),
+            SaveError::ConcurrentModification(_) => ("workspace_modified", PERSISTENCE_EXIT_CODE),
+            SaveError::InvalidDocument(_) | SaveError::Serialize(_) | SaveError::Io { .. } => {
+                ("persistence_error", PERSISTENCE_EXIT_CODE)
+            }
+        };
+        Self {
+            category,
+            message: error.to_string(),
+            exit_code,
+        }
+    }
 }
 
 fn extract_environment(args: &mut Vec<String>) -> Result<Option<String>, CliError> {
@@ -402,17 +436,57 @@ fn extract_output(args: &mut Vec<String>) -> Result<Option<PathBuf>, CliError> {
     }
 }
 
+fn extract_request_update(args: &mut Vec<String>) -> Result<RequestUpdate, CliError> {
+    Ok(RequestUpdate {
+        name: extract_string_option(args, "--name")?,
+        method: extract_string_option(args, "--method")?,
+        url: extract_string_option(args, "--url")?,
+    })
+}
+
+fn extract_string_option(
+    args: &mut Vec<String>,
+    option: &'static str,
+) -> Result<Option<String>, CliError> {
+    let positions: Vec<_> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| (argument == option).then_some(index))
+        .collect();
+    match positions.as_slice() {
+        [] => Ok(None),
+        [_first, _second, ..] => Err(CliError::invalid_arguments(format!(
+            "{option} may only be specified once"
+        ))),
+        [position] => {
+            if *position + 1 >= args.len()
+                || args[*position + 1].is_empty()
+                || args[*position + 1].starts_with('-')
+            {
+                return Err(CliError::invalid_arguments(format!(
+                    "{option} requires a non-empty value"
+                )));
+            }
+            let value = args.remove(*position + 1);
+            args.remove(*position);
+            Ok(Some(value))
+        }
+    }
+}
+
 fn parse_command(
     args: &[String],
     environment: Option<String>,
     output: Option<PathBuf>,
+    update: RequestUpdate,
 ) -> Result<Command, CliError> {
     match args {
         [group, action, path]
             if group == "collection"
                 && action == "validate"
                 && environment.is_none()
-                && output.is_none() =>
+                && output.is_none()
+                && update.is_empty() =>
         {
             Ok(Command::Validate {
                 input: WorkspaceInput::from_argument(path),
@@ -422,14 +496,15 @@ fn parse_command(
             if group == "request"
                 && action == "list"
                 && environment.is_none()
-                && output.is_none() =>
+                && output.is_none()
+                && update.is_empty() =>
         {
             Ok(Command::List {
                 input: WorkspaceInput::from_argument(path),
             })
         }
         [group, action, path, selector]
-            if group == "request" && action == "get" && output.is_none() =>
+            if group == "request" && action == "get" && output.is_none() && update.is_empty() =>
         {
             Ok(Command::Get {
                 input: WorkspaceInput::from_argument(path),
@@ -437,12 +512,27 @@ fn parse_command(
                 environment,
             })
         }
-        [group, action, path, selector] if group == "request" && action == "run" => {
+        [group, action, path, selector]
+            if group == "request" && action == "run" && update.is_empty() =>
+        {
             Ok(Command::Run {
                 input: WorkspaceInput::from_argument(path),
                 selector: selector.clone(),
                 environment,
                 output,
+            })
+        }
+        [group, action, path, selector]
+            if group == "request"
+                && action == "set"
+                && environment.is_none()
+                && output.is_none()
+                && !update.is_empty() =>
+        {
+            Ok(Command::Set {
+                input: WorkspaceInput::from_argument(path),
+                selector: selector.clone(),
+                update,
             })
         }
         _ => Err(CliError::invalid_arguments(
@@ -472,7 +562,38 @@ fn execute(command: Command, stdin: &mut impl Read) -> Result<CommandOutput, Cli
             output.as_ref(),
             stdin,
         ),
+        Command::Set {
+            input,
+            selector,
+            update,
+        } => update_request(&input, &selector, &update, stdin),
     }
+}
+
+fn update_request(
+    input: &WorkspaceInput,
+    selector: &str,
+    update: &RequestUpdate,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let mut loaded = load(input, stdin)?;
+    loaded
+        .update_request(selector, update)
+        .map_err(CliError::persistence)?;
+    let key = loaded
+        .request_key(selector)
+        .expect("successfully updated selector must resolve");
+    let request = loaded
+        .workspace()
+        .request(key)
+        .expect("repository request key must resolve");
+    Ok(CommandOutput {
+        human: format!(
+            "Updated request\n{}",
+            request_human(selector, None, request)
+        ),
+        json: request_json(selector, None, request),
+    })
 }
 
 fn run_request(

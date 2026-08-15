@@ -314,6 +314,19 @@ same repository
     ↓
 atomic filesystem write
 
+The OpenCollection repository retains the exact source bytes for every editable
+request document. A request update is applied to the domain workspace first, then
+merged into the retained YAML so unsupported fields survive. Before the temporary file
+is committed, the repository compares the current file with its loaded bytes and
+rejects externally modified sources. The temporary file is synced and atomically
+committed on Unix, Windows, and WASI through a focused filesystem dependency.
+Successful saves refresh the retained byte snapshot so subsequent edits from the same
+loaded workspace remain safe.
+
+The repository operation is synchronous and must be dispatched away from GPUI's UI
+thread by the future desktop adapter. This does not create a second persistence path;
+CLI and desktop use the same repository operation.
+
 
 ## Repository Abstraction
 

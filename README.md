@@ -86,6 +86,9 @@ probe request run ./api users/list-users.yml \
 probe request run ./api reports/download.yml \
   --environment development --output ./report.pdf --json
 
+probe request set ./api users/list-users.yml \
+  --method GET --url https://api.example.com/v2/users --json
+
 probe collection validate ./api --quiet
 ```
 
@@ -97,7 +100,7 @@ chain, and interpolates request variables before output or execution preflight.
 The repository is a Cargo workspace. It currently includes OpenCollection parsing,
 bundled and unbundled filesystem loading, an indexed in-memory workspace, shared
 environment resolution, asynchronous HTTP execution, and a versioned automation-safe
-CLI contract with stdin and quiet-mode support.
+CLI contract with stdin, quiet mode, and atomic OpenCollection request updates.
 
 ```bash
 cargo run -p probe-cli -- --help

@@ -1,11 +1,15 @@
 use std::{
     collections::BTreeMap,
     error::Error,
-    fmt, fs, io,
+    fmt, fs,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
-use probe_core::{CollectionItem, Environment, RequestKey, Workspace, WorkspaceItemRef};
+use atomic_write_file::AtomicWriteFile;
+use probe_core::{
+    CollectionItem, Environment, RequestKey, RequestUpdate, Workspace, WorkspaceItemRef,
+};
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 
@@ -16,6 +20,7 @@ use super::{EnvironmentDocument, ParseError, parse, project_item};
 pub struct LocatedRequest {
     selector: String,
     key: RequestKey,
+    persistence: Option<RequestPersistence>,
 }
 
 impl LocatedRequest {
@@ -38,6 +43,7 @@ pub struct LoadedWorkspace {
     workspace: Workspace,
     requests: Vec<LocatedRequest>,
     request_keys_by_selector: BTreeMap<String, RequestKey>,
+    documents: BTreeMap<PathBuf, SourceDocument>,
 }
 
 impl LoadedWorkspace {
@@ -58,6 +64,80 @@ impl LoadedWorkspace {
     pub fn request_key(&self, selector: &str) -> Option<RequestKey> {
         self.request_keys_by_selector.get(selector).copied()
     }
+
+    /// Applies an update in memory and atomically persists its OpenCollection document.
+    ///
+    /// The save is rejected if the source file no longer exactly matches the bytes
+    /// loaded by this repository instance. On persistence failure, the in-memory
+    /// request remains updated so callers can report or retry the dirty state.
+    pub fn update_request(
+        &mut self,
+        selector: &str,
+        update: &RequestUpdate,
+    ) -> Result<(), SaveError> {
+        if update.is_empty() {
+            return Err(SaveError::EmptyUpdate);
+        }
+
+        let located = self
+            .requests
+            .iter()
+            .find(|request| request.selector == selector)
+            .cloned()
+            .ok_or_else(|| SaveError::RequestNotFound(selector.to_owned()))?;
+        let request = self
+            .workspace
+            .request_mut(located.key)
+            .expect("repository request key must resolve");
+        update.apply(request);
+
+        let persistence = located.persistence.ok_or(SaveError::ReadOnlySource)?;
+        let source = self
+            .documents
+            .get(&persistence.document_path)
+            .expect("filesystem request must retain its source document");
+        let current = fs::read(&persistence.document_path).map_err(|source| SaveError::Io {
+            path: persistence.document_path.clone(),
+            source,
+        })?;
+        if current != source.original_source {
+            return Err(SaveError::ConcurrentModification(
+                persistence.document_path.clone(),
+            ));
+        }
+
+        let mut document: Value =
+            serde_yaml_ng::from_slice(&source.original_source).map_err(|error| {
+                SaveError::InvalidDocument(format!("retained source cannot be parsed: {error}"))
+            })?;
+        let request_document = request_document_mut(&mut document, &persistence.item_path)?;
+        apply_request_update(request_document, update)?;
+        let serialized = serde_yaml_ng::to_string(&document).map_err(SaveError::Serialize)?;
+        atomic_write(
+            &persistence.document_path,
+            serialized.as_bytes(),
+            &source.original_source,
+        )?;
+
+        self.documents.insert(
+            persistence.document_path,
+            SourceDocument {
+                original_source: serialized.into_bytes(),
+            },
+        );
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RequestPersistence {
+    document_path: PathBuf,
+    item_path: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SourceDocument {
+    original_source: Vec<u8>,
 }
 
 /// Loads a bundled OpenCollection file or an unbundled collection directory.
@@ -75,7 +155,7 @@ pub fn load_workspace(path: impl AsRef<Path>) -> Result<LoadedWorkspace, LoadErr
 /// Structural selectors are identical to selectors produced when the same bundled
 /// document is loaded from a file.
 pub fn load_workspace_from_str(source: &str) -> Result<LoadedWorkspace, LoadError> {
-    load_bundled_source(source, Path::new("<memory>"))
+    load_bundled_source(source, None)
 }
 
 /// An error raised while loading an OpenCollection workspace.
@@ -122,25 +202,105 @@ impl Error for LoadError {
     }
 }
 
+/// An error raised while persisting an OpenCollection request update.
+#[derive(Debug)]
+pub enum SaveError {
+    /// No request matched the repository selector.
+    RequestNotFound(String),
+    /// The requested update did not contain any changed fields.
+    EmptyUpdate,
+    /// The workspace came from an in-memory source such as stdin.
+    ReadOnlySource,
+    /// The source changed after it was loaded and was not overwritten.
+    ConcurrentModification(PathBuf),
+    /// A retained source document no longer has the expected OpenCollection shape.
+    InvalidDocument(String),
+    /// YAML serialization failed.
+    Serialize(serde_yaml_ng::Error),
+    /// An atomic filesystem operation failed.
+    Io { path: PathBuf, source: io::Error },
+}
+
+impl fmt::Display for SaveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RequestNotFound(selector) => {
+                write!(formatter, "request selector not found: {selector}")
+            }
+            Self::EmptyUpdate => formatter.write_str("request update has no changed fields"),
+            Self::ReadOnlySource => {
+                formatter.write_str("a workspace loaded from stdin cannot be persisted")
+            }
+            Self::ConcurrentModification(path) => write!(
+                formatter,
+                "refusing to overwrite externally modified file: {}",
+                path.display()
+            ),
+            Self::InvalidDocument(message) => {
+                write!(
+                    formatter,
+                    "cannot update retained OpenCollection document: {message}"
+                )
+            }
+            Self::Serialize(source) => {
+                write!(formatter, "cannot serialize OpenCollection YAML: {source}")
+            }
+            Self::Io { path, source } => {
+                write!(formatter, "cannot persist {}: {source}", path.display())
+            }
+        }
+    }
+}
+
+impl Error for SaveError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Serialize(source) => Some(source),
+            Self::Io { source, .. } => Some(source),
+            Self::RequestNotFound(_)
+            | Self::EmptyUpdate
+            | Self::ReadOnlySource
+            | Self::ConcurrentModification(_)
+            | Self::InvalidDocument(_) => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum LocatorNode {
     Folder(Vec<LocatorNode>),
-    Request(String),
+    Request {
+        selector: String,
+        persistence: Option<RequestPersistence>,
+    },
 }
 
 fn load_bundled(path: &Path) -> Result<LoadedWorkspace, LoadError> {
     let source = read_to_string(path)?;
-    load_bundled_source(&source, path)
+    load_bundled_source(&source, Some(path))
 }
 
-fn load_bundled_source(source: &str, source_name: &Path) -> Result<LoadedWorkspace, LoadError> {
+fn load_bundled_source(
+    source: &str,
+    document_path: Option<&Path>,
+) -> Result<LoadedWorkspace, LoadError> {
+    let source_name = document_path.unwrap_or_else(|| Path::new("<memory>"));
     let parsed = parse(source).map_err(|source| LoadError::Parse {
         path: source_name.to_owned(),
         source,
     })?;
-    let nodes = bundled_locator_nodes(parsed.document(), "items");
+    let nodes = bundled_locator_nodes(parsed.document(), "items", document_path);
     let workspace = Workspace::from_collection(parsed.into_collection());
-    Ok(index_locators(workspace, &nodes))
+    let mut loaded = index_locators(workspace, &nodes);
+    if let Some(path) = document_path {
+        loaded.documents.insert(
+            path.to_owned(),
+            SourceDocument {
+                original_source: source.as_bytes().to_vec(),
+            },
+        );
+    }
+    Ok(loaded)
 }
 
 fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
@@ -152,19 +312,23 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
         source,
     })?;
     let mut collection = parsed.into_collection();
-    let loaded_items = read_items(root, root, "opencollection")?;
+    let mut documents = BTreeMap::new();
+    let loaded_items = read_items(root, root, "opencollection", &mut documents)?;
     let (items, nodes): (Vec<_>, Vec<_>) = loaded_items.into_iter().unzip();
     collection.items = items;
     collection.environments.extend(read_environments(root)?);
 
     let workspace = Workspace::from_collection(collection);
-    Ok(index_locators(workspace, &nodes))
+    let mut loaded = index_locators(workspace, &nodes);
+    loaded.documents = documents;
+    Ok(loaded)
 }
 
 fn read_items(
     directory: &Path,
     root: &Path,
     reserved_stem: &str,
+    documents: &mut BTreeMap<PathBuf, SourceDocument>,
 ) -> Result<Vec<(CollectionItem, LocatorNode)>, LoadError> {
     let mut entries = read_directory(directory)?;
     entries.sort_by_key(|entry| entry.file_name());
@@ -184,7 +348,7 @@ fn read_items(
             let Some(folder_config) = config_file(&path, "folder") else {
                 continue;
             };
-            let mut folder = match read_item(&folder_config)? {
+            let mut folder = match read_item(&folder_config)?.item {
                 Some(CollectionItem::Folder(folder)) => folder,
                 Some(CollectionItem::HttpRequest(_)) => {
                     return Err(LoadError::InvalidItem {
@@ -194,7 +358,7 @@ fn read_items(
                 }
                 None => continue,
             };
-            let children = read_items(&path, root, "folder")?;
+            let children = read_items(&path, root, "folder", documents)?;
             let (child_items, child_nodes): (Vec<_>, Vec<_>) = children.into_iter().unzip();
             folder.items = child_items;
             items.push((
@@ -204,13 +368,26 @@ fn read_items(
         } else if is_yaml_file(&path)
             && path.file_stem().and_then(|stem| stem.to_str()) != Some(reserved_stem)
         {
-            if let Some(item) = read_item(&path)? {
+            let read = read_item(&path)?;
+            if let Some(item) = read.item {
                 match item {
                     CollectionItem::HttpRequest(request) => {
                         let selector = relative_selector(root, &path);
+                        documents.insert(
+                            path.clone(),
+                            SourceDocument {
+                                original_source: read.original_source,
+                            },
+                        );
                         items.push((
                             CollectionItem::HttpRequest(request),
-                            LocatorNode::Request(selector),
+                            LocatorNode::Request {
+                                selector,
+                                persistence: Some(RequestPersistence {
+                                    document_path: path,
+                                    item_path: Vec::new(),
+                                }),
+                            },
                         ));
                     }
                     CollectionItem::Folder(_) => {
@@ -228,15 +405,24 @@ fn read_items(
     Ok(items)
 }
 
-fn read_item(path: &Path) -> Result<Option<CollectionItem>, LoadError> {
+struct ReadItem {
+    item: Option<CollectionItem>,
+    original_source: Vec<u8>,
+}
+
+fn read_item(path: &Path) -> Result<ReadItem, LoadError> {
     let source = read_to_string(path)?;
     let value: Value = serde_yaml_ng::from_str(&source).map_err(|source| LoadError::Parse {
         path: path.to_owned(),
         source: ParseError::new(source),
     })?;
-    project_item(value).map_err(|source| LoadError::Parse {
+    let item = project_item(value).map_err(|source| LoadError::Parse {
         path: path.to_owned(),
         source: ParseError::new(source),
+    })?;
+    Ok(ReadItem {
+        item,
+        original_source: source.into_bytes(),
     })
 }
 
@@ -293,24 +479,43 @@ struct LocatorInfoDocument {
     item_type: Option<String>,
 }
 
-fn bundled_locator_nodes(document: &Value, prefix: &str) -> Vec<LocatorNode> {
+fn bundled_locator_nodes(
+    document: &Value,
+    prefix: &str,
+    document_path: Option<&Path>,
+) -> Vec<LocatorNode> {
     let document: LocatorItemsDocument = serde_yaml_ng::from_value(document.clone())
         .expect("successfully parsed document must retain an object root");
-    locator_nodes_from_items(document.items, prefix)
+    locator_nodes_from_items(document.items, prefix, document_path, &[])
 }
 
-fn locator_nodes_from_items(items: Vec<Value>, prefix: &str) -> Vec<LocatorNode> {
+fn locator_nodes_from_items(
+    items: Vec<Value>,
+    prefix: &str,
+    document_path: Option<&Path>,
+    parent_path: &[usize],
+) -> Vec<LocatorNode> {
     items
         .into_iter()
         .enumerate()
         .filter_map(|(index, value)| {
+            let mut item_path = parent_path.to_vec();
+            item_path.push(index);
             let item: LocatorItemDocument = serde_yaml_ng::from_value(value)
                 .expect("successfully projected item must retain a valid object shape");
             match item.info.item_type.as_deref() {
-                Some("http") => Some(LocatorNode::Request(format!("{prefix}/{index}"))),
+                Some("http") => Some(LocatorNode::Request {
+                    selector: format!("{prefix}/{index}"),
+                    persistence: document_path.map(|path| RequestPersistence {
+                        document_path: path.to_owned(),
+                        item_path,
+                    }),
+                }),
                 Some("folder") => Some(LocatorNode::Folder(locator_nodes_from_items(
                     item.items,
                     &format!("{prefix}/{index}/items"),
+                    document_path,
+                    &item_path,
                 ))),
                 _ => None,
             }
@@ -329,6 +534,7 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
         workspace,
         requests,
         request_keys_by_selector,
+        documents: BTreeMap::new(),
     }
 }
 
@@ -345,10 +551,17 @@ fn index_locator_nodes(
     );
     for (item, node) in items.iter().zip(nodes) {
         match (item, node) {
-            (WorkspaceItemRef::Request(key), LocatorNode::Request(selector)) => {
+            (
+                WorkspaceItemRef::Request(key),
+                LocatorNode::Request {
+                    selector,
+                    persistence,
+                },
+            ) => {
                 requests.push(LocatedRequest {
                     selector: selector.clone(),
                     key: *key,
+                    persistence: persistence.clone(),
                 });
             }
             (WorkspaceItemRef::Folder(key), LocatorNode::Folder(children)) => {
@@ -403,4 +616,83 @@ fn relative_selector(root: &Path, path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+fn request_document_mut<'a>(
+    document: &'a mut Value,
+    item_path: &[usize],
+) -> Result<&'a mut Value, SaveError> {
+    let mut current = document;
+    for index in item_path {
+        let mapping = current.as_mapping_mut().ok_or_else(|| {
+            SaveError::InvalidDocument("an item parent is not a mapping".to_owned())
+        })?;
+        let items = mapping
+            .get_mut(Value::String("items".to_owned()))
+            .and_then(Value::as_sequence_mut)
+            .ok_or_else(|| {
+                SaveError::InvalidDocument("an item parent has no items sequence".to_owned())
+            })?;
+        current = items.get_mut(*index).ok_or_else(|| {
+            SaveError::InvalidDocument(format!("item index {index} is out of bounds"))
+        })?;
+    }
+    Ok(current)
+}
+
+fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<(), SaveError> {
+    let request = document.as_mapping_mut().ok_or_else(|| {
+        SaveError::InvalidDocument("the request item is not a mapping".to_owned())
+    })?;
+
+    if let Some(name) = &update.name {
+        let info = mapping_child(request, "info")?;
+        info.insert(
+            Value::String("name".to_owned()),
+            Value::String(name.clone()),
+        );
+    }
+    if update.method.is_some() || update.url.is_some() {
+        let http = mapping_child(request, "http")?;
+        if let Some(method) = &update.method {
+            http.insert(
+                Value::String("method".to_owned()),
+                Value::String(method.clone()),
+            );
+        }
+        if let Some(url) = &update.url {
+            http.insert(Value::String("url".to_owned()), Value::String(url.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn mapping_child<'a>(
+    parent: &'a mut serde_yaml_ng::Mapping,
+    name: &str,
+) -> Result<&'a mut serde_yaml_ng::Mapping, SaveError> {
+    let key = Value::String(name.to_owned());
+    if !parent.contains_key(&key) {
+        parent.insert(key.clone(), Value::Mapping(serde_yaml_ng::Mapping::new()));
+    }
+    parent
+        .get_mut(&key)
+        .and_then(Value::as_mapping_mut)
+        .ok_or_else(|| SaveError::InvalidDocument(format!("'{name}' is not a mapping")))
+}
+
+fn atomic_write(path: &Path, contents: &[u8], expected_source: &[u8]) -> Result<(), SaveError> {
+    let map_io = |source| SaveError::Io {
+        path: path.to_owned(),
+        source,
+    };
+    let mut file = AtomicWriteFile::open(path).map_err(map_io)?;
+    file.write_all(contents).map_err(map_io)?;
+    file.sync_all().map_err(map_io)?;
+    let current = fs::read(path).map_err(map_io)?;
+    if current != expected_source {
+        return Err(SaveError::ConcurrentModification(path.to_owned()));
+    }
+    file.commit().map_err(map_io)?;
+    Ok(())
 }

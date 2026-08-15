@@ -115,6 +115,11 @@ impl Workspace {
         self.requests.get(key.into())
     }
 
+    /// Mutably looks up a request in constant time, rejecting stale generations.
+    pub fn request_mut(&mut self, key: RequestKey) -> Option<&mut HttpRequest> {
+        self.requests.get_mut(key.into())
+    }
+
     /// Returns the number of live requests.
     #[must_use]
     pub const fn request_count(&self) -> usize {
