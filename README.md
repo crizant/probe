@@ -65,6 +65,9 @@ probe collection validate ./api
 probe request list ./api --json
 
 probe request get ./api users/list-users.yml --json
+
+probe request get ./api users/list-users.yml \
+  --environment development --json
 ```
 
 Unbundled collections use workspace-relative request paths as selectors. Bundled
@@ -81,12 +84,15 @@ implemented in Phase 5:
 probe request run ./api users/list-users.yml --json
 ```
 
+`--environment <name>` selects an OpenCollection environment, applies its `extends`
+chain, and interpolates request variables before output or execution preflight.
+
 ## Development
 
 The repository is a Cargo workspace. It currently includes OpenCollection parsing,
-bundled and unbundled filesystem loading, an indexed in-memory workspace, and the
-Phase 3 CLI foundation. Environment resolution and HTTP execution are deferred to
-later phases.
+bundled and unbundled filesystem loading, an indexed in-memory workspace, the CLI
+foundation, and shared environment resolution. HTTP execution remains deferred to
+Phase 5.
 
 ```bash
 cargo run -p probe-cli -- --help
@@ -106,6 +112,10 @@ cargo run -p probe-cli -- request list \
 
 cargo run -p probe-cli -- request get \
   tests/fixtures/opencollection/unbundled users/list-users.yml --json
+
+cargo run -p probe-cli -- request get \
+  tests/fixtures/opencollection/phase4-environments.yml items/0 \
+  --environment development --json
 ```
 
 See [docs/CLI.md](docs/CLI.md) for selectors, JSON fields, and exit codes.

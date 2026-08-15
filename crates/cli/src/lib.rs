@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use probe_core::{EnvironmentResolutionError, resolve_environment, resolve_request};
 use probe_opencollection::{LoadedWorkspace, load_workspace};
 use serde_json::json;
 
@@ -76,10 +77,11 @@ pub const fn help() -> &'static str {
         "  collection validate <path>          Validate an OpenCollection workspace\n",
         "  request list <path>                 List HTTP requests\n",
         "  request get <path> <selector>       Inspect an HTTP request\n",
-        "  request run <path> <selector>       Reserved until HTTP execution is added\n",
+        "  request run <path> <selector>       Resolve a request; HTTP starts in Phase 5\n",
         "\n",
         "Options:\n",
-        "      --json  Emit deterministic JSON\n",
+        "      --environment <name>  Resolve request variables with an environment\n",
+        "      --json                Emit deterministic JSON\n",
         "  -h, --help  Print help\n",
     )
 }
@@ -95,8 +97,8 @@ const REQUEST_HELP: &str = concat!(
     "\n",
     "Commands:\n",
     "  list <path>                 List requests and repository selectors\n",
-    "  get <path> <selector>       Inspect one request\n",
-    "  run <path> <selector>       Reserved until Phase 5\n",
+    "  get <path> <selector> [--environment <name>]  Inspect one request\n",
+    "  run <path> <selector> [--environment <name>]  Resolve; HTTP starts in Phase 5\n",
 );
 
 /// Runs the CLI adapter for arguments that exclude the executable name.
@@ -136,7 +138,12 @@ where
         return RunOutput::success(help.to_owned());
     }
 
-    match parse_command(&args).and_then(execute) {
+    let environment = match extract_environment(&mut args) {
+        Ok(environment) => environment,
+        Err(error) => return RunOutput::failure(error, json_output),
+    };
+
+    match parse_command(&args, environment).and_then(execute) {
         Ok(output) => RunOutput::success(output.render(json_output)),
         Err(error) => RunOutput::failure(error, json_output),
     }
@@ -144,10 +151,22 @@ where
 
 #[derive(Debug)]
 enum Command {
-    Validate { path: PathBuf },
-    List { path: PathBuf },
-    Get { path: PathBuf, selector: String },
-    Run { path: PathBuf, selector: String },
+    Validate {
+        path: PathBuf,
+    },
+    List {
+        path: PathBuf,
+    },
+    Get {
+        path: PathBuf,
+        selector: String,
+        environment: Option<String>,
+    },
+    Run {
+        path: PathBuf,
+        selector: String,
+        environment: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -205,28 +224,76 @@ impl CliError {
             exit_code: EXECUTION_EXIT_CODE,
         }
     }
+
+    fn configuration(error: EnvironmentResolutionError) -> Self {
+        let category = match error {
+            EnvironmentResolutionError::EnvironmentNotFound(_) => "environment_not_found",
+            EnvironmentResolutionError::MissingVariable(_) => "missing_variable",
+            EnvironmentResolutionError::SecretVariableUnavailable(_) => {
+                "secret_variable_unavailable"
+            }
+            _ => "environment_resolution",
+        };
+        Self {
+            category,
+            message: error.to_string(),
+            exit_code: CONFIGURATION_EXIT_CODE,
+        }
+    }
 }
 
-fn parse_command(args: &[String]) -> Result<Command, CliError> {
+fn extract_environment(args: &mut Vec<String>) -> Result<Option<String>, CliError> {
+    let positions: Vec<_> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| (argument == "--environment").then_some(index))
+        .collect();
+    match positions.as_slice() {
+        [] => Ok(None),
+        [_first, _second, ..] => Err(CliError::invalid_arguments(
+            "--environment may only be specified once",
+        )),
+        [position] => {
+            if *position + 1 >= args.len() || args[*position + 1].starts_with('-') {
+                return Err(CliError::invalid_arguments(
+                    "--environment requires a non-empty name",
+                ));
+            }
+            let value = args.remove(*position + 1);
+            args.remove(*position);
+            Ok(Some(value))
+        }
+    }
+}
+
+fn parse_command(args: &[String], environment: Option<String>) -> Result<Command, CliError> {
     match args {
-        [group, action, path] if group == "collection" && action == "validate" => {
+        [group, action, path]
+            if group == "collection" && action == "validate" && environment.is_none() =>
+        {
             Ok(Command::Validate {
                 path: PathBuf::from(path),
             })
         }
-        [group, action, path] if group == "request" && action == "list" => Ok(Command::List {
-            path: PathBuf::from(path),
-        }),
+        [group, action, path]
+            if group == "request" && action == "list" && environment.is_none() =>
+        {
+            Ok(Command::List {
+                path: PathBuf::from(path),
+            })
+        }
         [group, action, path, selector] if group == "request" && action == "get" => {
             Ok(Command::Get {
                 path: PathBuf::from(path),
                 selector: selector.clone(),
+                environment,
             })
         }
         [group, action, path, selector] if group == "request" && action == "run" => {
             Ok(Command::Run {
                 path: PathBuf::from(path),
                 selector: selector.clone(),
+                environment,
             })
         }
         _ => Err(CliError::invalid_arguments(
@@ -239,12 +306,23 @@ fn execute(command: Command) -> Result<CommandOutput, CliError> {
     match command {
         Command::Validate { path } => validate(&path),
         Command::List { path } => list_requests(&path),
-        Command::Get { path, selector } => get_request(&path, &selector),
-        Command::Run { path, selector } => {
+        Command::Get {
+            path,
+            selector,
+            environment,
+        } => get_request(&path, &selector, environment.as_deref()),
+        Command::Run {
+            path,
+            selector,
+            environment,
+        } => {
             let loaded = load(&path)?;
-            loaded
+            let key = loaded
                 .request_key(&selector)
                 .ok_or_else(|| CliError::request_not_found(&selector))?;
+            if let Some(environment) = environment.as_deref() {
+                resolve_loaded_request(&loaded, key, environment)?;
+            }
             Err(CliError::execution_unavailable())
         }
     }
@@ -303,19 +381,43 @@ fn list_requests(path: &PathBuf) -> Result<CommandOutput, CliError> {
     })
 }
 
-fn get_request(path: &PathBuf, selector: &str) -> Result<CommandOutput, CliError> {
+fn get_request(
+    path: &PathBuf,
+    selector: &str,
+    environment: Option<&str>,
+) -> Result<CommandOutput, CliError> {
     let loaded = load(path)?;
     let key = loaded
         .request_key(selector)
         .ok_or_else(|| CliError::request_not_found(selector))?;
-    let request = loaded
-        .workspace()
+    let resolved;
+    let request = if let Some(environment) = environment {
+        resolved = resolve_loaded_request(&loaded, key, environment)?;
+        &resolved
+    } else {
+        loaded
+            .workspace()
+            .request(key)
+            .expect("repository request key must resolve")
+    };
+    Ok(CommandOutput {
+        human: request_human(selector, environment, request),
+        json: request_json(selector, environment, request),
+    })
+}
+
+fn resolve_loaded_request(
+    loaded: &LoadedWorkspace,
+    key: probe_core::RequestKey,
+    environment: &str,
+) -> Result<probe_core::HttpRequest, CliError> {
+    let workspace = loaded.workspace();
+    let environment = resolve_environment(workspace.environments(), environment)
+        .map_err(CliError::configuration)?;
+    let request = workspace
         .request(key)
         .expect("repository request key must resolve");
-    Ok(CommandOutput {
-        human: request_human(selector, request),
-        json: request_json(selector, request),
-    })
+    resolve_request(request, &environment).map_err(CliError::configuration)
 }
 
 fn load(path: &PathBuf) -> Result<LoadedWorkspace, CliError> {

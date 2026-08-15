@@ -244,6 +244,22 @@ CLI formatter
      ↓
 human text / JSON
 
+## Environment Resolution
+
+Environment selection and interpolation live in `probe-core`, so CLI, desktop, and
+future interfaces share exactly the same behavior. Resolution operates on the loaded
+in-memory workspace: parent environments are applied before children, child variables
+override by name, and variable values may reference other variables. Cyclic
+inheritance, cyclic interpolation, missing variables, and invalid variant selection
+produce typed errors.
+
+The resolver returns a cloned, resolved request and leaves the canonical parsed model
+unchanged. It currently interpolates method, URL, headers, query parameters, supported
+body fields, file references, and authentication string/number values. OpenCollection
+secret declarations contain no value, so references fail until a separate secure
+runtime value provider is introduced. Loading `dotEnvFilePath` is also outside Phase 4;
+the domain resolver remains independent of filesystem APIs.
+
 
 ## Persistence
 

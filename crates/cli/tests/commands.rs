@@ -84,6 +84,71 @@ fn gets_request_by_repository_selector() {
     assert_eq!(value["method"], "GET");
     assert_eq!(value["headers"][0]["name"], "Accept");
     assert_eq!(value["queryParameters"][0]["name"], "limit");
+    assert!(value["environment"].is_null());
+}
+
+#[test]
+fn gets_request_resolved_with_selected_environment() {
+    let output = probe()
+        .args(["request", "get"])
+        .arg(fixture("phase4-environments.yml"))
+        .arg("items/0")
+        .args(["--environment", "development", "--json"])
+        .output()
+        .expect("resolved get command should run");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["environment"], "development");
+    assert_eq!(value["url"], "https://dev.example.com/au/users");
+    assert_eq!(value["headers"][0]["value"], "Bearer development-token");
+    assert_eq!(value["queryParameters"][0]["value"], "au");
+    assert_eq!(value["body"]["value"]["data"], "{\"tenant\":\"au\"}");
+    assert_eq!(
+        value["authentication"]["properties"]["token"],
+        "development-token"
+    );
+}
+
+#[test]
+fn reports_environment_and_missing_variable_errors() {
+    let missing_environment = probe()
+        .args(["request", "get"])
+        .arg(fixture("phase4-environments.yml"))
+        .arg("items/0")
+        .args(["--environment", "production", "--json"])
+        .output()
+        .expect("get command should run");
+    assert_eq!(missing_environment.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&missing_environment.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "environment_not_found");
+
+    let missing_variable = probe()
+        .args(["request", "get"])
+        .arg(fixture("phase4-environments.yml"))
+        .arg("items/1")
+        .args(["--environment", "development", "--json"])
+        .output()
+        .expect("get command should run");
+    assert_eq!(missing_variable.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&missing_variable.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "missing_variable");
+}
+
+#[test]
+fn reports_unavailable_collection_secret() {
+    let output = probe()
+        .args(["request", "get"])
+        .arg(fixture("phase4-environments.yml"))
+        .arg("items/2")
+        .args(["--environment", "development", "--json"])
+        .output()
+        .expect("get command should run");
+
+    assert_eq!(output.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "secret_variable_unavailable");
 }
 
 #[test]
@@ -115,6 +180,21 @@ fn recognizes_run_without_executing_http() {
     assert_eq!(output.status.code(), Some(6));
     assert!(output.stderr.is_empty());
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["error"]["category"], "execution_unavailable");
+}
+
+#[test]
+fn run_preflights_environment_resolution_before_phase_five() {
+    let output = probe()
+        .args(["request", "run"])
+        .arg(fixture("phase4-environments.yml"))
+        .arg("items/0")
+        .args(["--environment", "development", "--json"])
+        .output()
+        .expect("run command should run");
+
+    assert_eq!(output.status.code(), Some(6));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["error"]["category"], "execution_unavailable");
 }
 

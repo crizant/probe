@@ -4,11 +4,16 @@ use probe_core::{
 };
 use serde_json::{Map, Value, json};
 
-pub(super) fn request_human(selector: &str, request: &HttpRequest) -> String {
+pub(super) fn request_human(
+    selector: &str,
+    environment: Option<&str>,
+    request: &HttpRequest,
+) -> String {
     let mut output = String::new();
     output.push_str(&format!(
-        "Name: {}\nSelector: {selector}\nMethod: {}\nURL: {}\n",
+        "Name: {}\nSelector: {selector}\nEnvironment: {}\nMethod: {}\nURL: {}\n",
         request.metadata.name.as_deref().unwrap_or("<unnamed>"),
+        environment.unwrap_or("<none>"),
         request.method.as_deref().unwrap_or("<unset>"),
         request.url.as_deref().unwrap_or("<unset>"),
     ));
@@ -52,7 +57,11 @@ pub(super) fn request_human(selector: &str, request: &HttpRequest) -> String {
     output
 }
 
-pub(super) fn request_json(selector: &str, request: &HttpRequest) -> Value {
+pub(super) fn request_json(
+    selector: &str,
+    environment: Option<&str>,
+    request: &HttpRequest,
+) -> Value {
     let headers: Vec<_> = request
         .headers
         .iter()
@@ -90,6 +99,7 @@ pub(super) fn request_json(selector: &str, request: &HttpRequest) -> Value {
     json!({
         "authentication": authentication,
         "body": request.body.as_ref().map(request_body_json),
+        "environment": environment,
         "headers": headers,
         "method": request.method,
         "name": request.metadata.name,

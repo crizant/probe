@@ -7,8 +7,12 @@
 
 use std::collections::BTreeMap;
 
+mod environment;
 mod workspace;
 
+pub use environment::{
+    EnvironmentResolutionError, ResolvedEnvironment, resolve_environment, resolve_request,
+};
 pub use workspace::{FolderKey, RequestKey, Workspace, WorkspaceFolder, WorkspaceItemRef};
 
 /// A parsed API collection.

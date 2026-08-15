@@ -1,0 +1,70 @@
+opencollection: 1.0.0
+info:
+  name: Phase 4 environment fixture
+bundled: true
+config:
+  environments:
+    - name: base
+      variables:
+        - name: host
+          value: api.example.com
+        - name: baseUrl
+          value: https://{{host}}
+        - name: tenant
+          value:
+            - title: Australia
+              selected: true
+              value: au
+            - title: United States
+              value: us
+        - name: disabledValue
+          value: hidden
+          disabled: true
+        - secret: true
+          name: secretToken
+          type: string
+    - name: development
+      extends: base
+      variables:
+        - name: host
+          value: dev.example.com
+        - name: token
+          value: development-token
+items:
+  - info:
+      name: Resolved users
+      type: http
+      seq: 1
+    http:
+      method: GET
+      url: "{{baseUrl}}/{{tenant}}/users"
+      headers:
+        - name: Authorization
+          value: "Bearer {{token}}"
+      params:
+        - name: tenant
+          value: "{{tenant}}"
+          type: query
+      body:
+        type: json
+        data: '{"tenant":"{{tenant}}"}'
+      auth:
+        type: bearer
+        token: "{{token}}"
+  - info:
+      name: Missing variable
+      type: http
+      seq: 2
+    http:
+      method: GET
+      url: "{{baseUrl}}/{{missing}}"
+  - info:
+      name: Secret variable
+      type: http
+      seq: 3
+    http:
+      method: GET
+      url: "{{baseUrl}}/secret"
+      headers:
+        - name: Authorization
+          value: "Bearer {{secretToken}}"
