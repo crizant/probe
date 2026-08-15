@@ -100,8 +100,8 @@ chain, and interpolates request variables before output or execution preflight.
 The repository is a Cargo workspace. It currently includes OpenCollection parsing,
 bundled and unbundled filesystem loading, an indexed in-memory workspace, shared
 environment resolution, asynchronous HTTP execution, a versioned automation-safe CLI
-contract, and a native GPUI desktop foundation with semantic light/dark themes and
-headless gpui-base controls.
+contract, and a native GPUI desktop shell with semantic light/dark themes,
+OpenCollection-backed browsing, request tabs, and resizable editor/response panes.
 
 ```bash
 cargo run -p probe-cli -- --help

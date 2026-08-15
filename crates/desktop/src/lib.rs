@@ -7,6 +7,7 @@
 
 mod app;
 pub mod components;
+mod shell;
 pub mod theme;
 
 pub use app::{ProbeApp, run};

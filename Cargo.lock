@@ -4543,6 +4543,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "probe-core",
+ "probe-opencollection",
 ]
 
 [[package]]

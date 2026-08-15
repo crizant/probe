@@ -238,6 +238,13 @@ It must not include:
 - database queries
 - network operations
 
+The desktop shell retains the repository-loaded workspace for the lifetime of the
+window. Its tree is rendered from `WorkspaceItemRef` values, and tabs retain only
+session-local `RequestKey` values. Opening a collection delegates parsing and
+filesystem traversal to the OpenCollection repository on a background executor;
+the GPUI adapter never parses YAML. Folder expansion, active tabs, and pane sizes are
+presentation state and do not modify the domain workspace.
+
 ### Runtime Identity and Persistence Locators
 
 OpenCollection does not define durable IDs for requests or folders. The active

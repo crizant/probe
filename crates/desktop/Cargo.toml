@@ -9,6 +9,7 @@ rust-version.workspace = true
 base-gpui = { git = "https://github.com/LukeTandjung/base-gpui", rev = "ceb5153aa3ee561010b2b33c13af6793d56eddb6" }
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", rev = "59b2ebf10351b5c0b5cd4403f01ed0460eeec06d" }
 probe-core = { path = "../core" }
+probe-opencollection = { path = "../opencollection" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_platform = { version = "0.1.0", git = "https://github.com/zed-industries/zed", rev = "59b2ebf10351b5c0b5cd4403f01ed0460eeec06d", features = ["font-kit", "runtime_shaders"] }
