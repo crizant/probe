@@ -367,7 +367,7 @@ impl ProbeApp {
         };
         let selected_environment = self
             .request_editor
-            .selected_environment(key)
+            .selected_environment()
             .map(str::to_owned);
         let request = if let Some(environment_name) = selected_environment {
             let Some(loaded) = &self.loaded_workspace else {
@@ -796,10 +796,10 @@ impl ProbeApp {
             .border_b_1()
             .border_color(theme.colors.borders.subtle)
             .child(tab_strip);
-        if let Some(key) = self.shell.active_tab() {
+        if self.shell.active_tab().is_some() {
             let selected = self
                 .request_editor
-                .selected_environment(key)
+                .selected_environment()
                 .unwrap_or("")
                 .to_owned();
             let mut options = vec![(String::new(), "No environment".to_owned())];
@@ -823,7 +823,7 @@ impl ProbeApp {
                         let value = value.cloned().unwrap_or_default();
                         let _ = environment_view.update(cx, |view, cx| {
                             view.request_editor
-                                .select_environment(key, (!value.is_empty()).then_some(value));
+                                .select_environment((!value.is_empty()).then_some(value));
                             cx.notify();
                         });
                     },
@@ -977,7 +977,7 @@ impl ProbeApp {
                                     ("request-url", key.slot()),
                                     url.clone(),
                                     "https://api.example.com/path",
-                                    self.variable_context(key),
+                                    self.variable_context(),
                                     move |value, _, input_cx| {
                                         let _ = url_view.update(input_cx, |view, cx| {
                                             view.edit_request(
@@ -1052,7 +1052,7 @@ impl ProbeApp {
                                 ("query-name", index),
                                 parameter.name.clone(),
                                 "Parameter",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = name_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1076,7 +1076,7 @@ impl ProbeApp {
                                 ("query-value", index),
                                 parameter.value.clone(),
                                 "Value",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = value_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1186,7 +1186,7 @@ impl ProbeApp {
                                 ("header-name", index),
                                 header.name.clone(),
                                 "Header",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = name_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1209,7 +1209,7 @@ impl ProbeApp {
                                 ("header-value", index),
                                 header.value.clone(),
                                 "Value",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = value_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1352,7 +1352,7 @@ impl ProbeApp {
                                 theme,
                                 ("request-body", key.slot()),
                                 raw.data.clone(),
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = body_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1426,7 +1426,7 @@ impl ProbeApp {
                                 ("form-field-name", index),
                                 field.name.clone(),
                                 "Field",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = name_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1452,7 +1452,7 @@ impl ProbeApp {
                                 ("form-field-value", index),
                                 field.value.clone(),
                                 "Value",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = value_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1609,7 +1609,7 @@ impl ProbeApp {
                                 ("multipart-name", index),
                                 part.name.clone(),
                                 "Part",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = name_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1635,7 +1635,7 @@ impl ProbeApp {
                                 ("multipart-value", index),
                                 value,
                                 "Value or file path",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = value_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1758,7 +1758,7 @@ impl ProbeApp {
                                 ("body-file-path", index),
                                 file.file_path.clone(),
                                 "File path",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = path_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1783,7 +1783,7 @@ impl ProbeApp {
                                 ("body-file-content-type", index),
                                 file.content_type.clone(),
                                 "Content type",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let _ = type_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -1942,7 +1942,7 @@ impl ProbeApp {
                                 ("authentication-property-name", index),
                                 property_name.clone(),
                                 "Property",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let old_name = old_name.clone();
                                     let _ = name_view.update(input_cx, |view, cx| {
@@ -1974,7 +1974,7 @@ impl ProbeApp {
                                 ("authentication-property-value", index),
                                 auth_value(value),
                                 "Value",
-                                self.variable_context(key),
+                                self.variable_context(),
                                 move |value, _, input_cx| {
                                     let value_name = value_name.clone();
                                     let _ = value_view.update(input_cx, |view, cx| {
@@ -2705,8 +2705,8 @@ impl ProbeApp {
         self.loaded_workspace.as_ref()?.workspace().request(key)
     }
 
-    fn variable_context(&self, key: RequestKey) -> components::VariableContext {
-        let Some(selected) = self.request_editor.selected_environment(key) else {
+    fn variable_context(&self) -> components::VariableContext {
+        let Some(selected) = self.request_editor.selected_environment() else {
             return components::VariableContext {
                 values: Default::default(),
                 unavailable_message: "Select an environment to resolve this variable".to_owned(),
@@ -3363,6 +3363,35 @@ mod tests {
     }
 
     #[gpui::test]
+    fn environment_selection_is_shared_when_opening_another_request(cx: &mut TestAppContext) {
+        cx.update(base_gpui::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = environment_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let first = workspace.requests()[0].key();
+        let second = workspace.requests()[1].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(first, cx);
+                view.request_editor
+                    .select_environment(Some("development".to_owned()));
+                view.select_request(second, cx);
+                assert_eq!(
+                    view.request_editor.selected_environment(),
+                    Some("development")
+                );
+            })
+            .expect("test window should be open");
+    }
+
+    #[gpui::test]
     fn request_variables_render_inline_and_show_resolved_tooltips(cx: &mut TestAppContext) {
         cx.update(base_gpui::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -3380,7 +3409,7 @@ mod tests {
                 view.set_workspace(fixture, workspace);
                 view.select_request(request_key, cx);
                 view.request_editor
-                    .select_environment(request_key, Some("development".to_owned()));
+                    .select_environment(Some("development".to_owned()));
                 cx.notify();
             })
             .expect("test window should be open");
