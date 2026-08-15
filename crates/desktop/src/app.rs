@@ -2541,7 +2541,8 @@ impl ProbeApp {
             .rounded(px(theme.metrics.radius_medium))
             .bg(theme.colors.surfaces.overlay)
             .border_1()
-            .border_color(theme.colors.borders.standard);
+            .border_color(theme.colors.borders.standard)
+            .style_with_state(|_, popup| popup.occlude());
 
         if !self.session.recent_collections.is_empty() {
             popup = popup.child_any(

@@ -271,9 +271,10 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
                 .rounded(px(theme.metrics.radius_small))
                 .text_color(theme.colors.text.primary)
                 .style_with_state(move |state, item| {
-                    item.when(state.highlighted, |item| {
-                        item.bg(theme.colors.surfaces.sidebar)
-                    })
+                    item.debug_selector(move || format!("{id}-item-{index}"))
+                        .when(state.highlighted, |item| {
+                            item.bg(theme.colors.surfaces.sidebar)
+                        })
                 })
                 .child(
                     SelectItemIndicator::new()
@@ -343,6 +344,7 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
                             .bg(theme.colors.surfaces.overlay)
                             .border_1()
                             .border_color(theme.colors.borders.standard)
+                            .style_with_state(|_, popup| popup.occlude())
                             .child(list),
                     ),
             ),
@@ -658,7 +660,7 @@ mod tests {
         prelude::*, px, size,
     };
 
-    use super::menu_button;
+    use super::{dropdown, menu_button};
     use crate::theme::Theme;
 
     struct MenuTestView {
@@ -701,7 +703,7 @@ mod tests {
                                 PopoverPopup::new()
                                     .w(px(180.0))
                                     .style_with_state(|_, popup| {
-                                        popup.debug_selector(|| "menu-test-popup".into())
+                                        popup.debug_selector(|| "menu-test-popup".into()).occlude()
                                     })
                                     .child_any(menu_button(
                                         Theme::light(),
@@ -752,5 +754,111 @@ mod tests {
             .expect("test window should remain open");
         assert!(!open);
         assert_eq!(activations, 1);
+    }
+
+    struct DropdownHoverLeakView {
+        value: Option<&'static str>,
+        underlay_hovered: bool,
+    }
+
+    impl Render for DropdownHoverLeakView {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut Context<Self>,
+        ) -> impl IntoElement {
+            let select_view = cx.weak_entity();
+            let underlay_view = cx.weak_entity();
+
+            div()
+                .size_full()
+                .p(px(12.0))
+                .flex()
+                .flex_col()
+                .child(dropdown(
+                    Theme::light(),
+                    "hover-leak-select",
+                    "Method",
+                    self.value,
+                    vec![
+                        ("GET", "GET".to_owned()),
+                        ("POST", "POST".to_owned()),
+                        ("PUT", "PUT".to_owned()),
+                        ("PATCH", "PATCH".to_owned()),
+                        ("DELETE", "DELETE".to_owned()),
+                    ],
+                    120.0,
+                    move |value, _, cx| {
+                        let value = value.copied();
+                        let _ = select_view.update(cx, |view, cx| {
+                            view.value = value;
+                            cx.notify();
+                        });
+                    },
+                ))
+                .child(
+                    div()
+                        .id("dropdown-underlay")
+                        .flex_1()
+                        .w_full()
+                        .mt(px(8.0))
+                        .debug_selector(|| "dropdown-underlay".into())
+                        .hover(|underlay| underlay.bg(Theme::light().colors.surfaces.raised))
+                        .on_hover(move |hovered, _, cx| {
+                            let hovered = *hovered;
+                            let _ = underlay_view.update(cx, |view, cx| {
+                                view.underlay_hovered = hovered;
+                                cx.notify();
+                            });
+                        })
+                        .child("Underlay"),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn dropdown_menu_does_not_hover_elements_underneath(cx: &mut TestAppContext) {
+        cx.update(base_gpui::init);
+        let window = cx.open_window(size(px(360.0), px(280.0)), |_, _| DropdownHoverLeakView {
+            value: Some("GET"),
+            underlay_hovered: false,
+        });
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let underlay = visual
+            .debug_bounds("dropdown-underlay")
+            .expect("underlay should be rendered");
+        visual.simulate_mouse_move(underlay.center(), None, Modifiers::default());
+        visual.run_until_parked();
+        cx.run_until_parked();
+        let hovered = window
+            .update(cx, |view, _, _| view.underlay_hovered)
+            .expect("test window should remain open");
+        assert!(hovered, "underlay should hover when the menu is closed");
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let trigger = visual
+            .debug_bounds("hover-leak-select-trigger")
+            .expect("select trigger should be rendered");
+        visual.simulate_click(trigger.center(), Modifiers::default());
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let item = visual
+            .debug_bounds("hover-leak-select-item-3")
+            .expect("select item over the underlay should be rendered");
+        visual.simulate_mouse_move(item.center(), None, Modifiers::default());
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        let hovered = window
+            .update(cx, |view, _, _| view.underlay_hovered)
+            .expect("test window should remain open");
+        assert!(
+            !hovered,
+            "hovering a dropdown item should not hover the element underneath"
+        );
     }
 }
