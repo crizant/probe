@@ -1,0 +1,44 @@
+opencollection: 1.0.0
+info:
+  name: Pet Store
+  summary: Requests for the example pet service
+  version: 2.1.0
+  authors:
+    - name: Probe Team
+      email: probe@example.com
+      url: https://example.com/probe
+bundled: true
+items:
+  - info:
+      name: Pets
+      type: folder
+      seq: 1
+    items:
+      - info:
+          name: List pets
+          type: http
+          seq: 1
+        http:
+          method: GET
+          url: https://api.example.com/pets
+          headers:
+            - name: Accept
+              value: application/json
+            - name: X-Debug
+              value: "true"
+              disabled: true
+          params:
+            - name: limit
+              value: "25"
+              type: query
+            - name: ownerId
+              value: "42"
+              type: path
+  - info:
+      name: Health check
+      type: http
+      seq: 2
+    http:
+      method: HEAD
+      url: https://api.example.com/health
+

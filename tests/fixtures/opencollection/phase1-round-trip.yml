@@ -1,0 +1,39 @@
+opencollection: 1.0.0
+info:
+  name: Round-trip collection
+  summary: Unsupported v1 fields must survive serialization
+bundled: true
+extensions:
+  vendor.example:
+    color: violet
+items:
+  - info:
+      name: Create pet
+      type: http
+      description: Creates a pet while exercising unsupported fields
+      seq: 1
+    http:
+      method: POST
+      url: https://api.example.com/pets?source=fixture
+      headers:
+        - name: Content-Type
+          value: application/json
+          description: Payload media type
+      params:
+        - name: source
+          value: fixture
+          type: query
+          description: Request origin
+      body:
+        type: json
+        data: '{"name":"Milo"}'
+      auth:
+        type: bearer
+        token: not-used-by-phase-1
+    runtime:
+      scripts:
+        - type: tests
+          code: expect(res.status).to.equal(201);
+    settings:
+      encodeUrl: true
+

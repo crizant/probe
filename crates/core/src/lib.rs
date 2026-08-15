@@ -1,5 +1,369 @@
 //! Shared domain and application layer for Probe.
 //!
-//! Domain models and application operations will be introduced in later phases.
+//! These models describe application concepts and deliberately contain no YAML or
+//! serialization concerns.
 
 #![forbid(unsafe_code)]
+
+use std::collections::BTreeMap;
+
+/// A parsed API collection.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Collection {
+    /// Collection-level metadata.
+    pub metadata: CollectionMetadata,
+    /// Requests and folders at the collection root.
+    pub items: Vec<CollectionItem>,
+    /// Environments embedded in the collection configuration.
+    pub environments: Vec<Environment>,
+}
+
+/// Collection-level metadata from OpenCollection's `info` object.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CollectionMetadata {
+    /// Human-readable collection name.
+    pub name: Option<String>,
+    /// Short collection summary.
+    pub summary: Option<String>,
+    /// User-defined collection version.
+    pub version: Option<String>,
+    /// Collection authors.
+    pub authors: Vec<Author>,
+}
+
+/// A collection author.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Author {
+    /// Author name.
+    pub name: Option<String>,
+    /// Author email address.
+    pub email: Option<String>,
+    /// Author URL.
+    pub url: Option<String>,
+}
+
+/// An item supported by the current domain reader.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CollectionItem {
+    /// A folder containing more collection items.
+    Folder(Folder),
+    /// An HTTP request.
+    HttpRequest(HttpRequest),
+}
+
+/// Metadata shared by folders and HTTP requests.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ItemMetadata {
+    /// Human-readable item name.
+    pub name: Option<String>,
+    /// User-interface ordering value.
+    pub sequence: Option<f64>,
+}
+
+/// A folder in a collection.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Folder {
+    /// Folder metadata.
+    pub metadata: ItemMetadata,
+    /// Supported child items.
+    pub items: Vec<CollectionItem>,
+}
+
+/// An HTTP request definition.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HttpRequest {
+    /// Request metadata.
+    pub metadata: ItemMetadata,
+    /// HTTP method as written in the collection.
+    pub method: Option<String>,
+    /// Request URL, which may contain unresolved collection variables.
+    pub url: Option<String>,
+    /// HTTP request headers.
+    pub headers: Vec<Header>,
+    /// Query parameters. Path parameters are outside the current phase.
+    pub query_parameters: Vec<QueryParameter>,
+    /// Request body definition, including selectable variants when present.
+    pub body: Option<RequestBody>,
+    /// Request authentication configuration.
+    pub authentication: Option<Authentication>,
+}
+
+/// An HTTP request header.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Header {
+    /// Header name.
+    pub name: String,
+    /// Header value.
+    pub value: String,
+    /// Whether this header is disabled.
+    pub disabled: bool,
+}
+
+/// An HTTP query parameter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueryParameter {
+    /// Parameter name.
+    pub name: String,
+    /// Parameter value.
+    pub value: String,
+    /// Whether this parameter is disabled.
+    pub disabled: bool,
+}
+
+/// A request body represented either directly or as selectable variants.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RequestBody {
+    /// One body definition.
+    Single(Body),
+    /// Multiple named body definitions.
+    Variants(Vec<BodyVariant>),
+}
+
+/// A named request-body variant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BodyVariant {
+    /// Variant title.
+    pub title: String,
+    /// Whether the variant is selected.
+    pub selected: bool,
+    /// Variant body.
+    pub body: Body,
+}
+
+/// A supported OpenCollection HTTP body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Body {
+    /// JSON, text, XML, or SPARQL data.
+    Raw(RawBody),
+    /// URL-encoded form fields.
+    FormUrlEncoded(Vec<FormField>),
+    /// Multipart form parts.
+    Multipart(Vec<MultipartPart>),
+    /// One or more file-body variants.
+    File(Vec<FileReference>),
+}
+
+/// A raw request body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawBody {
+    /// Raw body content type.
+    pub kind: RawBodyKind,
+    /// Body data.
+    pub data: String,
+}
+
+/// Raw body types defined by OpenCollection v1.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RawBodyKind {
+    /// JSON text.
+    Json,
+    /// Plain text.
+    Text,
+    /// XML text.
+    Xml,
+    /// SPARQL text.
+    Sparql,
+}
+
+/// A URL-encoded form field.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FormField {
+    /// Field name.
+    pub name: String,
+    /// Field value.
+    pub value: String,
+    /// Whether the field is disabled.
+    pub disabled: bool,
+}
+
+/// A multipart form part.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultipartPart {
+    /// Part name.
+    pub name: String,
+    /// Part kind.
+    pub kind: MultipartPartKind,
+    /// Text value or file paths.
+    pub value: MultipartValue,
+    /// Optional content type.
+    pub content_type: Option<String>,
+    /// Whether the part is disabled.
+    pub disabled: bool,
+}
+
+/// Multipart part types.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MultipartPartKind {
+    /// A text part.
+    Text,
+    /// A file part.
+    File,
+}
+
+/// A multipart part value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MultipartValue {
+    /// A single text value or file path.
+    Single(String),
+    /// Multiple file paths.
+    Multiple(Vec<String>),
+}
+
+/// A file-body choice.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileReference {
+    /// File path.
+    pub file_path: String,
+    /// File media type.
+    pub content_type: String,
+    /// Whether this file is selected.
+    pub selected: bool,
+}
+
+/// Authentication configuration for a request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Authentication {
+    /// Authentication scheme.
+    pub kind: AuthenticationKind,
+    /// Scheme-specific configuration, kept independent of serialization formats.
+    pub properties: BTreeMap<String, AuthenticationValue>,
+}
+
+/// Authentication schemes defined by OpenCollection v1.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AuthenticationKind {
+    /// Inherit authentication from the containing scope.
+    Inherit,
+    /// AWS Signature Version 4.
+    AwsV4,
+    /// HTTP Basic authentication.
+    Basic,
+    /// WS-Security UsernameToken authentication.
+    Wsse,
+    /// Bearer token authentication.
+    Bearer,
+    /// HTTP Digest authentication.
+    Digest,
+    /// NTLM authentication.
+    Ntlm,
+    /// API-key authentication.
+    ApiKey,
+    /// OAuth 1.0.
+    OAuth1,
+    /// OAuth 2.0.
+    OAuth2,
+    /// A future or extension authentication scheme.
+    Other(String),
+}
+
+/// A serialization-independent authentication property value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AuthenticationValue {
+    /// A string value.
+    String(String),
+    /// A boolean value.
+    Boolean(bool),
+    /// A number retained in its string form.
+    Number(String),
+    /// A null value.
+    Null,
+    /// A sequence of values.
+    Sequence(Vec<AuthenticationValue>),
+    /// A string-keyed object.
+    Object(BTreeMap<String, AuthenticationValue>),
+}
+
+/// A bundled OpenCollection environment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Environment {
+    /// Environment name.
+    pub name: String,
+    /// Optional display color.
+    pub color: Option<String>,
+    /// Parent environment name.
+    pub extends: Option<String>,
+    /// Optional dotenv file path.
+    pub dot_env_file_path: Option<String>,
+    /// Environment variables.
+    pub variables: Vec<EnvironmentVariable>,
+}
+
+/// A normal or secret environment variable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EnvironmentVariable {
+    /// A value stored in the collection.
+    Plain(Variable),
+    /// A secret whose value is stored outside the collection.
+    Secret(SecretVariable),
+}
+
+/// A non-secret environment variable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Variable {
+    /// Variable name.
+    pub name: Option<String>,
+    /// Variable value or selectable values.
+    pub value: Option<VariableValueSet>,
+    /// Whether the variable is disabled.
+    pub disabled: bool,
+}
+
+/// A secret environment-variable declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SecretVariable {
+    /// Variable name.
+    pub name: Option<String>,
+    /// Declared value type.
+    pub value_type: Option<VariableValueType>,
+    /// Whether the variable is disabled.
+    pub disabled: bool,
+}
+
+/// A single variable value or a set of selectable variants.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VariableValueSet {
+    /// One value.
+    Single(VariableValue),
+    /// Named selectable values.
+    Variants(Vec<VariableValueVariant>),
+}
+
+/// A named variable-value variant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VariableValueVariant {
+    /// Variant title.
+    pub title: String,
+    /// Whether the variant is selected.
+    pub selected: bool,
+    /// Variant value.
+    pub value: VariableValue,
+}
+
+/// An environment variable value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VariableValue {
+    /// The shorthand string form.
+    String(String),
+    /// An explicitly typed value whose data remains in string form.
+    Typed {
+        /// Declared value type.
+        kind: VariableValueType,
+        /// String representation of the value.
+        data: String,
+    },
+}
+
+/// Types available for explicitly typed and secret variables.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VariableValueType {
+    /// String data.
+    String,
+    /// Numeric data.
+    Number,
+    /// Boolean data.
+    Boolean,
+    /// Null data.
+    Null,
+    /// Object data.
+    Object,
+}

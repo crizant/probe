@@ -1,0 +1,128 @@
+opencollection: 1.0.0
+info:
+  name: Phase 1 complete fixture
+bundled: true
+config:
+  environments:
+    - name: development
+      color: green
+      dotEnvFilePath: .env.development
+      variables:
+        - name: baseUrl
+          value: https://dev.example.com
+        - name: retries
+          value:
+            type: number
+            data: "3"
+        - name: region
+          value:
+            - title: Brisbane
+              selected: true
+              value: ap-southeast-2
+            - title: Virginia
+              value: us-east-1
+        - secret: true
+          name: apiToken
+          type: string
+    - name: staging
+      extends: development
+      variables:
+        - name: baseUrl
+          value: https://staging.example.com
+items:
+  - info:
+      name: Create pet
+      type: http
+      seq: 1
+    http:
+      method: POST
+      url: "{{baseUrl}}/pets"
+      body:
+        type: json
+        data: '{"name":"Milo"}'
+      auth:
+        type: bearer
+        token: "{{apiToken}}"
+  - info:
+      name: Submit form
+      type: http
+      seq: 2
+    http:
+      method: POST
+      url: https://example.com/forms
+      body:
+        type: form-urlencoded
+        data:
+          - name: title
+            value: hello
+          - name: draft
+            value: "true"
+            disabled: true
+      auth:
+        type: basic
+        username: demo
+        password: secret
+  - info:
+      name: Upload assets
+      type: http
+      seq: 3
+    http:
+      method: POST
+      url: https://example.com/assets
+      body:
+        type: multipart-form
+        data:
+          - name: caption
+            type: text
+            value: Summer
+          - name: files
+            type: file
+            value:
+              - ./images/one.png
+              - ./images/two.png
+            contentType: image/png
+      auth:
+        type: apikey
+        key: X-API-Key
+        value: "{{apiToken}}"
+        placement: header
+  - info:
+      name: Upload archive
+      type: http
+      seq: 4
+    http:
+      method: PUT
+      url: https://example.com/archive
+      body:
+        type: file
+        data:
+          - filePath: ./archive.zip
+            contentType: application/zip
+            selected: true
+      auth: inherit
+  - info:
+      name: Variant body
+      type: http
+      seq: 5
+    http:
+      method: POST
+      url: https://example.com/variants
+      body:
+        - title: JSON
+          selected: true
+          body:
+            type: json
+            data: '{"enabled":true}'
+        - title: Text
+          body:
+            type: text
+            data: enabled
+      auth:
+        type: oauth2
+        flow: client_credentials
+        accessTokenUrl: https://example.com/oauth/token
+        credentials:
+          clientId: probe
+          clientSecret: secret
+          placement: basic_auth_header
+
