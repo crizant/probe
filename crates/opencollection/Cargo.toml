@@ -1,0 +1,13 @@
+[package]
+name = "probe-opencollection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+probe-core = { path = "../core" }
+
+[lints]
+workspace = true
+
