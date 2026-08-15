@@ -1,0 +1,242 @@
+use std::{collections::BTreeMap, path::Path, time::Duration};
+
+use probe_core::{HttpRequest, RequestKey};
+use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpResponse};
+use tokio::sync::oneshot;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseState {
+    Running,
+    Complete(HttpResponse),
+    Failed(String),
+    Cancelled,
+}
+
+impl ResponseState {
+    pub(crate) const fn is_running(&self) -> bool {
+        matches!(self, Self::Running)
+    }
+}
+
+pub(crate) struct ActiveRequest {
+    pub(crate) generation: u64,
+    pub(crate) cancellation: oneshot::Sender<()>,
+}
+
+#[derive(Default)]
+pub(crate) struct ExecutionState {
+    next_generation: u64,
+    responses: BTreeMap<RequestKey, ResponseState>,
+    active: BTreeMap<RequestKey, ActiveRequest>,
+}
+
+impl ExecutionState {
+    pub(crate) fn begin(&mut self, key: RequestKey, cancellation: oneshot::Sender<()>) -> u64 {
+        self.cancel(key);
+        self.next_generation = self.next_generation.wrapping_add(1);
+        let generation = self.next_generation;
+        self.active.insert(
+            key,
+            ActiveRequest {
+                generation,
+                cancellation,
+            },
+        );
+        self.responses.insert(key, ResponseState::Running);
+        generation
+    }
+
+    pub(crate) fn finish(
+        &mut self,
+        key: RequestKey,
+        generation: u64,
+        result: Result<HttpResponse, HttpError>,
+    ) {
+        if !self
+            .active
+            .get(&key)
+            .is_some_and(|active| active.generation == generation)
+        {
+            return;
+        }
+        self.active.remove(&key);
+        let response = match result {
+            Ok(response) => ResponseState::Complete(response),
+            Err(HttpError::Cancelled) => ResponseState::Cancelled,
+            Err(error) => ResponseState::Failed(error.to_string()),
+        };
+        self.responses.insert(key, response);
+    }
+
+    pub(crate) fn fail(&mut self, key: RequestKey, message: String) {
+        self.cancel(key);
+        self.responses.insert(key, ResponseState::Failed(message));
+    }
+
+    pub(crate) fn cancel(&mut self, key: RequestKey) {
+        if let Some(active) = self.active.remove(&key) {
+            let _ = active.cancellation.send(());
+            self.responses.insert(key, ResponseState::Cancelled);
+        }
+    }
+
+    pub(crate) fn cancel_all(&mut self) {
+        for (_, active) in std::mem::take(&mut self.active) {
+            let _ = active.cancellation.send(());
+        }
+        for response in self.responses.values_mut() {
+            if response.is_running() {
+                *response = ResponseState::Cancelled;
+            }
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.cancel_all();
+        self.responses.clear();
+    }
+
+    pub(crate) fn response(&self, key: RequestKey) -> Option<&ResponseState> {
+        self.responses.get(&key)
+    }
+}
+
+pub(crate) fn workspace_base_directory(path: &Path) -> Option<std::path::PathBuf> {
+    if path.is_dir() {
+        Some(path.to_owned())
+    } else {
+        path.parent().map(Path::to_owned)
+    }
+}
+
+pub(crate) fn execute_http_request(
+    request: HttpRequest,
+    options: ExecutionOptions,
+    cancellation: oneshot::Receiver<()>,
+) -> Result<HttpResponse, HttpError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| HttpError::ClientConfiguration(error.to_string()))?;
+    runtime.block_on(async move {
+        let engine = HttpEngine::new()?;
+        engine
+            .execute_cancellable(&request, &options, async move {
+                let _ = cancellation.await;
+            })
+            .await
+    })
+}
+
+pub(crate) fn format_duration(duration: Duration) -> String {
+    if duration.as_secs() > 0 {
+        format!("{:.2} s", duration.as_secs_f64())
+    } else {
+        format!("{} ms", duration.as_millis())
+    }
+}
+
+pub(crate) fn format_size(size: usize) -> String {
+    if size >= 1024 * 1024 {
+        format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+    } else if size >= 1024 {
+        format!("{:.1} KB", size as f64 / 1024.0)
+    } else {
+        format!("{size} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use probe_core::HttpRequest;
+    use probe_http::ExecutionOptions;
+    use probe_http::{HttpError, HttpResponse};
+    use tokio::sync::oneshot;
+
+    use super::{
+        ExecutionState, ResponseState, execute_http_request, format_duration, format_size,
+    };
+
+    fn key() -> probe_core::RequestKey {
+        let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
+            items: vec![probe_core::CollectionItem::HttpRequest(
+                probe_core::HttpRequest::default(),
+            )],
+            ..probe_core::Collection::default()
+        });
+        let probe_core::WorkspaceItemRef::Request(key) = workspace.root_items()[0] else {
+            panic!("expected request key");
+        };
+        key
+    }
+
+    #[test]
+    fn stale_completion_cannot_replace_a_newer_execution() {
+        let key = key();
+        let mut state = ExecutionState::default();
+        let (first, _) = oneshot::channel();
+        let first_generation = state.begin(key, first);
+        let (second, _) = oneshot::channel();
+        let second_generation = state.begin(key, second);
+
+        state.finish(key, first_generation, Ok(response(201)));
+        assert_eq!(state.response(key), Some(&ResponseState::Running));
+        state.finish(key, second_generation, Ok(response(204)));
+        assert!(matches!(
+            state.response(key),
+            Some(ResponseState::Complete(response)) if response.status == 204
+        ));
+    }
+
+    #[test]
+    fn cancellation_is_visible_and_normalized() {
+        let key = key();
+        let mut state = ExecutionState::default();
+        let (sender, mut receiver) = oneshot::channel();
+        let generation = state.begin(key, sender);
+        state.cancel(key);
+        assert!(receiver.try_recv().is_ok());
+        assert_eq!(state.response(key), Some(&ResponseState::Cancelled));
+        state.finish(key, generation, Err(HttpError::Cancelled));
+        assert_eq!(state.response(key), Some(&ResponseState::Cancelled));
+    }
+
+    #[test]
+    fn metadata_units_are_readable() {
+        assert_eq!(format_duration(Duration::from_millis(83)), "83 ms");
+        assert_eq!(format_duration(Duration::from_millis(1250)), "1.25 s");
+        assert_eq!(format_size(812), "812 B");
+        assert_eq!(format_size(2048), "2.0 KB");
+    }
+
+    #[test]
+    fn desktop_adapter_forwards_cancellation_to_the_shared_http_engine() {
+        let (cancel, cancellation) = oneshot::channel();
+        cancel.send(()).expect("cancellation should be delivered");
+        let result = execute_http_request(
+            HttpRequest {
+                method: Some("GET".to_owned()),
+                url: Some("http://127.0.0.1:1/phase-12".to_owned()),
+                ..HttpRequest::default()
+            },
+            ExecutionOptions::default(),
+            cancellation,
+        );
+        assert_eq!(result, Err(HttpError::Cancelled));
+    }
+
+    fn response(status: u16) -> HttpResponse {
+        HttpResponse {
+            status,
+            reason: String::new(),
+            url: String::new(),
+            duration: Duration::ZERO,
+            size: 0,
+            headers: Vec::new(),
+            body: Vec::new(),
+            body_complete: true,
+        }
+    }
+}

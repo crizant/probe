@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    thread,
 };
 
 use base_gpui::popover::{
@@ -16,12 +17,17 @@ use gpui::{
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, FileReference, FormField, Header, HttpRequest,
     MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RequestBody, RequestKey,
-    Workspace, WorkspaceItemRef, resolve_environment,
+    Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
 };
+use probe_http::{ExecutionOptions, HttpError};
 use probe_opencollection::{LoadedWorkspace, load_workspace};
 
 use crate::{
     components,
+    execution::{
+        ExecutionState, ResponseState, execute_http_request, format_duration, format_size,
+        workspace_base_directory,
+    },
     request_editor::{
         BodyEditorKind, EditorSection, RequestEditorState, auth_label, auth_value, body_kind,
         raw_body_mut, set_auth_property, set_authentication,
@@ -49,6 +55,7 @@ pub struct ProbeApp {
     workspace_switcher_open: bool,
     visible_tree_rows: Vec<TreeRow>,
     request_editor: RequestEditorState,
+    execution: ExecutionState,
     #[cfg(test)]
     rendered_sidebar_rows: usize,
     _quit_subscription: gpui::Subscription,
@@ -82,6 +89,7 @@ impl ProbeApp {
             workspace_switcher_open: false,
             visible_tree_rows: Vec::new(),
             request_editor: RequestEditorState::default(),
+            execution: ExecutionState::default(),
             #[cfg(test)]
             rendered_sidebar_rows: 0,
             _quit_subscription: quit_subscription,
@@ -203,6 +211,7 @@ impl ProbeApp {
     }
 
     fn set_workspace(&mut self, path: PathBuf, workspace: LoadedWorkspace) {
+        self.execution.clear();
         self.loaded_workspace = Some(workspace);
         self.workspace_path = Some(path);
         self.shell.reset_for_workspace();
@@ -303,6 +312,7 @@ impl ProbeApp {
     }
 
     fn close_workspace(&mut self, cx: &mut Context<Self>) {
+        self.execution.clear();
         self.loaded_workspace = None;
         self.workspace_path = None;
         self.shell.reset_for_workspace();
@@ -328,6 +338,78 @@ impl ProbeApp {
     fn close_tab(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         self.shell.close_tab(key);
         self.persist_session(cx);
+        cx.notify();
+    }
+
+    fn send_request(&mut self, key: RequestKey, cx: &mut Context<Self>) {
+        let Some(request) = self
+            .loaded_workspace
+            .as_ref()
+            .and_then(|loaded| loaded.workspace().request(key))
+            .cloned()
+        else {
+            return;
+        };
+        let selected_environment = self
+            .request_editor
+            .selected_environment(key)
+            .map(str::to_owned);
+        let request = if let Some(environment_name) = selected_environment {
+            let Some(loaded) = &self.loaded_workspace else {
+                return;
+            };
+            match resolve_environment(loaded.workspace().environments(), &environment_name)
+                .and_then(|environment| resolve_request(&request, &environment))
+            {
+                Ok(request) => request,
+                Err(error) => {
+                    self.execution.fail(key, error.to_string());
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            request
+        };
+        let options = ExecutionOptions {
+            base_directory: self
+                .workspace_path
+                .as_deref()
+                .and_then(workspace_base_directory),
+        };
+        let (cancellation_sender, cancellation_receiver) = tokio::sync::oneshot::channel();
+        let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
+        let generation = self.execution.begin(key, cancellation_sender);
+        let spawn_result = thread::Builder::new()
+            .name("probe-http-request".to_owned())
+            .spawn(move || {
+                let result = execute_http_request(request, options, cancellation_receiver);
+                let _ = result_sender.send(result);
+            });
+        if let Err(error) = spawn_result {
+            self.execution
+                .fail(key, format!("Could not start HTTP execution: {error}"));
+            cx.notify();
+            return;
+        }
+
+        cx.spawn(async move |view, cx| {
+            let result = result_receiver.await.unwrap_or_else(|_| {
+                Err(HttpError::Transport(
+                    "HTTP execution ended without a result".to_owned(),
+                ))
+            });
+            let _ = view.update(cx, |view, cx| {
+                view.execution.finish(key, generation, result);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn cancel_request(&mut self, key: RequestKey, cx: &mut Context<Self>) {
+        self.execution.cancel(key);
         cx.notify();
     }
 
@@ -746,6 +828,11 @@ impl ProbeApp {
         let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
         let url = request.url.clone().unwrap_or_default();
         let url_view = cx.weak_entity();
+        let execution_view = cx.weak_entity();
+        let request_running = self
+            .execution
+            .response(key)
+            .is_some_and(ResponseState::is_running);
         let mut section_tabs = div().flex().items_center().gap(px(theme.metrics.spacing_1));
         for (index, section) in EditorSection::ALL.into_iter().enumerate() {
             let section_view = cx.weak_entity();
@@ -845,6 +932,26 @@ impl ProbeApp {
                                                 |request| request.url = Some(value.to_string()),
                                                 cx,
                                             );
+                                        });
+                                    },
+                                ),
+                            ))
+                            .child(div().ml(px(theme.metrics.spacing_2)).flex_none().child(
+                                components::primary_button(
+                                    theme,
+                                    "request-execution",
+                                    if request_running { "Cancel" } else { "Send" },
+                                    move |_, _, cx| {
+                                        let _ = execution_view.update(cx, |view, cx| {
+                                            if view
+                                                .execution
+                                                .response(key)
+                                                .is_some_and(ResponseState::is_running)
+                                            {
+                                                view.cancel_request(key, cx);
+                                            } else {
+                                                view.send_request(key, cx);
+                                            }
                                         });
                                     },
                                 ),
@@ -1897,6 +2004,145 @@ impl ProbeApp {
     }
 
     fn render_response_panel(&self, theme: Theme) -> gpui::Div {
+        let state = self
+            .shell
+            .active_tab()
+            .and_then(|key| self.execution.response(key))
+            .cloned();
+        let (summary, content) = match state {
+            Some(ResponseState::Running) => (
+                "Sending…".to_owned(),
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.colors.text.muted)
+                    .child("Waiting for the server…")
+                    .into_any_element(),
+            ),
+            Some(ResponseState::Cancelled) => (
+                "Cancelled".to_owned(),
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.colors.text.muted)
+                    .child("Request cancelled.")
+                    .into_any_element(),
+            ),
+            Some(ResponseState::Failed(error)) => (
+                "Failed".to_owned(),
+                div()
+                    .id("response-error-scroll")
+                    .flex_1()
+                    .p(px(theme.metrics.spacing_3))
+                    .overflow_y_scroll()
+                    .text_color(theme.colors.status.error)
+                    .child(error)
+                    .into_any_element(),
+            ),
+            Some(ResponseState::Complete(response)) => {
+                let status = format!("{} {}", response.status, response.reason);
+                let summary = format!(
+                    "{}  •  {}  •  {}",
+                    status.trim_end(),
+                    format_duration(response.duration),
+                    format_size(response.size)
+                );
+                let mut headers = div().flex().flex_col().gap(px(theme.metrics.spacing_1));
+                for header in &response.headers {
+                    headers = headers.child(
+                        div()
+                            .flex()
+                            .gap(px(theme.metrics.spacing_2))
+                            .child(
+                                div()
+                                    .min_w(px(150.0))
+                                    .text_color(theme.colors.text.secondary)
+                                    .child(header.name.clone()),
+                            )
+                            .child(header.value.clone()),
+                    );
+                }
+                if response.headers.is_empty() {
+                    headers = headers.child(
+                        div()
+                            .text_color(theme.colors.text.muted)
+                            .child("No response headers"),
+                    );
+                }
+                let body = String::from_utf8_lossy(&response.body).into_owned();
+                let truncation = (!response.body_complete)
+                    .then_some("Response body is truncated at the in-memory limit.");
+                (
+                    summary,
+                    div()
+                        .id("response-content-scroll")
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .p(px(theme.metrics.spacing_3))
+                        .flex()
+                        .flex_col()
+                        .gap(px(theme.metrics.spacing_3))
+                        .overflow_y_scroll()
+                        .child(
+                            div()
+                                .id("response-status")
+                                .debug_selector(|| "response-status".into())
+                                .text_color(response_status_color(theme, response.status))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(status),
+                        )
+                        .child(
+                            div()
+                                .id("response-headers")
+                                .debug_selector(|| "response-headers".into())
+                                .flex()
+                                .flex_col()
+                                .gap(px(theme.metrics.spacing_1))
+                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Headers"))
+                                .child(headers),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(theme.metrics.spacing_1))
+                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Body"))
+                                .when_some(truncation, |body, message| {
+                                    body.child(
+                                        div()
+                                            .text_color(theme.colors.status.warning)
+                                            .child(message),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .id("response-body")
+                                        .debug_selector(|| "response-body".into())
+                                        .font_family(theme.typography.monospace_family)
+                                        .text_size(px(theme.typography.caption_size))
+                                        .child(body),
+                                ),
+                        )
+                        .into_any_element(),
+                )
+            }
+            None => (
+                String::new(),
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.colors.text.muted)
+                    .child("Send a request to see its response.")
+                    .into_any_element(),
+            ),
+        };
+
         div()
             .when(self.shell.pane_layout == PaneLayout::Vertical, |panel| {
                 panel.h(px(self.shell.response_height)).w_full()
@@ -1922,18 +2168,10 @@ impl ProbeApp {
                         div()
                             .text_size(px(theme.typography.caption_size))
                             .text_color(theme.colors.text.muted)
-                            .child("Send is available in Phase 12"),
+                            .child(summary),
                     ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(theme.colors.text.muted)
-                    .child("Responses will appear here."),
-            )
+            .child(content)
     }
 
     fn render_editor_response(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
@@ -2297,6 +2535,16 @@ fn method_color(theme: Theme, method: &str) -> gpui::Rgba {
     }
 }
 
+fn response_status_color(theme: Theme, status: u16) -> gpui::Rgba {
+    match status {
+        100..=199 => theme.colors.responses.informational,
+        200..=299 => theme.colors.responses.success,
+        300..=399 => theme.colors.responses.redirect,
+        400..=499 => theme.colors.responses.client_error,
+        _ => theme.colors.responses.server_error,
+    }
+}
+
 fn request_method_options(active_method: &str) -> Vec<(String, String)> {
     let mut methods = vec!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
     if !methods.contains(&active_method) {
@@ -2403,9 +2651,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{path::PathBuf, time::Duration};
 
     use gpui::{Modifiers, TestAppContext, VisualTestContext, px, size};
+    use probe_http::{HttpResponse, ResponseHeader};
 
     use super::ProbeApp;
     use crate::request_editor::{BodyEditorKind, EditorSection};
@@ -2546,6 +2795,53 @@ mod tests {
     }
 
     #[gpui::test]
+    fn completed_response_renders_metadata_headers_and_body(cx: &mut TestAppContext) {
+        cx.update(base_gpui::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(request_key, cx);
+                let (cancellation, _) = tokio::sync::oneshot::channel();
+                let generation = view.execution.begin(request_key, cancellation);
+                view.execution.finish(
+                    request_key,
+                    generation,
+                    Ok(HttpResponse {
+                        status: 201,
+                        reason: "Created".to_owned(),
+                        url: "https://api.example.test/users".to_owned(),
+                        duration: Duration::from_millis(42),
+                        size: 11,
+                        headers: vec![ResponseHeader {
+                            name: "content-type".to_owned(),
+                            value: "application/json".to_owned(),
+                        }],
+                        body: br#"{"ok":true}"#.to_vec(),
+                        body_complete: true,
+                    }),
+                );
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("response-status").is_some());
+        assert!(visual.debug_bounds("response-headers").is_some());
+        assert!(visual.debug_bounds("response-body").is_some());
+    }
+
+    #[gpui::test]
     fn request_variables_render_inline_and_show_resolved_tooltips(cx: &mut TestAppContext) {
         cx.update(base_gpui::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -2569,17 +2865,22 @@ mod tests {
             .expect("test window should be open");
         cx.run_until_parked();
 
-        let input_point = {
+        let (variable_point, input_point) = {
             let mut visual = VisualTestContext::from_window(window.into(), cx);
-            assert!(visual.debug_bounds("variable-highlight-overlay").is_some());
+            let variable = visual
+                .debug_bounds("variable-highlight-overlay")
+                .expect("variable overlay should render");
             let url_bar = visual
                 .debug_bounds("request-url-bar")
                 .expect("request URL bar should render");
-            gpui::point(url_bar.right() - px(40.0), url_bar.center().y)
+            (
+                variable.center(),
+                gpui::point(url_bar.right() - px(110.0), url_bar.center().y),
+            )
         };
         {
             let mut visual = VisualTestContext::from_window(window.into(), cx);
-            visual.simulate_mouse_move(input_point, None, Modifiers::default());
+            visual.simulate_mouse_move(variable_point, None, Modifiers::default());
             visual.run_until_parked();
         }
         cx.executor()

@@ -4580,9 +4580,11 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "probe-core",
+ "probe-http",
  "probe-opencollection",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

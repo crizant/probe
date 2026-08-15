@@ -259,6 +259,12 @@ implicitly coupled to individual keystrokes. Environment selection lives at the 
 right edge of the request tab bar. Unsaved body representations are retained as local
 editor drafts per request, allowing users to switch body types without losing work.
 
+Desktop HTTP execution resolves the selected environment against an in-memory request,
+then runs the shared `probe-http` engine away from the GPUI thread. Cancellation is
+forwarded into that engine. Execution and response state is retained per runtime request
+key, while generation checks prevent a superseded request from replacing a newer result.
+Response state is presentation-only and is not written into OpenCollection YAML.
+
 The request tree keeps a flat list of lightweight references for currently visible
 expanded nodes. Its fixed-height GPUI list is virtualized, so scrolling constructs and
 paints only the viewport range rather than every request in a large workspace. Folder

@@ -104,7 +104,9 @@ contract, and a native GPUI desktop shell with semantic light/dark themes,
 OpenCollection-backed browsing, request tabs, resizable editor/response panes, and
 a title-bar workspace switcher. The request editor updates method, URL, query
 parameters, headers, body, authentication, and environment selection in memory as
-the user works. The editor and response viewer support vertical or horizontal layouts,
+the user works. Desktop Send and Cancel actions use the same asynchronous HTTP engine
+as the CLI, and completed responses expose status, duration, size, headers, and body.
+The editor and response viewer support vertical or horizontal layouts,
 and the local desktop session restores the active workspace, tabs, collapsed folders,
 pane orientation, and pane sizes automatically.
 
