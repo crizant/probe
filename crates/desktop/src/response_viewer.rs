@@ -241,9 +241,9 @@ pub(crate) fn prepare_document(
     }
 
     let text = String::from_utf8_lossy(&response.body);
-    let raw_lines = display_lines(&text, &[], MAX_LINE_COLUMNS);
     let json_candidate = looks_like_json(response);
     let pending = json_candidate && response.body.len() > SYNC_PRETTY_BYTES;
+    let raw_lines = display_lines(&text, &[], MAX_LINE_COLUMNS);
     let (pretty_lines, pretty_notice, pretty_pending) = if pending {
         (raw_lines.clone(), Some("Formatting JSON…".to_owned()), true)
     } else if json_candidate {
@@ -363,6 +363,65 @@ pub(crate) fn display_lines(
         flush(&mut current, current_start, &mut lines, highlights);
     }
     lines
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct JoinedDisplay {
+    pub text: String,
+    pub syntax: Vec<(Range<usize>, SyntaxRole)>,
+    pub line_offsets: Vec<usize>,
+}
+
+pub(crate) fn join_display_lines(lines: &[ResponseLine]) -> JoinedDisplay {
+    let mut text = String::new();
+    let mut syntax = Vec::new();
+    let mut line_offsets = Vec::with_capacity(lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            text.push('\n');
+        }
+        let offset = text.len();
+        line_offsets.push(offset);
+        for (range, role) in &line.syntax {
+            syntax.push((offset + range.start..offset + range.end, *role));
+        }
+        text.push_str(&line.text);
+    }
+    JoinedDisplay {
+        text,
+        syntax,
+        line_offsets,
+    }
+}
+
+pub(crate) const HEADER_SEPARATOR: &str = ": ";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct JoinedHeaders {
+    pub text: String,
+    pub line_offsets: Vec<usize>,
+    pub name_lens: Vec<usize>,
+}
+
+pub(crate) fn join_header_lines(headers: &[ResponseHeader]) -> JoinedHeaders {
+    let mut text = String::new();
+    let mut line_offsets = Vec::with_capacity(headers.len());
+    let mut name_lens = Vec::with_capacity(headers.len());
+    for (index, header) in headers.iter().enumerate() {
+        if index > 0 {
+            text.push('\n');
+        }
+        line_offsets.push(text.len());
+        name_lens.push(header.name.len());
+        text.push_str(&header.name);
+        text.push_str(HEADER_SEPARATOR);
+        text.push_str(&header.value);
+    }
+    JoinedHeaders {
+        text,
+        line_offsets,
+        name_lens,
+    }
 }
 
 fn clip_highlights(
@@ -571,8 +630,8 @@ mod tests {
 
     use super::{
         MAX_LINE_COLUMNS, PreparedDocument, ResponseViewerTab, SearchColumn, SyntaxRole,
-        display_lines, highlight_json, looks_like_json, prepare_document, pretty_json_body,
-        search_headers, search_lines,
+        display_lines, highlight_json, join_display_lines, join_header_lines, looks_like_json,
+        prepare_document, pretty_json_body, search_headers, search_lines,
     };
 
     fn response(body: &[u8], content_type: &str) -> HttpResponse {
@@ -654,6 +713,31 @@ mod tests {
     }
 
     #[test]
+    fn join_header_lines_keeps_name_and_value_offsets() {
+        let headers = [
+            ResponseHeader {
+                name: "content-type".to_owned(),
+                value: "application/json".to_owned(),
+            },
+            ResponseHeader {
+                name: "x-request-id".to_owned(),
+                value: "abc".to_owned(),
+            },
+        ];
+        let joined = join_header_lines(&headers);
+        assert_eq!(
+            joined.text,
+            "content-type: application/json\nx-request-id: abc"
+        );
+        assert_eq!(
+            &joined.text[joined.line_offsets[0]..joined.line_offsets[0] + joined.name_lens[0]],
+            "content-type"
+        );
+        let value_start = joined.line_offsets[1] + joined.name_lens[1] + 2;
+        assert_eq!(&joined.text[value_start..], "abc");
+    }
+
+    #[test]
     fn binary_and_json_sniffing_prepare_the_expected_document() {
         let json = response(br#"{"ok":true}"#, "application/json");
         assert!(looks_like_json(&json));
@@ -662,6 +746,17 @@ mod tests {
         assert!(!document.binary);
         assert!(document.pretty_notice.is_none());
         assert!(document.pretty_lines.len() > 1);
+        assert!(
+            document.raw_lines.iter().all(|line| line.syntax.is_empty()),
+            "raw JSON bodies should not be syntax highlighted"
+        );
+        assert!(
+            document
+                .pretty_lines
+                .iter()
+                .any(|line| !line.syntax.is_empty()),
+            "pretty JSON bodies should keep syntax highlights"
+        );
 
         let binary = response(&[0, 159, 146, 150], "application/octet-stream");
         let (document, pending) = prepare_document(&binary, 2);
@@ -695,6 +790,26 @@ mod tests {
             .find(|(_, role)| *role == SyntaxRole::String)
             .expect("string span");
         assert_eq!(&source[string.0.clone()], "\"Ada\"");
+    }
+
+    #[test]
+    fn join_display_lines_remaps_wrapped_syntax_without_relexing() {
+        let source = "\"abcdefghij\"";
+        let highlights = highlight_json(source);
+        let lines = display_lines(source, &highlights, 5);
+        assert!(lines.len() > 1);
+        let joined = join_display_lines(&lines);
+        assert_eq!(joined.line_offsets.len(), lines.len());
+        assert_eq!(joined.text.matches('\n').count(), lines.len() - 1);
+        let mut reconstructed = Vec::new();
+        for (line, offset) in lines.iter().zip(&joined.line_offsets) {
+            for (range, role) in &line.syntax {
+                let joined_range = offset + range.start..offset + range.end;
+                reconstructed.push((joined_range.clone(), *role));
+                assert_eq!(&joined.text[joined_range], &line.text[range.clone()]);
+            }
+        }
+        assert_eq!(joined.syntax, reconstructed);
     }
 
     #[test]

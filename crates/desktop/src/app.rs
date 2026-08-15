@@ -8,17 +8,16 @@ use base_gpui::popover::{
     PopoverPopup, PopoverPortal, PopoverPositioner, PopoverRoot, PopoverTrigger,
 };
 use gpui::{
-    App, AppContext as _, Bounds, Context, CursorStyle, FontWeight, HighlightStyle,
-    InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, ParentElement as _,
-    PathPromptOptions, Render, ScrollStrategy, StatefulInteractiveElement as _, Styled as _,
-    StyledText, Task, TitlebarOptions, UniformListScrollHandle, Window, WindowBounds,
-    WindowControlArea, WindowOptions, combine_highlights, div, point, prelude::FluentBuilder as _,
-    px, relative, size, uniform_list,
+    App, AppContext as _, Bounds, Context, CursorStyle, FontWeight, InteractiveElement as _,
+    IntoElement, MouseButton, MouseMoveEvent, ParentElement as _, PathPromptOptions, Render,
+    ScrollStrategy, StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions,
+    UniformListScrollHandle, Window, WindowBounds, WindowControlArea, WindowOptions, div, point,
+    prelude::FluentBuilder as _, px, relative, size, uniform_list,
 };
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, FileReference, FormField, Header, HttpRequest,
-    MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RequestBody, RequestKey,
-    Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
+    MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind, RequestBody,
+    RequestKey, Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
 use probe_opencollection::{LoadedWorkspace, load_workspace};
@@ -34,8 +33,8 @@ use crate::{
         raw_body_mut, set_auth_property, set_authentication,
     },
     response_viewer::{
-        PreparedDocument, ResponseViewerState, ResponseViewerTab, SearchColumn, SearchMatch,
-        SyntaxRole, prepare_document, pretty_json_body,
+        PreparedDocument, ResponseViewerState, ResponseViewerTab, prepare_document,
+        pretty_json_body,
     },
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
@@ -1370,6 +1369,7 @@ impl ProbeApp {
                                 ("request-body", key.slot()),
                                 raw.data.clone(),
                                 self.variable_context(),
+                                raw.kind == RawBodyKind::Json,
                                 move |value, _, input_cx| {
                                     let _ = body_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -2119,10 +2119,7 @@ impl ProbeApp {
                     format_size(response.size)
                 );
                 let document = active_key.and_then(|key| self.response_viewer.document(key));
-                (
-                    summary,
-                    self.render_response_document(theme, response.status, &status, document, cx),
-                )
+                (summary, self.render_response_document(theme, document, cx))
             }
             None => (
                 String::new(),
@@ -2174,8 +2171,6 @@ impl ProbeApp {
     fn render_response_document(
         &self,
         theme: Theme,
-        status: u16,
-        status_label: &str,
         document: Option<&PreparedDocument>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -2298,14 +2293,10 @@ impl ProbeApp {
             .pt(px(theme.metrics.spacing_2))
             .flex()
             .flex_col()
-            .gap(px(theme.metrics.spacing_1))
-            .child(
-                div()
-                    .text_color(response_status_color(theme, status))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(status_label.to_owned()),
-            );
+            .gap(px(theme.metrics.spacing_1));
+        let mut has_banner = false;
         if document.truncated {
+            has_banner = true;
             banners = banners.child(
                 div()
                     .text_color(theme.colors.status.warning)
@@ -2316,6 +2307,7 @@ impl ProbeApp {
         if let Some(notice) = &document.pretty_notice
             && self.response_viewer.tab() != ResponseViewerTab::Headers
         {
+            has_banner = true;
             banners = banners.child(
                 div()
                     .text_color(theme.colors.text.muted)
@@ -2325,7 +2317,7 @@ impl ProbeApp {
         }
 
         let list = match self.response_viewer.tab() {
-            ResponseViewerTab::Headers => self.render_response_headers(theme, document, cx),
+            ResponseViewerTab::Headers => self.render_response_headers(theme, key, document, cx),
             ResponseViewerTab::Pretty | ResponseViewerTab::Raw => {
                 self.render_response_body(theme, key, document, cx)
             }
@@ -2350,7 +2342,7 @@ impl ProbeApp {
                     .child(tabs)
                     .child(search),
             )
-            .child(banners)
+            .when(has_banner, |panel| panel.child(banners))
             .child(list)
             .into_any_element()
     }
@@ -2378,7 +2370,9 @@ impl ProbeApp {
         if lines.is_empty() {
             return placeholder_message(theme, "Empty response body.");
         }
-        let row_count = lines.len();
+        let matches = self.response_viewer.matches(key);
+        let active_match = self.response_viewer.active_match();
+        let view = cx.weak_entity();
         div()
             .id("response-body")
             .debug_selector(|| "response-body".into())
@@ -2386,54 +2380,42 @@ impl ProbeApp {
             .min_h(px(0.0))
             .px(px(theme.metrics.spacing_3))
             .pb(px(theme.metrics.spacing_2))
-            .child(
-                uniform_list("response-body-list", row_count, {
-                    cx.processor(move |view, range: std::ops::Range<usize>, _, _cx| {
-                        #[cfg(test)]
-                        {
-                            view.rendered_response_rows = range.len();
-                        }
-                        let key = view.shell.active_tab();
-                        let lines = key
-                            .map(|key| view.response_viewer.visible_lines(key))
-                            .unwrap_or_default();
-                        let matches = key
-                            .map(|key| view.response_viewer.matches(key))
-                            .unwrap_or_default();
-                        let active_match = view.response_viewer.active_match();
-                        range
-                            .filter_map(|index| {
-                                lines.get(index).map(|line| {
-                                    render_response_line(
-                                        theme,
-                                        index,
-                                        &line.text,
-                                        &line.syntax,
-                                        SearchColumn::Body,
-                                        &matches,
-                                        active_match,
-                                    )
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .size_full()
-                .track_scroll(&self.response_scroll),
-            )
+            .child(components::response_body_input(
+                theme,
+                "response-body-editor",
+                lines,
+                &matches,
+                active_match,
+                self.response_scroll.clone(),
+                move |range, cx| {
+                    #[cfg(test)]
+                    {
+                        let _ = view.update(cx, |this, _| {
+                            this.rendered_response_rows = range.len();
+                        });
+                    }
+                    #[cfg(not(test))]
+                    {
+                        let _ = (&view, range, cx);
+                    }
+                },
+            ))
             .into_any_element()
     }
 
     fn render_response_headers(
         &self,
         theme: Theme,
+        key: probe_core::RequestKey,
         document: &PreparedDocument,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         if document.headers.is_empty() {
             return placeholder_message(theme, "No response headers");
         }
-        let row_count = document.headers.len();
+        let matches = self.response_viewer.matches(key);
+        let active_match = self.response_viewer.active_match();
+        let view = cx.weak_entity();
         div()
             .id("response-headers")
             .debug_selector(|| "response-headers".into())
@@ -2441,65 +2423,26 @@ impl ProbeApp {
             .min_h(px(0.0))
             .px(px(theme.metrics.spacing_3))
             .pb(px(theme.metrics.spacing_2))
-            .child(
-                uniform_list("response-headers-list", row_count, {
-                    cx.processor(move |view, range: std::ops::Range<usize>, _, _cx| {
-                        #[cfg(test)]
-                        {
-                            view.rendered_response_rows = range.len();
-                        }
-                        let Some(key) = view.shell.active_tab() else {
-                            return Vec::new();
-                        };
-                        let Some(document) = view.response_viewer.document(key) else {
-                            return Vec::new();
-                        };
-                        let matches = view.response_viewer.matches(key);
-                        let active_match = view.response_viewer.active_match();
-                        range
-                            .filter_map(|index| {
-                                document.headers.get(index).map(|header| {
-                                    div()
-                                        .id(("response-header-row", index))
-                                        .w_full()
-                                        .h(px(RESPONSE_LINE_HEIGHT))
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(theme.metrics.spacing_2))
-                                        .font_family(theme.typography.monospace_family)
-                                        .text_size(px(theme.typography.caption_size))
-                                        .child(
-                                            div()
-                                                .min_w(px(140.0))
-                                                .text_color(theme.colors.text.secondary)
-                                                .child(highlighted_text(
-                                                    theme,
-                                                    &header.name,
-                                                    &[],
-                                                    SearchColumn::HeaderName,
-                                                    index,
-                                                    &matches,
-                                                    active_match,
-                                                )),
-                                        )
-                                        .child(highlighted_text(
-                                            theme,
-                                            &header.value,
-                                            &[],
-                                            SearchColumn::HeaderValue,
-                                            index,
-                                            &matches,
-                                            active_match,
-                                        ))
-                                        .into_any_element()
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .size_full()
-                .track_scroll(&self.response_scroll),
-            )
+            .child(components::response_headers_input(
+                theme,
+                "response-headers-editor",
+                &document.headers,
+                &matches,
+                active_match,
+                self.response_scroll.clone(),
+                move |range, cx| {
+                    #[cfg(test)]
+                    {
+                        let _ = view.update(cx, |this, _| {
+                            this.rendered_response_rows = range.len();
+                        });
+                    }
+                    #[cfg(not(test))]
+                    {
+                        let _ = (&view, range, cx);
+                    }
+                },
+            ))
             .into_any_element()
     }
 
@@ -2856,8 +2799,6 @@ fn flatten_visible_tree_rows(
     }
 }
 
-const RESPONSE_LINE_HEIGHT: f32 = 20.0;
-
 fn placeholder_message(theme: Theme, message: &str) -> gpui::AnyElement {
     div()
         .flex_1()
@@ -2870,89 +2811,6 @@ fn placeholder_message(theme: Theme, message: &str) -> gpui::AnyElement {
         .into_any_element()
 }
 
-fn render_response_line(
-    theme: Theme,
-    index: usize,
-    text: &str,
-    syntax: &[(std::ops::Range<usize>, SyntaxRole)],
-    column: SearchColumn,
-    matches: &[SearchMatch],
-    active_match: usize,
-) -> gpui::AnyElement {
-    div()
-        .id(("response-line", index))
-        .w_full()
-        .h(px(RESPONSE_LINE_HEIGHT))
-        .flex()
-        .items_center()
-        .font_family(theme.typography.monospace_family)
-        .text_size(px(theme.typography.caption_size))
-        .text_color(theme.colors.syntax.plain)
-        .overflow_hidden()
-        .child(highlighted_text(
-            theme,
-            text,
-            syntax,
-            column,
-            index,
-            matches,
-            active_match,
-        ))
-        .into_any_element()
-}
-
-fn highlighted_text(
-    theme: Theme,
-    text: &str,
-    syntax: &[(std::ops::Range<usize>, SyntaxRole)],
-    column: SearchColumn,
-    row: usize,
-    matches: &[SearchMatch],
-    active_match: usize,
-) -> StyledText {
-    let syntax_highlights = syntax
-        .iter()
-        .map(|(range, role)| (range.clone(), syntax_highlight_style(theme, *role)));
-    let search_highlights = matches.iter().enumerate().filter_map(|(index, found)| {
-        (found.row == row && found.column == column).then_some((
-            found.range.clone(),
-            search_highlight_style(theme, index == active_match),
-        ))
-    });
-    StyledText::new(text.to_owned())
-        .with_highlights(combine_highlights(syntax_highlights, search_highlights))
-}
-
-fn syntax_highlight_style(theme: Theme, role: SyntaxRole) -> HighlightStyle {
-    let color = match role {
-        SyntaxRole::Property => theme.colors.syntax.property,
-        SyntaxRole::String => theme.colors.syntax.string,
-        SyntaxRole::Number => theme.colors.syntax.number,
-        SyntaxRole::Boolean => theme.colors.syntax.boolean,
-        SyntaxRole::Null => theme.colors.syntax.null,
-        SyntaxRole::Punctuation => theme.colors.syntax.punctuation,
-    };
-    HighlightStyle {
-        color: Some(color.into()),
-        ..HighlightStyle::default()
-    }
-}
-
-fn search_highlight_style(theme: Theme, active: bool) -> HighlightStyle {
-    if active {
-        HighlightStyle {
-            color: Some(theme.colors.selection.active_foreground.into()),
-            background_color: Some(theme.colors.selection.active_background.into()),
-            ..HighlightStyle::default()
-        }
-    } else {
-        HighlightStyle {
-            background_color: Some(theme.colors.selection.inactive_background.into()),
-            ..HighlightStyle::default()
-        }
-    }
-}
-
 fn method_color(theme: Theme, method: &str) -> gpui::Rgba {
     match method {
         "GET" => theme.colors.methods.get,
@@ -2961,16 +2819,6 @@ fn method_color(theme: Theme, method: &str) -> gpui::Rgba {
         "PATCH" => theme.colors.methods.patch,
         "DELETE" => theme.colors.methods.delete,
         _ => theme.colors.methods.other,
-    }
-}
-
-fn response_status_color(theme: Theme, status: u16) -> gpui::Rgba {
-    match status {
-        100..=199 => theme.colors.responses.informational,
-        200..=299 => theme.colors.responses.success,
-        300..=399 => theme.colors.responses.redirect,
-        400..=499 => theme.colors.responses.client_error,
-        _ => theme.colors.responses.server_error,
     }
 }
 
@@ -3047,6 +2895,7 @@ fn render_windows_controls(_: Theme) -> gpui::Div {
 pub fn run() {
     gpui_platform::application().run(|cx: &mut App| {
         base_gpui::init(cx);
+        crate::multiline_input::init(cx);
 
         let bounds = Bounds::centered(None, size(px(1180.0), px(780.0)), cx);
         cx.open_window(
@@ -3227,8 +3076,51 @@ mod tests {
     }
 
     #[gpui::test]
+    fn request_editor_renders_multiline_json_body(cx: &mut TestAppContext) {
+        cx.update(base_gpui::init);
+        cx.update(crate::multiline_input::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(request_key, cx);
+                view.request_editor.section = EditorSection::Body;
+                view.edit_request(
+                    request_key,
+                    |request| {
+                        request.body = Some(probe_core::RequestBody::Single(
+                            probe_core::Body::Raw(probe_core::RawBody {
+                                kind: probe_core::RawBodyKind::Json,
+                                data: "{\n  \"name\": \"Milo\"\n}".to_owned(),
+                            }),
+                        ));
+                    },
+                    cx,
+                );
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let body = visual
+            .debug_bounds("request-body-editor")
+            .expect("multiline JSON body editor should render");
+        assert!(body.size.height > px(120.0));
+    }
+
+    #[gpui::test]
     fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppContext) {
         cx.update(base_gpui::init);
+        cx.update(crate::multiline_input::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3316,6 +3208,7 @@ mod tests {
     #[gpui::test]
     fn large_response_body_only_renders_visible_rows(cx: &mut TestAppContext) {
         cx.update(base_gpui::init);
+        cx.update(crate::multiline_input::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });

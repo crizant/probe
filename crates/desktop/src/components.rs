@@ -17,13 +17,18 @@ use gpui::{
     App, AppContext as _, Bounds, ClickEvent, ContentMask, Context, Element, ElementId, Entity,
     GlobalElementId, Hsla, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
     MouseButton, PaintQuad, ParentElement as _, Pixels, Render, ShapedLine, SharedString,
-    StatefulInteractiveElement as _, Style, Styled as _, TextAlign, TextRun, Window, div, fill,
-    point, prelude::FluentBuilder as _, px, relative, size, transparent_black,
+    StatefulInteractiveElement as _, Style, Styled as _, TextAlign, TextRun,
+    UniformListScrollHandle, Window, div, fill, point, prelude::FluentBuilder as _, px, relative,
+    size, transparent_black,
 };
 
-use crate::theme::Theme;
-
+use crate::multiline_input::{MultilineInput, TextHighlight};
+use crate::response_viewer::{
+    HEADER_SEPARATOR, ResponseLine, SearchColumn, SearchMatch, SyntaxRole, highlight_json,
+    join_display_lines, join_header_lines,
+};
 use crate::shell::PaneLayout;
+use crate::theme::Theme;
 
 /// Single-line label that shows an ellipsis when the available width is too small.
 pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
@@ -94,6 +99,7 @@ pub fn primary_button(
         .rounded(px(theme.metrics.radius_small))
         .font_family(theme.typography.interface_family)
         .text_size(px(theme.typography.body_size))
+        .text_color(theme.colors.selection.active_foreground)
         .on_click(on_click)
         .style_with_state(move |state, button| {
             let background = if state.disabled {
@@ -104,7 +110,7 @@ pub fn primary_button(
             let foreground = if state.disabled {
                 theme.colors.actions.disabled_foreground
             } else {
-                theme.colors.text.inverse
+                theme.colors.selection.active_foreground
             };
 
             button
@@ -146,7 +152,7 @@ pub(crate) fn search_input(
 ) -> impl IntoElement {
     Input::new()
         .id(id)
-        .value(value)
+        .value(single_line(value))
         .placeholder(placeholder)
         .on_value_change_with_context(on_value_change)
         .on_enter_with_context(on_enter)
@@ -183,7 +189,7 @@ fn text_input_with_variables(
     let id = id.into();
     let tooltip_id =
         ElementId::NamedChild(Arc::new(id.clone()), SharedString::from("variable-tooltip"));
-    let value = value.into();
+    let value = single_line(value);
     let input = Input::new()
         .id(id.clone())
         .value(value.clone())
@@ -208,7 +214,7 @@ fn text_input_with_variables(
                     theme.colors.borders.standard
                 })
         });
-    variable_input_overlay(theme, id, tooltip_id, input, value, variables, false)
+    variable_input_overlay(theme, id, tooltip_id, input, value, variables)
 }
 
 pub(crate) fn editor_button(
@@ -381,37 +387,220 @@ pub(crate) fn body_text_input(
     id: impl Into<ElementId>,
     value: impl Into<SharedString>,
     variables: VariableContext,
-    on_value_change: impl Fn(SharedString, &mut Window, &mut gpui::Context<InputRuntime>) + 'static,
+    json: bool,
+    on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui::AnyElement {
     let id = id.into();
     let tooltip_id =
         ElementId::NamedChild(Arc::new(id.clone()), SharedString::from("variable-tooltip"));
     let value = value.into();
-    let input = Input::new()
-        .id(id.clone())
-        .value(value.clone())
+    let ranges = variable_ranges(&value);
+    let highlights = body_text_highlights(theme, &value, json, &ranges);
+    let input = MultilineInput::new()
+        .id(id)
+        .value(value)
         .placeholder("Body content")
-        .on_value_change_with_context(on_value_change)
+        .highlights(highlights)
+        .on_value_change(move |value, window, cx| on_value_change(value, window, cx))
         .size_full()
         .min_h(px(120.0))
         .p(px(theme.metrics.spacing_3))
-        .flex()
-        .items_start()
         .rounded(px(theme.metrics.radius_small))
         .font_family(theme.typography.monospace_family)
         .text_size(px(theme.typography.body_size))
         .text_color(theme.colors.text.primary)
-        .style_with_state(move |state, input| {
+        .style_with_state(move |focused, input| {
             input
                 .bg(theme.colors.surfaces.window)
                 .border_1()
-                .border_color(if state.focused {
+                .border_color(if focused {
                     theme.colors.borders.focused
                 } else {
                     theme.colors.borders.standard
                 })
         });
-    variable_input_overlay(theme, id, tooltip_id, input, value, variables, true)
+
+    let wrapper = div()
+        .id(tooltip_id)
+        .relative()
+        .size_full()
+        .debug_selector(|| "variable-input-tooltip-trigger".into())
+        .child(input);
+    if ranges.is_empty() {
+        return wrapper.into_any_element();
+    }
+
+    let rows = ranges
+        .into_iter()
+        .map(|(_, name)| {
+            let resolved = variables
+                .values
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| variables.unavailable_message.clone());
+            (name, resolved)
+        })
+        .collect::<Vec<_>>();
+    wrapper
+        .tooltip(move |_, cx| {
+            cx.new(|_| VariableTooltip {
+                theme,
+                rows: rows.clone(),
+            })
+            .into()
+        })
+        .tooltip_show_delay(Duration::from_millis(200))
+        .into_any_element()
+}
+
+pub(crate) fn response_body_input(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    lines: &[ResponseLine],
+    matches: &[SearchMatch],
+    active_match: usize,
+    scroll: UniformListScrollHandle,
+    on_visible_range: impl Fn(std::ops::Range<usize>, &mut App) + 'static,
+) -> gpui::AnyElement {
+    let joined = join_display_lines(lines);
+    let mut highlights = joined
+        .syntax
+        .into_iter()
+        .map(|(range, role)| TextHighlight {
+            range,
+            color: Some(syntax_color(theme, role)),
+            background: None,
+        })
+        .collect::<Vec<_>>();
+    for (index, found) in matches.iter().enumerate() {
+        if found.column != SearchColumn::Body {
+            continue;
+        }
+        let Some(&offset) = joined.line_offsets.get(found.row) else {
+            continue;
+        };
+        let active = index == active_match;
+        highlights.push(TextHighlight {
+            range: offset + found.range.start..offset + found.range.end,
+            color: active.then(|| theme.colors.selection.active_foreground.into()),
+            background: Some(if active {
+                theme.colors.selection.active_background.into()
+            } else {
+                theme.colors.selection.inactive_background.into()
+            }),
+        });
+    }
+    MultilineInput::new()
+        .id(id)
+        .value(joined.text)
+        .read_only()
+        .highlights(highlights)
+        .track_scroll(scroll)
+        .on_visible_range(on_visible_range)
+        .size_full()
+        .min_h(px(0.0))
+        .font_family(theme.typography.monospace_family)
+        .text_size(px(theme.typography.body_size))
+        .text_color(theme.colors.syntax.plain)
+        .into_any_element()
+}
+
+pub(crate) fn response_headers_input(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    headers: &[probe_http::ResponseHeader],
+    matches: &[SearchMatch],
+    active_match: usize,
+    scroll: UniformListScrollHandle,
+    on_visible_range: impl Fn(std::ops::Range<usize>, &mut App) + 'static,
+) -> gpui::AnyElement {
+    let joined = join_header_lines(headers);
+    let mut highlights = Vec::new();
+    for (offset, name_len) in joined.line_offsets.iter().zip(&joined.name_lens) {
+        highlights.push(TextHighlight {
+            range: *offset..*offset + name_len,
+            color: Some(theme.colors.text.secondary.into()),
+            background: None,
+        });
+    }
+    for (index, found) in matches.iter().enumerate() {
+        let Some(&line_start) = joined.line_offsets.get(found.row) else {
+            continue;
+        };
+        let range = match found.column {
+            SearchColumn::HeaderName => {
+                line_start + found.range.start..line_start + found.range.end
+            }
+            SearchColumn::HeaderValue => {
+                let value_start = line_start + joined.name_lens[found.row] + HEADER_SEPARATOR.len();
+                value_start + found.range.start..value_start + found.range.end
+            }
+            SearchColumn::Body => continue,
+        };
+        let active = index == active_match;
+        highlights.push(TextHighlight {
+            range,
+            color: active.then(|| theme.colors.selection.active_foreground.into()),
+            background: Some(if active {
+                theme.colors.selection.active_background.into()
+            } else {
+                theme.colors.selection.inactive_background.into()
+            }),
+        });
+    }
+    MultilineInput::new()
+        .id(id)
+        .value(joined.text)
+        .read_only()
+        .highlights(highlights)
+        .track_scroll(scroll)
+        .on_visible_range(on_visible_range)
+        .size_full()
+        .min_h(px(0.0))
+        .font_family(theme.typography.monospace_family)
+        .text_size(px(theme.typography.body_size))
+        .text_color(theme.colors.text.primary)
+        .into_any_element()
+}
+
+fn body_text_highlights(
+    theme: Theme,
+    value: &str,
+    json: bool,
+    variables: &[(std::ops::Range<usize>, String)],
+) -> Vec<TextHighlight> {
+    let mut highlights = Vec::new();
+    if json {
+        highlights.extend(
+            highlight_json(value)
+                .into_iter()
+                .map(|(range, role)| TextHighlight {
+                    range,
+                    color: Some(syntax_color(theme, role)),
+                    background: None,
+                }),
+        );
+    }
+    for (range, _) in variables {
+        highlights.push(TextHighlight {
+            range: range.clone(),
+            color: Some(theme.colors.syntax.string.into()),
+            background: None,
+        });
+    }
+    highlights
+}
+
+fn syntax_color(theme: Theme, role: SyntaxRole) -> Hsla {
+    let color = match role {
+        SyntaxRole::Property => theme.colors.syntax.property,
+        SyntaxRole::String => theme.colors.syntax.string,
+        SyntaxRole::Number => theme.colors.syntax.number,
+        SyntaxRole::Boolean => theme.colors.syntax.boolean,
+        SyntaxRole::Null => theme.colors.syntax.null,
+        SyntaxRole::Punctuation => theme.colors.syntax.punctuation,
+    };
+    color.into()
 }
 
 fn variable_input_overlay(
@@ -421,15 +610,13 @@ fn variable_input_overlay(
     input: Input,
     value: SharedString,
     variables: VariableContext,
-    body: bool,
 ) -> gpui::AnyElement {
     let ranges = variable_ranges(&value);
     let wrapper = div()
         .id(tooltip_id)
         .relative()
         .debug_selector(|| "variable-input-tooltip-trigger".into())
-        .when(body, |wrapper| wrapper.size_full())
-        .when(!body, |wrapper| wrapper.w_full());
+        .w_full();
     if ranges.is_empty() {
         return wrapper.child(input).into_any_element();
     }
@@ -442,7 +629,6 @@ fn variable_input_overlay(
         input_id,
         value,
         ranges.clone(),
-        body,
     ));
 
     let rows = ranges
@@ -476,7 +662,6 @@ fn variable_highlight_layer(
     input_id: ElementId,
     value: SharedString,
     ranges: Vec<(Range<usize>, String)>,
-    body: bool,
 ) -> impl IntoElement {
     let highlight_color = theme.colors.syntax.string.into();
     let caret_color = theme.colors.text.primary.into();
@@ -490,12 +675,8 @@ fn variable_highlight_layer(
         // and visible width.
         .border_1()
         .border_color(transparent_black())
-        .when(body, |overlay| {
-            overlay.p(px(theme.metrics.spacing_3)).items_start()
-        })
-        .when(!body, |overlay| {
-            overlay.px(px(theme.metrics.spacing_2)).items_center()
-        })
+        .px(px(theme.metrics.spacing_2))
+        .items_center()
         .flex()
         .overflow_hidden()
         .font_family(theme.typography.monospace_family)
@@ -575,19 +756,20 @@ impl Element for VariableHighlightElement {
         let selected_range = state.read(cx).selected_range();
         let focused = state.read(cx).is_focused(window);
         let style = window.text_style();
+        let display = single_line(self.value.clone());
         let run = TextRun {
-            len: self.value.len(),
+            len: display.len(),
             font: style.font(),
             color: transparent_black(),
             background_color: None,
             underline: None,
             strikethrough: None,
         };
-        let runs = variable_highlight_runs(&self.value, &self.ranges, &run, self.highlight_color);
+        let runs = variable_highlight_runs(&display, &self.ranges, &run, self.highlight_color);
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window
             .text_system()
-            .shape_line(self.value.clone(), font_size, &runs, None);
+            .shape_line(display, font_size, &runs, None);
         let cursor_x = line.x_for_index(cursor);
         let visible_width = bounds.right() - bounds.left();
         let scroll_offset = input_text_scroll_offset(cursor_x, visible_width);
@@ -720,6 +902,15 @@ fn input_text_scroll_offset(cursor_x: Pixels, visible_width: Pixels) -> Pixels {
         visible_width - cursor_x - px(2.0)
     } else {
         px(0.0)
+    }
+}
+
+pub(crate) fn single_line(value: impl Into<SharedString>) -> SharedString {
+    let value = value.into();
+    if value.find(['\n', '\r']).is_none() {
+        value
+    } else {
+        SharedString::from(value.replace(['\n', '\r'], " "))
     }
 }
 
@@ -925,9 +1116,10 @@ mod tests {
     };
 
     use super::{
-        VariableHighlightElement, dropdown, input_text_scroll_offset, menu_button,
-        variable_highlight_runs, variable_ranges,
+        VariableHighlightElement, body_text_highlights, dropdown, input_text_scroll_offset,
+        menu_button, single_line, variable_highlight_runs, variable_ranges,
     };
+    use crate::response_viewer::{SyntaxRole, highlight_json};
     use crate::theme::Theme;
 
     struct MenuTestView {
@@ -1130,6 +1322,16 @@ mod tests {
     }
 
     #[test]
+    fn single_line_replaces_line_breaks_with_spaces() {
+        assert_eq!(single_line("abc"), SharedString::from("abc"));
+        assert_eq!(single_line("a\nb\rc"), SharedString::from("a b c"));
+        assert_eq!(
+            single_line("{\n  \"name\": \"Milo\"\n}"),
+            SharedString::from("{   \"name\": \"Milo\" }")
+        );
+    }
+
+    #[test]
     fn variable_ranges_find_mustache_placeholders() {
         let value = "{{host}}/users/{{id}}";
         let ranges = variable_ranges(value);
@@ -1138,6 +1340,30 @@ mod tests {
         assert_eq!(ranges[0].1, "host");
         assert_eq!(&value[ranges[1].0.clone()], "{{id}}");
         assert_eq!(ranges[1].1, "id");
+    }
+
+    #[test]
+    fn json_body_highlights_tokens_and_lets_variables_override() {
+        let theme = Theme::light();
+        let value = "{\"host\":\"{{host}}\"}";
+        let ranges = variable_ranges(value);
+        let highlights = body_text_highlights(theme, value, true, &ranges);
+        assert!(highlights.iter().any(|highlight| {
+            highlight.range == (1..7)
+                && highlight.color == Some(theme.colors.syntax.property.into())
+        }));
+        let variable = highlights
+            .iter()
+            .rev()
+            .find(|highlight| &value[highlight.range.clone()] == "{{host}}")
+            .expect("variable highlight");
+        assert_eq!(variable.color, Some(theme.colors.syntax.string.into()));
+        let roles_from_json = highlight_json(value);
+        assert!(
+            roles_from_json
+                .iter()
+                .any(|(_, role)| *role == SyntaxRole::Property)
+        );
     }
 
     #[test]
@@ -1272,6 +1498,34 @@ mod tests {
             prepaint.scroll_offset,
             px(0.0),
             "caret at the start should keep the variable highlight at its origin"
+        );
+    }
+
+    #[gpui::test]
+    fn variable_highlight_shapes_multiline_value_without_panicking(cx: &mut TestAppContext) {
+        let value = SharedString::from("{{host}}\n/users");
+        let window = cx.open_window(size(px(240.0), px(48.0)), |window, cx| HighlightHarness {
+            input: cx.new(|cx| InputRuntime::new(single_line(value.clone()), window, cx)),
+        });
+        let input = window
+            .update(cx, |harness, _window, _cx| harness.input.clone())
+            .expect("highlight test window should be open");
+        let ranges = variable_ranges(&value)
+            .into_iter()
+            .map(|(range, _)| range)
+            .collect();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let _ = visual.draw(
+            point(px(0.0), px(0.0)),
+            size(px(160.0), px(24.0)),
+            |_, _| VariableHighlightElement {
+                input_id: None,
+                state: Some(input),
+                value,
+                ranges,
+                highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+                caret_color: hsla(0.0, 0.0, 1.0, 1.0),
+            },
         );
     }
 }

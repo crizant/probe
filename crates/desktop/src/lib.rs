@@ -8,6 +8,7 @@
 mod app;
 pub mod components;
 mod execution;
+mod multiline_input;
 mod request_editor;
 mod response_viewer;
 mod session;
