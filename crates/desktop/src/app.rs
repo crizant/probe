@@ -2310,7 +2310,11 @@ fn request_method_options(active_method: &str) -> Vec<(String, String)> {
 
 #[cfg(target_os = "windows")]
 fn render_windows_controls(theme: Theme) -> gpui::Div {
-    let control = move |id: &'static str, label: &'static str, area, action: fn(&mut Window)| {
+    let control = move |id: &'static str,
+                        label: &'static str,
+                        area,
+                        destructive: bool,
+                        action: fn(&mut Window)| {
         div()
             .id(id)
             .w(px(44.0))
@@ -2319,7 +2323,15 @@ fn render_windows_controls(theme: Theme) -> gpui::Div {
             .items_center()
             .justify_center()
             .window_control_area(area)
-            .hover(move |control| control.bg(theme.colors.surfaces.sidebar))
+            .hover(move |control| {
+                if destructive {
+                    control
+                        .bg(theme.colors.status.error)
+                        .text_color(theme.colors.text.inverse)
+                } else {
+                    control.bg(theme.colors.surfaces.sidebar)
+                }
+            })
             .on_click(move |_, window, _| action(window))
             .child(label)
     };
@@ -2331,27 +2343,23 @@ fn render_windows_controls(theme: Theme) -> gpui::Div {
             "window-minimize",
             "—",
             WindowControlArea::Min,
+            false,
             |window| window.minimize_window(),
         ))
         .child(control(
             "window-maximize",
             "□",
             WindowControlArea::Max,
+            false,
             |window| window.zoom_window(),
         ))
-        .child(
-            control(
-                "window-close",
-                "×",
-                WindowControlArea::Close,
-                Window::remove_window,
-            )
-            .hover(move |control| {
-                control
-                    .bg(theme.colors.status.error)
-                    .text_color(theme.colors.text.inverse)
-            }),
-        )
+        .child(control(
+            "window-close",
+            "×",
+            WindowControlArea::Close,
+            true,
+            Window::remove_window,
+        ))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -2588,7 +2596,12 @@ mod tests {
             visual.simulate_click(input_point, Modifiers::default());
             visual.run_until_parked();
         }
-        cx.simulate_keystrokes(window.into(), "cmd-a");
+        let select_all = if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        };
+        cx.simulate_keystrokes(window.into(), select_all);
         cx.simulate_input(window.into(), "https://changed.example");
         cx.run_until_parked();
         let edited_url = window
