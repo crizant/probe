@@ -156,6 +156,30 @@ application styled component
         ↓
 feature UI
 
+Desktop components consume semantic design tokens. They must not hard-code theme
+colors or parse theme files. Platform presentation may map the same semantic intent to
+different macOS, Windows, and Linux conventions. macOS follows Apple HIG behavior,
+Windows follows Microsoft Windows App Design and Fluent conventions, and Linux uses a
+cross-desktop baseline informed by GNOME and KDE guidance plus applicable
+freedesktop.org standards. The Linux adapter must not become separate GTK and Qt
+imitations.
+
+Built-in themes initially provide the token values. Future user-defined themes use a
+separate presentation-infrastructure boundary:
+
+Plain-text theme file
+        ↓
+theme parser and validator
+        ↓
+semantic theme model
+        ↓
+GPUI presentation
+
+Theme configuration is local presentation state. It does not belong in the domain
+workspace, OpenCollection YAML, or the canonical collection repository. Invalid or
+incomplete custom themes fall back safely to built-in semantic values. See
+`docs/DESIGN.md` for the design-system contract.
+
 
 ## Application Layer
 

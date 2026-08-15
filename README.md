@@ -114,6 +114,9 @@ CLI startup, and practical peak-memory profiling at 100, 1,000, and 10,000 reque
 See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for reproducible commands and fixture
 generation.
 
+Desktop work follows the native, platform-aware design and future plain-text theming
+contract in [docs/DESIGN.md](docs/DESIGN.md).
+
 Try the current CLI against the included unbundled fixture:
 
 ```bash

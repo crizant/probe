@@ -308,14 +308,48 @@ Before using unfamiliar APIs:
 Build:
 
 - application window
-- theme foundation
+- semantic theme foundation with native macOS light and dark defaults
 - basic gpui-base primitives
+
+Follow `docs/DESIGN.md`. Phase 9 establishes design tokens and built-in themes only;
+loading user-authored theme files remains a future capability.
 
 Exit criteria:
 
 - desktop application launches
 - gpui-base works
 - shared core is accessible from desktop crate
+- macOS window structure and interaction conventions align with the current Apple HIG
+- Windows behavior aligns with the current Microsoft Windows App Design and Fluent
+  conventions
+- Linux behavior follows a documented cross-desktop baseline reviewed against both
+  GNOME and KDE guidance rather than imitating either toolkit
+- built-in light and dark appearances use semantic tokens without component-level
+  hard-coded colors
+- keyboard focus, keyboard navigation, system appearance changes, and display scaling
+  have been verified on each supported platform
+
+
+### Deferred follow-up — User-Defined Themes
+
+After the desktop design system and component vocabulary are stable, support themes
+stored in plain-text, human-editable configuration files. This is not a Phase 9 exit
+criterion and should be scheduled separately.
+
+Required:
+
+- a documented, versioned theme schema
+- deterministic parsing and validation outside individual components
+- semantic tokens rather than component-specific styling keys
+- safe fallback for missing, invalid, or unsupported values
+- built-in themes remain available when custom themes fail
+- live theme application without changing component behavior
+- contrast and accessibility validation
+- useful diagnostics that identify the source file and invalid field
+
+Do not store themes in OpenCollection YAML or a proprietary database. Do not choose
+the configuration syntax until the schema is designed; YAML, TOML, and JSON are not
+implicitly approved by this requirement.
 
 
 ## Phase 10 — Desktop Shell

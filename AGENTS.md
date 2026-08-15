@@ -198,6 +198,35 @@ such as JSONL, where appropriate.
 
 GPUI is the desktop application and rendering framework.
 
+The macOS application must feel native and follow the current Apple Human
+Interface Guidelines. This includes platform-appropriate window structure,
+menus, terminology, keyboard shortcuts, focus behavior, accessibility, and
+system appearance. Inspect the current official guidance before implementing
+an unfamiliar interaction pattern.
+
+The Windows application must follow the current Microsoft Windows App Design
+guidance and Fluent Design conventions. Respect standard Windows windowing,
+menus, keyboard behavior, input methods, system appearance, high-contrast mode,
+display scaling, and shell integration.
+
+Linux has no single universal desktop HIG. Follow common cross-desktop Linux
+conventions and applicable freedesktop.org standards. Use the current GNOME and
+KDE Human Interface Guidelines as references, and verify behavior on both GNOME
+and KDE Plasma where practical. Do not dynamically imitate GTK/Adwaita or
+Qt/Breeze styling; maintain one coherent Probe design while respecting system
+fonts, appearance preferences, scaling, accessibility, input, and desktop
+integration.
+
+Do not impose one platform's conventions on another. Share application behavior
+and semantic design tokens while allowing presentation and interaction details
+to vary by platform.
+
+Follow [docs/DESIGN.md](docs/DESIGN.md) for the desktop design system. Components
+must consume semantic design tokens rather than hard-code colors or read theme
+configuration directly. The visual system must remain compatible with future
+user-defined themes loaded from plain-text files, but do not implement theme-file
+loading before its planned phase.
+
 GPUI APIs may evolve.
 
 Always treat the exact version/revision pinned by this repository as
