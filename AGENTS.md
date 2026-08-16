@@ -14,7 +14,7 @@ Technology:
 
 - Rust
 - GPUI
-- gpui-base
+- Longbridge `gpui-base` (crate `gpui-base` from `longbridge/gpui-component`)
 - OpenCollection YAML
 
 The product has two first-class interfaces:
@@ -114,7 +114,7 @@ cli:
 
 desktop:
 - GPUI
-- gpui-base
+- Longbridge gpui-base
 - desktop presentation
 
 Do not introduce circular dependencies.
@@ -257,36 +257,77 @@ without explicit approval.
 
 # gpui-base
 
-Use gpui-base as the preferred source of reusable unstyled/headless UI
-behavior when an appropriate component exists.
+Probe uses **Longbridge `gpui-base`**, the foundation crate in
+[`longbridge/gpui-component`](https://github.com/longbridge/gpui-component).
+Docs: https://longbridge.github.io/gpui-component/base/
+
+Cargo dependency (always pin a git revision):
+
+```toml
+gpui-base = { git = "https://github.com/longbridge/gpui-component", rev = "…" }
+```
+
+Rust crate and import path: `gpui-base` / `gpui_base`.
+
+Call `probe_desktop::theme::Theme::init(cx)` once before opening windows
+(this calls `gpui_base::init` and installs default chrome tokens).
+
+## Do not confuse these libraries
+
+These are different crates. Do not substitute one for another:
+
+| Name | Repository | Role in Probe |
+| --- | --- | --- |
+| **gpui-base** | `longbridge/gpui-component` (`crates/base`) | Required. Primitives plus default chrome tokens. |
+| **gpui-component** | `longbridge/gpui-component` (`crates/ui`) | Forbidden. Pre-styled façade. |
+
+Never depend on `gpui-component`. Never copy `gpui_component::` APIs or
+`.primary()` theme helpers into Probe. Desktop chrome uses gpui-base's
+default gallery tokens through Probe's semantic theme model.
+
+Pin GPUI to the Zed revision required by the pinned `gpui-base` commit.
+If Cargo reports incompatible GPUI types, the GPUI pin drifted from
+gpui-base — fix the pin, do not mix two GPUI revisions. Do not add
+`rev` to Probe's GPUI git URL; gpui-base uses the same unpinned source
+and a mismatched revision compiles two GPUIs. Pin the Zed commit in
+`Cargo.lock` (`cargo update -p gpui --precise <sha>`) to the revision
+in that gpui-base commit's `Cargo.lock`.
+
+## Behavior vs appearance
 
 Treat behavior and appearance separately.
 
 gpui-base:
-- reusable primitives
+- reusable primitives (`Button`, `Input`/`InputState`, `Select`, `Switch`,
+  `Toggle`, `Popover`, `Popup`, …)
 - interaction behavior
 - accessibility
 - component mechanics
 
-application:
-- colors
-- typography
-- spacing
-- borders
-- radii
-- visual identity
+application (Probe):
+- maps gpui-base default chrome tokens into semantic roles
+- domain colors (methods, status, syntax)
+- compositions in `crates/desktop/src/components.rs`
+
+Project Probe's `Theme` into `gpui_base::Theme` so primitives and
+infrastructure (scrollbars, resize handles) share the same tokens.
 
 Before using an unfamiliar gpui-base API:
 
-1. Inspect the exact pinned source.
-2. Inspect examples/tests.
-3. Verify the API exists.
-4. Do not guess based on gpui-component APIs.
+1. Inspect the exact pinned source under the git revision in
+   `crates/desktop/Cargo.toml`.
+2. Inspect `crates/base` examples/tests in that revision.
+3. Verify the API exists on `gpui_base::…`.
+4. Do not guess from `gpui-component` or remembered APIs.
 
-Do not fork gpui-base merely to change styling.
+Do not fork gpui-base merely to change styling. Style primitives with
+GPUI `Styled` methods, `.styles(|s| …)` semantic states, and Probe tokens.
 
 Custom GPUI components are appropriate when gpui-base does not provide
-the required behavior or specialized performance is necessary.
+the required behavior or specialized performance is necessary. The
+response viewer and request-body editor are examples: they need
+virtualization and overlay highlighting that the stock single-line
+`Input` does not provide.
 
 ---
 
@@ -569,9 +610,11 @@ Before adding a crate:
 4. Avoid large dependencies for trivial functionality.
 5. Do not replace dependencies without a clear reason.
 
-Pin GPUI/gpui-base appropriately.
+Pin GPUI and Longbridge gpui-base together. The GPUI git revision must
+match the revision required by the pinned `gpui-base` commit.
 
-Do not upgrade GPUI or gpui-base as part of unrelated work.
+Do not upgrade GPUI or gpui-base as part of unrelated work. Do not add
+`gpui-component`.
 
 ---
 

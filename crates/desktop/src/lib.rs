@@ -9,11 +9,11 @@ mod app;
 mod caret;
 pub mod components;
 mod execution;
-mod multiline_input;
 mod request_editor;
 mod response_viewer;
 mod session;
 mod shell;
+mod syntax;
 pub mod theme;
 
 pub use app::{ProbeApp, run};

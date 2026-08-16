@@ -23,7 +23,7 @@ Required:
 - CI
 - logging/error strategy
 
-GPUI/gpui-base may be added now or when desktop development begins,
+GPUI and Longbridge gpui-base may be added now or when desktop development begins,
 but desktop implementation must not begin yet.
 
 Exit criteria:
@@ -296,8 +296,11 @@ is established.
 
 Add/pin:
 
-- GPUI
-- gpui-base
+- GPUI (Zed revision required by the pinned gpui-base commit)
+- Longbridge gpui-base (`gpui-base` from `longbridge/gpui-component`)
+
+Do not add `gpui-component` (styled façade). Inspect the pinned `gpui-base`
+source; desktop chrome follows gpui-base's default gallery tokens.
 
 Before using unfamiliar APIs:
 
@@ -308,8 +311,8 @@ Before using unfamiliar APIs:
 Build:
 
 - application window
-- semantic theme foundation with native macOS light and dark defaults
-- basic gpui-base primitives
+- semantic theme foundation from gpui-base default light and dark tokens
+- basic Longbridge gpui-base primitives styled with those tokens
 
 Follow `docs/DESIGN.md`. Phase 9 establishes design tokens and built-in themes only;
 loading user-authored theme files remains a future capability.
@@ -317,7 +320,7 @@ loading user-authored theme files remains a future capability.
 Exit criteria:
 
 - desktop application launches
-- gpui-base works
+- Longbridge gpui-base works
 - shared core is accessible from desktop crate
 - macOS window structure and interaction conventions align with the current Apple HIG
 - Windows behavior aligns with the current Microsoft Windows App Design and Fluent
@@ -437,7 +440,7 @@ Implement:
 - Headers
 - Search
 
-Benchmark gpui-base/GPUI text components before assuming suitability
+Benchmark Longbridge gpui-base/GPUI text components before assuming suitability
 for large responses.
 
 For large responses consider:

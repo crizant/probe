@@ -94,11 +94,13 @@ API.
 
 ## Component Architecture
 
-gpui-base provides reusable behavior and accessibility where an appropriate primitive
-exists. Probe supplies visual styling through semantic tokens and composed components:
+Longbridge `gpui-base` provides reusable behavior, accessibility, and default
+chrome tokens where an appropriate primitive exists. Probe maps those tokens
+into the semantic theme model and composes feature views. Do not use Longbridge
+`gpui-component`. Desktop chrome follows the gpui-base gallery defaults.
 
 ```text
-gpui-base behavior
+Longbridge gpui-base primitives and default tokens
         ↓
 Probe semantic tokens
         ↓
@@ -133,9 +135,10 @@ focused, selected, inactive, and disabled behavior where relevant.
 
 ## Built-In Themes
 
-The desktop foundation ships with native macOS light and dark defaults and follows
-system appearance changes. Built-in themes are complete, validated semantic theme
-models and provide fallback values for every token.
+The desktop foundation ships with gpui-base default light and dark chrome
+tokens and follows system appearance changes. Built-in themes are complete,
+validated semantic theme models and provide fallback values for every token.
+HTTP method, status, and syntax colors remain distinct from chrome.
 
 Theme changes must not alter application semantics, hide required state, move commands
 unexpectedly, or replace platform-standard interaction behavior. Selection, focus,

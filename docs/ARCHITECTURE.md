@@ -80,7 +80,7 @@ Infrastructure implements capabilities required by the application.
 Domain must not depend on:
 
 - GPUI
-- gpui-base
+- gpui-base (Longbridge)
 - CLI frameworks
 - YAML
 - reqwest
@@ -137,7 +137,9 @@ GPUI owns:
 - events
 - application lifecycle
 
-gpui-base provides reusable unstyled/headless component behavior.
+gpui-base (Longbridge `gpui-base` from `longbridge/gpui-component`) provides
+reusable component behavior and default chrome tokens. Do not use
+`gpui-component`.
 
 The application provides:
 
@@ -150,7 +152,7 @@ The application provides:
 
 Preferred composition:
 
-gpui-base primitive
+Longbridge gpui-base primitive
         ↓
 application styled component
         ↓
@@ -267,12 +269,14 @@ forwarded into that engine. Execution and response state is retained per runtime
 key, while generation checks prevent a superseded request from replacing a newer result.
 Response state is presentation-only and is not written into OpenCollection YAML.
 
-The response viewer is a specialized read-only renderer, not a gpui-base text editor.
-Pinned gpui-base `Input` shapes a single line and retains the full buffer, so it is not
-used for response bodies. The viewer splits bodies into bounded display rows, virtualizes
-them with GPUI `uniform_list` (the same primitive as the request tree), pretty-prints JSON
-with semantic syntax tokens, and searches those prepared rows. JSON larger than 64 KiB is
-pretty-printed on a background executor so request switching stays responsive.
+The response viewer renders Pretty, Raw, and Headers through Longbridge
+gpui-base `Editor` in read-only mode. Probe retains the original response text,
+searches the active representation, applies language highlighting through
+gpui-base's highlighter seam (Syntect for JSON on the Pretty tab), overlays
+search matches as decorations, and lets the editor virtualize the viewport.
+JSON larger than 64 KiB is pretty-printed on a background executor, while
+syntax highlighting is disabled above the same bound so request switching
+stays responsive.
 
 The request tree keeps a flat list of lightweight references for currently visible
 expanded nodes. Its fixed-height GPUI list is virtualized, so scrolling constructs and

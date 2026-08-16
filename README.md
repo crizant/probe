@@ -2,7 +2,7 @@
 
 A fast, native, local-first API client for macOS, Windows, and Linux.
 
-Built with Rust, GPUI, and gpui-base, with OpenCollection YAML as the
+Built with Rust, GPUI, and Longbridge gpui-base, with OpenCollection YAML as the
 primary workspace format.
 
 The project provides two first-class interfaces:
@@ -30,16 +30,19 @@ Both interfaces use the same Rust application and domain layers.
 
 - Rust
 - GPUI
-- gpui-base
+- Longbridge [gpui-base](https://longbridge.github.io/gpui-component/base/)
 - OpenCollection YAML
 - Git-compatible filesystem storage
 
 GPUI provides the native application and rendering framework.
 
-gpui-base provides reusable unstyled/headless UI primitives.
+Probe uses Longbridge `gpui-base` (`crates/base` in
+[`longbridge/gpui-component`](https://github.com/longbridge/gpui-component))
+for interaction, focus, accessibility, and default chrome tokens. That crate
+is not `gpui-component` (Longbridge's pre-styled façade).
 
-Application-specific visual design and styling belong to this project,
-not to the component library.
+Desktop chrome follows the [gpui-base gallery](https://longbridge.github.io/gpui-component/base/)
+default look. Domain colors (HTTP methods, status, syntax) stay distinct.
 
 ## Interfaces
 

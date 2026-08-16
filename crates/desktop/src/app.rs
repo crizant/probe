@@ -4,16 +4,14 @@ use std::{
     thread,
 };
 
-use base_gpui::popover::{
-    PopoverPopup, PopoverPortal, PopoverPositioner, PopoverRoot, PopoverTrigger,
-};
 use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, FontWeight, InteractiveElement as _,
     IntoElement, MouseButton, MouseMoveEvent, ParentElement as _, PathPromptOptions, Render,
-    ScrollHandle, ScrollStrategy, StatefulInteractiveElement as _, Styled as _, Task,
-    TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowControlArea,
-    WindowOptions, div, point, prelude::FluentBuilder as _, px, relative, size, uniform_list,
+    ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions, Window,
+    WindowBounds, WindowControlArea, WindowOptions, div, point, prelude::FluentBuilder as _, px,
+    relative, size, uniform_list,
 };
+use gpui_base::{Button, Popover, Tab, Tabs};
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, FileReference, FormField, Header, HttpRequest,
     MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind, RequestBody,
@@ -61,7 +59,6 @@ pub struct ProbeApp {
     request_editor: RequestEditorState,
     execution: ExecutionState,
     response_viewer: ResponseViewerState,
-    response_scroll: UniformListScrollHandle,
     tab_bar_scroll: ScrollHandle,
     pending_tab_reveal: bool,
     #[cfg(test)]
@@ -75,8 +72,12 @@ pub struct ProbeApp {
 
 impl ProbeApp {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        cx.observe_window_appearance(window, |_, window, _| window.refresh())
-            .detach();
+        cx.observe_window_appearance(window, |_, window, cx| {
+            Theme::sync_gpui_base(window.appearance(), cx);
+            window.refresh();
+        })
+        .detach();
+        Theme::sync_gpui_base(window.appearance(), cx);
         let quit_subscription = cx.on_app_quit(|view, cx| {
             view.capture_session();
             let store = view.session_store.clone();
@@ -107,7 +108,6 @@ impl ProbeApp {
             request_editor: RequestEditorState::default(),
             execution: ExecutionState::default(),
             response_viewer: ResponseViewerState::default(),
-            response_scroll: UniformListScrollHandle::new(),
             tab_bar_scroll: ScrollHandle::new(),
             pending_tab_reveal: false,
             #[cfg(test)]
@@ -588,10 +588,11 @@ impl ProbeApp {
                 let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
                 let selected = self.shell.active_tab() == Some(key);
                 let view = cx.weak_entity();
-                div()
-                    .id(("request-tree-item", key.slot()))
+                Button::new(("request-tree-item", key.slot()))
+                    .focusable(false)
+                    .tab_stop(false)
                     .w_full()
-                    .h(px(30.0))
+                    .h(px(28.0))
                     .pl(px(12.0 + depth as f32 * 16.0))
                     .pr(px(theme.metrics.spacing_2))
                     .flex()
@@ -604,7 +605,7 @@ impl ProbeApp {
                             .text_color(theme.colors.selection.active_foreground)
                     })
                     .when(!selected, |row| {
-                        row.hover(move |row| row.bg(theme.colors.surfaces.raised))
+                        row.hover(move |row| row.bg(theme.colors.surfaces.window))
                     })
                     .cursor_pointer()
                     .on_click(move |_, _, cx| {
@@ -640,10 +641,11 @@ impl ProbeApp {
                 let expanded = self.shell.folder_is_expanded(key);
                 let label = folder.metadata.name.as_deref().unwrap_or("Untitled folder");
                 let view = cx.weak_entity();
-                div()
-                    .id(("folder-tree-item", key.slot()))
+                Button::new(("folder-tree-item", key.slot()))
+                    .focusable(false)
+                    .tab_stop(false)
                     .w_full()
-                    .h(px(30.0))
+                    .h(px(28.0))
                     .pl(px(8.0 + depth as f32 * 16.0))
                     .pr(px(theme.metrics.spacing_2))
                     .flex()
@@ -652,7 +654,7 @@ impl ProbeApp {
                     .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
                     .cursor_pointer()
-                    .hover(move |row| row.bg(theme.colors.surfaces.raised))
+                    .hover(move |row| row.bg(theme.colors.surfaces.window))
                     .on_click(move |_, _, cx| {
                         let _ = view.update(cx, |view, cx| {
                             view.shell.toggle_folder(key);
@@ -722,19 +724,20 @@ impl ProbeApp {
                         .to_owned();
                     let detail = path.display().to_string();
                     let view = cx.weak_entity();
-                    let row = div()
-                        .id(("recent-collection", index))
+                    let row = Button::new(("recent-collection", index))
+                        .focusable(false)
+                        .tab_stop(false)
                         .mx(px(theme.metrics.spacing_2))
                         .p(px(theme.metrics.spacing_2))
                         .flex()
                         .flex_col()
+                        .items_start()
                         .gap(px(theme.metrics.spacing_1))
                         .overflow_hidden()
                         .rounded(px(theme.metrics.radius_small))
                         .cursor_pointer()
-                        .hover(move |row| row.bg(theme.colors.surfaces.raised))
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            cx.stop_propagation();
+                        .hover(move |row| row.bg(theme.colors.surfaces.window))
+                        .on_click(move |_, window, cx| {
                             let path = open_path.clone();
                             let _ = view.update(cx, |view, cx| {
                                 if !view.loading {
@@ -784,8 +787,8 @@ impl ProbeApp {
     }
 
     fn render_tabs(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let mut tab_strip = div()
-            .id("request-tabs-scroll")
+        let tab_count = self.shell.tabs().len();
+        let mut tab_strip = Tabs::new("request-tabs-scroll")
             .flex_1()
             .min_w(px(0.0))
             .h_full()
@@ -815,9 +818,16 @@ impl ProbeApp {
             let select_view = cx.weak_entity();
             let close_view = cx.weak_entity();
             let tab_key = *key;
+            let tab_index = self
+                .shell
+                .tabs()
+                .iter()
+                .position(|open| *open == *key)
+                .unwrap_or(0);
             tab_strip = tab_strip.child(
-                div()
-                    .id(("request-tab", key.slot()))
+                Tab::new(("request-tab", key.slot()))
+                    .selected(active)
+                    .set_position(tab_index + 1, tab_count)
                     .h_full()
                     .min_w(px(120.0))
                     .max_w(px(220.0))
@@ -828,7 +838,10 @@ impl ProbeApp {
                     .overflow_hidden()
                     .border_r_1()
                     .border_color(theme.colors.borders.subtle)
-                    .when(active, |tab| tab.bg(theme.colors.surfaces.editor))
+                    .when(active, |tab| {
+                        tab.bg(theme.colors.surfaces.editor)
+                            .font_weight(FontWeight::SEMIBOLD)
+                    })
                     .when(!active, |tab| {
                         tab.text_color(theme.colors.text.secondary)
                             .hover(move |tab| tab.bg(theme.colors.surfaces.window))
@@ -845,8 +858,9 @@ impl ProbeApp {
                             }),
                     )
                     .child(
-                        div()
-                            .id(("close-tab", key.slot()))
+                        Button::new(("close-tab", key.slot()))
+                            .focusable(false)
+                            .tab_stop(false)
                             .flex_none()
                             .px(px(4.0))
                             .rounded(px(theme.metrics.radius_small))
@@ -961,10 +975,13 @@ impl ProbeApp {
             .execution
             .response(key)
             .is_some_and(ResponseState::is_running);
-        let mut section_tabs = div().flex().items_center().gap(px(theme.metrics.spacing_1));
+        let mut section_tabs = Tabs::new("request-editor-sections")
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1));
         for (index, section) in EditorSection::ALL.into_iter().enumerate() {
             let section_view = cx.weak_entity();
-            section_tabs = section_tabs.child(components::editor_button(
+            section_tabs = section_tabs.child(components::text_tab(
                 theme,
                 ("request-editor-section", index),
                 format!(
@@ -977,6 +994,8 @@ impl ProbeApp {
                     }
                 ),
                 self.request_editor.section == section,
+                index + 1,
+                EditorSection::ALL.len(),
                 move |_, _, cx| {
                     let _ = section_view.update(cx, |view, cx| {
                         view.request_editor.section = section;
@@ -1404,40 +1423,37 @@ impl ProbeApp {
         match request.body.as_ref() {
             Some(RequestBody::Single(Body::Raw(raw))) => {
                 let body_view = cx.weak_entity();
-                editor = editor
-                    .child(
-                        div()
-                            .text_size(px(theme.typography.caption_size))
-                            .text_color(theme.colors.text.muted)
-                            .child("Request body"),
-                    )
-                    .child(
-                        div()
-                            .id("request-body-editor")
-                            .debug_selector(|| "request-body-editor".into())
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .child(components::body_text_input(
-                                theme,
-                                ("request-body", key.slot()),
-                                raw.data.clone(),
-                                self.variable_context(),
-                                raw.kind == RawBodyKind::Json,
-                                move |value, _, input_cx| {
-                                    let _ = body_view.update(input_cx, |view, cx| {
-                                        view.edit_request(
-                                            key,
-                                            |request| {
-                                                if let Some(data) = raw_body_mut(request) {
-                                                    *data = value.to_string();
-                                                }
-                                            },
-                                            cx,
-                                        );
-                                    });
-                                },
-                            )),
-                    );
+                editor = editor.child(
+                    div()
+                        .id("request-body-editor")
+                        .debug_selector(|| "request-body-editor".into())
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(components::body_text_input(
+                            theme,
+                            ("request-body", key.slot()),
+                            raw.data.clone(),
+                            self.variable_context(),
+                            match raw.kind {
+                                RawBodyKind::Json => components::BodySyntax::Json,
+                                RawBodyKind::Xml => components::BodySyntax::Xml,
+                                _ => components::BodySyntax::Plain,
+                            },
+                            move |value, _, input_cx| {
+                                let _ = body_view.update(input_cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            if let Some(data) = raw_body_mut(request) {
+                                                *data = value.to_string();
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        )),
+                );
             }
             Some(RequestBody::Single(Body::FormUrlEncoded(fields))) => {
                 editor = editor.child(self.render_form_body_editor(key, fields, theme, cx));
@@ -2237,28 +2253,31 @@ impl ProbeApp {
                 .into_any_element();
         };
 
-        let mut tabs = div().flex().items_center().gap(px(theme.metrics.spacing_1));
+        let mut tabs = Tabs::new("response-view-tabs")
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1));
         for (index, tab) in ResponseViewerTab::ALL.into_iter().enumerate() {
             let tab_view = cx.weak_entity();
             let selected = self.response_viewer.tab() == tab;
             tabs = tabs.child(
-                div()
-                    .debug_selector(move || {
-                        format!("response-tab-{}", tab.label().to_ascii_lowercase())
-                    })
-                    .child(components::editor_button(
-                        theme,
-                        ("response-view-tab", index),
-                        tab.label(),
-                        selected,
-                        move |_, _, cx| {
-                            let _ = tab_view.update(cx, |view, cx| {
-                                view.response_viewer.set_tab(tab);
-                                view.response_scroll.scroll_to_item(0, ScrollStrategy::Top);
-                                cx.notify();
-                            });
-                        },
-                    )),
+                components::text_tab(
+                    theme,
+                    ("response-view-tab", index),
+                    tab.label(),
+                    selected,
+                    index + 1,
+                    ResponseViewerTab::ALL.len(),
+                    move |_, _, cx| {
+                        let _ = tab_view.update(cx, |view, cx| {
+                            view.response_viewer.set_tab(tab);
+                            cx.notify();
+                        });
+                    },
+                )
+                .debug_selector(move || {
+                    format!("response-tab-{}", tab.label().to_ascii_lowercase())
+                }),
             );
         }
 
@@ -2290,10 +2309,6 @@ impl ProbeApp {
                 move |value, _, input_cx| {
                     let _ = search_view.update(input_cx, |view, cx| {
                         view.response_viewer.set_search(value.to_string());
-                        if let Some(first) = view.response_viewer.matches(key).first() {
-                            view.response_scroll
-                                .scroll_to_item(first.row, ScrollStrategy::Center);
-                        }
                         cx.notify();
                     });
                 },
@@ -2397,12 +2412,7 @@ impl ProbeApp {
     }
 
     fn step_response_match(&mut self, key: probe_core::RequestKey, delta: isize) {
-        if let Some(index) = self.response_viewer.step_match(key, delta)
-            && let Some(found) = self.response_viewer.matches(key).get(index)
-        {
-            self.response_scroll
-                .scroll_to_item(found.row, ScrollStrategy::Center);
-        }
+        self.response_viewer.step_match(key, delta);
     }
 
     fn render_response_body(
@@ -2415,8 +2425,8 @@ impl ProbeApp {
         if document.binary {
             return placeholder_message(theme, "Binary response body cannot be displayed as text.");
         }
-        let lines = self.response_viewer.visible_lines(key);
-        if lines.is_empty() {
+        let text = self.response_viewer.visible_text(key);
+        if text.is_empty() {
             return placeholder_message(theme, "Empty response body.");
         }
         let matches = self.response_viewer.matches(key);
@@ -2427,15 +2437,20 @@ impl ProbeApp {
             .debug_selector(|| "response-body".into())
             .flex_1()
             .min_h(px(0.0))
-            .px(px(theme.metrics.spacing_3))
-            .pb(px(theme.metrics.spacing_2))
+            .p(px(theme.metrics.spacing_3))
             .child(components::response_body_input(
                 theme,
                 "response-body-editor",
-                lines,
+                text,
                 &matches,
                 active_match,
-                self.response_scroll.clone(),
+                if self.response_viewer.tab() == ResponseViewerTab::Pretty
+                    && document.pretty_notice.is_none()
+                {
+                    "json"
+                } else {
+                    ""
+                },
                 move |range, cx| {
                     #[cfg(test)]
                     {
@@ -2470,15 +2485,13 @@ impl ProbeApp {
             .debug_selector(|| "response-headers".into())
             .flex_1()
             .min_h(px(0.0))
-            .px(px(theme.metrics.spacing_3))
-            .pb(px(theme.metrics.spacing_2))
+            .p(px(theme.metrics.spacing_3))
             .child(components::response_headers_input(
                 theme,
                 "response-headers-editor",
                 &document.headers,
                 &matches,
                 active_match,
-                self.response_scroll.clone(),
                 move |range, cx| {
                     #[cfg(test)]
                     {
@@ -2536,7 +2549,7 @@ impl ProbeApp {
         let open_view = cx.weak_entity();
         let close_view = cx.weak_entity();
         let layout_view = cx.weak_entity();
-        let mut popup = PopoverPopup::new()
+        let mut popup = div()
             .id("workspace-switcher-popup")
             .aria_label("Workspaces")
             .w(px(300.0))
@@ -2547,11 +2560,10 @@ impl ProbeApp {
             .rounded(px(theme.metrics.radius_medium))
             .bg(theme.colors.surfaces.overlay)
             .border_1()
-            .border_color(theme.colors.borders.standard)
-            .style_with_state(|_, popup| popup.occlude());
+            .border_color(theme.colors.borders.standard);
 
         if !self.session.recent_collections.is_empty() {
-            popup = popup.child_any(
+            popup = popup.child(
                 div()
                     .px(px(theme.metrics.spacing_2))
                     .py(px(theme.metrics.spacing_1))
@@ -2568,7 +2580,7 @@ impl ProbeApp {
                     .unwrap_or("Collection")
                     .to_owned();
                 let view = cx.weak_entity();
-                popup = popup.child_any(components::menu_button(
+                popup = popup.child(components::menu_button(
                     theme,
                     ("workspace-switcher-recent", index),
                     label,
@@ -2583,7 +2595,7 @@ impl ProbeApp {
                     },
                 ));
             }
-            popup = popup.child_any(
+            popup = popup.child(
                 div()
                     .h(px(1.0))
                     .my(px(theme.metrics.spacing_1))
@@ -2591,7 +2603,7 @@ impl ProbeApp {
             );
         }
 
-        popup = popup.child_any(components::menu_button(
+        popup = popup.child(components::menu_button(
             theme,
             "workspace-switcher-open",
             "Open Collection…",
@@ -2605,7 +2617,7 @@ impl ProbeApp {
             },
         ));
         if self.loaded_workspace.is_some() {
-            popup = popup.child_any(components::menu_button(
+            popup = popup.child(components::menu_button(
                 theme,
                 "workspace-switcher-close",
                 "Close Current Collection",
@@ -2618,19 +2630,18 @@ impl ProbeApp {
             ));
         }
 
-        let switcher = PopoverRoot::<()>::new()
-            .id("workspace-switcher")
+        let switcher = Popover::new("workspace-switcher")
             .open(self.workspace_switcher_open)
-            .on_open_change(move |open, _, _, cx| {
+            .on_open_change(move |open, _, cx| {
                 let _ = switcher_view.update(cx, |view, cx| {
-                    view.workspace_switcher_open = open;
+                    view.workspace_switcher_open = *open;
                     cx.notify();
                 });
             })
-            .child(
-                PopoverTrigger::new()
-                    .id("workspace-switcher-trigger")
-                    .aria_label("Switch workspace")
+            .trigger(
+                Button::new("workspace-switcher-trigger")
+                    .accessibility_label("Switch workspace")
+                    .selected(self.workspace_switcher_open)
                     .h(px(28.0))
                     .max_w(px(260.0))
                     .px(px(theme.metrics.spacing_2))
@@ -2639,18 +2650,13 @@ impl ProbeApp {
                     .gap(px(theme.metrics.spacing_2))
                     .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
-                    .style_with_state(move |state, trigger| {
-                        trigger
-                            .border_1()
-                            .border_color(if state.focused {
-                                theme.colors.borders.focused
-                            } else {
-                                theme.colors.borders.subtle
-                            })
-                            .when(state.open, |trigger| {
-                                trigger.bg(theme.colors.surfaces.sidebar)
-                            })
-                            .hover(move |trigger| trigger.bg(theme.colors.surfaces.sidebar))
+                    .border_1()
+                    .border_color(theme.colors.borders.subtle)
+                    .debug_selector(|| "workspace-switcher-trigger".into())
+                    .hover(move |trigger| trigger.bg(theme.colors.surfaces.sidebar))
+                    .focus(move |trigger| trigger.border_color(theme.colors.borders.focused))
+                    .styles(move |styles| {
+                        styles.selected(move |trigger| trigger.bg(theme.colors.surfaces.sidebar))
                     })
                     .child(components::truncated_label(self.workspace_name()).flex_1())
                     .child(
@@ -2661,13 +2667,7 @@ impl ProbeApp {
                             .child("▾"),
                     ),
             )
-            .child(
-                PopoverPortal::new().child(
-                    PopoverPositioner::new()
-                        .side_offset(px(theme.metrics.spacing_1))
-                        .child(popup),
-                ),
-            );
+            .content(move |_, _, _| popup);
 
         div()
             .h(px(38.0))
@@ -2898,8 +2898,9 @@ fn render_windows_controls(theme: Theme) -> gpui::Div {
                         area,
                         destructive: bool,
                         action: fn(&mut Window)| {
-        div()
-            .id(id)
+        Button::new(id)
+            .focusable(false)
+            .tab_stop(false)
             .w(px(44.0))
             .h_full()
             .flex()
@@ -2952,8 +2953,7 @@ fn render_windows_controls(_: Theme) -> gpui::Div {
 
 pub fn run() {
     gpui_platform::application().run(|cx: &mut App| {
-        base_gpui::init(cx);
-        crate::multiline_input::init(cx);
+        Theme::init(cx);
 
         let bounds = Bounds::centered(None, size(px(1180.0), px(780.0)), cx);
         cx.open_window(
@@ -2996,6 +2996,7 @@ mod tests {
     use crate::{
         request_editor::{BodyEditorKind, EditorSection},
         response_viewer::ResponseViewerTab,
+        theme::Theme,
     };
 
     fn bundled_fixture() -> PathBuf {
@@ -3015,7 +3016,7 @@ mod tests {
 
     #[gpui::test]
     fn recent_collection_in_sidebar_loads_the_workspace(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3056,7 +3057,7 @@ mod tests {
 
     #[gpui::test]
     fn large_sidebar_only_renders_the_visible_rows(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3089,7 +3090,7 @@ mod tests {
 
     #[gpui::test]
     fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3135,8 +3136,7 @@ mod tests {
 
     #[gpui::test]
     fn request_editor_renders_multiline_json_body(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
-        cx.update(crate::multiline_input::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3177,8 +3177,7 @@ mod tests {
 
     #[gpui::test]
     fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
-        cx.update(crate::multiline_input::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3265,8 +3264,7 @@ mod tests {
 
     #[gpui::test]
     fn large_response_body_only_renders_visible_rows(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
-        cx.update(crate::multiline_input::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3312,11 +3310,19 @@ mod tests {
             })
             .expect("test window should be open");
         cx.run_until_parked();
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                window.simulate_next_frame(cx);
+            });
+        }
+        cx.run_until_parked();
 
         let (total_rows, rendered_rows) = window
             .update(cx, |view, _, _| {
                 (
-                    view.response_viewer.visible_lines(request_key).len(),
+                    view.response_viewer.visible_line_count(request_key),
                     view.rendered_response_rows,
                 )
             })
@@ -3331,7 +3337,7 @@ mod tests {
 
     #[gpui::test]
     fn environment_selection_is_shared_when_opening_another_request(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3360,7 +3366,7 @@ mod tests {
 
     #[gpui::test]
     fn request_variables_render_inline_and_show_resolved_tooltips(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3433,7 +3439,7 @@ mod tests {
 
     #[gpui::test]
     fn long_request_names_ellipsis_instead_of_wrapping(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
@@ -3485,7 +3491,7 @@ mod tests {
 
     #[gpui::test]
     fn opening_many_request_tabs_scrolls_to_the_active_tab(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
+        cx.update(Theme::init);
         let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });

@@ -1,18 +1,12 @@
 //! Read-only response presentation: Pretty, Raw, Headers, and Search.
 //!
-//! gpui-base `Input` shapes a single line and is an editor, not a viewer. A whole
-//! response body in one GPUI text node would layout every glyph. This module therefore
-//! prepares bounded display rows so the desktop adapter can virtualize them with
-//! `uniform_list`, pretty-print JSON off the UI thread when needed, and search without
-//! scanning the original bytes on every frame.
+//! This module retains response text without altering it, searches the active
+//! representation, and pretty-prints JSON off the UI thread. Syntax coloring is
+//! applied by the gpui-base `Editor` highlighter.
 
 use std::ops::Range;
 
 use probe_http::{HttpResponse, ResponseHeader};
-
-/// Longest display row, in Unicode scalars. Keeps virtualized rows bounded even when a
-/// minified body is a single line.
-pub(crate) const MAX_LINE_COLUMNS: usize = 256;
 
 /// JSON pretty-print larger than this runs on a background executor.
 pub(crate) const SYNC_PRETTY_BYTES: usize = 64 * 1024;
@@ -37,41 +31,16 @@ impl ResponseViewerTab {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SyntaxRole {
-    Property,
-    String,
-    Number,
-    Boolean,
-    Null,
-    Punctuation,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SearchColumn {
-    Body,
-    HeaderName,
-    HeaderValue,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResponseLine {
-    pub text: String,
-    pub syntax: Vec<(Range<usize>, SyntaxRole)>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SearchMatch {
-    pub row: usize,
-    pub range: Range<usize>,
-    pub column: SearchColumn,
+    pub range: std::ops::Range<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PreparedDocument {
     pub generation: u64,
-    pub raw_lines: Vec<ResponseLine>,
-    pub pretty_lines: Vec<ResponseLine>,
+    pub raw_text: String,
+    pub pretty_text: String,
     pub pretty_pending: bool,
     pub pretty_notice: Option<String>,
     pub binary: bool,
@@ -153,20 +122,30 @@ impl ResponseViewerState {
         if document.generation != generation || !document.pretty_pending {
             return;
         }
-        document.pretty_lines = pretty.lines;
+        document.pretty_text = pretty.text;
         document.pretty_notice = pretty.notice;
         document.pretty_pending = false;
         self.active_match = 0;
     }
 
-    pub(crate) fn visible_lines(&self, key: probe_core::RequestKey) -> &[ResponseLine] {
+    pub(crate) fn visible_text(&self, key: probe_core::RequestKey) -> &str {
         let Some(document) = self.documents.get(&key) else {
-            return &[];
+            return "";
         };
         match self.tab {
-            ResponseViewerTab::Pretty => &document.pretty_lines,
-            ResponseViewerTab::Raw => &document.raw_lines,
-            ResponseViewerTab::Headers => &[],
+            ResponseViewerTab::Pretty => &document.pretty_text,
+            ResponseViewerTab::Raw => &document.raw_text,
+            ResponseViewerTab::Headers => "",
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn visible_line_count(&self, key: probe_core::RequestKey) -> usize {
+        let text = self.visible_text(key);
+        if text.is_empty() {
+            0
+        } else {
+            text.lines().count() + usize::from(text.ends_with('\n'))
         }
     }
 
@@ -177,7 +156,7 @@ impl ResponseViewerState {
         match self.tab {
             ResponseViewerTab::Headers => search_headers(&document.headers, &self.search),
             ResponseViewerTab::Pretty | ResponseViewerTab::Raw => {
-                search_lines(self.visible_lines(key), &self.search)
+                search_text(self.visible_text(key), &self.search)
             }
         }
     }
@@ -200,7 +179,7 @@ impl ResponseViewerState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PrettyBody {
-    pub lines: Vec<ResponseLine>,
+    pub text: String,
     pub notice: Option<String>,
 }
 
@@ -213,8 +192,8 @@ pub(crate) fn prepare_document(
         return (
             PreparedDocument {
                 generation,
-                raw_lines: Vec::new(),
-                pretty_lines: Vec::new(),
+                raw_text: String::new(),
+                pretty_text: String::new(),
                 pretty_pending: false,
                 pretty_notice: None,
                 binary: false,
@@ -228,8 +207,8 @@ pub(crate) fn prepare_document(
         return (
             PreparedDocument {
                 generation,
-                raw_lines: Vec::new(),
-                pretty_lines: Vec::new(),
+                raw_text: String::new(),
+                pretty_text: String::new(),
                 pretty_pending: false,
                 pretty_notice: Some(format!("Binary response body ({} bytes).", response.size)),
                 binary: true,
@@ -240,18 +219,17 @@ pub(crate) fn prepare_document(
         );
     }
 
-    let text = String::from_utf8_lossy(&response.body);
+    let raw_text = String::from_utf8_lossy(&response.body).into_owned();
     let json_candidate = looks_like_json(response);
     let pending = json_candidate && response.body.len() > SYNC_PRETTY_BYTES;
-    let raw_lines = display_lines(&text, &[], MAX_LINE_COLUMNS);
-    let (pretty_lines, pretty_notice, pretty_pending) = if pending {
-        (raw_lines.clone(), Some("Formatting JSON…".to_owned()), true)
+    let (pretty_text, pretty_notice, pretty_pending) = if pending {
+        (raw_text.clone(), Some("Formatting JSON…".to_owned()), true)
     } else if json_candidate {
         let pretty = pretty_json_body(&response.body);
-        (pretty.lines, pretty.notice, false)
+        (pretty.text, pretty.notice, false)
     } else {
         (
-            raw_lines.clone(),
+            raw_text.clone(),
             Some("Pretty formatting is available for JSON responses.".to_owned()),
             false,
         )
@@ -260,8 +238,8 @@ pub(crate) fn prepare_document(
     (
         PreparedDocument {
             generation,
-            raw_lines,
-            pretty_lines,
+            raw_text,
+            pretty_text,
             pretty_pending,
             pretty_notice,
             binary: false,
@@ -275,20 +253,17 @@ pub(crate) fn prepare_document(
 pub(crate) fn pretty_json_body(body: &[u8]) -> PrettyBody {
     match serde_json::from_slice::<serde_json::Value>(body) {
         Ok(value) => match serde_json::to_string_pretty(&value) {
-            Ok(pretty) => {
-                let highlights = highlight_json(&pretty);
-                PrettyBody {
-                    lines: display_lines(&pretty, &highlights, MAX_LINE_COLUMNS),
-                    notice: None,
-                }
-            }
+            Ok(pretty) => PrettyBody {
+                text: pretty,
+                notice: None,
+            },
             Err(_) => PrettyBody {
-                lines: display_lines(&String::from_utf8_lossy(body), &[], MAX_LINE_COLUMNS),
+                text: String::from_utf8_lossy(body).into_owned(),
                 notice: Some("Could not pretty-print this JSON response.".to_owned()),
             },
         },
         Err(_) => PrettyBody {
-            lines: display_lines(&String::from_utf8_lossy(body), &[], MAX_LINE_COLUMNS),
+            text: String::from_utf8_lossy(body).into_owned(),
             notice: Some("Response is not valid JSON.".to_owned()),
         },
     }
@@ -318,80 +293,6 @@ fn trim_ascii_start(bytes: &[u8]) -> &[u8] {
         .position(|byte| !byte.is_ascii_whitespace())
         .unwrap_or(bytes.len());
     &bytes[index..]
-}
-
-pub(crate) fn display_lines(
-    text: &str,
-    highlights: &[(Range<usize>, SyntaxRole)],
-    max_cols: usize,
-) -> Vec<ResponseLine> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_start = 0;
-    let mut cols = 0;
-
-    let flush = |current: &mut String,
-                 current_start: usize,
-                 lines: &mut Vec<ResponseLine>,
-                 highlights: &[(Range<usize>, SyntaxRole)]| {
-        let end = current_start + current.len();
-        lines.push(ResponseLine {
-            text: std::mem::take(current),
-            syntax: clip_highlights(highlights, current_start..end),
-        });
-    };
-
-    for (idx, ch) in text.char_indices() {
-        if ch == '\n' {
-            flush(&mut current, current_start, &mut lines, highlights);
-            current_start = idx + ch.len_utf8();
-            cols = 0;
-            continue;
-        }
-        if ch == '\r' {
-            continue;
-        }
-        if max_cols > 0 && cols == max_cols && !current.is_empty() {
-            flush(&mut current, current_start, &mut lines, highlights);
-            current_start = idx;
-            cols = 0;
-        }
-        current.push(ch);
-        cols += 1;
-    }
-    if !current.is_empty() || lines.is_empty() || text.ends_with('\n') {
-        flush(&mut current, current_start, &mut lines, highlights);
-    }
-    lines
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct JoinedDisplay {
-    pub text: String,
-    pub syntax: Vec<(Range<usize>, SyntaxRole)>,
-    pub line_offsets: Vec<usize>,
-}
-
-pub(crate) fn join_display_lines(lines: &[ResponseLine]) -> JoinedDisplay {
-    let mut text = String::new();
-    let mut syntax = Vec::new();
-    let mut line_offsets = Vec::with_capacity(lines.len());
-    for (index, line) in lines.iter().enumerate() {
-        if index > 0 {
-            text.push('\n');
-        }
-        let offset = text.len();
-        line_offsets.push(offset);
-        for (range, role) in &line.syntax {
-            syntax.push((offset + range.start..offset + range.end, *role));
-        }
-        text.push_str(&line.text);
-    }
-    JoinedDisplay {
-        text,
-        syntax,
-        line_offsets,
-    }
 }
 
 pub(crate) const HEADER_SEPARATOR: &str = ": ";
@@ -424,129 +325,11 @@ pub(crate) fn join_header_lines(headers: &[ResponseHeader]) -> JoinedHeaders {
     }
 }
 
-fn clip_highlights(
-    highlights: &[(Range<usize>, SyntaxRole)],
-    span: Range<usize>,
-) -> Vec<(Range<usize>, SyntaxRole)> {
-    highlights
-        .iter()
-        .filter_map(|(range, role)| {
-            let start = range.start.max(span.start);
-            let end = range.end.min(span.end);
-            (start < end).then(|| (start - span.start..end - span.start, *role))
-        })
+pub(crate) fn search_text(text: &str, query: &str) -> Vec<SearchMatch> {
+    find_ignore_case(text, query)
+        .into_iter()
+        .map(|range| SearchMatch { range })
         .collect()
-}
-
-pub(crate) fn highlight_json(text: &str) -> Vec<(Range<usize>, SyntaxRole)> {
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    let mut spans = Vec::new();
-    while index < bytes.len() {
-        match bytes[index] {
-            b' ' | b'\n' | b'\r' | b'\t' => index += 1,
-            b'{' | b'}' | b'[' | b']' | b':' | b',' => {
-                spans.push((index..index + 1, SyntaxRole::Punctuation));
-                index += 1;
-            }
-            b'"' => {
-                let start = index;
-                index += 1;
-                while index < bytes.len() {
-                    match bytes[index] {
-                        b'\\' => index = (index + 2).min(bytes.len()),
-                        b'"' => {
-                            index += 1;
-                            break;
-                        }
-                        _ => index += 1,
-                    }
-                }
-                let role = if followed_by_colon(bytes, index) {
-                    SyntaxRole::Property
-                } else {
-                    SyntaxRole::String
-                };
-                spans.push((start..index, role));
-            }
-            b't' if keyword_at(text, index, "true") => {
-                spans.push((index..index + 4, SyntaxRole::Boolean));
-                index += 4;
-            }
-            b'f' if keyword_at(text, index, "false") => {
-                spans.push((index..index + 5, SyntaxRole::Boolean));
-                index += 5;
-            }
-            b'n' if keyword_at(text, index, "null") => {
-                spans.push((index..index + 4, SyntaxRole::Null));
-                index += 4;
-            }
-            b'-' | b'0'..=b'9' => {
-                let start = index;
-                index = scan_json_number(bytes, index);
-                spans.push((start..index, SyntaxRole::Number));
-            }
-            _ => index += 1,
-        }
-    }
-    spans
-}
-
-fn keyword_at(text: &str, index: usize, keyword: &str) -> bool {
-    text[index..].starts_with(keyword)
-        && !text
-            .as_bytes()
-            .get(index + keyword.len())
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
-}
-
-fn followed_by_colon(bytes: &[u8], mut index: usize) -> bool {
-    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-        index += 1;
-    }
-    bytes.get(index) == Some(&b':')
-}
-
-fn scan_json_number(bytes: &[u8], mut index: usize) -> usize {
-    if bytes.get(index) == Some(&b'-') {
-        index += 1;
-    }
-    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-        index += 1;
-    }
-    if bytes.get(index) == Some(&b'.') {
-        index += 1;
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-    }
-    if matches!(bytes.get(index), Some(b'e' | b'E')) {
-        index += 1;
-        if matches!(bytes.get(index), Some(b'+' | b'-')) {
-            index += 1;
-        }
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-    }
-    index
-}
-
-pub(crate) fn search_lines(lines: &[ResponseLine], query: &str) -> Vec<SearchMatch> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    let mut matches = Vec::new();
-    for (row, line) in lines.iter().enumerate() {
-        for range in find_ignore_case(&line.text, query) {
-            matches.push(SearchMatch {
-                row,
-                range,
-                column: SearchColumn::Body,
-            });
-        }
-    }
-    matches
 }
 
 pub(crate) fn search_headers(headers: &[ResponseHeader], query: &str) -> Vec<SearchMatch> {
@@ -554,21 +337,20 @@ pub(crate) fn search_headers(headers: &[ResponseHeader], query: &str) -> Vec<Sea
         return Vec::new();
     }
     let mut matches = Vec::new();
-    for (row, header) in headers.iter().enumerate() {
+    let mut line_start = 0;
+    for header in headers {
         for range in find_ignore_case(&header.name, query) {
             matches.push(SearchMatch {
-                row,
-                range,
-                column: SearchColumn::HeaderName,
+                range: line_start + range.start..line_start + range.end,
             });
         }
+        let value_start = line_start + header.name.len() + HEADER_SEPARATOR.len();
         for range in find_ignore_case(&header.value, query) {
             matches.push(SearchMatch {
-                row,
-                range,
-                column: SearchColumn::HeaderValue,
+                range: value_start + range.start..value_start + range.end,
             });
         }
+        line_start = value_start + header.value.len() + 1;
     }
     matches
 }
@@ -629,9 +411,8 @@ mod tests {
     use probe_http::{HttpResponse, ResponseHeader};
 
     use super::{
-        MAX_LINE_COLUMNS, PreparedDocument, ResponseViewerTab, SearchColumn, SyntaxRole,
-        display_lines, highlight_json, join_display_lines, join_header_lines, looks_like_json,
-        prepare_document, pretty_json_body, search_headers, search_lines,
+        PreparedDocument, ResponseViewerTab, join_header_lines, looks_like_json, prepare_document,
+        pretty_json_body, search_headers, search_text,
     };
 
     fn response(body: &[u8], content_type: &str) -> HttpResponse {
@@ -651,47 +432,30 @@ mod tests {
     }
 
     #[test]
-    fn pretty_json_indents_and_highlights_tokens() {
+    fn pretty_json_indents_object_fields() {
         let pretty = pretty_json_body(br#"{"ok":true,"n":1}"#);
         assert!(pretty.notice.is_none());
-        let text = pretty
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = pretty.text;
         assert!(text.contains('\n'));
         assert!(text.contains("\"ok\""));
-        let roles: Vec<SyntaxRole> = pretty
-            .lines
-            .iter()
-            .flat_map(|line| line.syntax.iter().map(|(_, role)| *role))
-            .collect();
-        assert!(roles.contains(&SyntaxRole::Property));
-        assert!(roles.contains(&SyntaxRole::Boolean));
-        assert!(roles.contains(&SyntaxRole::Number));
     }
 
     #[test]
-    fn long_lines_are_chunked_for_virtualized_rows() {
-        let line = "x".repeat(MAX_LINE_COLUMNS * 3 + 10);
-        let lines = display_lines(&line, &[], MAX_LINE_COLUMNS);
-        assert_eq!(lines.len(), 4);
-        assert!(
-            lines
-                .iter()
-                .all(|row| row.text.chars().count() <= MAX_LINE_COLUMNS)
-        );
+    fn long_lines_are_preserved_for_the_virtualized_editor() {
+        let line = "x".repeat(1_000);
+        let response = response(line.as_bytes(), "text/plain");
+        let (document, pending) = prepare_document(&response, 1);
+        assert!(!pending);
+        assert_eq!(document.raw_text, line);
     }
 
     #[test]
     fn search_is_case_insensitive_and_records_byte_ranges() {
-        let lines = display_lines("Alpha\nbeta ALPHA", &[], MAX_LINE_COLUMNS);
-        let matches = search_lines(&lines, "alpha");
+        let text = "Alpha\nbeta ALPHA";
+        let matches = search_text(text, "alpha");
         assert_eq!(matches.len(), 2);
-        assert_eq!(matches[0].row, 0);
-        assert_eq!(&lines[0].text[matches[0].range.clone()], "Alpha");
-        assert_eq!(matches[1].row, 1);
+        assert_eq!(&text[matches[0].range.clone()], "Alpha");
+        assert_eq!(&text[matches[1].range.clone()], "ALPHA");
     }
 
     #[test]
@@ -708,8 +472,8 @@ mod tests {
         ];
         let matches = search_headers(&headers, "json");
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].column, SearchColumn::HeaderValue);
-        assert_eq!(matches[0].row, 0);
+        let joined = join_header_lines(&headers);
+        assert_eq!(&joined.text[matches[0].range.clone()], "json");
     }
 
     #[test]
@@ -745,24 +509,13 @@ mod tests {
         assert!(!pending);
         assert!(!document.binary);
         assert!(document.pretty_notice.is_none());
-        assert!(document.pretty_lines.len() > 1);
-        assert!(
-            document.raw_lines.iter().all(|line| line.syntax.is_empty()),
-            "raw JSON bodies should not be syntax highlighted"
-        );
-        assert!(
-            document
-                .pretty_lines
-                .iter()
-                .any(|line| !line.syntax.is_empty()),
-            "pretty JSON bodies should keep syntax highlights"
-        );
+        assert!(document.pretty_text.contains('\n'));
 
         let binary = response(&[0, 159, 146, 150], "application/octet-stream");
         let (document, pending) = prepare_document(&binary, 2);
         assert!(!pending);
         assert!(document.binary);
-        assert!(document.raw_lines.is_empty());
+        assert!(document.raw_text.is_empty());
     }
 
     #[test]
@@ -777,39 +530,12 @@ mod tests {
     }
 
     #[test]
-    fn highlight_json_treats_object_keys_as_properties() {
-        let source = "{\n  \"name\": \"Ada\"\n}";
-        let highlights = highlight_json(source);
-        let property = highlights
-            .iter()
-            .find(|(_, role)| *role == SyntaxRole::Property)
-            .expect("property span");
-        assert_eq!(&source[property.0.clone()], "\"name\"");
-        let string = highlights
-            .iter()
-            .find(|(_, role)| *role == SyntaxRole::String)
-            .expect("string span");
-        assert_eq!(&source[string.0.clone()], "\"Ada\"");
-    }
-
-    #[test]
-    fn join_display_lines_remaps_wrapped_syntax_without_relexing() {
-        let source = "\"abcdefghij\"";
-        let highlights = highlight_json(source);
-        let lines = display_lines(source, &highlights, 5);
-        assert!(lines.len() > 1);
-        let joined = join_display_lines(&lines);
-        assert_eq!(joined.line_offsets.len(), lines.len());
-        assert_eq!(joined.text.matches('\n').count(), lines.len() - 1);
-        let mut reconstructed = Vec::new();
-        for (line, offset) in lines.iter().zip(&joined.line_offsets) {
-            for (range, role) in &line.syntax {
-                let joined_range = offset + range.start..offset + range.end;
-                reconstructed.push((joined_range.clone(), *role));
-                assert_eq!(&joined.text[joined_range], &line.text[range.clone()]);
-            }
-        }
-        assert_eq!(joined.syntax, reconstructed);
+    fn raw_text_does_not_insert_line_breaks() {
+        let source = r#"{"value":"abcdefghij"}"#;
+        let response = response(source.as_bytes(), "application/json");
+        let (document, pending) = prepare_document(&response, 1);
+        assert!(!pending);
+        assert_eq!(document.raw_text, source);
     }
 
     #[test]

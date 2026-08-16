@@ -1,34 +1,27 @@
-//! Probe-styled compositions over headless base-gpui behavior.
+//! Probe-styled compositions over headless Longbridge gpui-base behavior.
 
 use std::{collections::BTreeMap, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
-use base_gpui::{
-    button::ButtonRoot,
-    primitives::input::{Input, InputRuntime},
-    select::{
-        SelectIcon, SelectItem, SelectItemIndicator, SelectItemText, SelectList, SelectPopup,
-        SelectPortal, SelectPositioner, SelectRoot, SelectTrigger, SelectValue,
-    },
-    switch::{SwitchRoot, SwitchThumb},
-    toggle::Toggle,
-    toggle_group::ToggleGroup,
-};
+use crate::response_viewer::{SearchMatch, join_header_lines};
+use crate::shell::PaneLayout;
+use crate::theme::{Theme, ThemeAppearance};
 use gpui::{
     App, AppContext as _, Bounds, ClickEvent, ContentMask, Context, Element, ElementId, Entity,
-    GlobalElementId, Hsla, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
-    MouseButton, PaintQuad, ParentElement as _, Pixels, Render, ShapedLine, SharedString,
-    StatefulInteractiveElement as _, Style, Styled as _, TextAlign, TextRun,
-    UniformListScrollHandle, Window, div, fill, point, prelude::FluentBuilder as _, px, relative,
-    size, transparent_black,
+    Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla, InspectorElementId,
+    InteractiveElement as _, IntoElement, LayoutId, MouseButton, PaintQuad, ParentElement as _,
+    Pixels, Render, RenderOnce, Role, ShapedLine, SharedString, StatefulInteractiveElement as _,
+    Style, Styled as _, Subscription, TextAlign, TextRun, Window, div, fill, hsla, point,
+    prelude::FluentBuilder as _, px, relative, size, transparent_black,
 };
-
-use crate::multiline_input::{MultilineInput, TextHighlight};
-use crate::response_viewer::{
-    HEADER_SEPARATOR, ResponseLine, SearchColumn, SearchMatch, SyntaxRole, highlight_json,
-    join_display_lines, join_header_lines,
+use gpui_base::{
+    Button, Editor, Input, InputBase, Popover, Switch, SwitchThumb, SwitchTrack, Toggle,
+    ToggleGroup,
+    actions::{Confirm, SelectDown, SelectUp},
+    input::{
+        EditorState, InputEditorStyle, InputEvent, InputState, TextDecoration,
+        TextDecorationCollection,
+    },
 };
-use crate::shell::PaneLayout;
-use crate::theme::Theme;
 
 /// Single-line label that shows an ellipsis when the available width is too small.
 pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
@@ -89,8 +82,7 @@ pub fn primary_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let label = label.into();
-    ButtonRoot::new()
-        .id(id)
+    Button::new(id)
         .h(px(theme.metrics.control_height))
         .px(px(theme.metrics.spacing_3))
         .flex()
@@ -100,35 +92,152 @@ pub fn primary_button(
         .font_family(theme.typography.interface_family)
         .text_size(px(theme.typography.body_size))
         .text_color(theme.colors.selection.active_foreground)
-        .on_click(on_click)
-        .style_with_state(move |state, button| {
-            let background = if state.disabled {
-                theme.colors.actions.disabled
-            } else {
-                theme.colors.actions.accent
-            };
-            let foreground = if state.disabled {
-                theme.colors.actions.disabled_foreground
-            } else {
-                theme.colors.selection.active_foreground
-            };
-
-            button
-                .bg(background)
-                .text_color(foreground)
-                .border_1()
-                .border_color(if state.focused {
-                    theme.colors.borders.focused
-                } else {
-                    background
-                })
-                .when(!state.disabled, |button| {
-                    button
-                        .cursor_pointer()
-                        .hover(move |button| button.bg(theme.colors.actions.hover))
-                })
+        .bg(theme.colors.actions.accent)
+        .border_1()
+        .border_color(theme.colors.actions.accent)
+        .cursor_pointer()
+        .hover(move |button| button.bg(theme.colors.actions.hover))
+        .focus(move |button| button.border_color(theme.colors.borders.focused))
+        .styles(move |styles| {
+            styles.disabled(move |button| {
+                button
+                    .bg(theme.colors.actions.disabled)
+                    .text_color(theme.colors.actions.disabled_foreground)
+                    .border_color(theme.colors.actions.disabled)
+            })
         })
+        .on_click(on_click)
         .child(label)
+}
+
+type InputChangeHandler = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
+type DropdownChangeHandler<T> = Rc<dyn Fn(Option<&T>, &mut Window, &mut App)>;
+type VisibleRangeHandler = Rc<dyn Fn(Range<usize>, &mut App)>;
+
+struct FieldInput {
+    state: Entity<InputState>,
+    on_change: InputChangeHandler,
+    on_enter: Option<InputChangeHandler>,
+    _subscription: Subscription,
+}
+
+impl FieldInput {
+    fn on_event(
+        this: &mut Self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                let value = input.read(cx).value();
+                (this.on_change)(value, window, cx);
+            }
+            InputEvent::PressEnter { .. } => {
+                if let Some(on_enter) = this.on_enter.clone() {
+                    let value = input.read(cx).value();
+                    on_enter(value, window, cx);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(IntoElement)]
+struct ProbeTextInput {
+    theme: Theme,
+    id: ElementId,
+    value: SharedString,
+    placeholder: SharedString,
+    variables: VariableContext,
+    font_family: &'static str,
+    text_size: f32,
+    height: f32,
+    width: Option<f32>,
+    debug_selector: Option<&'static str>,
+    on_change: InputChangeHandler,
+    on_enter: Option<InputChangeHandler>,
+}
+
+impl RenderOnce for ProbeTextInput {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let placeholder = self.placeholder.clone();
+        let on_change = self.on_change.clone();
+        let on_enter = self.on_enter.clone();
+        let field = window.use_keyed_state(self.id.clone(), cx, |window, cx| {
+            let state = cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder(placeholder.clone());
+                state.set_editor_style(editor_paint_style(self.theme));
+                state
+            });
+            let subscription = cx.subscribe_in(&state, window, FieldInput::on_event);
+            FieldInput {
+                state,
+                on_change: on_change.clone(),
+                on_enter: on_enter.clone(),
+                _subscription: subscription,
+            }
+        });
+        field.update(cx, |field, cx| {
+            field.on_change = self.on_change.clone();
+            field.on_enter = self.on_enter.clone();
+            field.state.update(cx, |input, cx| {
+                input.set_editor_style(editor_paint_style(self.theme));
+                if input.value() != self.value {
+                    input.set_value(self.value.clone(), window, cx);
+                }
+            });
+        });
+        let state = field.read(cx).state.clone();
+        let focused = state.read(cx).focus_handle(cx).is_focused(window);
+        let tooltip_id = ElementId::NamedChild(
+            Arc::new(self.id.clone()),
+            SharedString::from("variable-tooltip"),
+        );
+        let theme = self.theme;
+        let input = InputBase::new(self.id.clone())
+            .h(px(self.height))
+            .when_some(self.width, |input, width| input.w(px(width)))
+            .when(self.width.is_none(), |input| input.min_w(px(0.0)).w_full())
+            .px(px(theme.metrics.spacing_2))
+            .flex()
+            .items_center()
+            .rounded(px(theme.metrics.radius_small))
+            .font_family(self.font_family)
+            .text_size(px(self.text_size))
+            .text_color(theme.colors.text.primary)
+            .bg(theme.colors.surfaces.window)
+            .border_1()
+            .border_color(if focused {
+                theme.colors.borders.focused
+            } else {
+                theme.colors.borders.standard
+            })
+            .focused(focused)
+            .styles(move |styles| {
+                styles.focused(move |input| input.border_color(theme.colors.borders.focused))
+            })
+            .when_some(self.debug_selector, |input, selector| {
+                input.debug_selector(move || selector.into())
+            })
+            .on_mouse_down(MouseButton::Left, {
+                let state = state.clone();
+                move |_, window, cx| {
+                    state.update(cx, |input, cx| input.focus(window, cx));
+                }
+            })
+            .child(Input::new(&state));
+        variable_input_overlay(
+            self.theme,
+            state,
+            tooltip_id,
+            input,
+            self.value,
+            self.variables,
+        )
+    }
 }
 
 pub(crate) fn variable_text_input(
@@ -137,9 +246,23 @@ pub(crate) fn variable_text_input(
     value: impl Into<SharedString>,
     placeholder: impl Into<SharedString>,
     variables: VariableContext,
-    on_value_change: impl Fn(SharedString, &mut Window, &mut gpui::Context<InputRuntime>) + 'static,
+    on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui::AnyElement {
-    text_input_with_variables(theme, id, value, placeholder, variables, on_value_change)
+    ProbeTextInput {
+        theme,
+        id: id.into(),
+        value: single_line(value),
+        placeholder: placeholder.into(),
+        variables,
+        font_family: theme.typography.monospace_family,
+        text_size: theme.typography.body_size,
+        height: theme.metrics.control_height,
+        width: None,
+        debug_selector: None,
+        on_change: Rc::new(on_value_change),
+        on_enter: None,
+    }
+    .into_any_element()
 }
 
 pub(crate) fn search_input(
@@ -147,87 +270,23 @@ pub(crate) fn search_input(
     id: impl Into<ElementId>,
     value: impl Into<SharedString>,
     placeholder: impl Into<SharedString>,
-    on_value_change: impl Fn(SharedString, &mut Window, &mut gpui::Context<InputRuntime>) + 'static,
-    on_enter: impl Fn(SharedString, &mut Window, &mut gpui::Context<InputRuntime>) + 'static,
+    on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+    on_enter: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let id = id.into();
-    let value = single_line(value);
-    let input = Input::new()
-        .id(id.clone())
-        .value(value.clone())
-        .placeholder(placeholder)
-        .on_value_change_with_context(on_value_change)
-        .on_enter_with_context(on_enter)
-        .h(px(theme.metrics.control_height - 4.0))
-        .w(px(180.0))
-        .px(px(theme.metrics.spacing_2))
-        .flex()
-        .items_center()
-        .rounded(px(theme.metrics.radius_small))
-        .font_family(theme.typography.interface_family)
-        .text_size(px(theme.typography.caption_size))
-        .text_color(theme.colors.text.primary)
-        .style_with_state(move |state, input| {
-            input
-                .debug_selector(|| "response-search".into())
-                .bg(theme.colors.surfaces.window)
-                .border_1()
-                .border_color(if state.focused {
-                    theme.colors.borders.focused
-                } else {
-                    theme.colors.borders.standard
-                })
-        });
-    div()
-        .relative()
-        .child(input)
-        .child(variable_highlight_layer(
-            theme,
-            id,
-            value,
-            Vec::new(),
-            theme.typography.interface_family,
-            theme.typography.caption_size,
-        ))
-}
-
-fn text_input_with_variables(
-    theme: Theme,
-    id: impl Into<ElementId>,
-    value: impl Into<SharedString>,
-    placeholder: impl Into<SharedString>,
-    variables: VariableContext,
-    on_value_change: impl Fn(SharedString, &mut Window, &mut gpui::Context<InputRuntime>) + 'static,
-) -> gpui::AnyElement {
-    let id = id.into();
-    let tooltip_id =
-        ElementId::NamedChild(Arc::new(id.clone()), SharedString::from("variable-tooltip"));
-    let value = single_line(value);
-    let input = Input::new()
-        .id(id.clone())
-        .value(value.clone())
-        .placeholder(placeholder)
-        .on_value_change_with_context(on_value_change)
-        .h(px(theme.metrics.control_height))
-        .min_w(px(0.0))
-        .px(px(theme.metrics.spacing_2))
-        .flex()
-        .items_center()
-        .rounded(px(theme.metrics.radius_small))
-        .font_family(theme.typography.monospace_family)
-        .text_size(px(theme.typography.body_size))
-        .text_color(theme.colors.text.primary)
-        .style_with_state(move |state, input| {
-            input
-                .bg(theme.colors.surfaces.window)
-                .border_1()
-                .border_color(if state.focused {
-                    theme.colors.borders.focused
-                } else {
-                    theme.colors.borders.standard
-                })
-        });
-    variable_input_overlay(theme, id, tooltip_id, input, value, variables)
+    ProbeTextInput {
+        theme,
+        id: id.into(),
+        value: single_line(value),
+        placeholder: placeholder.into(),
+        variables: VariableContext::default(),
+        font_family: theme.typography.interface_family,
+        text_size: theme.typography.caption_size,
+        height: theme.metrics.control_height - 4.0,
+        width: Some(180.0),
+        debug_selector: Some("response-search"),
+        on_change: Rc::new(on_value_change),
+        on_enter: Some(Rc::new(on_enter)),
+    }
 }
 
 pub(crate) fn editor_button(
@@ -238,9 +297,9 @@ pub(crate) fn editor_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let label = label.into();
-    ButtonRoot::new()
-        .id(id)
-        .h(px(30.0))
+    Button::new(id)
+        .selected(selected)
+        .h(px(theme.metrics.control_height))
         .px(px(theme.metrics.spacing_2))
         .flex()
         .items_center()
@@ -252,25 +311,61 @@ pub(crate) fn editor_button(
         } else {
             theme.colors.text.secondary
         })
-        .on_click(on_click)
-        .style_with_state(move |state, button| {
-            button
-                .bg(if selected {
-                    theme.colors.selection.active_background
-                } else {
-                    theme.colors.surfaces.window
-                })
-                .border_1()
-                .border_color(if state.focused {
-                    theme.colors.borders.focused
-                } else {
-                    theme.colors.borders.standard
-                })
-                .cursor_pointer()
-                .when(!selected, |button| {
-                    button.hover(move |button| button.bg(theme.colors.surfaces.raised))
-                })
+        .bg(if selected {
+            theme.colors.selection.active_background
+        } else {
+            theme.colors.surfaces.window
         })
+        .border_1()
+        .border_color(theme.colors.borders.standard)
+        .cursor_pointer()
+        .hover(move |button| {
+            if selected {
+                button
+            } else {
+                button.bg(theme.colors.surfaces.raised)
+            }
+        })
+        .focus(move |button| button.border_color(theme.colors.borders.focused))
+        .on_click(on_click)
+        .child(label)
+}
+
+pub(crate) fn text_tab(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<String>,
+    selected: bool,
+    position: usize,
+    size: usize,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Button {
+    let label = label.into();
+    Button::new(id)
+        .role(Role::Tab)
+        .selected(selected)
+        .aria_selected(selected)
+        .aria_position_in_set(position)
+        .aria_size_of_set(size)
+        .h(px(28.0))
+        .px(px(theme.metrics.spacing_2))
+        .flex()
+        .items_center()
+        .text_size(px(theme.typography.caption_size))
+        .text_color(if selected {
+            theme.colors.text.primary
+        } else {
+            theme.colors.text.secondary
+        })
+        .border_b_2()
+        .border_color(if selected {
+            theme.colors.borders.focused
+        } else {
+            theme.colors.surfaces.editor
+        })
+        .when(selected, |tab| tab.font_weight(FontWeight::SEMIBOLD))
+        .cursor_pointer()
+        .on_click(on_click)
         .child(label)
 }
 
@@ -281,28 +376,21 @@ pub(crate) fn remove_row_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let color = theme.colors.text.secondary;
-    ButtonRoot::new()
-        .id(id)
-        .aria_label(aria_label)
+    Button::new(id)
+        .accessibility_label(aria_label)
         .w(px(30.0))
-        .h(px(30.0))
+        .h(px(theme.metrics.control_height))
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(theme.metrics.radius_small))
+        .bg(theme.colors.surfaces.window)
+        .border_1()
+        .border_color(theme.colors.borders.standard)
+        .cursor_pointer()
+        .hover(move |button| button.bg(theme.colors.surfaces.raised))
+        .focus(move |button| button.border_color(theme.colors.borders.focused))
         .on_click(on_click)
-        .style_with_state(move |state, button| {
-            button
-                .bg(theme.colors.surfaces.window)
-                .border_1()
-                .border_color(if state.focused {
-                    theme.colors.borders.focused
-                } else {
-                    theme.colors.borders.standard
-                })
-                .cursor_pointer()
-                .hover(move |button| button.bg(theme.colors.surfaces.raised))
-        })
         .child(trash_icon(color))
 }
 
@@ -365,137 +453,243 @@ pub(crate) fn dropdown_with_option_colors<T: Clone + Eq + 'static>(
     width: f32,
     on_value_change: impl Fn(Option<&T>, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let option_colors = Rc::new(
-        options
-            .iter()
-            .filter_map(|(value, _, color)| color.map(|color| (value.clone(), color)))
-            .collect::<Vec<_>>(),
-    );
-    let mut list = SelectList::new().flex().flex_col().gap(px(2.0));
-    for (index, (value, label, color)) in options.into_iter().enumerate() {
-        let color = color.unwrap_or(theme.colors.text.primary);
-        list = list.child(
-            SelectItem::new()
-                .id(format!("{id}-item-{index}"))
-                .value(value)
-                .label(label.clone())
-                .h(px(30.0))
-                .px(px(theme.metrics.spacing_2))
-                .flex()
-                .items_center()
-                .gap(px(theme.metrics.spacing_2))
-                .overflow_hidden()
-                .rounded(px(theme.metrics.radius_small))
-                .text_color(color)
-                .style_with_state(move |state, item| {
-                    item.debug_selector(move || format!("{id}-item-{index}"))
-                        .when(state.highlighted, |item| {
-                            item.bg(theme.colors.surfaces.sidebar)
-                        })
-                })
-                .child(
-                    SelectItemIndicator::new()
-                        .keep_mounted(true)
-                        .flex_none()
-                        .w(px(14.0))
-                        .style_with_state(|state, indicator| {
-                            if state.selected {
-                                indicator
-                            } else {
-                                indicator.invisible()
-                            }
-                        })
-                        .child("✓"),
-                )
-                .child(
-                    SelectItemText::new()
-                        .text(label)
-                        .min_w(px(0.0))
-                        .flex_1()
-                        .truncate(),
-                ),
-        );
+    ProbeDropdown {
+        theme,
+        id,
+        aria_label,
+        value,
+        options,
+        width,
+        on_value_change: Rc::new(on_value_change),
     }
+}
 
-    let value_colors = option_colors;
-    SelectRoot::<T>::new()
-        .id(id)
-        .value(value)
-        .on_value_change(move |value, _, window, cx| on_value_change(value, window, cx))
-        .w(px(width))
-        .child(
-            SelectTrigger::new()
-                .id(format!("{id}-trigger"))
-                .aria_label(aria_label)
-                .w_full()
-                .h(px(30.0))
-                .px(px(theme.metrics.spacing_2))
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(theme.metrics.spacing_1))
-                .overflow_hidden()
-                .rounded(px(theme.metrics.radius_small))
-                .bg(theme.colors.surfaces.window)
-                .border_1()
-                .border_color(theme.colors.borders.standard)
-                .text_color(theme.colors.text.primary)
-                .style_with_state(move |state, trigger| {
-                    trigger
-                        .debug_selector(move || format!("{id}-trigger"))
-                        .border_color(if state.root.focused {
-                            theme.colors.borders.focused
-                        } else {
-                            theme.colors.borders.standard
-                        })
-                        .when(!state.root.open, |trigger| {
-                            trigger.hover(move |trigger| trigger.bg(theme.colors.surfaces.raised))
-                        })
-                })
-                .child(
-                    SelectValue::new()
-                        .placeholder("None")
-                        .min_w(px(0.0))
-                        .flex_1()
-                        .truncate()
-                        .style_with_state(move |state, value| {
-                            let color = state
-                                .selected_value
-                                .as_ref()
-                                .and_then(|selected| {
-                                    value_colors
-                                        .iter()
-                                        .find(|(value, _)| value == selected)
-                                        .map(|(_, color)| *color)
-                                })
-                                .unwrap_or(theme.colors.text.primary);
-                            value.text_color(color)
-                        }),
-                )
-                .child(
-                    SelectIcon::new()
-                        .flex_none()
-                        .text_color(theme.colors.text.muted)
-                        .child("▾"),
-                ),
-        )
-        .child(
-            SelectPortal::<T>::new().child(
-                SelectPositioner::new()
-                    .side_offset(px(theme.metrics.spacing_1))
-                    .child(
-                        SelectPopup::new()
-                            .w(px(width.max(160.0)))
-                            .p(px(theme.metrics.spacing_1))
-                            .rounded(px(theme.metrics.radius_medium))
-                            .bg(theme.colors.surfaces.overlay)
-                            .border_1()
-                            .border_color(theme.colors.borders.standard)
-                            .style_with_state(|_, popup| popup.occlude())
-                            .child(list),
-                    ),
-            ),
-        )
+#[derive(IntoElement)]
+struct ProbeDropdown<T: Clone + Eq + 'static> {
+    theme: Theme,
+    id: &'static str,
+    aria_label: &'static str,
+    value: Option<T>,
+    options: Vec<(T, String, Option<gpui::Rgba>)>,
+    width: f32,
+    on_value_change: DropdownChangeHandler<T>,
+}
+
+#[derive(Debug)]
+struct DropdownState {
+    open: bool,
+    highlighted: usize,
+}
+
+impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let selected_index = self
+            .value
+            .as_ref()
+            .and_then(|selected| {
+                self.options
+                    .iter()
+                    .position(|(value, _, _)| value == selected)
+            })
+            .unwrap_or(0);
+        let state =
+            window.use_keyed_state(ElementId::from(format!("{}-state", self.id)), cx, |_, _| {
+                DropdownState {
+                    open: false,
+                    highlighted: selected_index,
+                }
+            });
+        state.update(cx, |state, _| {
+            if state.highlighted >= self.options.len() {
+                state.highlighted = selected_index;
+            }
+        });
+        let open = state.read(cx).open;
+        let parent = window.current_view();
+        let selected_label = self
+            .value
+            .as_ref()
+            .and_then(|selected| {
+                self.options
+                    .iter()
+                    .find(|(value, _, _)| value == selected)
+                    .map(|(_, label, _)| label.clone())
+            })
+            .unwrap_or_else(|| "None".to_owned());
+        let selected_color = self
+            .value
+            .as_ref()
+            .and_then(|selected| {
+                self.options
+                    .iter()
+                    .find(|(value, _, _)| value == selected)
+                    .and_then(|(_, _, color)| *color)
+            })
+            .unwrap_or(self.theme.colors.text.primary);
+        let theme = self.theme;
+        let id = self.id;
+        let option_count = self.options.len();
+        let option_focus_handles = (0..option_count)
+            .map(|index| {
+                window
+                    .use_keyed_state(format!("{id}-item-{index}-focus"), cx, |_, cx| {
+                        cx.focus_handle()
+                    })
+                    .read(cx)
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        let trigger = Button::new(format!("{id}-trigger"))
+            .role(Role::ComboBox)
+            .accessibility_label(self.aria_label)
+            .selected(open)
+            .aria_expanded(open)
+            .w_full()
+            .h(px(theme.metrics.control_height))
+            .px(px(theme.metrics.spacing_2))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(theme.metrics.spacing_1))
+            .overflow_hidden()
+            .rounded(px(theme.metrics.radius_small))
+            .bg(theme.colors.surfaces.window)
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .text_color(selected_color)
+            .debug_selector(move || format!("{id}-trigger"))
+            .hover(move |trigger| trigger.bg(theme.colors.surfaces.raised))
+            .focus(move |trigger| trigger.border_color(theme.colors.borders.focused))
+            .child(truncated_label(selected_label).min_w(px(0.0)).flex_1())
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(theme.colors.text.muted)
+                    .child(if open { "▴" } else { "▾" }),
+            );
+        let options = Rc::new(self.options);
+        let selected_value = self.value;
+        let on_value_change = self.on_value_change;
+        Popover::new(id)
+            .open(open)
+            .on_open_change({
+                let state = state.clone();
+                move |next, _, cx| {
+                    state.update(cx, |state, _| {
+                        state.open = *next;
+                        if *next {
+                            state.highlighted = selected_index;
+                        }
+                    });
+                    cx.notify(parent);
+                }
+            })
+            .trigger(trigger)
+            .content(move |popover_state, _window, cx| {
+                let list_focus = popover_state.focus_handle(cx);
+                let popover = cx.entity();
+                let values = options.clone();
+                let confirm_handler = on_value_change.clone();
+                let confirm_state = state.clone();
+                let mut list = div()
+                    .track_focus(&list_focus)
+                    .key_context("Select")
+                    .on_action({
+                        let state = state.clone();
+                        let handles = option_focus_handles.clone();
+                        move |_: &SelectDown, window, cx| {
+                            if handles.is_empty() {
+                                return;
+                            }
+                            let next = state.update(cx, |state, _| {
+                                state.highlighted = (state.highlighted + 1) % handles.len();
+                                state.highlighted
+                            });
+                            handles[next].focus(window, cx);
+                        }
+                    })
+                    .on_action({
+                        let state = state.clone();
+                        let handles = option_focus_handles.clone();
+                        move |_: &SelectUp, window, cx| {
+                            if handles.is_empty() {
+                                return;
+                            }
+                            let next = state.update(cx, |state, _| {
+                                state.highlighted =
+                                    (state.highlighted + handles.len() - 1) % handles.len();
+                                state.highlighted
+                            });
+                            handles[next].focus(window, cx);
+                        }
+                    })
+                    .on_action(move |_: &Confirm, window, cx| {
+                        let index = confirm_state.read(cx).highlighted;
+                        if let Some((value, _, _)) = values.get(index) {
+                            confirm_handler(Some(value), window, cx);
+                            popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                            cx.notify(parent);
+                        }
+                    })
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .w(px(self.width.max(160.0)))
+                    .p(px(theme.metrics.spacing_1))
+                    .rounded(px(theme.metrics.radius_medium))
+                    .bg(theme.colors.surfaces.overlay)
+                    .border_1()
+                    .border_color(theme.colors.borders.standard);
+                for (index, (value, label, color)) in options.iter().enumerate() {
+                    let color = color.unwrap_or(theme.colors.text.primary);
+                    let selected = selected_value.as_ref() == Some(value);
+                    let on_value_change = on_value_change.clone();
+                    let value = value.clone();
+                    let popover = cx.entity();
+                    let focus_handle = option_focus_handles[index].clone();
+                    list = list.child(
+                        Button::new(format!("{id}-item-{index}"))
+                            .role(Role::ListBoxOption)
+                            .aria_selected(selected)
+                            .track_focus(&focus_handle)
+                            .w_full()
+                            .h(px(28.0))
+                            .px(px(theme.metrics.spacing_2))
+                            .flex()
+                            .items_center()
+                            .gap(px(theme.metrics.spacing_2))
+                            .overflow_hidden()
+                            .rounded(px(theme.metrics.radius_small))
+                            .text_color(color)
+                            .debug_selector(move || format!("{id}-item-{index}"))
+                            .hover(move |item| {
+                                item.bg(theme.colors.surfaces.sidebar).cursor_pointer()
+                            })
+                            .on_click(move |_, window, cx| {
+                                on_value_change(Some(&value), window, cx);
+                                popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                                cx.notify(parent);
+                            })
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(px(14.0))
+                                    .when(!selected, |marker| marker.invisible())
+                                    .child("✓"),
+                            )
+                            .child(truncated_label(label.clone()).min_w(px(0.0)).flex_1()),
+                    );
+                }
+                list
+            })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BodySyntax {
+    Plain,
+    Json,
+    Xml,
 }
 
 pub(crate) fn body_text_input(
@@ -503,7 +697,7 @@ pub(crate) fn body_text_input(
     id: impl Into<ElementId>,
     value: impl Into<SharedString>,
     variables: VariableContext,
-    json: bool,
+    syntax: BodySyntax,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui::AnyElement {
     let id = id.into();
@@ -511,37 +705,34 @@ pub(crate) fn body_text_input(
         ElementId::NamedChild(Arc::new(id.clone()), SharedString::from("variable-tooltip"));
     let value = value.into();
     let ranges = variable_ranges(&value);
-    let highlights = body_text_highlights(theme, &value, json, &ranges);
-    let input = MultilineInput::new()
-        .id(id)
-        .value(value)
-        .placeholder("Body content")
-        .highlights(highlights)
-        .on_value_change(move |value, window, cx| on_value_change(value, window, cx))
-        .size_full()
-        .min_h(px(120.0))
-        .p(px(theme.metrics.spacing_3))
-        .rounded(px(theme.metrics.radius_small))
-        .font_family(theme.typography.monospace_family)
-        .text_size(px(theme.typography.body_size))
-        .text_color(theme.colors.text.primary)
-        .style_with_state(move |focused, input| {
-            input
-                .bg(theme.colors.surfaces.window)
-                .border_1()
-                .border_color(if focused {
-                    theme.colors.borders.focused
-                } else {
-                    theme.colors.borders.standard
-                })
-        });
-
+    let decorations = body_text_highlights(theme, &ranges);
+    let editor = ProbeEditor {
+        theme,
+        id,
+        value: value.clone(),
+        placeholder: SharedString::from("Body content"),
+        decorations,
+        language: match syntax {
+            BodySyntax::Json => "json".into(),
+            BodySyntax::Xml => "xml".into(),
+            BodySyntax::Plain => SharedString::default(),
+        },
+        readonly: false,
+        min_height: Some(120.0),
+        padded: true,
+        soft_wrap: true,
+        text_color: theme.colors.text.primary,
+        scroll_to_offset: None,
+        on_change: Some(Rc::new(on_value_change)),
+        on_visible_range: None,
+        debug_selector: None,
+    };
     let wrapper = div()
         .id(tooltip_id)
         .relative()
         .size_full()
         .debug_selector(|| "variable-input-tooltip-trigger".into())
-        .child(input);
+        .child(editor);
     if ranges.is_empty() {
         return wrapper.into_any_element();
     }
@@ -572,53 +763,39 @@ pub(crate) fn body_text_input(
 pub(crate) fn response_body_input(
     theme: Theme,
     id: impl Into<ElementId>,
-    lines: &[ResponseLine],
+    text: &str,
     matches: &[SearchMatch],
     active_match: usize,
-    scroll: UniformListScrollHandle,
-    on_visible_range: impl Fn(std::ops::Range<usize>, &mut App) + 'static,
+    language: impl Into<SharedString>,
+    on_visible_range: impl Fn(Range<usize>, &mut App) + 'static,
 ) -> gpui::AnyElement {
-    let joined = join_display_lines(lines);
-    let mut highlights = joined
-        .syntax
-        .into_iter()
-        .map(|(range, role)| TextHighlight {
-            range,
-            color: Some(syntax_color(theme, role)),
-            background: None,
-        })
-        .collect::<Vec<_>>();
+    let mut decorations = Vec::new();
+    let mut scroll_to_offset = None;
     for (index, found) in matches.iter().enumerate() {
-        if found.column != SearchColumn::Body {
-            continue;
-        }
-        let Some(&offset) = joined.line_offsets.get(found.row) else {
-            continue;
-        };
         let active = index == active_match;
-        highlights.push(TextHighlight {
-            range: offset + found.range.start..offset + found.range.end,
-            color: active.then(|| theme.colors.selection.active_foreground.into()),
-            background: Some(if active {
-                theme.colors.selection.active_background.into()
-            } else {
-                theme.colors.selection.inactive_background.into()
-            }),
-        });
+        if active {
+            scroll_to_offset = Some(found.range.start);
+        }
+        decorations.push(search_match_decoration(theme, found.range.clone(), active));
     }
-    MultilineInput::new()
-        .id(id)
-        .value(joined.text)
-        .read_only()
-        .highlights(highlights)
-        .track_scroll(scroll)
-        .on_visible_range(on_visible_range)
-        .size_full()
-        .min_h(px(0.0))
-        .font_family(theme.typography.monospace_family)
-        .text_size(px(theme.typography.body_size))
-        .text_color(theme.colors.syntax.plain)
-        .into_any_element()
+    ProbeEditor {
+        theme,
+        id: id.into(),
+        value: text.to_owned().into(),
+        placeholder: SharedString::default(),
+        decorations,
+        language: language.into(),
+        readonly: true,
+        min_height: None,
+        padded: true,
+        soft_wrap: false,
+        text_color: theme.colors.syntax.plain,
+        scroll_to_offset,
+        on_change: None,
+        on_visible_range: Some(Rc::new(on_visible_range)),
+        debug_selector: None,
+    }
+    .into_any_element()
 }
 
 pub(crate) fn response_headers_input(
@@ -627,103 +804,261 @@ pub(crate) fn response_headers_input(
     headers: &[probe_http::ResponseHeader],
     matches: &[SearchMatch],
     active_match: usize,
-    scroll: UniformListScrollHandle,
-    on_visible_range: impl Fn(std::ops::Range<usize>, &mut App) + 'static,
+    on_visible_range: impl Fn(Range<usize>, &mut App) + 'static,
 ) -> gpui::AnyElement {
     let joined = join_header_lines(headers);
-    let mut highlights = Vec::new();
+    let mut decorations = Vec::new();
     for (offset, name_len) in joined.line_offsets.iter().zip(&joined.name_lens) {
-        highlights.push(TextHighlight {
-            range: *offset..*offset + name_len,
-            color: Some(theme.colors.text.secondary.into()),
-            background: None,
-        });
+        decorations.push(text_decoration(
+            *offset..*offset + name_len,
+            Some(theme.colors.text.secondary.into()),
+            None,
+        ));
     }
+    let mut scroll_to_offset = None;
     for (index, found) in matches.iter().enumerate() {
-        let Some(&line_start) = joined.line_offsets.get(found.row) else {
-            continue;
-        };
-        let range = match found.column {
-            SearchColumn::HeaderName => {
-                line_start + found.range.start..line_start + found.range.end
-            }
-            SearchColumn::HeaderValue => {
-                let value_start = line_start + joined.name_lens[found.row] + HEADER_SEPARATOR.len();
-                value_start + found.range.start..value_start + found.range.end
-            }
-            SearchColumn::Body => continue,
-        };
         let active = index == active_match;
-        highlights.push(TextHighlight {
-            range,
-            color: active.then(|| theme.colors.selection.active_foreground.into()),
-            background: Some(if active {
-                theme.colors.selection.active_background.into()
-            } else {
-                theme.colors.selection.inactive_background.into()
-            }),
-        });
+        if active {
+            scroll_to_offset = Some(found.range.start);
+        }
+        decorations.push(search_match_decoration(theme, found.range.clone(), active));
     }
-    MultilineInput::new()
-        .id(id)
-        .value(joined.text)
-        .read_only()
-        .highlights(highlights)
-        .track_scroll(scroll)
-        .on_visible_range(on_visible_range)
-        .size_full()
-        .min_h(px(0.0))
-        .font_family(theme.typography.monospace_family)
-        .text_size(px(theme.typography.body_size))
-        .text_color(theme.colors.text.primary)
-        .into_any_element()
+    ProbeEditor {
+        theme,
+        id: id.into(),
+        value: joined.text.into(),
+        placeholder: SharedString::default(),
+        decorations,
+        language: SharedString::default(),
+        readonly: true,
+        min_height: None,
+        padded: true,
+        soft_wrap: false,
+        text_color: theme.colors.text.primary,
+        scroll_to_offset,
+        on_change: None,
+        on_visible_range: Some(Rc::new(on_visible_range)),
+        debug_selector: None,
+    }
+    .into_any_element()
 }
 
-fn body_text_highlights(
+struct EditorField {
+    state: Entity<EditorState>,
+    decorations: TextDecorationCollection,
+    last_decorations: Vec<TextDecoration>,
+    on_change: Option<InputChangeHandler>,
+    last_scroll_offset: Option<usize>,
+    language: SharedString,
+    _subscription: Subscription,
+}
+
+impl EditorField {
+    fn on_event(
+        this: &mut Self,
+        input: &Entity<EditorState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, InputEvent::Change)
+            && let Some(on_change) = this.on_change.clone()
+        {
+            on_change(input.read(cx).value(), window, cx);
+        }
+    }
+}
+
+/// gpui-base paints caret, selection, and gutter from `InputEditorStyle`.
+/// Its `Default` is fully transparent, so Probe must supply visible tokens.
+fn editor_paint_style(theme: Theme) -> InputEditorStyle {
+    InputEditorStyle {
+        foreground: theme.colors.text.primary.into(),
+        muted_foreground: theme.colors.text.muted.into(),
+        background: theme.colors.surfaces.window.into(),
+        border: theme.colors.borders.standard.into(),
+        selection: match theme.appearance {
+            ThemeAppearance::Light => hsla(0.6, 0.8, 0.7, 0.45),
+            ThemeAppearance::Dark => hsla(0.6, 0.45, 0.45, 0.45),
+        },
+        caret: theme.colors.text.primary.into(),
+        highlight_styles: Arc::new(crate::syntax::ProbeHighlightStyles::new(theme)),
+        ..Default::default()
+    }
+}
+
+#[derive(IntoElement)]
+struct ProbeEditor {
     theme: Theme,
-    value: &str,
-    json: bool,
-    variables: &[(std::ops::Range<usize>, String)],
-) -> Vec<TextHighlight> {
-    let mut highlights = Vec::new();
-    if json {
-        highlights.extend(
-            highlight_json(value)
-                .into_iter()
-                .map(|(range, role)| TextHighlight {
-                    range,
-                    color: Some(syntax_color(theme, role)),
-                    background: None,
-                }),
-        );
-    }
-    for (range, _) in variables {
-        highlights.push(TextHighlight {
-            range: range.clone(),
-            color: Some(theme.colors.syntax.string.into()),
-            background: None,
-        });
-    }
-    highlights
+    id: ElementId,
+    value: SharedString,
+    placeholder: SharedString,
+    decorations: Vec<TextDecoration>,
+    language: SharedString,
+    readonly: bool,
+    min_height: Option<f32>,
+    padded: bool,
+    soft_wrap: bool,
+    text_color: gpui::Rgba,
+    scroll_to_offset: Option<usize>,
+    on_change: Option<InputChangeHandler>,
+    on_visible_range: Option<VisibleRangeHandler>,
+    debug_selector: Option<&'static str>,
 }
 
-fn syntax_color(theme: Theme, role: SyntaxRole) -> Hsla {
-    let color = match role {
-        SyntaxRole::Property => theme.colors.syntax.property,
-        SyntaxRole::String => theme.colors.syntax.string,
-        SyntaxRole::Number => theme.colors.syntax.number,
-        SyntaxRole::Boolean => theme.colors.syntax.boolean,
-        SyntaxRole::Null => theme.colors.syntax.null,
-        SyntaxRole::Punctuation => theme.colors.syntax.punctuation,
-    };
-    color.into()
+impl RenderOnce for ProbeEditor {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let placeholder = self.placeholder.clone();
+        let on_change = self.on_change.clone();
+        let soft_wrap = self.soft_wrap;
+        let language = self.language.clone();
+        let field = window.use_keyed_state(self.id.clone(), cx, |window, cx| {
+            let state = cx.new(|cx| {
+                let mut editor = EditorState::new(window, cx)
+                    .placeholder(placeholder.clone())
+                    .folding(false)
+                    .searchable(false)
+                    .soft_wrap(soft_wrap)
+                    .language(language.clone());
+                editor.set_highlighter_factory(crate::syntax::factory(), cx);
+                editor.set_editor_style(editor_paint_style(self.theme));
+                editor
+            });
+            state.update(cx, |editor, cx| {
+                editor.set_readonly(self.readonly, cx);
+                editor.set_value(self.value.clone(), window, cx);
+            });
+            let decorations = state.update(cx, |editor, cx| {
+                editor.create_decorations_collection(Vec::new(), cx)
+            });
+            let subscription = cx.subscribe_in(&state, window, EditorField::on_event);
+            EditorField {
+                state,
+                decorations,
+                last_decorations: Vec::new(),
+                on_change: on_change.clone(),
+                last_scroll_offset: None,
+                language: language.clone(),
+                _subscription: subscription,
+            }
+        });
+        field.update(cx, |field, cx| {
+            field.on_change = self.on_change.clone();
+            let language_changed = field.language != self.language;
+            if language_changed {
+                field.language = self.language.clone();
+            }
+            field.state.update(cx, |editor, cx| {
+                editor.set_editor_style(editor_paint_style(self.theme));
+                editor.set_readonly(self.readonly, cx);
+                if language_changed {
+                    editor.set_highlighter(self.language.clone(), cx);
+                }
+                if editor.value() != self.value {
+                    editor.set_value(self.value.clone(), window, cx);
+                }
+            });
+            if field.last_decorations != self.decorations {
+                field.last_decorations = self.decorations.clone();
+                field.decorations.set(self.decorations.clone(), cx);
+            }
+            if self.scroll_to_offset != field.last_scroll_offset {
+                if let Some(offset) = self.scroll_to_offset {
+                    let laid_out = field.state.read(cx).visible_row_range().is_some();
+                    field.state.update(cx, |editor, cx| {
+                        editor.set_selected_range(offset..offset, cx);
+                    });
+                    if laid_out {
+                        field.last_scroll_offset = self.scroll_to_offset;
+                    }
+                } else {
+                    field.last_scroll_offset = None;
+                }
+            }
+        });
+        let state = field.read(cx).state.clone();
+        if let Some(on_visible_range) = self.on_visible_range {
+            match state.read(cx).visible_row_range() {
+                Some(range) => on_visible_range(range, cx),
+                None => window.request_animation_frame(),
+            }
+        }
+        let focused = state.read(cx).focus_handle(cx).is_focused(window);
+        let theme = self.theme;
+        InputBase::new(self.id)
+            .size_full()
+            .when_some(self.min_height, |editor, height| editor.min_h(px(height)))
+            .when(self.padded, |editor| editor.p(px(theme.metrics.spacing_3)))
+            .overflow_hidden()
+            .rounded(px(theme.metrics.radius_small))
+            .font_family(theme.typography.monospace_family)
+            .text_size(px(theme.typography.body_size))
+            .text_color(self.text_color)
+            .bg(theme.colors.surfaces.window)
+            .border_1()
+            .border_color(if focused {
+                theme.colors.borders.focused
+            } else {
+                theme.colors.borders.standard
+            })
+            .focused(focused)
+            .styles(move |styles| {
+                styles.focused(move |editor| editor.border_color(theme.colors.borders.focused))
+            })
+            .when_some(self.debug_selector, |editor, selector| {
+                editor.debug_selector(move || selector.into())
+            })
+            .on_mouse_down(MouseButton::Left, {
+                let state = state.clone();
+                move |_, window, cx| {
+                    state.update(cx, |editor, cx| editor.focus(window, cx));
+                }
+            })
+            .child(div().size_full().child(Editor::new(&state)))
+    }
+}
+
+fn body_text_highlights(theme: Theme, variables: &[(Range<usize>, String)]) -> Vec<TextDecoration> {
+    variables
+        .iter()
+        .map(|(range, _)| {
+            text_decoration(range.clone(), Some(theme.colors.syntax.string.into()), None)
+        })
+        .collect()
+}
+
+fn search_match_decoration(theme: Theme, range: Range<usize>, active: bool) -> TextDecoration {
+    text_decoration(
+        range,
+        active.then(|| theme.colors.selection.active_foreground.into()),
+        Some(if active {
+            theme.colors.selection.active_background.into()
+        } else {
+            theme.colors.selection.inactive_background.into()
+        }),
+    )
+}
+
+fn text_decoration(
+    range: Range<usize>,
+    color: Option<Hsla>,
+    background: Option<Hsla>,
+) -> TextDecoration {
+    TextDecoration::new(
+        range,
+        HighlightStyle {
+            color,
+            background_color: background,
+            ..Default::default()
+        },
+    )
 }
 
 fn variable_input_overlay(
     theme: Theme,
-    input_id: ElementId,
+    state: Entity<InputState>,
     tooltip_id: ElementId,
-    input: Input,
+    input: impl IntoElement,
     value: SharedString,
     variables: VariableContext,
 ) -> gpui::AnyElement {
@@ -739,7 +1074,7 @@ fn variable_input_overlay(
         .child(input)
         .child(variable_highlight_layer(
             theme,
-            input_id,
+            state,
             value,
             ranges.clone(),
             theme.typography.monospace_family,
@@ -772,12 +1107,9 @@ fn variable_input_overlay(
         .into_any_element()
 }
 
-/// Must match the keyed-state child id used by `base_gpui` `Input`.
-const INPUT_RUNTIME_STATE_KEY: &str = "state";
-
 fn variable_highlight_layer(
     theme: Theme,
-    input_id: ElementId,
+    state: Entity<InputState>,
     value: SharedString,
     ranges: Vec<(Range<usize>, String)>,
     font_family: &'static str,
@@ -806,8 +1138,7 @@ fn variable_highlight_layer(
             layer.debug_selector(|| "variable-highlight-overlay".into())
         })
         .child(VariableHighlightElement {
-            input_id: Some(input_id),
-            state: None,
+            state,
             value,
             ranges: ranges.into_iter().map(|(range, _)| range).collect(),
             highlight_color,
@@ -817,8 +1148,7 @@ fn variable_highlight_layer(
 }
 
 struct VariableHighlightElement {
-    input_id: Option<ElementId>,
-    state: Option<Entity<InputRuntime>>,
+    state: Entity<InputState>,
     value: SharedString,
     ranges: Vec<Range<usize>>,
     highlight_color: Hsla,
@@ -876,10 +1206,10 @@ impl Element for VariableHighlightElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let state = self.input_runtime(window, cx);
-        let cursor = state.read(cx).cursor_offset();
+        let state = self.state.clone();
+        let cursor = state.read(cx).cursor();
         let selected_range = state.read(cx).selected_range();
-        let focused = state.read(cx).is_focused(window);
+        let focused = state.read(cx).focus_handle(cx).is_focused(window);
         let style = window.text_style();
         let display = single_line(self.value.clone());
         let run = TextRun {
@@ -956,36 +1286,8 @@ impl Element for VariableHighlightElement {
     }
 }
 
-impl VariableHighlightElement {
-    fn input_runtime(&self, window: &mut Window, cx: &mut App) -> Entity<InputRuntime> {
-        if let Some(state) = self.state.clone() {
-            return state;
-        }
-        let input_id = self
-            .input_id
-            .clone()
-            .expect("variable highlight needs the input id or a runtime");
-        let value = self.value.clone();
-        // `Input::render` looks up keyed state from inside ViewElement's
-        // `type_name::<Input>()` namespace. Replay that namespace so this
-        // sibling reads the same `InputRuntime` the field is editing.
-        window.with_id(
-            ElementId::Name(std::any::type_name::<Input>().into()),
-            |window| {
-                let state_id = ElementId::NamedChild(
-                    Arc::new(input_id),
-                    SharedString::from(INPUT_RUNTIME_STATE_KEY),
-                );
-                window.use_keyed_state(state_id, cx, |window, cx| {
-                    InputRuntime::new(value, window, cx)
-                })
-            },
-        )
-    }
-}
-
-/// Matches `InputTextElement` in gpui-base: shift the painted line left when the
-/// caret would otherwise sit past the visible width.
+/// Matches Longbridge gpui-base single-line input: shift the painted line left
+/// when the caret would otherwise sit past the visible width.
 fn variable_highlight_runs(
     value: &str,
     ranges: &[Range<usize>],
@@ -1087,8 +1389,7 @@ pub fn menu_button(
             pointer_activate(window, cx);
         })
         .child(
-            ButtonRoot::new()
-                .id(id)
+            Button::new(id)
                 .w_full()
                 .h(px(32.0))
                 .px(px(theme.metrics.spacing_3))
@@ -1100,24 +1401,15 @@ pub fn menu_button(
                 .font_family(theme.typography.interface_family)
                 .text_size(px(theme.typography.body_size))
                 .text_color(theme.colors.text.primary)
+                .border_1()
+                .border_color(theme.colors.surfaces.overlay)
+                .cursor_pointer()
+                .hover(move |button| button.bg(theme.colors.surfaces.sidebar))
+                .focus(move |button| button.border_color(theme.colors.borders.focused))
                 .on_click(move |event, window, cx| {
                     if !matches!(event, ClickEvent::Mouse(_)) {
                         keyboard_activate(window, cx);
                     }
-                })
-                .style_with_state(move |state, button| {
-                    button
-                        .border_1()
-                        .border_color(if state.focused {
-                            theme.colors.borders.focused
-                        } else {
-                            theme.colors.surfaces.overlay
-                        })
-                        .when(!state.disabled, |button| {
-                            button
-                                .cursor_pointer()
-                                .hover(move |button| button.bg(theme.colors.surfaces.sidebar))
-                        })
                 })
                 .child(truncated_label(label.into()).w_full()),
         )
@@ -1131,40 +1423,36 @@ pub fn switch(
     on_checked_change: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let label = label.into();
-    SwitchRoot::new()
-        .id(id)
-        .checked(Some(checked))
-        .aria_label(label)
-        .w(px(38.0))
-        .h(px(22.0))
-        .p(px(2.0))
+    Switch::new(id)
+        .checked(checked)
+        .accessibility_label(label)
+        .w(px(36.0))
+        .h(px(20.0))
         .flex()
         .items_center()
-        .rounded(px(11.0))
-        .on_checked_change(move |value, _, window, cx| on_checked_change(value, window, cx))
-        .style_with_state(move |state, root| {
-            root.bg(if state.checked {
-                theme.colors.actions.accent
-            } else {
-                theme.colors.actions.disabled
-            })
-            .border_1()
-            .border_color(if state.focused {
-                theme.colors.borders.focused
-            } else {
-                theme.colors.borders.standard
-            })
-            .when(!state.disabled, |root| root.cursor_pointer())
-        })
+        .cursor_pointer()
+        .on_change(move |value, _, window, cx| on_checked_change(value, window, cx))
         .child(
-            SwitchThumb::new()
-                .size(px(16.0))
-                .rounded(px(8.0))
-                .style_with_state(move |state, thumb| {
-                    thumb
-                        .bg(theme.colors.surfaces.raised)
-                        .when(state.root.checked, |thumb| thumb.ml(px(16.0)))
-                }),
+            SwitchTrack::new("switch-track")
+                .checked(checked)
+                .w(px(36.0))
+                .h(px(20.0))
+                .p(px(2.0))
+                .flex()
+                .items_center()
+                .rounded(px(9999.0))
+                .bg(if checked {
+                    theme.colors.actions.accent
+                } else {
+                    theme.colors.borders.standard
+                })
+                .child(
+                    SwitchThumb::new(checked)
+                        .size(px(16.0))
+                        .rounded(px(8.0))
+                        .bg(theme.colors.text.inverse)
+                        .ml(if checked { px(16.0) } else { px(0.0) }),
+                ),
         )
 }
 
@@ -1173,54 +1461,40 @@ pub(crate) fn pane_layout_toggle(
     layout: PaneLayout,
     on_change: impl Fn(PaneLayout, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let selected = match layout {
-        PaneLayout::Vertical => "vertical",
-        PaneLayout::Horizontal => "horizontal",
-    };
-    let item = move |index: usize, value: &'static str, label: &'static str, layout: PaneLayout| {
-        Toggle::new()
-            .id(("pane-layout", index))
-            .value(value)
-            .aria_label(label)
+    let on_change = Rc::new(on_change);
+    let item = |index: usize, label: &'static str, item_layout: PaneLayout| {
+        let pressed = layout == item_layout;
+        let color = if pressed {
+            theme.colors.selection.active_foreground
+        } else {
+            theme.colors.text.secondary
+        };
+        let on_change = on_change.clone();
+        Toggle::new(("pane-layout", index))
+            .pressed(pressed)
+            .accessibility_label(label)
             .w(px(30.0))
             .h(px(26.0))
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(theme.metrics.radius_small))
-            .style_with_state(move |state, toggle| {
-                let color = if state.pressed {
-                    theme.colors.selection.active_foreground
-                } else {
-                    theme.colors.text.secondary
-                };
-                toggle
-                    .text_color(color)
-                    .when(state.pressed, |toggle| {
-                        toggle.bg(theme.colors.selection.active_background)
-                    })
-                    .when(!state.pressed, |toggle| {
-                        toggle.hover(move |toggle| toggle.bg(theme.colors.surfaces.raised))
-                    })
-                    .child(pane_layout_icon(layout, color))
+            .text_color(color)
+            .when(pressed, |toggle| {
+                toggle.bg(theme.colors.selection.active_background)
             })
+            .when(!pressed, |toggle| {
+                toggle.hover(move |toggle| toggle.bg(theme.colors.surfaces.raised))
+            })
+            .on_change(move |next, _, window, cx| {
+                if next {
+                    on_change(item_layout, window, cx);
+                }
+            })
+            .child(pane_layout_icon(item_layout, color))
     };
 
-    ToggleGroup::<&'static str>::new()
-        .id("pane-layout-toggle")
-        .aria_label("Request and response layout")
-        .value(vec![selected])
-        .on_value_change(move |values, _, window, cx| {
-            let Some(value) = values.first() else {
-                return;
-            };
-            let layout = if *value == "horizontal" {
-                PaneLayout::Horizontal
-            } else {
-                PaneLayout::Vertical
-            };
-            on_change(layout, window, cx);
-        })
+    ToggleGroup::new("pane-layout-toggle")
         .p(px(2.0))
         .flex()
         .gap(px(2.0))
@@ -1230,13 +1504,11 @@ pub(crate) fn pane_layout_toggle(
         .bg(theme.colors.surfaces.window)
         .child(item(
             0,
-            "vertical",
             "Stack response below request",
             PaneLayout::Vertical,
         ))
         .child(item(
             1,
-            "horizontal",
             "Place response beside request",
             PaneLayout::Horizontal,
         ))
@@ -1263,21 +1535,18 @@ fn pane_layout_icon(layout: PaneLayout, color: gpui::Rgba) -> gpui::Div {
 
 #[cfg(test)]
 mod tests {
-    use base_gpui::{
-        popover::{PopoverPopup, PopoverPortal, PopoverPositioner, PopoverRoot, PopoverTrigger},
-        primitives::input::{InputHome, InputRuntime},
-    };
     use gpui::{
-        AppContext as _, Context, Entity, IntoElement, Modifiers, Render, SharedString,
+        AppContext as _, Context, Entity, Hsla, IntoElement, Modifiers, Render, SharedString,
         TestAppContext, VisualTestContext, div, hsla, point, prelude::*, px, size,
         transparent_black,
     };
+    use gpui_base::{Button, Popover, input::InputState};
 
     use super::{
-        VariableHighlightElement, body_text_highlights, dropdown, input_text_scroll_offset,
-        menu_button, single_line, variable_highlight_runs, variable_ranges,
+        VariableHighlightElement, body_text_highlights, dropdown, editor_paint_style,
+        input_text_scroll_offset, menu_button, single_line, variable_highlight_runs,
+        variable_ranges,
     };
-    use crate::response_viewer::{SyntaxRole, highlight_json};
     use crate::theme::Theme;
 
     struct MenuTestView {
@@ -1295,55 +1564,49 @@ mod tests {
             let activate_view = cx.weak_entity();
 
             div().size_full().p(px(20.0)).child(
-                PopoverRoot::<()>::new()
-                    .id("menu-test-popover")
+                Popover::new("menu-test-popover")
                     .open(self.open)
-                    .on_open_change(move |open, _, _, cx| {
+                    .on_open_change(move |open, _, cx| {
                         let _ = open_view.update(cx, |view, cx| {
-                            view.open = open;
+                            view.open = *open;
                             cx.notify();
                         });
                     })
-                    .child(
-                        PopoverTrigger::new()
-                            .id("menu-test-trigger")
+                    .trigger(
+                        Button::new("menu-test-trigger")
                             .w(px(100.0))
                             .h(px(28.0))
-                            .style_with_state(|_, trigger| {
-                                trigger.debug_selector(|| "menu-test-trigger".into())
-                            })
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .debug_selector(|| "menu-test-trigger".into())
                             .child("Open"),
                     )
-                    .child(
-                        PopoverPortal::new().child(
-                            PopoverPositioner::new().child(
-                                PopoverPopup::new()
-                                    .w(px(180.0))
-                                    .style_with_state(|_, popup| {
-                                        popup.debug_selector(|| "menu-test-popup".into()).occlude()
-                                    })
-                                    .child_any(menu_button(
-                                        Theme::light(),
-                                        "menu-test-item",
-                                        "Workspace",
-                                        move |_, cx| {
-                                            let _ = activate_view.update(cx, |view, cx| {
-                                                view.activations += 1;
-                                                view.open = false;
-                                                cx.notify();
-                                            });
-                                        },
-                                    )),
-                            ),
-                        ),
-                    ),
+                    .content(move |_, _, _| {
+                        div()
+                            .id("menu-test-popup")
+                            .w(px(180.0))
+                            .debug_selector(|| "menu-test-popup".into())
+                            .child(menu_button(
+                                Theme::light(),
+                                "menu-test-item",
+                                "Workspace",
+                                move |_, cx| {
+                                    let _ = activate_view.update(cx, |view, cx| {
+                                        view.activations += 1;
+                                        view.open = false;
+                                        cx.notify();
+                                    });
+                                },
+                            ))
+                    }),
             )
         }
     }
 
     #[gpui::test]
     fn controlled_popover_menu_item_activates_on_pointer_press(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
+        cx.update(crate::theme::Theme::init);
         let window = cx.open_window(size(px(320.0), px(180.0)), |_, _| MenuTestView {
             open: false,
             activations: 0,
@@ -1435,7 +1698,7 @@ mod tests {
 
     #[gpui::test]
     fn dropdown_menu_does_not_hover_elements_underneath(cx: &mut TestAppContext) {
-        cx.update(base_gpui::init);
+        cx.update(crate::theme::Theme::init);
         let window = cx.open_window(size(px(360.0), px(280.0)), |_, _| DropdownHoverLeakView {
             value: Some("GET"),
             underlay_hovered: false,
@@ -1477,6 +1740,66 @@ mod tests {
             !hovered,
             "hovering a dropdown item should not hover the element underneath"
         );
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_click(point(px(340.0), px(260.0)), Modifiers::default());
+        visual.run_until_parked();
+        assert!(
+            visual.debug_bounds("hover-leak-select-item-3").is_none(),
+            "clicking outside should dismiss the dropdown"
+        );
+    }
+
+    #[gpui::test]
+    fn dropdown_keyboard_navigation_selects_and_dismisses(cx: &mut TestAppContext) {
+        cx.update(crate::theme::Theme::init);
+        let window = cx.open_window(size(px(360.0), px(280.0)), |_, _| DropdownHoverLeakView {
+            value: Some("GET"),
+            underlay_hovered: false,
+        });
+        cx.run_until_parked();
+
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            let trigger = visual
+                .debug_bounds("hover-leak-select-trigger")
+                .expect("select trigger should render");
+            visual.simulate_click(trigger.center(), Modifiers::default());
+            visual.run_until_parked();
+        }
+
+        cx.simulate_keystrokes(window.into(), "down enter");
+        cx.run_until_parked();
+
+        let value = window
+            .update(cx, |view, _, _| view.value)
+            .expect("test window should remain open");
+        assert_eq!(value, Some("POST"));
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            visual.debug_bounds("hover-leak-select-item-1").is_none(),
+            "keyboard selection should dismiss the dropdown"
+        );
+    }
+
+    #[test]
+    fn editor_paint_style_uses_visible_caret_and_gallery_selection() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let style = editor_paint_style(theme);
+            assert!(
+                style.caret.a > 0.0,
+                "gpui-base default caret is transparent"
+            );
+            assert!(
+                style.selection.a > 0.0,
+                "gpui-base default selection is transparent"
+            );
+            assert_eq!(style.foreground, theme.colors.text.primary.into());
+            assert_eq!(style.caret, theme.colors.text.primary.into());
+            assert_ne!(style.selection, Hsla::default());
+        }
+        let light = editor_paint_style(Theme::light());
+        assert_eq!(light.selection, hsla(0.6, 0.8, 0.7, 0.45));
     }
 
     #[test]
@@ -1501,26 +1824,16 @@ mod tests {
     }
 
     #[test]
-    fn json_body_highlights_tokens_and_lets_variables_override() {
+    fn body_text_highlights_overlay_mustache_variables() {
         let theme = Theme::light();
         let value = "{\"host\":\"{{host}}\"}";
         let ranges = variable_ranges(value);
-        let highlights = body_text_highlights(theme, value, true, &ranges);
-        assert!(highlights.iter().any(|highlight| {
-            highlight.range == (1..7)
-                && highlight.color == Some(theme.colors.syntax.property.into())
-        }));
-        let variable = highlights
-            .iter()
-            .rev()
-            .find(|highlight| &value[highlight.range.clone()] == "{{host}}")
-            .expect("variable highlight");
-        assert_eq!(variable.color, Some(theme.colors.syntax.string.into()));
-        let roles_from_json = highlight_json(value);
-        assert!(
-            roles_from_json
-                .iter()
-                .any(|(_, role)| *role == SyntaxRole::Property)
+        let highlights = body_text_highlights(theme, &ranges);
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(&value[highlights[0].range.clone()], "{{host}}");
+        assert_eq!(
+            highlights[0].style.color,
+            Some(theme.colors.syntax.string.into())
         );
     }
 
@@ -1563,7 +1876,7 @@ mod tests {
     }
 
     struct HighlightHarness {
-        input: Entity<InputRuntime>,
+        input: Entity<InputState>,
     }
 
     impl Render for HighlightHarness {
@@ -1585,9 +1898,14 @@ mod tests {
 
     #[gpui::test]
     fn variable_highlight_scrolls_with_caret_at_end_of_long_url(cx: &mut TestAppContext) {
+        cx.update(crate::theme::Theme::init);
         let value = long_variable_url();
         let window = cx.open_window(size(px(240.0), px(48.0)), |window, cx| HighlightHarness {
-            input: cx.new(|cx| InputRuntime::new(value.clone(), window, cx)),
+            input: cx.new(|cx| {
+                let mut input = InputState::new(window, cx);
+                input.set_value(value.clone(), window, cx);
+                input
+            }),
         });
         let input = window
             .update(cx, |harness, _window, _cx| harness.input.clone())
@@ -1600,8 +1918,7 @@ mod tests {
         let visible = size(px(160.0), px(24.0));
         let (_, prepaint) = visual.draw(point(px(0.0), px(0.0)), visible, |_, _| {
             VariableHighlightElement {
-                input_id: None,
-                state: Some(input.clone()),
+                state: input.clone(),
                 value: value.clone(),
                 ranges,
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
@@ -1623,14 +1940,19 @@ mod tests {
 
     #[gpui::test]
     fn variable_highlight_stays_at_origin_when_caret_is_at_start(cx: &mut TestAppContext) {
+        cx.update(crate::theme::Theme::init);
         let value = long_variable_url();
         let window = cx.open_window(size(px(240.0), px(48.0)), |window, cx| HighlightHarness {
-            input: cx.new(|cx| InputRuntime::new(value.clone(), window, cx)),
+            input: cx.new(|cx| {
+                let mut input = InputState::new(window, cx);
+                input.set_value(value.clone(), window, cx);
+                input
+            }),
         });
         let input = window
-            .update(cx, |harness, window, cx| {
+            .update(cx, |harness, _window, cx| {
                 harness.input.update(cx, |input, cx| {
-                    input.home(&InputHome, window, cx);
+                    input.set_selected_range(0..0, cx);
                 });
                 harness.input.clone()
             })
@@ -1644,8 +1966,7 @@ mod tests {
             point(px(0.0), px(0.0)),
             size(px(160.0), px(24.0)),
             |_, _| VariableHighlightElement {
-                input_id: None,
-                state: Some(input),
+                state: input,
                 value,
                 ranges,
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
@@ -1663,9 +1984,14 @@ mod tests {
 
     #[gpui::test]
     fn variable_highlight_shapes_multiline_value_without_panicking(cx: &mut TestAppContext) {
+        cx.update(crate::theme::Theme::init);
         let value = SharedString::from("{{host}}\n/users");
         let window = cx.open_window(size(px(240.0), px(48.0)), |window, cx| HighlightHarness {
-            input: cx.new(|cx| InputRuntime::new(single_line(value.clone()), window, cx)),
+            input: cx.new(|cx| {
+                let mut input = InputState::new(window, cx);
+                input.set_value(single_line(value.clone()), window, cx);
+                input
+            }),
         });
         let input = window
             .update(cx, |harness, _window, _cx| harness.input.clone())
@@ -1679,8 +2005,7 @@ mod tests {
             point(px(0.0), px(0.0)),
             size(px(160.0), px(24.0)),
             |_, _| VariableHighlightElement {
-                input_id: None,
-                state: Some(input),
+                state: input,
                 value,
                 ranges,
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),

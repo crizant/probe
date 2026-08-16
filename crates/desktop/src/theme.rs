@@ -3,7 +3,8 @@
 //! Components consume these roles rather than embedding color literals. Future
 //! user-authored themes can produce this same model without changing components.
 
-use gpui::{Rgba, WindowAppearance, rgba};
+use gpui::{Hsla, Rgba, WindowAppearance, px, rgba};
+use gpui_base::{ColorTokens, RadiusTokens, ScrollbarStyles, SemanticThemeTokens};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThemeAppearance {
@@ -160,6 +161,62 @@ impl Theme {
         }
     }
 
+    /// Install gpui-base infrastructure and the library's default semantic tokens.
+    pub fn init(cx: &mut gpui::App) {
+        gpui_base::init(cx);
+        Self::sync_gpui_base(WindowAppearance::Light, cx);
+    }
+
+    /// Project this theme into gpui-base's global `Theme` so primitives and
+    /// infrastructure (scrollbars, resize handles) share the same tokens.
+    pub fn sync_gpui_base(appearance: WindowAppearance, cx: &mut gpui::App) {
+        let theme = Self::for_window_appearance(appearance);
+        let gpui_theme = gpui_base::Theme::global_mut(cx);
+        gpui_theme.tokens = theme.semantic_tokens();
+        let muted: Hsla = theme.colors.text.muted.into();
+        let border: Hsla = theme.colors.borders.standard.into();
+        let primary: Hsla = theme.colors.text.primary.into();
+        gpui_theme.scrollbar.styles = ScrollbarStyles::default()
+            .thumb(|thumb| thumb.bg(muted))
+            .thumb_hover(|thumb| thumb.bg(border))
+            .thumb_active(|thumb| thumb.bg(primary));
+        gpui_theme.resizable.handle = theme.colors.borders.subtle.into();
+        gpui_theme.resizable.active_handle = theme.colors.borders.focused.into();
+    }
+
+    fn semantic_tokens(self) -> SemanticThemeTokens {
+        SemanticThemeTokens {
+            colors: ColorTokens {
+                background: self.colors.surfaces.window.into(),
+                foreground: self.colors.text.primary.into(),
+                surface: self.colors.surfaces.raised.into(),
+                surface_foreground: self.colors.text.primary.into(),
+                primary: self.colors.actions.accent.into(),
+                primary_foreground: self.colors.text.inverse.into(),
+                secondary: self.colors.surfaces.raised.into(),
+                secondary_foreground: self.colors.text.secondary.into(),
+                muted: self.colors.surfaces.sidebar.into(),
+                muted_foreground: self.colors.text.muted.into(),
+                accent: self.colors.surfaces.raised.into(),
+                accent_foreground: self.colors.text.primary.into(),
+                destructive: self.colors.status.error.into(),
+                destructive_foreground: self.colors.text.inverse.into(),
+                border: self.colors.borders.standard.into(),
+                input: self.colors.borders.standard.into(),
+                ring: self.colors.borders.focused.into(),
+            },
+            radius: RadiusTokens {
+                none: px(0.0),
+                sm: px(self.metrics.radius_small),
+                md: px(self.metrics.radius_medium),
+                lg: px(self.metrics.radius_large),
+                xl: px(self.metrics.radius_large),
+                full: px(9999.0),
+            },
+            ..Default::default()
+        }
+    }
+
     #[must_use]
     pub fn method_color(self, method: &str) -> Rgba {
         match method.to_ascii_uppercase().as_str() {
@@ -178,43 +235,43 @@ impl Theme {
             appearance: ThemeAppearance::Light,
             colors: Colors {
                 surfaces: SurfaceColors {
-                    window: rgba(0xf5f5f7ff),
-                    sidebar: rgba(0xebebefff),
+                    window: rgba(0xffffffff),
+                    sidebar: rgba(0xf5f5f5ff),
                     editor: rgba(0xffffffff),
-                    raised: rgba(0xffffffff),
-                    overlay: rgba(0xfffffff2),
+                    raised: rgba(0xf5f5f5ff),
+                    overlay: rgba(0xffffffff),
                 },
                 text: TextColors {
-                    primary: rgba(0x1d1d1fff),
-                    secondary: rgba(0x4b4b50ff),
-                    muted: rgba(0x6e6e73ff),
-                    placeholder: rgba(0x8e8e93ff),
+                    primary: rgba(0x171717ff),
+                    secondary: rgba(0x525252ff),
+                    muted: rgba(0x737373ff),
+                    placeholder: rgba(0xa3a3a3ff),
                     inverse: rgba(0xffffffff),
                 },
                 borders: BorderColors {
-                    subtle: rgba(0x00000014),
-                    standard: rgba(0x00000029),
-                    strong: rgba(0x00000052),
-                    focused: rgba(0x0066ccff),
+                    subtle: rgba(0xe5e5e5ff),
+                    standard: rgba(0xd4d4d4ff),
+                    strong: rgba(0xa3a3a3ff),
+                    focused: rgba(0x171717ff),
                 },
                 actions: ActionColors {
-                    accent: rgba(0x0066ccff),
-                    hover: rgba(0x005bb8ff),
-                    pressed: rgba(0x004c99ff),
-                    disabled: rgba(0xd1d1d6ff),
-                    disabled_foreground: rgba(0x76767bff),
+                    accent: rgba(0x171717ff),
+                    hover: rgba(0x404040ff),
+                    pressed: rgba(0x0a0a0aff),
+                    disabled: rgba(0xe5e5e5ff),
+                    disabled_foreground: rgba(0xa3a3a3ff),
                 },
                 selection: SelectionColors {
-                    active_background: rgba(0x0066ccff),
+                    active_background: rgba(0x171717ff),
                     active_foreground: rgba(0xffffffff),
-                    inactive_background: rgba(0xd8d8dcff),
-                    inactive_foreground: rgba(0x1d1d1fff),
+                    inactive_background: rgba(0xe5e5e5ff),
+                    inactive_foreground: rgba(0x171717ff),
                 },
                 status: StatusColors {
                     success: rgba(0x248a3dff),
                     warning: rgba(0x9a6700ff),
                     error: rgba(0xc62828ff),
-                    informational: rgba(0x0066ccff),
+                    informational: rgba(0x171717ff),
                 },
                 methods: MethodColors {
                     get: rgba(0x087f5bff),
@@ -225,7 +282,7 @@ impl Theme {
                     other: rgba(0x4b4b50ff),
                 },
                 responses: ResponseColors {
-                    informational: rgba(0x0066ccff),
+                    informational: rgba(0x171717ff),
                     success: rgba(0x248a3dff),
                     redirect: rgba(0x7a5af8ff),
                     client_error: rgba(0xb54708ff),
@@ -253,43 +310,43 @@ impl Theme {
             appearance: ThemeAppearance::Dark,
             colors: Colors {
                 surfaces: SurfaceColors {
-                    window: rgba(0x1c1c1eff),
-                    sidebar: rgba(0x242426ff),
-                    editor: rgba(0x161618ff),
-                    raised: rgba(0x2c2c2eff),
-                    overlay: rgba(0x303033f2),
+                    window: rgba(0x0a0a0aff),
+                    sidebar: rgba(0x171717ff),
+                    editor: rgba(0x0a0a0aff),
+                    raised: rgba(0x171717ff),
+                    overlay: rgba(0x171717ff),
                 },
                 text: TextColors {
-                    primary: rgba(0xf5f5f7ff),
-                    secondary: rgba(0xd1d1d6ff),
-                    muted: rgba(0xaeaeb2ff),
-                    placeholder: rgba(0x8e8e93ff),
-                    inverse: rgba(0x1d1d1fff),
+                    primary: rgba(0xfafafaff),
+                    secondary: rgba(0xa3a3a3ff),
+                    muted: rgba(0x737373ff),
+                    placeholder: rgba(0x525252ff),
+                    inverse: rgba(0x0a0a0aff),
                 },
                 borders: BorderColors {
-                    subtle: rgba(0xffffff1f),
-                    standard: rgba(0xffffff38),
-                    strong: rgba(0xffffff66),
-                    focused: rgba(0x66aaffff),
+                    subtle: rgba(0x262626ff),
+                    standard: rgba(0x404040ff),
+                    strong: rgba(0x525252ff),
+                    focused: rgba(0xfafafaff),
                 },
                 actions: ActionColors {
-                    accent: rgba(0x0a84ffff),
-                    hover: rgba(0x3599ffff),
-                    pressed: rgba(0x0071e3ff),
-                    disabled: rgba(0x48484aff),
-                    disabled_foreground: rgba(0xaaaab0ff),
+                    accent: rgba(0xfafafaff),
+                    hover: rgba(0xd4d4d4ff),
+                    pressed: rgba(0xffffffff),
+                    disabled: rgba(0x262626ff),
+                    disabled_foreground: rgba(0x737373ff),
                 },
                 selection: SelectionColors {
-                    active_background: rgba(0x0066ccff),
-                    active_foreground: rgba(0xffffffff),
-                    inactive_background: rgba(0x48484aff),
-                    inactive_foreground: rgba(0xf5f5f7ff),
+                    active_background: rgba(0xfafafaff),
+                    active_foreground: rgba(0x0a0a0aff),
+                    inactive_background: rgba(0x262626ff),
+                    inactive_foreground: rgba(0xfafafaff),
                 },
                 status: StatusColors {
                     success: rgba(0x4cc963ff),
                     warning: rgba(0xffd60aff),
                     error: rgba(0xff6961ff),
-                    informational: rgba(0x64d2ffff),
+                    informational: rgba(0xfafafaff),
                 },
                 methods: MethodColors {
                     get: rgba(0x63e6beff),
@@ -373,10 +430,10 @@ const fn default_metrics() -> Metrics {
         spacing_2: 8.0,
         spacing_3: 12.0,
         spacing_4: 16.0,
-        radius_small: 5.0,
-        radius_medium: 8.0,
-        radius_large: 12.0,
-        control_height: 30.0,
+        radius_small: 3.0,
+        radius_medium: 6.0,
+        radius_large: 8.0,
+        control_height: 28.0,
         icon_small: 12.0,
         icon_standard: 16.0,
         elevation_raised: 1.0,
