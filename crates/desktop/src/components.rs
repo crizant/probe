@@ -10,8 +10,8 @@ use gpui::{
     Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla, InspectorElementId,
     InteractiveElement as _, IntoElement, LayoutId, MouseButton, PaintQuad, ParentElement as _,
     Pixels, Render, RenderOnce, Role, ShapedLine, SharedString, StatefulInteractiveElement as _,
-    Style, Styled as _, Subscription, TextAlign, TextRun, Window, div, fill, point,
-    prelude::FluentBuilder as _, px, relative, size, transparent_black,
+    Style, Styled as _, Subscription, TextAlign, TextRun, TransformationMatrix, Window, canvas,
+    div, fill, point, prelude::FluentBuilder as _, px, relative, size, transparent_black,
 };
 use gpui_base::{
     Button, Editor, Input, InputBase, Popover, Switch, SwitchThumb, SwitchTrack, Toggle,
@@ -26,6 +26,84 @@ use gpui_base::{
 /// Single-line label that shows an ellipsis when the available width is too small.
 pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
     div().min_w(px(0.0)).truncate().child(text.into())
+}
+
+const CHEVRON_DOWN_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M3 5.5 8 11 13 5.5" stroke="black" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
+const CHEVRON_UP_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M3 10.5 8 5 13 10.5" stroke="black" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
+const CHEVRON_RIGHT_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M5.5 3 11 8 5.5 13" stroke="black" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
+const PLUS_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="black" stroke-width="1.75" stroke-linecap="round"/></svg>"#;
+
+fn painted_svg_icon(path: &'static str, svg: &'static [u8], size: f32) -> gpui::Div {
+    let size = px(size);
+    div()
+        .flex_none()
+        .size(size)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, cx| {
+                    let _ = window.paint_svg(
+                        bounds,
+                        SharedString::from(path),
+                        Some(svg),
+                        TransformationMatrix::default(),
+                        window.text_style().color,
+                        cx,
+                    );
+                },
+            )
+            .size(size),
+        )
+}
+
+pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
+    let icon = if expanded {
+        painted_svg_icon("probe-chevron-up", CHEVRON_UP_SVG, theme.metrics.icon_small)
+    } else {
+        painted_svg_icon(
+            "probe-chevron-down",
+            CHEVRON_DOWN_SVG,
+            theme.metrics.icon_small,
+        )
+    };
+    icon.text_color(theme.colors.text.muted)
+}
+
+pub(crate) fn tree_chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
+    let icon = if expanded {
+        painted_svg_icon(
+            "probe-chevron-down",
+            CHEVRON_DOWN_SVG,
+            theme.metrics.icon_small,
+        )
+    } else {
+        painted_svg_icon(
+            "probe-chevron-right",
+            CHEVRON_RIGHT_SVG,
+            theme.metrics.icon_small,
+        )
+    };
+    icon.text_color(theme.colors.text.muted)
+}
+
+fn plus_icon(theme: Theme) -> gpui::Div {
+    painted_svg_icon("probe-plus", PLUS_SVG, theme.metrics.icon_small)
+}
+
+pub(crate) fn close_icon(theme: Theme) -> gpui::Div {
+    div()
+        .flex_none()
+        .w(px(theme.metrics.icon_standard))
+        .h(px(theme.metrics.icon_standard))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(theme.metrics.icon_standard))
+        .line_height(relative(1.0))
+        .child("×")
 }
 
 #[derive(Clone, Debug, Default)]
@@ -84,7 +162,7 @@ pub fn primary_button(
     let label = label.into();
     Button::new(id)
         .h(px(theme.metrics.control_height))
-        .px(px(theme.metrics.spacing_4))
+        .px(px(theme.metrics.spacing_3))
         .flex()
         .items_center()
         .justify_center()
@@ -205,7 +283,7 @@ impl RenderOnce for ProbeTextInput {
             .h(px(self.height))
             .when_some(self.width, |input, width| input.w(px(width)))
             .when(self.width.is_none(), |input| input.min_w(px(0.0)).w_full())
-            .px(px(theme.metrics.spacing_3))
+            .px(px(theme.metrics.spacing_2))
             .flex()
             .items_center()
             .rounded(px(theme.metrics.radius_small))
@@ -284,8 +362,8 @@ pub(crate) fn search_input(
         placeholder: placeholder.into(),
         variables: VariableContext::default(),
         font_family: theme.typography.interface_family,
-        text_size: theme.typography.caption_size,
-        height: theme.metrics.control_height - 4.0,
+        text_size: theme.typography.body_size,
+        height: theme.metrics.control_height - 2.0,
         width: Some(180.0),
         debug_selector: Some("response-search"),
         on_change: Rc::new(on_value_change),
@@ -293,14 +371,12 @@ pub(crate) fn search_input(
     }
 }
 
-pub(crate) fn editor_button(
+fn editor_button_base(
     theme: Theme,
     id: impl Into<ElementId>,
-    label: impl Into<String>,
     selected: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let label = label.into();
+) -> Button {
     Button::new(id)
         .selected(selected)
         .h(px(theme.metrics.control_height))
@@ -332,7 +408,28 @@ pub(crate) fn editor_button(
         })
         .focus(move |button| button.border_color(theme.colors.borders.focused))
         .on_click(on_click)
-        .child(label)
+}
+
+pub(crate) fn editor_button(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<String>,
+    selected: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    editor_button_base(theme, id, selected, on_click).child(label.into())
+}
+
+pub(crate) fn editor_add_button(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<String>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    editor_button_base(theme, id, false, on_click)
+        .gap(px(theme.metrics.spacing_1))
+        .child(plus_icon(theme))
+        .child(label.into())
 }
 
 pub(crate) fn text_tab(
@@ -351,23 +448,24 @@ pub(crate) fn text_tab(
         .aria_selected(selected)
         .aria_position_in_set(position)
         .aria_size_of_set(size)
-        .h(px(theme.metrics.control_height))
-        .px(px(theme.metrics.spacing_3))
+        .h(px(theme.metrics.control_height - 2.0))
+        .px(px(theme.metrics.spacing_2))
         .flex()
         .items_center()
+        .rounded(px(theme.metrics.radius_medium))
         .text_size(px(theme.typography.caption_size))
         .text_color(if selected {
             theme.colors.text.primary
         } else {
             theme.colors.text.secondary
         })
-        .border_b_2()
-        .border_color(if selected {
-            theme.colors.borders.focused
-        } else {
-            theme.colors.surfaces.editor
+        .when(selected, |tab| {
+            tab.bg(theme.colors.selection.inactive_background)
+                .font_weight(FontWeight::SEMIBOLD)
         })
-        .when(selected, |tab| tab.font_weight(FontWeight::SEMIBOLD))
+        .when(!selected, |tab| {
+            tab.hover(move |tab| tab.bg(theme.colors.surfaces.raised))
+        })
         .cursor_pointer()
         .on_click(on_click)
         .child(label)
@@ -550,7 +648,7 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
             .aria_expanded(open)
             .w_full()
             .h(px(theme.metrics.control_height))
-            .px(px(theme.metrics.spacing_3))
+            .px(px(theme.metrics.spacing_2))
             .flex()
             .items_center()
             .justify_between()
@@ -565,12 +663,7 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
             .hover(move |trigger| trigger.bg(theme.colors.selection.inactive_background))
             .focus(move |trigger| trigger.border_color(theme.colors.borders.focused))
             .child(truncated_label(selected_label).min_w(px(0.0)).flex_1())
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(theme.colors.text.muted)
-                    .child(if open { "▴" } else { "▾" }),
-            );
+            .child(chevron_icon(theme, open));
         let options = Rc::new(self.options);
         let selected_value = self.value;
         let on_value_change = self.on_value_change;
@@ -989,7 +1082,7 @@ impl RenderOnce for ProbeEditor {
         InputBase::new(self.id)
             .size_full()
             .when_some(self.min_height, |editor, height| editor.min_h(px(height)))
-            .when(self.padded, |editor| editor.p(px(theme.metrics.spacing_3)))
+            .when(self.padded, |editor| editor.p(px(theme.metrics.spacing_2)))
             .overflow_hidden()
             .rounded(px(theme.metrics.radius_small))
             .font_family(theme.typography.monospace_family)
@@ -1129,7 +1222,7 @@ fn variable_highlight_layer(
         // and visible width.
         .border_1()
         .border_color(transparent_black())
-        .px(px(theme.metrics.spacing_3))
+        .px(px(theme.metrics.spacing_2))
         .items_center()
         .flex()
         .overflow_hidden()

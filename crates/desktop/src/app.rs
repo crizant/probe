@@ -592,14 +592,12 @@ impl ProbeApp {
                     .focusable(false)
                     .tab_stop(false)
                     .w_full()
-                    .h(px(theme.metrics.control_height))
-                    .pl(px(
-                        theme.metrics.spacing_3 + depth as f32 * theme.metrics.spacing_4
-                    ))
-                    .pr(px(theme.metrics.spacing_2))
+                    .h(px(theme.metrics.tree_row_height))
+                    .pl(px(tree_request_indent(theme, depth)))
+                    .pr(px(theme.metrics.spacing_1))
                     .flex()
                     .items_center()
-                    .gap(px(theme.metrics.spacing_2))
+                    .gap(px(theme.metrics.spacing_1))
                     .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
                     .when(selected, |row| {
@@ -615,10 +613,10 @@ impl ProbeApp {
                     })
                     .child(
                         div()
-                            .w(px(42.0))
+                            .w(px(64.0))
                             .flex_none()
                             .truncate()
-                            .text_size(px(10.0))
+                            .text_size(px(theme.typography.caption_size))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(if selected {
                                 theme.colors.selection.active_foreground
@@ -647,14 +645,12 @@ impl ProbeApp {
                     .focusable(false)
                     .tab_stop(false)
                     .w_full()
-                    .h(px(theme.metrics.control_height))
-                    .pl(px(
-                        theme.metrics.spacing_2 + depth as f32 * theme.metrics.spacing_4
-                    ))
-                    .pr(px(theme.metrics.spacing_2))
+                    .h(px(theme.metrics.tree_row_height))
+                    .pl(px(tree_folder_indent(theme, depth)))
+                    .pr(px(theme.metrics.spacing_1))
                     .flex()
                     .items_center()
-                    .gap(px(theme.metrics.spacing_2))
+                    .gap(px(theme.metrics.spacing_1))
                     .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
                     .cursor_pointer()
@@ -667,7 +663,7 @@ impl ProbeApp {
                             cx.notify();
                         });
                     })
-                    .child(div().flex_none().child(if expanded { "▾" } else { "▸" }))
+                    .child(components::tree_chevron_icon(theme, expanded))
                     .child(
                         components::truncated_label(label.to_owned())
                             .flex_1()
@@ -695,8 +691,8 @@ impl ProbeApp {
             })
             .flex_1()
             .min_h(px(0.0))
-            .px(px(theme.metrics.spacing_2))
-            .py(px(theme.metrics.spacing_1))
+            .px(px(theme.metrics.spacing_1))
+            .py(px(2.0))
             .into_any_element()
         } else {
             let mut tree = div()
@@ -773,8 +769,8 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.sidebar)
             .child(
                 div()
-                    .h(px(44.0))
-                    .px(px(theme.metrics.spacing_3))
+                    .h(px(theme.metrics.tab_bar_height))
+                    .px(px(theme.metrics.spacing_2))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -797,14 +793,16 @@ impl ProbeApp {
             .flex_1()
             .min_w(px(0.0))
             .h_full()
+            .px(px(theme.metrics.spacing_1))
             .flex()
-            .items_end()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1))
             .overflow_x_scroll()
             .track_scroll(&self.tab_bar_scroll);
         let Some(loaded) = &self.loaded_workspace else {
             return div()
                 .id("request-tabs")
-                .h(px(40.0))
+                .h(px(theme.metrics.tab_bar_height))
                 .w_full()
                 .bg(theme.colors.surfaces.raised)
                 .border_b_1()
@@ -834,17 +832,15 @@ impl ProbeApp {
                 Tab::new(("request-tab", key.slot()))
                     .selected(active)
                     .set_position(tab_index + 1, tab_count)
-                    .h_full()
-                    .min_w(px(120.0))
-                    .max_w(px(220.0))
-                    .px(px(theme.metrics.spacing_3))
+                    .h(px(theme.metrics.control_height - 2.0))
+                    .min_w(px(96.0))
+                    .max_w(px(176.0))
+                    .px(px(theme.metrics.spacing_2))
                     .flex()
                     .items_center()
-                    .gap(px(theme.metrics.spacing_2))
+                    .gap(px(theme.metrics.spacing_1))
                     .overflow_hidden()
-                    .rounded_t(px(theme.metrics.radius_small))
-                    .border_r_1()
-                    .border_color(theme.colors.borders.subtle)
+                    .rounded(px(theme.metrics.radius_small))
                     .when(active, |tab| {
                         tab.bg(theme.colors.surfaces.editor)
                             .font_weight(FontWeight::SEMIBOLD)
@@ -878,10 +874,14 @@ impl ProbeApp {
                             .focusable(false)
                             .tab_stop(false)
                             .flex_none()
-                            .px(px(4.0))
+                            .w(px(theme.metrics.icon_standard + 4.0))
+                            .h(px(theme.metrics.icon_standard + 4.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .rounded(px(theme.metrics.radius_small))
                             .hover(move |close| close.bg(theme.colors.actions.disabled))
-                            .child("×")
+                            .child(components::close_icon(theme))
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 let _ =
@@ -893,7 +893,7 @@ impl ProbeApp {
 
         let mut tabs = div()
             .id("request-tabs")
-            .h(px(40.0))
+            .h(px(theme.metrics.tab_bar_height))
             .w_full()
             .flex()
             .items_center()
@@ -1039,16 +1039,16 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.editor)
             .child(
                 div()
-                    .p(px(theme.metrics.spacing_4))
-                    .pb(px(theme.metrics.spacing_3))
+                    .p(px(theme.metrics.spacing_2))
+                    .pb(px(theme.metrics.spacing_2))
                     .flex()
                     .flex_col()
-                    .gap(px(theme.metrics.spacing_3))
+                    .gap(px(theme.metrics.spacing_2))
                     .child(
                         div()
                             .id("request-url-bar")
                             .debug_selector(|| "request-url-bar".into())
-                            .h(px(theme.metrics.control_height + 4.0))
+                            .h(px(theme.metrics.control_height))
                             .w_full()
                             .flex()
                             .items_center()
@@ -1123,8 +1123,8 @@ impl ProbeApp {
                     .id("request-editor-section-content")
                     .flex_1()
                     .min_h(px(0.0))
-                    .px(px(theme.metrics.spacing_4))
-                    .pb(px(theme.metrics.spacing_4))
+                    .px(px(theme.metrics.spacing_2))
+                    .pb(px(theme.metrics.spacing_2))
                     .when(
                         self.request_editor.section != EditorSection::Body,
                         |content| content.overflow_y_scroll(),
@@ -1242,11 +1242,10 @@ impl ProbeApp {
                 );
         }
         let add_view = cx.weak_entity();
-        rows.child(components::editor_button(
+        rows.child(components::editor_add_button(
             theme,
             "add-query-parameter",
-            "+ Add parameter",
-            false,
+            "Add parameter",
             move |_, _, cx| {
                 let _ = add_view.update(cx, |view, cx| {
                     view.edit_request(
@@ -1371,11 +1370,10 @@ impl ProbeApp {
                 );
         }
         let add_view = cx.weak_entity();
-        rows.child(components::editor_button(
+        rows.child(components::editor_add_button(
             theme,
             "add-header",
-            "+ Add header",
-            false,
+            "Add header",
             move |_, _, cx| {
                 let _ = add_view.update(cx, |view, cx| {
                     view.edit_request(
@@ -1434,7 +1432,7 @@ impl ProbeApp {
             .min_h(px(0.0))
             .flex()
             .flex_col()
-            .gap(px(theme.metrics.spacing_3))
+            .gap(px(theme.metrics.spacing_2))
             .child(kind_buttons);
         match request.body.as_ref() {
             Some(RequestBody::Single(Body::Raw(raw))) => {
@@ -1622,11 +1620,10 @@ impl ProbeApp {
                 );
         }
         let add_view = cx.weak_entity();
-        rows.child(components::editor_button(
+        rows.child(components::editor_add_button(
             theme,
             "add-form-field",
-            "+ Add field",
-            false,
+            "Add field",
             move |_, _, cx| {
                 let _ = add_view.update(cx, |view, cx| {
                     view.edit_request(
@@ -1803,11 +1800,10 @@ impl ProbeApp {
                 );
         }
         let add_view = cx.weak_entity();
-        rows.child(components::editor_button(
+        rows.child(components::editor_add_button(
             theme,
             "add-multipart-part",
-            "+ Add part",
-            false,
+            "Add part",
             move |_, _, cx| {
                 let _ = add_view.update(cx, |view, cx| {
                     view.edit_request(
@@ -1948,11 +1944,10 @@ impl ProbeApp {
                 );
         }
         let add_view = cx.weak_entity();
-        rows.child(components::editor_button(
+        rows.child(components::editor_add_button(
             theme,
             "add-body-file",
-            "+ Add file",
-            false,
+            "Add file",
             move |_, _, cx| {
                 let _ = add_view.update(cx, |view, cx| {
                     view.edit_request(
@@ -2020,7 +2015,7 @@ impl ProbeApp {
         let mut editor = div()
             .flex()
             .flex_col()
-            .gap(px(theme.metrics.spacing_3))
+            .gap(px(theme.metrics.spacing_2))
             .child(kind_buttons);
         if let Some(authentication) = &request.authentication {
             for (index, (property_name, value)) in authentication.properties.iter().enumerate() {
@@ -2116,11 +2111,10 @@ impl ProbeApp {
                 );
             }
             let add_view = cx.weak_entity();
-            editor = editor.child(components::editor_button(
+            editor = editor.child(components::editor_add_button(
                 theme,
                 "add-authentication-property",
-                "+ Add property",
-                false,
+                "Add property",
                 move |_, _, cx| {
                     let _ = add_view.update(cx, |view, cx| {
                         view.edit_request(
@@ -2228,8 +2222,8 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.window)
             .child(
                 div()
-                    .h(px(40.0))
-                    .px(px(theme.metrics.spacing_4))
+                    .h(px(theme.metrics.tab_bar_height))
+                    .px(px(theme.metrics.spacing_2))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -2369,8 +2363,8 @@ impl ProbeApp {
             ));
 
         let mut banners = div()
-            .px(px(theme.metrics.spacing_3))
-            .pt(px(theme.metrics.spacing_2))
+            .px(px(theme.metrics.spacing_2))
+            .pt(px(theme.metrics.spacing_1))
             .flex()
             .flex_col()
             .gap(px(theme.metrics.spacing_1));
@@ -2410,8 +2404,8 @@ impl ProbeApp {
             .flex_col()
             .child(
                 div()
-                    .px(px(theme.metrics.spacing_4))
-                    .py(px(theme.metrics.spacing_2))
+                    .px(px(theme.metrics.spacing_2))
+                    .py(px(theme.metrics.spacing_1))
                     .flex()
                     .flex_wrap()
                     .items_center()
@@ -2453,7 +2447,7 @@ impl ProbeApp {
             .debug_selector(|| "response-body".into())
             .flex_1()
             .min_h(px(0.0))
-            .p(px(theme.metrics.spacing_3))
+            .p(px(theme.metrics.spacing_2))
             .child(components::response_body_input(
                 theme,
                 "response-body-editor",
@@ -2501,7 +2495,7 @@ impl ProbeApp {
             .debug_selector(|| "response-headers".into())
             .flex_1()
             .min_h(px(0.0))
-            .p(px(theme.metrics.spacing_3))
+            .p(px(theme.metrics.spacing_2))
             .child(components::response_headers_input(
                 theme,
                 "response-headers-editor",
@@ -2675,18 +2669,15 @@ impl ProbeApp {
                         styles.selected(move |trigger| trigger.bg(theme.colors.surfaces.sidebar))
                     })
                     .child(components::truncated_label(self.workspace_name()).flex_1())
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(theme.typography.caption_size))
-                            .text_color(theme.colors.text.muted)
-                            .child("▾"),
-                    ),
+                    .child(components::chevron_icon(
+                        theme,
+                        self.workspace_switcher_open,
+                    )),
             )
             .content(move |_, _, _| popup);
 
         div()
-            .h(px(40.0))
+            .h(px(theme.metrics.tab_bar_height))
             .w_full()
             .pl(px(if cfg!(target_os = "macos") {
                 80.0
@@ -2855,6 +2846,16 @@ impl Render for ProbeApp {
                     ),
             )
     }
+}
+
+fn tree_folder_indent(theme: Theme, depth: usize) -> f32 {
+    theme.metrics.spacing_1 + depth as f32 * theme.metrics.spacing_2
+}
+
+fn tree_request_indent(theme: Theme, depth: usize) -> f32 {
+    tree_folder_indent(theme, depth.saturating_sub(1))
+        + theme.metrics.icon_small
+        + theme.metrics.spacing_1
 }
 
 fn flatten_visible_tree_rows(

@@ -5,6 +5,8 @@
 //! than embedding color literals. Future user-authored themes can produce the same
 //! model without changing components.
 
+use std::borrow::Cow;
+
 use gpui::{FontWeight, Hsla, Rgba, WindowAppearance, hsla, px, rgba};
 use gpui_base::{
     ColorTokens, RadiusTokens, ScrollbarStyles, SemanticThemeTokens, ShadowTokens, SpacingTokens,
@@ -143,6 +145,8 @@ pub struct Metrics {
     pub radius_medium: f32,
     pub radius_large: f32,
     pub control_height: f32,
+    pub tree_row_height: f32,
+    pub tab_bar_height: f32,
     pub icon_small: f32,
     pub icon_standard: f32,
     pub elevation_raised: f32,
@@ -169,6 +173,7 @@ impl Theme {
     /// Install gpui-base infrastructure and the library's default semantic tokens.
     pub fn init(cx: &mut gpui::App) {
         gpui_base::init(cx);
+        load_bundled_fonts(cx);
         Self::sync_gpui_base(WindowAppearance::Light, cx);
     }
 
@@ -460,7 +465,7 @@ const fn platform_typography() -> Typography {
         interface_family: interface_font(),
         monospace_family: monospace_font(),
         body_size: 13.0,
-        caption_size: 11.0,
+        caption_size: 12.0,
         title_size: 24.0,
         body_line_height: 1.45,
         regular_weight: 400,
@@ -484,19 +489,28 @@ const fn interface_font() -> &'static str {
     "sans-serif"
 }
 
-#[cfg(target_os = "macos")]
 const fn monospace_font() -> &'static str {
-    "SF Mono"
+    "JetBrains Mono"
 }
 
-#[cfg(target_os = "windows")]
-const fn monospace_font() -> &'static str {
-    "Cascadia Mono"
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-const fn monospace_font() -> &'static str {
-    "monospace"
+/// JetBrains Mono 2.304 (SIL OFL 1.1), bundled in `assets/fonts/jetbrains-mono`.
+fn load_bundled_fonts(cx: &mut gpui::App) {
+    cx.text_system()
+        .add_fonts(vec![
+            Cow::Borrowed(
+                include_bytes!("../assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf")
+                    .as_slice(),
+            ),
+            Cow::Borrowed(
+                include_bytes!("../assets/fonts/jetbrains-mono/JetBrainsMono-Medium.ttf")
+                    .as_slice(),
+            ),
+            Cow::Borrowed(
+                include_bytes!("../assets/fonts/jetbrains-mono/JetBrainsMono-SemiBold.ttf")
+                    .as_slice(),
+            ),
+        ])
+        .expect("failed to load bundled JetBrains Mono fonts");
 }
 
 const fn default_metrics() -> Metrics {
@@ -508,7 +522,9 @@ const fn default_metrics() -> Metrics {
         radius_small: 6.0,
         radius_medium: 8.0,
         radius_large: 10.0,
-        control_height: 30.0,
+        control_height: 28.0,
+        tree_row_height: 28.0,
+        tab_bar_height: 32.0,
         icon_small: 12.0,
         icon_standard: 16.0,
         elevation_raised: 1.0,
@@ -561,6 +577,9 @@ mod tests {
                 theme.colors.selection.inactive_background
             );
             assert!(theme.metrics.control_height >= 28.0);
+            assert!(theme.typography.caption_size >= 12.0);
+            assert!(theme.typography.body_size >= theme.typography.caption_size);
+            assert_eq!(theme.typography.monospace_family, "JetBrains Mono");
             assert!(theme.metrics.radius_small >= 4.0);
             assert!(theme.metrics.radius_large <= 12.0);
             assert!(theme.metrics.radius_small < theme.metrics.radius_medium);
