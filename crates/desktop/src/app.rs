@@ -592,8 +592,10 @@ impl ProbeApp {
                     .focusable(false)
                     .tab_stop(false)
                     .w_full()
-                    .h(px(28.0))
-                    .pl(px(12.0 + depth as f32 * 16.0))
+                    .h(px(theme.metrics.control_height))
+                    .pl(px(
+                        theme.metrics.spacing_3 + depth as f32 * theme.metrics.spacing_4
+                    ))
                     .pr(px(theme.metrics.spacing_2))
                     .flex()
                     .items_center()
@@ -645,8 +647,10 @@ impl ProbeApp {
                     .focusable(false)
                     .tab_stop(false)
                     .w_full()
-                    .h(px(28.0))
-                    .pl(px(8.0 + depth as f32 * 16.0))
+                    .h(px(theme.metrics.control_height))
+                    .pl(px(
+                        theme.metrics.spacing_2 + depth as f32 * theme.metrics.spacing_4
+                    ))
                     .pr(px(theme.metrics.spacing_2))
                     .flex()
                     .items_center()
@@ -692,6 +696,7 @@ impl ProbeApp {
             .flex_1()
             .min_h(px(0.0))
             .px(px(theme.metrics.spacing_2))
+            .py(px(theme.metrics.spacing_1))
             .into_any_element()
         } else {
             let mut tree = div()
@@ -768,7 +773,7 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.sidebar)
             .child(
                 div()
-                    .h(px(42.0))
+                    .h(px(44.0))
                     .px(px(theme.metrics.spacing_3))
                     .flex()
                     .items_center()
@@ -799,7 +804,7 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return div()
                 .id("request-tabs")
-                .h(px(38.0))
+                .h(px(40.0))
                 .w_full()
                 .bg(theme.colors.surfaces.raised)
                 .border_b_1()
@@ -836,6 +841,7 @@ impl ProbeApp {
                     .items_center()
                     .gap(px(theme.metrics.spacing_2))
                     .overflow_hidden()
+                    .rounded_t(px(theme.metrics.radius_small))
                     .border_r_1()
                     .border_color(theme.colors.borders.subtle)
                     .when(active, |tab| {
@@ -877,7 +883,7 @@ impl ProbeApp {
 
         let mut tabs = div()
             .id("request-tabs")
-            .h(px(38.0))
+            .h(px(40.0))
             .w_full()
             .flex()
             .items_center()
@@ -1023,27 +1029,27 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.editor)
             .child(
                 div()
-                    .p(px(theme.metrics.spacing_3))
-                    .pb(px(theme.metrics.spacing_2))
+                    .p(px(theme.metrics.spacing_4))
+                    .pb(px(theme.metrics.spacing_3))
                     .flex()
                     .flex_col()
-                    .gap(px(theme.metrics.spacing_2))
+                    .gap(px(theme.metrics.spacing_3))
                     .child(
                         div()
                             .id("request-url-bar")
                             .debug_selector(|| "request-url-bar".into())
-                            .h(px(40.0))
+                            .h(px(theme.metrics.control_height + 4.0))
                             .w_full()
                             .flex()
                             .items_center()
-                            .child(div().w(px(92.0)).mr(px(theme.metrics.spacing_2)).child(
+                            .child(div().w(px(108.0)).mr(px(theme.metrics.spacing_2)).child(
                                 components::dropdown_with_option_colors(
                                     theme,
                                     "request-method",
                                     "HTTP method",
                                     Some(method.clone()),
                                     request_method_options(theme, &method),
-                                    92.0,
+                                    108.0,
                                     {
                                         let method_view = cx.weak_entity();
                                         move |value, _, cx| {
@@ -1107,8 +1113,8 @@ impl ProbeApp {
                     .id("request-editor-section-content")
                     .flex_1()
                     .min_h(px(0.0))
-                    .px(px(theme.metrics.spacing_3))
-                    .pb(px(theme.metrics.spacing_3))
+                    .px(px(theme.metrics.spacing_4))
+                    .pb(px(theme.metrics.spacing_4))
                     .when(
                         self.request_editor.section != EditorSection::Body,
                         |content| content.overflow_y_scroll(),
@@ -2212,8 +2218,8 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.window)
             .child(
                 div()
-                    .h(px(38.0))
-                    .px(px(theme.metrics.spacing_3))
+                    .h(px(40.0))
+                    .px(px(theme.metrics.spacing_4))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -2394,8 +2400,8 @@ impl ProbeApp {
             .flex_col()
             .child(
                 div()
-                    .px(px(theme.metrics.spacing_3))
-                    .py(px(theme.metrics.spacing_1))
+                    .px(px(theme.metrics.spacing_4))
+                    .py(px(theme.metrics.spacing_2))
                     .flex()
                     .flex_wrap()
                     .items_center()
@@ -2553,7 +2559,7 @@ impl ProbeApp {
             .id("workspace-switcher-popup")
             .aria_label("Workspaces")
             .w(px(300.0))
-            .p(px(theme.metrics.spacing_2))
+            .p(px(theme.metrics.spacing_3))
             .flex()
             .flex_col()
             .gap(px(theme.metrics.spacing_1))
@@ -2642,9 +2648,9 @@ impl ProbeApp {
                 Button::new("workspace-switcher-trigger")
                     .accessibility_label("Switch workspace")
                     .selected(self.workspace_switcher_open)
-                    .h(px(28.0))
+                    .h(px(theme.metrics.control_height))
                     .max_w(px(260.0))
-                    .px(px(theme.metrics.spacing_2))
+                    .px(px(theme.metrics.spacing_3))
                     .flex()
                     .items_center()
                     .gap(px(theme.metrics.spacing_2))
@@ -2670,10 +2676,10 @@ impl ProbeApp {
             .content(move |_, _, _| popup);
 
         div()
-            .h(px(38.0))
+            .h(px(40.0))
             .w_full()
             .pl(px(if cfg!(target_os = "macos") {
-                78.0
+                80.0
             } else {
                 theme.metrics.spacing_3
             }))

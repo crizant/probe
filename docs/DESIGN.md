@@ -95,14 +95,14 @@ API.
 ## Component Architecture
 
 Longbridge `gpui-base` provides reusable behavior, accessibility, and default
-chrome tokens where an appropriate primitive exists. Probe maps those tokens
-into the semantic theme model and composes feature views. Do not use Longbridge
-`gpui-component`. Desktop chrome follows the gpui-base gallery defaults.
+chrome tokens where an appropriate primitive exists. Probe maps Catppuccin
+Latte (light) and Mocha (dark) onto the semantic theme model and composes
+feature views. Do not use Longbridge `gpui-component`.
 
 ```text
-Longbridge gpui-base primitives and default tokens
+Longbridge gpui-base primitives
         ↓
-Probe semantic tokens
+Probe semantic tokens (Catppuccin Latte / Mocha)
         ↓
 Probe styled component
         ↓
@@ -135,10 +135,11 @@ focused, selected, inactive, and disabled behavior where relevant.
 
 ## Built-In Themes
 
-The desktop foundation ships with gpui-base default light and dark chrome
-tokens and follows system appearance changes. Built-in themes are complete,
-validated semantic theme models and provide fallback values for every token.
-HTTP method, status, and syntax colors remain distinct from chrome.
+The desktop foundation ships with Catppuccin [Latte](https://github.com/catppuccin/catppuccin)
+(light) and [Mocha](https://github.com/catppuccin/catppuccin) (dark) as complete
+semantic theme models, and follows system appearance changes. Built-in themes
+provide fallback values for every token. HTTP method, status, and syntax colors
+use Catppuccin accent hues and remain distinct from chrome.
 
 Theme changes must not alter application semantics, hide required state, move commands
 unexpectedly, or replace platform-standard interaction behavior. Selection, focus,

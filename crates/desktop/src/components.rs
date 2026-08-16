@@ -4,13 +4,13 @@ use std::{collections::BTreeMap, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
 use crate::response_viewer::{SearchMatch, join_header_lines};
 use crate::shell::PaneLayout;
-use crate::theme::{Theme, ThemeAppearance};
+use crate::theme::Theme;
 use gpui::{
     App, AppContext as _, Bounds, ClickEvent, ContentMask, Context, Element, ElementId, Entity,
     Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla, InspectorElementId,
     InteractiveElement as _, IntoElement, LayoutId, MouseButton, PaintQuad, ParentElement as _,
     Pixels, Render, RenderOnce, Role, ShapedLine, SharedString, StatefulInteractiveElement as _,
-    Style, Styled as _, Subscription, TextAlign, TextRun, Window, div, fill, hsla, point,
+    Style, Styled as _, Subscription, TextAlign, TextRun, Window, div, fill, point,
     prelude::FluentBuilder as _, px, relative, size, transparent_black,
 };
 use gpui_base::{
@@ -44,12 +44,12 @@ impl Render for VariableTooltip {
         let mut content = div()
             .debug_selector(|| "variable-input-tooltip-popup".into())
             .max_w(px(360.0))
-            .px(px(self.theme.metrics.spacing_2))
-            .py(px(self.theme.metrics.spacing_1))
+            .px(px(self.theme.metrics.spacing_3))
+            .py(px(self.theme.metrics.spacing_2))
             .flex()
             .flex_col()
             .gap(px(self.theme.metrics.spacing_1))
-            .rounded(px(self.theme.metrics.radius_small))
+            .rounded(px(self.theme.metrics.radius_medium))
             .bg(self.theme.colors.surfaces.overlay)
             .border_1()
             .border_color(self.theme.colors.borders.standard)
@@ -84,19 +84,23 @@ pub fn primary_button(
     let label = label.into();
     Button::new(id)
         .h(px(theme.metrics.control_height))
-        .px(px(theme.metrics.spacing_3))
+        .px(px(theme.metrics.spacing_4))
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(theme.metrics.radius_small))
         .font_family(theme.typography.interface_family)
         .text_size(px(theme.typography.body_size))
-        .text_color(theme.colors.selection.active_foreground)
+        .text_color(theme.colors.text.inverse)
         .bg(theme.colors.actions.accent)
         .border_1()
         .border_color(theme.colors.actions.accent)
         .cursor_pointer()
-        .hover(move |button| button.bg(theme.colors.actions.hover))
+        .hover(move |button| {
+            button
+                .bg(theme.colors.actions.hover)
+                .border_color(theme.colors.actions.hover)
+        })
         .focus(move |button| button.border_color(theme.colors.borders.focused))
         .styles(move |styles| {
             styles.disabled(move |button| {
@@ -201,14 +205,14 @@ impl RenderOnce for ProbeTextInput {
             .h(px(self.height))
             .when_some(self.width, |input, width| input.w(px(width)))
             .when(self.width.is_none(), |input| input.min_w(px(0.0)).w_full())
-            .px(px(theme.metrics.spacing_2))
+            .px(px(theme.metrics.spacing_3))
             .flex()
             .items_center()
             .rounded(px(theme.metrics.radius_small))
             .font_family(self.font_family)
             .text_size(px(self.text_size))
             .text_color(theme.colors.text.primary)
-            .bg(theme.colors.surfaces.window)
+            .bg(theme.colors.surfaces.raised)
             .border_1()
             .border_color(if focused {
                 theme.colors.borders.focused
@@ -300,7 +304,7 @@ pub(crate) fn editor_button(
     Button::new(id)
         .selected(selected)
         .h(px(theme.metrics.control_height))
-        .px(px(theme.metrics.spacing_2))
+        .px(px(theme.metrics.spacing_3))
         .flex()
         .items_center()
         .justify_center()
@@ -347,8 +351,8 @@ pub(crate) fn text_tab(
         .aria_selected(selected)
         .aria_position_in_set(position)
         .aria_size_of_set(size)
-        .h(px(28.0))
-        .px(px(theme.metrics.spacing_2))
+        .h(px(theme.metrics.control_height))
+        .px(px(theme.metrics.spacing_3))
         .flex()
         .items_center()
         .text_size(px(theme.typography.caption_size))
@@ -384,11 +388,11 @@ pub(crate) fn remove_row_button(
         .items_center()
         .justify_center()
         .rounded(px(theme.metrics.radius_small))
-        .bg(theme.colors.surfaces.window)
+        .bg(theme.colors.surfaces.raised)
         .border_1()
         .border_color(theme.colors.borders.standard)
         .cursor_pointer()
-        .hover(move |button| button.bg(theme.colors.surfaces.raised))
+        .hover(move |button| button.bg(theme.colors.selection.inactive_background))
         .focus(move |button| button.border_color(theme.colors.borders.focused))
         .on_click(on_click)
         .child(trash_icon(color))
@@ -546,19 +550,19 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
             .aria_expanded(open)
             .w_full()
             .h(px(theme.metrics.control_height))
-            .px(px(theme.metrics.spacing_2))
+            .px(px(theme.metrics.spacing_3))
             .flex()
             .items_center()
             .justify_between()
             .gap(px(theme.metrics.spacing_1))
             .overflow_hidden()
             .rounded(px(theme.metrics.radius_small))
-            .bg(theme.colors.surfaces.window)
+            .bg(theme.colors.surfaces.raised)
             .border_1()
             .border_color(theme.colors.borders.standard)
             .text_color(selected_color)
             .debug_selector(move || format!("{id}-trigger"))
-            .hover(move |trigger| trigger.bg(theme.colors.surfaces.raised))
+            .hover(move |trigger| trigger.bg(theme.colors.selection.inactive_background))
             .focus(move |trigger| trigger.border_color(theme.colors.borders.focused))
             .child(truncated_label(selected_label).min_w(px(0.0)).flex_1())
             .child(
@@ -633,9 +637,9 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
                     })
                     .flex()
                     .flex_col()
-                    .gap(px(2.0))
+                    .gap(px(theme.metrics.spacing_1))
                     .w(px(self.width.max(160.0)))
-                    .p(px(theme.metrics.spacing_1))
+                    .p(px(theme.metrics.spacing_2))
                     .rounded(px(theme.metrics.radius_medium))
                     .bg(theme.colors.surfaces.overlay)
                     .border_1()
@@ -653,8 +657,8 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
                             .aria_selected(selected)
                             .track_focus(&focus_handle)
                             .w_full()
-                            .h(px(28.0))
-                            .px(px(theme.metrics.spacing_2))
+                            .h(px(theme.metrics.control_height))
+                            .px(px(theme.metrics.spacing_3))
                             .flex()
                             .items_center()
                             .gap(px(theme.metrics.spacing_2))
@@ -875,12 +879,9 @@ fn editor_paint_style(theme: Theme) -> InputEditorStyle {
     InputEditorStyle {
         foreground: theme.colors.text.primary.into(),
         muted_foreground: theme.colors.text.muted.into(),
-        background: theme.colors.surfaces.window.into(),
+        background: theme.colors.surfaces.raised.into(),
         border: theme.colors.borders.standard.into(),
-        selection: match theme.appearance {
-            ThemeAppearance::Light => hsla(0.6, 0.8, 0.7, 0.45),
-            ThemeAppearance::Dark => hsla(0.6, 0.45, 0.45, 0.45),
-        },
+        selection: theme.editor_selection(),
         caret: theme.colors.text.primary.into(),
         highlight_styles: Arc::new(crate::syntax::ProbeHighlightStyles::new(theme)),
         ..Default::default()
@@ -994,7 +995,7 @@ impl RenderOnce for ProbeEditor {
             .font_family(theme.typography.monospace_family)
             .text_size(px(theme.typography.body_size))
             .text_color(self.text_color)
-            .bg(theme.colors.surfaces.window)
+            .bg(theme.colors.surfaces.raised)
             .border_1()
             .border_color(if focused {
                 theme.colors.borders.focused
@@ -1117,7 +1118,7 @@ fn variable_highlight_layer(
 ) -> impl IntoElement {
     let highlight_color = theme.colors.syntax.string.into();
     let caret_color = theme.colors.text.primary.into();
-    let mask_color = theme.colors.surfaces.window.into();
+    let mask_color = theme.colors.surfaces.raised.into();
     div()
         .absolute()
         .top(px(0.0))
@@ -1128,7 +1129,7 @@ fn variable_highlight_layer(
         // and visible width.
         .border_1()
         .border_color(transparent_black())
-        .px(px(theme.metrics.spacing_2))
+        .px(px(theme.metrics.spacing_3))
         .items_center()
         .flex()
         .overflow_hidden()
@@ -1391,7 +1392,7 @@ pub fn menu_button(
         .child(
             Button::new(id)
                 .w_full()
-                .h(px(32.0))
+                .h(px(theme.metrics.control_height + 4.0))
                 .px(px(theme.metrics.spacing_3))
                 .flex()
                 .items_center()
@@ -1473,8 +1474,8 @@ pub(crate) fn pane_layout_toggle(
         Toggle::new(("pane-layout", index))
             .pressed(pressed)
             .accessibility_label(label)
-            .w(px(30.0))
-            .h(px(26.0))
+            .w(px(32.0))
+            .h(px(28.0))
             .flex()
             .items_center()
             .justify_center()
@@ -1495,7 +1496,7 @@ pub(crate) fn pane_layout_toggle(
     };
 
     ToggleGroup::new("pane-layout-toggle")
-        .p(px(2.0))
+        .p(px(3.0))
         .flex()
         .gap(px(2.0))
         .rounded(px(theme.metrics.radius_medium))
@@ -1783,7 +1784,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_paint_style_uses_visible_caret_and_gallery_selection() {
+    fn editor_paint_style_uses_visible_caret_and_theme_selection() {
         for theme in [Theme::light(), Theme::dark()] {
             let style = editor_paint_style(theme);
             assert!(
@@ -1796,10 +1797,9 @@ mod tests {
             );
             assert_eq!(style.foreground, theme.colors.text.primary.into());
             assert_eq!(style.caret, theme.colors.text.primary.into());
+            assert_eq!(style.selection, theme.editor_selection());
             assert_ne!(style.selection, Hsla::default());
         }
-        let light = editor_paint_style(Theme::light());
-        assert_eq!(light.selection, hsla(0.6, 0.8, 0.7, 0.45));
     }
 
     #[test]

@@ -166,8 +166,9 @@ cross-desktop baseline informed by GNOME and KDE guidance plus applicable
 freedesktop.org standards. The Linux adapter must not become separate GTK and Qt
 imitations.
 
-Built-in themes initially provide the token values. Future user-defined themes use a
-separate presentation-infrastructure boundary:
+Built-in themes map Catppuccin Latte (light) and Mocha (dark) onto the semantic
+token model. Future user-defined themes use a separate presentation-infrastructure
+boundary:
 
 Plain-text theme file
         ↓

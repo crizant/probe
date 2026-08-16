@@ -1,10 +1,15 @@
 //! Semantic desktop design tokens and complete built-in themes.
 //!
-//! Components consume these roles rather than embedding color literals. Future
-//! user-authored themes can produce this same model without changing components.
+//! Built-in appearances map [Catppuccin](https://github.com/catppuccin/catppuccin)
+//! Latte (light) and Mocha (dark) onto this model. Components consume roles rather
+//! than embedding color literals. Future user-authored themes can produce the same
+//! model without changing components.
 
-use gpui::{Hsla, Rgba, WindowAppearance, px, rgba};
-use gpui_base::{ColorTokens, RadiusTokens, ScrollbarStyles, SemanticThemeTokens};
+use gpui::{FontWeight, Hsla, Rgba, WindowAppearance, hsla, px, rgba};
+use gpui_base::{
+    ColorTokens, RadiusTokens, ScrollbarStyles, SemanticThemeTokens, ShadowTokens, SpacingTokens,
+    TextStyleToken, TypographyTokens,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThemeAppearance {
@@ -184,7 +189,22 @@ impl Theme {
         gpui_theme.resizable.active_handle = theme.colors.borders.focused.into();
     }
 
+    /// Editor caret selection wash derived from Catppuccin blue.
+    #[must_use]
+    pub fn editor_selection(self) -> Hsla {
+        match self.appearance {
+            ThemeAppearance::Light => hsla(0.611, 0.915, 0.539, 0.28),
+            ThemeAppearance::Dark => hsla(0.603, 0.919, 0.759, 0.30),
+        }
+    }
+
     fn semantic_tokens(self) -> SemanticThemeTokens {
+        let mut shadow: Hsla = self.colors.text.primary.into();
+        shadow.a = match self.appearance {
+            ThemeAppearance::Light => 0.10,
+            ThemeAppearance::Dark => 0.32,
+        };
+        let body_line = px(self.typography.body_size * self.typography.body_line_height);
         SemanticThemeTokens {
             colors: ColorTokens {
                 background: self.colors.surfaces.window.into(),
@@ -197,7 +217,7 @@ impl Theme {
                 secondary_foreground: self.colors.text.secondary.into(),
                 muted: self.colors.surfaces.sidebar.into(),
                 muted_foreground: self.colors.text.muted.into(),
-                accent: self.colors.surfaces.raised.into(),
+                accent: self.colors.selection.inactive_background.into(),
                 accent_foreground: self.colors.text.primary.into(),
                 destructive: self.colors.status.error.into(),
                 destructive_foreground: self.colors.text.inverse.into(),
@@ -213,7 +233,50 @@ impl Theme {
                 xl: px(self.metrics.radius_large),
                 full: px(9999.0),
             },
-            ..Default::default()
+            spacing: SpacingTokens {
+                xxs: px(2.0),
+                xs: px(self.metrics.spacing_1),
+                sm: px(self.metrics.spacing_2),
+                md: px(self.metrics.spacing_3),
+                lg: px(self.metrics.spacing_4),
+                xl: px(20.0),
+                xxl: px(24.0),
+            },
+            typography: TypographyTokens {
+                sans: self.typography.interface_family.into(),
+                mono: self.typography.monospace_family.into(),
+                xs: TextStyleToken {
+                    size: px(self.typography.caption_size),
+                    line_height: px(16.0),
+                    weight: FontWeight::NORMAL,
+                },
+                sm: TextStyleToken {
+                    size: px(self.typography.body_size),
+                    line_height: body_line,
+                    weight: FontWeight::NORMAL,
+                },
+                md: TextStyleToken {
+                    size: px(self.typography.body_size),
+                    line_height: body_line,
+                    weight: FontWeight::NORMAL,
+                },
+                lg: TextStyleToken {
+                    size: px(15.0),
+                    line_height: px(22.0),
+                    weight: FontWeight::NORMAL,
+                },
+                xl: TextStyleToken {
+                    size: px(self.typography.title_size),
+                    line_height: px(32.0),
+                    weight: FontWeight::SEMIBOLD,
+                },
+                mono_md: TextStyleToken {
+                    size: px(self.typography.body_size),
+                    line_height: px(20.0),
+                    weight: FontWeight::NORMAL,
+                },
+            },
+            shadow: ShadowTokens::elevations(shadow),
         }
     }
 
@@ -233,71 +296,7 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             appearance: ThemeAppearance::Light,
-            colors: Colors {
-                surfaces: SurfaceColors {
-                    window: rgba(0xffffffff),
-                    sidebar: rgba(0xf5f5f5ff),
-                    editor: rgba(0xffffffff),
-                    raised: rgba(0xf5f5f5ff),
-                    overlay: rgba(0xffffffff),
-                },
-                text: TextColors {
-                    primary: rgba(0x171717ff),
-                    secondary: rgba(0x525252ff),
-                    muted: rgba(0x737373ff),
-                    placeholder: rgba(0xa3a3a3ff),
-                    inverse: rgba(0xffffffff),
-                },
-                borders: BorderColors {
-                    subtle: rgba(0xe5e5e5ff),
-                    standard: rgba(0xd4d4d4ff),
-                    strong: rgba(0xa3a3a3ff),
-                    focused: rgba(0x171717ff),
-                },
-                actions: ActionColors {
-                    accent: rgba(0x171717ff),
-                    hover: rgba(0x404040ff),
-                    pressed: rgba(0x0a0a0aff),
-                    disabled: rgba(0xe5e5e5ff),
-                    disabled_foreground: rgba(0xa3a3a3ff),
-                },
-                selection: SelectionColors {
-                    active_background: rgba(0x171717ff),
-                    active_foreground: rgba(0xffffffff),
-                    inactive_background: rgba(0xe5e5e5ff),
-                    inactive_foreground: rgba(0x171717ff),
-                },
-                status: StatusColors {
-                    success: rgba(0x248a3dff),
-                    warning: rgba(0x9a6700ff),
-                    error: rgba(0xc62828ff),
-                    informational: rgba(0x171717ff),
-                },
-                methods: MethodColors {
-                    get: rgba(0x087f5bff),
-                    post: rgba(0x7a5af8ff),
-                    put: rgba(0x9a6700ff),
-                    patch: rgba(0xb54708ff),
-                    delete: rgba(0xc62828ff),
-                    other: rgba(0x4b4b50ff),
-                },
-                responses: ResponseColors {
-                    informational: rgba(0x171717ff),
-                    success: rgba(0x248a3dff),
-                    redirect: rgba(0x7a5af8ff),
-                    client_error: rgba(0xb54708ff),
-                    server_error: rgba(0xc62828ff),
-                },
-                syntax: SyntaxColors {
-                    plain: rgba(0x1d1d1fff),
-                    property: rgba(0x005cc5ff),
-                    string: rgba(0x248a3dff),
-                    number: rgba(0x7a3e9dff),
-                    boolean: rgba(0xb54708ff),
-                    null: rgba(0x6e6e73ff),
-                    punctuation: rgba(0x4b4b50ff),
-                },
-            },
+            colors: latte(),
             typography: platform_typography(),
             metrics: default_metrics(),
             motion: default_motion(),
@@ -308,75 +307,151 @@ impl Theme {
     pub fn dark() -> Self {
         Self {
             appearance: ThemeAppearance::Dark,
-            colors: Colors {
-                surfaces: SurfaceColors {
-                    window: rgba(0x0a0a0aff),
-                    sidebar: rgba(0x171717ff),
-                    editor: rgba(0x0a0a0aff),
-                    raised: rgba(0x171717ff),
-                    overlay: rgba(0x171717ff),
-                },
-                text: TextColors {
-                    primary: rgba(0xfafafaff),
-                    secondary: rgba(0xa3a3a3ff),
-                    muted: rgba(0x737373ff),
-                    placeholder: rgba(0x525252ff),
-                    inverse: rgba(0x0a0a0aff),
-                },
-                borders: BorderColors {
-                    subtle: rgba(0x262626ff),
-                    standard: rgba(0x404040ff),
-                    strong: rgba(0x525252ff),
-                    focused: rgba(0xfafafaff),
-                },
-                actions: ActionColors {
-                    accent: rgba(0xfafafaff),
-                    hover: rgba(0xd4d4d4ff),
-                    pressed: rgba(0xffffffff),
-                    disabled: rgba(0x262626ff),
-                    disabled_foreground: rgba(0x737373ff),
-                },
-                selection: SelectionColors {
-                    active_background: rgba(0xfafafaff),
-                    active_foreground: rgba(0x0a0a0aff),
-                    inactive_background: rgba(0x262626ff),
-                    inactive_foreground: rgba(0xfafafaff),
-                },
-                status: StatusColors {
-                    success: rgba(0x4cc963ff),
-                    warning: rgba(0xffd60aff),
-                    error: rgba(0xff6961ff),
-                    informational: rgba(0xfafafaff),
-                },
-                methods: MethodColors {
-                    get: rgba(0x63e6beff),
-                    post: rgba(0xbf9affff),
-                    put: rgba(0xffd60aff),
-                    patch: rgba(0xff9f0aff),
-                    delete: rgba(0xff6961ff),
-                    other: rgba(0xd1d1d6ff),
-                },
-                responses: ResponseColors {
-                    informational: rgba(0x64d2ffff),
-                    success: rgba(0x4cc963ff),
-                    redirect: rgba(0xbf9affff),
-                    client_error: rgba(0xff9f0aff),
-                    server_error: rgba(0xff6961ff),
-                },
-                syntax: SyntaxColors {
-                    plain: rgba(0xf5f5f7ff),
-                    property: rgba(0x64d2ffff),
-                    string: rgba(0x63e6beff),
-                    number: rgba(0xbf9affff),
-                    boolean: rgba(0xff9f0aff),
-                    null: rgba(0xaeaeb2ff),
-                    punctuation: rgba(0xd1d1d6ff),
-                },
-            },
+            colors: mocha(),
             typography: platform_typography(),
             metrics: default_metrics(),
             motion: default_motion(),
         }
+    }
+}
+
+/// Catppuccin Latte — official palette mapped onto Probe semantic roles.
+/// https://github.com/catppuccin/catppuccin
+fn latte() -> Colors {
+    Colors {
+        surfaces: SurfaceColors {
+            window: rgba(0xeff1f5ff),  // base
+            sidebar: rgba(0xe6e9efff), // mantle
+            editor: rgba(0xeff1f5ff),  // base
+            raised: rgba(0xdce0e8ff),  // crust
+            overlay: rgba(0xeff1f5ff), // base
+        },
+        text: TextColors {
+            primary: rgba(0x4c4f69ff),     // text
+            secondary: rgba(0x5c5f77ff),   // subtext1
+            muted: rgba(0x6c6f85ff),       // subtext0
+            placeholder: rgba(0x8c8fa1ff), // overlay1
+            inverse: rgba(0xffffffff),     // on-accent
+        },
+        borders: BorderColors {
+            subtle: rgba(0xccd0daff),   // surface0
+            standard: rgba(0xbcc0ccff), // surface1
+            strong: rgba(0x9ca0b0ff),   // overlay0
+            focused: rgba(0x1e66f5ff),  // blue
+        },
+        actions: ActionColors {
+            accent: rgba(0x1e66f5ff),              // blue
+            hover: rgba(0x0a52e0ff),               // blue, darker
+            pressed: rgba(0x0843b9ff),             // blue, darkest
+            disabled: rgba(0xccd0daff),            // surface0
+            disabled_foreground: rgba(0x8c8fa1ff), // overlay1
+        },
+        selection: SelectionColors {
+            active_background: rgba(0x1e66f5ff),   // blue
+            active_foreground: rgba(0xffffffff),   // on-accent
+            inactive_background: rgba(0xccd0daff), // surface0
+            inactive_foreground: rgba(0x4c4f69ff), // text
+        },
+        status: StatusColors {
+            success: rgba(0x40a02bff),       // green
+            warning: rgba(0xdf8e1dff),       // yellow
+            error: rgba(0xd20f39ff),         // red
+            informational: rgba(0x209fb5ff), // sapphire
+        },
+        methods: MethodColors {
+            get: rgba(0x179299ff),    // teal
+            post: rgba(0xfe640bff),   // peach
+            put: rgba(0xdf8e1dff),    // yellow
+            patch: rgba(0x8839efff),  // mauve
+            delete: rgba(0xd20f39ff), // red
+            other: rgba(0x7c7f93ff),  // overlay2
+        },
+        responses: ResponseColors {
+            informational: rgba(0x209fb5ff), // sapphire
+            success: rgba(0x40a02bff),       // green
+            redirect: rgba(0xdf8e1dff),      // yellow
+            client_error: rgba(0xfe640bff),  // peach
+            server_error: rgba(0xd20f39ff),  // red
+        },
+        syntax: SyntaxColors {
+            plain: rgba(0x4c4f69ff),       // text
+            property: rgba(0x1e66f5ff),    // blue
+            string: rgba(0x40a02bff),      // green
+            number: rgba(0xfe640bff),      // peach
+            boolean: rgba(0x8839efff),     // mauve
+            null: rgba(0x7c7f93ff),        // overlay2
+            punctuation: rgba(0x8c8fa1ff), // overlay1
+        },
+    }
+}
+
+/// Catppuccin Mocha — official palette mapped onto Probe semantic roles.
+/// https://github.com/catppuccin/catppuccin
+fn mocha() -> Colors {
+    Colors {
+        surfaces: SurfaceColors {
+            window: rgba(0x1e1e2eff),  // base
+            sidebar: rgba(0x181825ff), // mantle
+            editor: rgba(0x1e1e2eff),  // base
+            raised: rgba(0x11111bff),  // crust
+            overlay: rgba(0x313244ff), // surface0
+        },
+        text: TextColors {
+            primary: rgba(0xcdd6f4ff),     // text
+            secondary: rgba(0xbac2deff),   // subtext1
+            muted: rgba(0xa6adc8ff),       // subtext0
+            placeholder: rgba(0x7f849cff), // overlay1
+            inverse: rgba(0x11111bff),     // crust
+        },
+        borders: BorderColors {
+            subtle: rgba(0x313244ff),   // surface0
+            standard: rgba(0x45475aff), // surface1
+            strong: rgba(0x6c7086ff),   // overlay0
+            focused: rgba(0x89b4faff),  // blue
+        },
+        actions: ActionColors {
+            accent: rgba(0x89b4faff),              // blue
+            hover: rgba(0xa1c4fbff),               // blue, lighter
+            pressed: rgba(0xbad3fcff),             // blue, lightest
+            disabled: rgba(0x313244ff),            // surface0
+            disabled_foreground: rgba(0x7f849cff), // overlay1
+        },
+        selection: SelectionColors {
+            active_background: rgba(0x89b4faff),   // blue
+            active_foreground: rgba(0x11111bff),   // crust
+            inactive_background: rgba(0x313244ff), // surface0
+            inactive_foreground: rgba(0xcdd6f4ff), // text
+        },
+        status: StatusColors {
+            success: rgba(0xa6e3a1ff),       // green
+            warning: rgba(0xf9e2afff),       // yellow
+            error: rgba(0xf38ba8ff),         // red
+            informational: rgba(0x74c7ecff), // sapphire
+        },
+        methods: MethodColors {
+            get: rgba(0x94e2d5ff),    // teal
+            post: rgba(0xfab387ff),   // peach
+            put: rgba(0xf9e2afff),    // yellow
+            patch: rgba(0xcba6f7ff),  // mauve
+            delete: rgba(0xf38ba8ff), // red
+            other: rgba(0x9399b2ff),  // overlay2
+        },
+        responses: ResponseColors {
+            informational: rgba(0x74c7ecff), // sapphire
+            success: rgba(0xa6e3a1ff),       // green
+            redirect: rgba(0xf9e2afff),      // yellow
+            client_error: rgba(0xfab387ff),  // peach
+            server_error: rgba(0xf38ba8ff),  // red
+        },
+        syntax: SyntaxColors {
+            plain: rgba(0xcdd6f4ff),       // text
+            property: rgba(0x89b4faff),    // blue
+            string: rgba(0xa6e3a1ff),      // green
+            number: rgba(0xfab387ff),      // peach
+            boolean: rgba(0xcba6f7ff),     // mauve
+            null: rgba(0x9399b2ff),        // overlay2
+            punctuation: rgba(0x7f849cff), // overlay1
+        },
     }
 }
 
@@ -430,10 +505,10 @@ const fn default_metrics() -> Metrics {
         spacing_2: 8.0,
         spacing_3: 12.0,
         spacing_4: 16.0,
-        radius_small: 3.0,
-        radius_medium: 6.0,
-        radius_large: 8.0,
-        control_height: 28.0,
+        radius_small: 6.0,
+        radius_medium: 8.0,
+        radius_large: 10.0,
+        control_height: 30.0,
         icon_small: 12.0,
         icon_standard: 16.0,
         elevation_raised: 1.0,
@@ -453,7 +528,7 @@ const fn default_motion() -> Motion {
 #[cfg(test)]
 mod tests {
     use super::{Theme, ThemeAppearance};
-    use gpui::{Rgba, WindowAppearance};
+    use gpui::{Rgba, WindowAppearance, rgba};
 
     #[test]
     fn native_appearances_select_the_expected_built_in_theme() {
@@ -486,10 +561,22 @@ mod tests {
                 theme.colors.selection.inactive_background
             );
             assert!(theme.metrics.control_height >= 28.0);
+            assert!(theme.metrics.radius_small >= 4.0);
+            assert!(theme.metrics.radius_large <= 12.0);
+            assert!(theme.metrics.radius_small < theme.metrics.radius_medium);
+            assert!(theme.metrics.radius_medium < theme.metrics.radius_large);
             assert_eq!(theme.method_color("GET"), theme.colors.methods.get);
             assert_eq!(theme.method_color("post"), theme.colors.methods.post);
             assert_ne!(theme.method_color("GET"), theme.method_color("DELETE"));
         }
+    }
+
+    #[test]
+    fn built_in_themes_use_catppuccin_latte_and_mocha() {
+        assert_eq!(Theme::light().colors.surfaces.window, rgba(0xeff1f5ff));
+        assert_eq!(Theme::light().colors.actions.accent, rgba(0x1e66f5ff));
+        assert_eq!(Theme::dark().colors.surfaces.window, rgba(0x1e1e2eff));
+        assert_eq!(Theme::dark().colors.actions.accent, rgba(0x89b4faff));
     }
 
     #[test]

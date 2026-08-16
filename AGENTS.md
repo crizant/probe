@@ -270,7 +270,7 @@ gpui-base = { git = "https://github.com/longbridge/gpui-component", rev = "…" 
 Rust crate and import path: `gpui-base` / `gpui_base`.
 
 Call `probe_desktop::theme::Theme::init(cx)` once before opening windows
-(this calls `gpui_base::init` and installs default chrome tokens).
+(this calls `gpui_base::init` and installs Probe's Catppuccin semantic tokens).
 
 ## Do not confuse these libraries
 
@@ -282,8 +282,8 @@ These are different crates. Do not substitute one for another:
 | **gpui-component** | `longbridge/gpui-component` (`crates/ui`) | Forbidden. Pre-styled façade. |
 
 Never depend on `gpui-component`. Never copy `gpui_component::` APIs or
-`.primary()` theme helpers into Probe. Desktop chrome uses gpui-base's
-default gallery tokens through Probe's semantic theme model.
+`.primary()` theme helpers into Probe. Desktop chrome uses Catppuccin Latte
+(light) and Mocha (dark) through Probe's semantic theme model.
 
 Pin GPUI to the Zed revision required by the pinned `gpui-base` commit.
 If Cargo reports incompatible GPUI types, the GPUI pin drifted from
@@ -305,7 +305,7 @@ gpui-base:
 - component mechanics
 
 application (Probe):
-- maps gpui-base default chrome tokens into semantic roles
+- maps Catppuccin Latte/Mocha into semantic roles
 - domain colors (methods, status, syntax)
 - compositions in `crates/desktop/src/components.rs`
 
