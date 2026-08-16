@@ -822,6 +822,7 @@ impl ProbeApp {
                 .unwrap_or("Untitled request");
             let select_view = cx.weak_entity();
             let close_view = cx.weak_entity();
+            let middle_close_view = close_view.clone();
             let tab_key = *key;
             let tab_index = self
                 .shell
@@ -855,6 +856,15 @@ impl ProbeApp {
                     .cursor_pointer()
                     .on_click(move |_, _, cx| {
                         let _ = select_view.update(cx, |view, cx| view.select_request(tab_key, cx));
+                    })
+                    .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
+                    .on_aux_click(move |event, _, cx| {
+                        if !event.is_middle_click() {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        let _ =
+                            middle_close_view.update(cx, |view, cx| view.close_tab(tab_key, cx));
                     })
                     .child(
                         components::truncated_label(label.to_owned())
@@ -2995,7 +3005,7 @@ pub fn run() {
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
-    use gpui::{Modifiers, TestAppContext, VisualTestContext, px, size};
+    use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size};
     use probe_http::{HttpResponse, ResponseHeader};
 
     use super::ProbeApp;
@@ -3493,6 +3503,47 @@ mod tests {
             "request tab label exceeded the tab max width: {:?}",
             tab_label.size
         );
+    }
+
+    #[gpui::test]
+    fn middle_clicking_a_request_tab_closes_it(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let first = workspace.requests()[0].key();
+        let second = workspace.requests()[1].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(first, cx);
+                view.select_request(second, cx);
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let tab = visual
+            .debug_bounds("request-tab-label")
+            .expect("active request tab should render");
+        visual.simulate_mouse_down(tab.center(), MouseButton::Middle, Modifiers::default());
+        visual.simulate_mouse_up(tab.center(), MouseButton::Middle, Modifiers::default());
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        let (tabs, active) = window
+            .update(cx, |view, _, _| {
+                (view.shell.tabs().to_vec(), view.shell.active_tab())
+            })
+            .expect("test window should remain open");
+        assert_eq!(tabs, vec![first]);
+        assert_eq!(active, Some(first));
     }
 
     #[gpui::test]
