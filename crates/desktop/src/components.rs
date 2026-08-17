@@ -1,6 +1,12 @@
 //! Probe-styled compositions over headless Longbridge gpui-base behavior.
 
-use std::{collections::BTreeMap, ops::Range, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    ops::Range,
+    rc::Rc,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use crate::response_viewer::{SearchMatch, join_header_lines};
 use crate::shell::PaneLayout;
@@ -28,13 +34,36 @@ pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
     div().min_w(px(0.0)).truncate().child(text.into())
 }
 
-const CHEVRON_DOWN_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M3 5.5 8 11 13 5.5" stroke="black" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
-const CHEVRON_UP_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M3 10.5 8 5 13 10.5" stroke="black" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
-const CHEVRON_RIGHT_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M5.5 3 11 8 5.5 13" stroke="black" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
-const PLUS_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="black" stroke-width="1.75" stroke-linecap="round"/></svg>"#;
-const SAVE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M3 2.5h8l2 2v9H3v-11Z" stroke="black" stroke-width="1.5" stroke-linejoin="round"/><path d="M5 2.5v4h6v-4M5 13.5v-4h6v4" stroke="black" stroke-width="1.5" stroke-linejoin="round"/></svg>"#;
+static CHEVRON_DOWN_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuChevronDown));
+static CHEVRON_UP_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuChevronUp));
+static CHEVRON_RIGHT_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuChevronRight));
+static PLUS_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuPlus));
+static SAVE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuSave));
+static CLOSE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuX));
+static TRASH_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuTrash2));
 
-fn painted_svg_icon(path: &'static str, svg: &'static [u8], size: f32) -> gpui::Div {
+fn icon_svg_bytes(icon: icondata::Icon) -> Vec<u8> {
+    format!(
+        concat!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{}" fill="{}" "#,
+            r#"stroke="{}" stroke-width="{}" stroke-linecap="{}" stroke-linejoin="{}">"#,
+            "{}",
+            "</svg>"
+        ),
+        icon.view_box.unwrap_or("0 0 24 24"),
+        icon.fill.unwrap_or("none"),
+        icon.stroke.unwrap_or("currentColor"),
+        icon.stroke_width.unwrap_or("2"),
+        icon.stroke_linecap.unwrap_or("round"),
+        icon.stroke_linejoin.unwrap_or("round"),
+        icon.data,
+    )
+    .into_bytes()
+}
+
+fn library_icon(cache_key: &'static str, data: &'static LazyLock<Vec<u8>>, size: f32) -> gpui::Div {
     let size = px(size);
     div()
         .flex_none()
@@ -48,8 +77,8 @@ fn painted_svg_icon(path: &'static str, svg: &'static [u8], size: f32) -> gpui::
                 move |bounds, _, window, cx| {
                     let _ = window.paint_svg(
                         bounds,
-                        SharedString::from(path),
-                        Some(svg),
+                        SharedString::from(cache_key),
+                        Some(data.as_slice()),
                         TransformationMatrix::default(),
                         window.text_style().color,
                         cx,
@@ -62,11 +91,15 @@ fn painted_svg_icon(path: &'static str, svg: &'static [u8], size: f32) -> gpui::
 
 pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
     let icon = if expanded {
-        painted_svg_icon("probe-chevron-up", CHEVRON_UP_SVG, theme.metrics.icon_small)
+        library_icon(
+            "lucide-chevron-up",
+            &CHEVRON_UP_SVG,
+            theme.metrics.icon_small,
+        )
     } else {
-        painted_svg_icon(
-            "probe-chevron-down",
-            CHEVRON_DOWN_SVG,
+        library_icon(
+            "lucide-chevron-down",
+            &CHEVRON_DOWN_SVG,
             theme.metrics.icon_small,
         )
     };
@@ -75,15 +108,15 @@ pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
 
 pub(crate) fn tree_chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
     let icon = if expanded {
-        painted_svg_icon(
-            "probe-chevron-down",
-            CHEVRON_DOWN_SVG,
+        library_icon(
+            "lucide-chevron-down",
+            &CHEVRON_DOWN_SVG,
             theme.metrics.icon_small,
         )
     } else {
-        painted_svg_icon(
-            "probe-chevron-right",
-            CHEVRON_RIGHT_SVG,
+        library_icon(
+            "lucide-chevron-right",
+            &CHEVRON_RIGHT_SVG,
             theme.metrics.icon_small,
         )
     };
@@ -91,25 +124,17 @@ pub(crate) fn tree_chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
 }
 
 fn plus_icon(theme: Theme) -> gpui::Div {
-    painted_svg_icon("probe-plus", PLUS_SVG, theme.metrics.icon_small)
+    library_icon("lucide-plus", &PLUS_SVG, theme.metrics.icon_small)
 }
 
 pub(crate) fn save_icon(theme: Theme) -> gpui::Div {
-    painted_svg_icon("probe-save", SAVE_SVG, theme.metrics.icon_standard)
+    library_icon("lucide-save", &SAVE_SVG, theme.metrics.icon_standard)
         .text_color(theme.colors.text.primary)
 }
 
 pub(crate) fn close_icon(theme: Theme) -> gpui::Div {
-    div()
-        .flex_none()
-        .w(px(theme.metrics.icon_standard))
-        .h(px(theme.metrics.icon_standard))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(theme.metrics.icon_standard))
-        .line_height(relative(1.0))
-        .child("×")
+    library_icon("lucide-x", &CLOSE_SVG, theme.metrics.icon_standard)
+        .text_color(theme.colors.text.secondary)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -503,30 +528,7 @@ pub(crate) fn remove_row_button(
 }
 
 fn trash_icon(color: gpui::Rgba) -> gpui::Div {
-    div()
-        .w(px(12.0))
-        .h(px(13.0))
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(1.0))
-        .child(div().w(px(4.0)).h(px(1.5)).rounded(px(1.0)).bg(color))
-        .child(div().w(px(12.0)).h(px(1.5)).rounded(px(0.5)).bg(color))
-        .child(
-            div()
-                .w(px(10.0))
-                .h(px(8.0))
-                .rounded(px(1.5))
-                .border_1()
-                .border_color(color)
-                .overflow_hidden()
-                .flex()
-                .justify_center()
-                .gap(px(1.5))
-                .pt(px(1.5))
-                .child(div().w(px(1.0)).h(px(4.5)).bg(color))
-                .child(div().w(px(1.0)).h(px(4.5)).bg(color)),
-        )
+    library_icon("lucide-trash-2", &TRASH_SVG, 14.0).text_color(color)
 }
 
 pub(crate) fn dropdown<T: Clone + Eq + 'static>(

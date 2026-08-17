@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 atomic-write-file = "0.3.1"
 directories = "6.0.0"
+icondata = { version = "0.7.0", default-features = false, features = ["lucide"] }
 # Longbridge gpui-base from longbridge/gpui-component. This is the unstyled
 # `gpui-base` crate, not the styled `gpui-component` façade.
 #
