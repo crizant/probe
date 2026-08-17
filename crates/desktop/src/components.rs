@@ -185,6 +185,13 @@ impl Render for VariableTooltip {
     }
 }
 
+fn focus_ring_shadow(ring_color: Hsla, gap_color: Hsla) -> Vec<BoxShadow> {
+    vec![
+        BoxShadow::new(px(0.0), px(0.0), ring_color).spread_radius(px(2.0)),
+        BoxShadow::new(px(0.0), px(0.0), gap_color).spread_radius(px(0.5)),
+    ]
+}
+
 pub fn primary_button(
     theme: Theme,
     id: impl Into<ElementId>,
@@ -212,12 +219,10 @@ pub fn primary_button(
                 .border_color(theme.colors.actions.hover)
         })
         .focus(move |button| {
-            button.shadow(vec![
-                BoxShadow::new(px(0.0), px(0.0), theme.colors.actions.accent.into())
-                    .spread_radius(px(3.0)),
-                BoxShadow::new(px(0.0), px(0.0), theme.colors.text.inverse.into())
-                    .spread_radius(px(1.0)),
-            ])
+            button.shadow(focus_ring_shadow(
+                theme.colors.actions.accent.into(),
+                theme.colors.text.inverse.into(),
+            ))
         })
         .styles(move |styles| {
             styles.disabled(move |button| {
@@ -1737,17 +1742,26 @@ pub(crate) fn pane_layout_toggle(
             .pressed(pressed)
             .accessibility_label(label)
             .w(px(32.0))
-            .h(px(28.0))
+            .h(px(theme.metrics.control_height))
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(theme.metrics.radius_small))
             .text_color(color)
+            .border_1()
+            .border_color(transparent_black())
+            .cursor_pointer()
             .when(pressed, |toggle| {
                 toggle.bg(theme.colors.selection.active_background)
             })
             .when(!pressed, |toggle| {
-                toggle.hover(move |toggle| toggle.bg(theme.colors.surfaces.raised))
+                toggle.hover(move |toggle| toggle.bg(theme.colors.selection.inactive_background))
+            })
+            .focus(move |toggle| {
+                toggle.shadow(focus_ring_shadow(
+                    theme.colors.borders.focused.into(),
+                    theme.colors.text.inverse.into(),
+                ))
             })
             .on_change(move |next, _, window, cx| {
                 if next {
@@ -1758,13 +1772,10 @@ pub(crate) fn pane_layout_toggle(
     };
 
     ToggleGroup::new("pane-layout-toggle")
-        .p(px(3.0))
         .flex()
-        .gap(px(2.0))
-        .rounded(px(theme.metrics.radius_medium))
-        .border_1()
-        .border_color(theme.colors.borders.standard)
-        .bg(theme.colors.surfaces.window)
+        .items_center()
+        .gap(px(theme.metrics.spacing_1))
+        .pr(px(theme.metrics.spacing_2))
         .child(item(
             0,
             "Stack response below request",
