@@ -6,11 +6,12 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, CursorStyle, FontWeight, InteractiveElement as _,
-    IntoElement, KeyBinding, MouseButton, MouseMoveEvent, ParentElement as _, PathPromptOptions,
-    PromptLevel, Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task,
-    TitlebarOptions, Window, WindowBounds, WindowControlArea, WindowOptions, div, point,
-    prelude::FluentBuilder as _, px, relative, size, uniform_list,
+    App, AppContext as _, Bounds, Context, CursorStyle, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, MouseMoveEvent,
+    ParentElement as _, PathPromptOptions, PromptLevel, Render, ScrollHandle,
+    StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions, Window, WindowBounds,
+    WindowControlArea, WindowOptions, div, point, prelude::FluentBuilder as _, px, relative, size,
+    uniform_list,
 };
 use gpui_base::{Button, Popover, Tab, Tabs};
 use probe_core::{
@@ -45,12 +46,16 @@ use crate::{
     theme::Theme,
 };
 
-gpui::actions!(probe, [SaveRequest]);
+gpui::actions!(
+    probe,
+    [OpenWorkspace, SaveRequest, CloseActiveTab, QuitApplication]
+);
 
 #[derive(Clone, Debug)]
 enum PendingClose {
     Tab(RequestKey),
     Workspace,
+    Window,
     Quit,
     Open {
         path: PathBuf,
@@ -65,6 +70,7 @@ struct TreeRow {
 }
 
 pub struct ProbeApp {
+    focus_handle: FocusHandle,
     loaded_workspace: Option<LoadedWorkspace>,
     workspace_path: Option<PathBuf>,
     shell: ShellState,
@@ -120,11 +126,14 @@ impl ProbeApp {
         let close_view = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             close_view
-                .update(cx, |view, cx| view.request_quit(window, cx))
+                .update(cx, |view, cx| view.request_close_window(window, cx))
                 .unwrap_or(true)
         });
+        let focus_handle = cx.focus_handle();
+        focus_handle.focus(window, cx);
 
         Self {
+            focus_handle,
             loaded_workspace: None,
             workspace_path: None,
             shell: ShellState::default(),
@@ -847,13 +856,22 @@ impl ProbeApp {
         }
     }
 
-    fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let dirty = self.dirty_keys();
         if dirty.is_empty() {
             return true;
         }
-        self.prompt_unsaved(dirty, PendingClose::Quit, window, cx);
+        self.prompt_unsaved(dirty, PendingClose::Window, window, cx);
         false
+    }
+
+    fn quit_application(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dirty = self.dirty_keys();
+        if dirty.is_empty() {
+            cx.quit();
+        } else {
+            self.prompt_unsaved(dirty, PendingClose::Quit, window, cx);
+        }
     }
 
     fn prompt_unsaved(
@@ -925,9 +943,10 @@ impl ProbeApp {
                         .filter(|request| self.persistence.is_dirty(*key, request))
                         .map(|_| vec![*key])
                         .unwrap_or_default(),
-                    PendingClose::Workspace | PendingClose::Quit | PendingClose::Open { .. } => {
-                        self.dirty_keys()
-                    }
+                    PendingClose::Workspace
+                    | PendingClose::Window
+                    | PendingClose::Quit
+                    | PendingClose::Open { .. } => self.dirty_keys(),
                 };
                 if dirty.is_empty() {
                     self.finish_pending_close(pending, window, cx);
@@ -997,7 +1016,8 @@ impl ProbeApp {
         match pending {
             PendingClose::Tab(key) => self.close_tab_now(key, cx),
             PendingClose::Workspace => self.close_workspace_now(cx),
-            PendingClose::Quit => window.remove_window(),
+            PendingClose::Window => window.remove_window(),
+            PendingClose::Quit => cx.quit(),
             PendingClose::Open {
                 path,
                 restored_state,
@@ -3433,6 +3453,7 @@ impl Render for ProbeApp {
 
         div()
             .size_full()
+            .track_focus(&self.focus_handle)
             .bg(theme.colors.surfaces.window)
             .text_color(theme.colors.text.primary)
             .font_family(theme.typography.interface_family)
@@ -3446,6 +3467,17 @@ impl Render for ProbeApp {
             )
             .on_action(cx.listener(|view, _: &SaveRequest, window, cx| {
                 view.save_active_request(window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &OpenWorkspace, window, cx| {
+                view.choose_workspace(window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &CloseActiveTab, window, cx| {
+                if let Some(key) = view.shell.active_tab() {
+                    view.request_close_tab(key, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|view, _: &QuitApplication, window, cx| {
+                view.quit_application(window, cx);
             }))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
@@ -3626,11 +3658,7 @@ fn render_windows_controls(_: Theme) -> gpui::Div {
 pub fn run() {
     gpui_platform::application().run(|cx: &mut App| {
         Theme::init(cx);
-        if cfg!(target_os = "macos") {
-            cx.bind_keys([KeyBinding::new("cmd-s", SaveRequest, None)]);
-        } else {
-            cx.bind_keys([KeyBinding::new("ctrl-s", SaveRequest, None)]);
-        }
+        bind_platform_hotkeys(cx);
 
         let bounds = Bounds::centered(None, size(px(1180.0), px(780.0)), cx);
         cx.open_window(
@@ -3662,6 +3690,32 @@ pub fn run() {
     });
 }
 
+fn bind_platform_hotkeys(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([
+        KeyBinding::new("cmd-o", OpenWorkspace, None),
+        KeyBinding::new("cmd-s", SaveRequest, None),
+        KeyBinding::new("cmd-w", CloseActiveTab, None),
+        KeyBinding::new("cmd-q", QuitApplication, None),
+    ]);
+
+    #[cfg(target_os = "windows")]
+    cx.bind_keys([
+        KeyBinding::new("ctrl-o", OpenWorkspace, None),
+        KeyBinding::new("ctrl-s", SaveRequest, None),
+        KeyBinding::new("ctrl-w", CloseActiveTab, None),
+        KeyBinding::new("alt-f4", QuitApplication, None),
+    ]);
+
+    #[cfg(target_os = "linux")]
+    cx.bind_keys([
+        KeyBinding::new("ctrl-o", OpenWorkspace, None),
+        KeyBinding::new("ctrl-s", SaveRequest, None),
+        KeyBinding::new("ctrl-w", CloseActiveTab, None),
+        KeyBinding::new("ctrl-q", QuitApplication, None),
+    ]);
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -3673,7 +3727,7 @@ mod tests {
     use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size};
     use probe_http::{HttpResponse, ResponseHeader};
 
-    use super::ProbeApp;
+    use super::{ProbeApp, bind_platform_hotkeys};
     use crate::{
         request_editor::{BodyEditorKind, EditorSection},
         response_viewer::ResponseViewerTab,
@@ -4449,6 +4503,47 @@ mod tests {
         visual.simulate_mouse_down(tab.center(), MouseButton::Middle, Modifiers::default());
         visual.simulate_mouse_up(tab.center(), MouseButton::Middle, Modifiers::default());
         visual.run_until_parked();
+        cx.run_until_parked();
+
+        let (tabs, active) = window
+            .update(cx, |view, _, _| {
+                (view.shell.tabs().to_vec(), view.shell.active_tab())
+            })
+            .expect("test window should remain open");
+        assert_eq!(tabs, vec![first]);
+        assert_eq!(active, Some(first));
+    }
+
+    #[gpui::test]
+    fn platform_close_tab_hotkey_closes_the_active_request(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        cx.update(bind_platform_hotkeys);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let first = workspace.requests()[0].key();
+        let second = workspace.requests()[1].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(first, cx);
+                view.select_request(second, cx);
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let shortcut = if cfg!(target_os = "macos") {
+            "cmd-w"
+        } else {
+            "ctrl-w"
+        };
+        cx.simulate_keystrokes(window.into(), shortcut);
         cx.run_until_parked();
 
         let (tabs, active) = window
