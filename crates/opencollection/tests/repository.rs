@@ -4,7 +4,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use probe_core::RequestUpdate;
+use probe_core::{
+    Authentication, AuthenticationKind, AuthenticationValue, Body, FormField, Header,
+    QueryParameter, RequestBody, RequestUpdate,
+};
 use probe_opencollection::{SaveError, load_workspace, load_workspace_from_str};
 
 fn fixture(path: &str) -> PathBuf {
@@ -141,6 +144,118 @@ fn bundled_update_save_reload_preserves_unknown_fields() {
     assert!(saved.contains("description: Creates a pet"));
     assert!(saved.contains("runtime:"));
     assert!(saved.contains("encodeUrl: true"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
+    let path = temporary_path("desktop-fields.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).expect("workspace should load");
+    let mut properties = std::collections::BTreeMap::new();
+    properties.insert(
+        "username".to_owned(),
+        AuthenticationValue::String("probe".to_owned()),
+    );
+    let update = RequestUpdate {
+        method: Some("PATCH".to_owned()),
+        url: Some("https://api.example.com/pets/42".to_owned()),
+        headers: Some(vec![Header {
+            name: "X-Probe".to_owned(),
+            value: "desktop".to_owned(),
+            disabled: true,
+        }]),
+        query_parameters: Some(vec![QueryParameter {
+            name: "preview".to_owned(),
+            value: "true".to_owned(),
+            disabled: false,
+        }]),
+        body: Some(Some(RequestBody::Single(Body::FormUrlEncoded(vec![
+            FormField {
+                name: "name".to_owned(),
+                value: "Milo".to_owned(),
+                disabled: false,
+            },
+        ])))),
+        authentication: Some(Some(Authentication {
+            kind: AuthenticationKind::Basic,
+            properties,
+        })),
+        ..RequestUpdate::default()
+    };
+
+    let prepared = loaded
+        .prepare_request_save("items/0", update)
+        .expect("save should prepare");
+    let completed = prepared.execute().expect("save should execute");
+    loaded.complete_request_save(completed);
+
+    let reloaded = load_workspace(&path).expect("saved workspace should reload");
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("items/0").unwrap())
+        .unwrap();
+    assert_eq!(request.method.as_deref(), Some("PATCH"));
+    assert_eq!(request.headers[0].name, "X-Probe");
+    assert!(request.headers[0].disabled);
+    assert_eq!(request.query_parameters[0].name, "preview");
+    assert!(matches!(
+        request.body,
+        Some(RequestBody::Single(Body::FormUrlEncoded(_)))
+    ));
+    assert_eq!(
+        request.authentication.as_ref().map(|auth| &auth.kind),
+        Some(&AuthenticationKind::Basic)
+    );
+
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("vendor.example"));
+    assert!(saved.contains("description: Payload media type"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn every_supported_body_and_authentication_shape_survives_desktop_style_saves() {
+    let path = temporary_path("desktop-body-shapes.yml");
+    fs::copy(fixture("phase1-bodies-auth-environments.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let snapshots: Vec<_> = loaded
+        .requests()
+        .iter()
+        .map(|located| {
+            (
+                located.selector().to_owned(),
+                loaded.workspace().request(located.key()).unwrap().clone(),
+            )
+        })
+        .collect();
+
+    for (selector, request) in &snapshots {
+        let update = RequestUpdate {
+            method: request.method.clone(),
+            url: request.url.clone(),
+            headers: Some(request.headers.clone()),
+            query_parameters: Some(request.query_parameters.clone()),
+            body: Some(request.body.clone()),
+            authentication: Some(request.authentication.clone()),
+            ..RequestUpdate::default()
+        };
+        let saved = loaded
+            .prepare_request_save(selector, update)
+            .unwrap()
+            .execute()
+            .unwrap();
+        loaded.complete_request_save(saved);
+    }
+
+    let reloaded = load_workspace(&path).unwrap();
+    for (selector, expected) in snapshots {
+        let actual = reloaded
+            .workspace()
+            .request(reloaded.request_key(&selector).unwrap())
+            .unwrap();
+        assert_eq!(actual, &expected, "request {selector} changed after save");
+    }
     fs::remove_file(path).unwrap();
 }
 

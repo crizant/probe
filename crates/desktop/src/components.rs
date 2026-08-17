@@ -32,6 +32,7 @@ const CHEVRON_DOWN_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" view
 const CHEVRON_UP_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M3 10.5 8 5 13 10.5" stroke="black" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
 const CHEVRON_RIGHT_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M5.5 3 11 8 5.5 13" stroke="black" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
 const PLUS_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="black" stroke-width="1.75" stroke-linecap="round"/></svg>"#;
+const SAVE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M3 2.5h8l2 2v9H3v-11Z" stroke="black" stroke-width="1.5" stroke-linejoin="round"/><path d="M5 2.5v4h6v-4M5 13.5v-4h6v4" stroke="black" stroke-width="1.5" stroke-linejoin="round"/></svg>"#;
 
 fn painted_svg_icon(path: &'static str, svg: &'static [u8], size: f32) -> gpui::Div {
     let size = px(size);
@@ -91,6 +92,11 @@ pub(crate) fn tree_chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
 
 fn plus_icon(theme: Theme) -> gpui::Div {
     painted_svg_icon("probe-plus", PLUS_SVG, theme.metrics.icon_small)
+}
+
+pub(crate) fn save_icon(theme: Theme) -> gpui::Div {
+    painted_svg_icon("probe-save", SAVE_SVG, theme.metrics.icon_standard)
+        .text_color(theme.colors.text.primary)
 }
 
 pub(crate) fn close_icon(theme: Theme) -> gpui::Div {

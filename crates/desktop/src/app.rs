@@ -6,10 +6,10 @@ use std::{
 
 use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, MouseMoveEvent, ParentElement as _, PathPromptOptions, Render,
-    ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions, Window,
-    WindowBounds, WindowControlArea, WindowOptions, div, point, prelude::FluentBuilder as _, px,
-    relative, size, uniform_list,
+    IntoElement, KeyBinding, MouseButton, MouseMoveEvent, ParentElement as _, PathPromptOptions,
+    PromptLevel, Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task,
+    TitlebarOptions, Window, WindowBounds, WindowControlArea, WindowOptions, div, point,
+    prelude::FluentBuilder as _, px, relative, size, uniform_list,
 };
 use gpui_base::{Button, Popover, Tab, Tabs};
 use probe_core::{
@@ -26,6 +26,7 @@ use crate::{
         ExecutionState, ResponseState, execute_http_request, format_duration, format_size,
         workspace_base_directory,
     },
+    persistence::PersistenceState,
     request_editor::{
         BodyEditorKind, EditorSection, RequestEditorState, auth_label, auth_value, body_kind,
         raw_body_mut, set_auth_property, set_authentication,
@@ -38,6 +39,19 @@ use crate::{
     shell::{PaneLayout, ResizePane, ShellState},
     theme::Theme,
 };
+
+gpui::actions!(probe, [SaveRequest]);
+
+#[derive(Clone, Debug)]
+enum PendingClose {
+    Tab(RequestKey),
+    Workspace,
+    Quit,
+    Open {
+        path: PathBuf,
+        restored_state: Option<SessionState>,
+    },
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TreeRow {
@@ -53,7 +67,10 @@ pub struct ProbeApp {
     message: Option<String>,
     session_store: Option<SessionStore>,
     session: SessionState,
-    save_task: Option<Task<()>>,
+    session_save_task: Option<Task<()>>,
+    request_save_task: Option<Task<()>>,
+    persistence: PersistenceState,
+    pending_close: Option<PendingClose>,
     workspace_switcher_open: bool,
     visible_tree_rows: Vec<TreeRow>,
     request_editor: RequestEditorState,
@@ -93,6 +110,12 @@ impl ProbeApp {
         let keystrokes = cx.observe_keystrokes(|this, _, _, cx| {
             this.reset_caret_blink(cx);
         });
+        let close_view = cx.weak_entity();
+        window.on_window_should_close(cx, move |window, cx| {
+            close_view
+                .update(cx, |view, cx| view.request_quit(window, cx))
+                .unwrap_or(true)
+        });
 
         Self {
             loaded_workspace: None,
@@ -102,7 +125,10 @@ impl ProbeApp {
             message: None,
             session_store: SessionStore::for_application(),
             session: SessionState::default(),
-            save_task: None,
+            session_save_task: None,
+            request_save_task: None,
+            persistence: PersistenceState::default(),
+            pending_close: None,
             workspace_switcher_open: false,
             visible_tree_rows: Vec::new(),
             request_editor: RequestEditorState::default(),
@@ -202,7 +228,7 @@ impl ProbeApp {
                     return;
                 };
                 let _ = view.update_in(cx, |view, window, cx| {
-                    view.load_workspace_path(path, None, window, cx);
+                    view.request_load_workspace(path, None, window, cx);
                 });
             })
             .detach();
@@ -263,7 +289,38 @@ impl ProbeApp {
             .detach();
     }
 
+    fn request_load_workspace(
+        &mut self,
+        path: PathBuf,
+        restored_state: Option<SessionState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let dirty = self.dirty_keys();
+        if dirty.is_empty() {
+            self.load_workspace_path(path, restored_state, window, cx);
+        } else {
+            self.prompt_unsaved(
+                dirty,
+                PendingClose::Open {
+                    path,
+                    restored_state,
+                },
+                window,
+                cx,
+            );
+        }
+    }
+
     fn set_workspace(&mut self, path: PathBuf, workspace: LoadedWorkspace) {
+        self.persistence
+            .reset(workspace.requests().iter().filter_map(|located| {
+                workspace
+                    .workspace()
+                    .request(located.key())
+                    .cloned()
+                    .map(|request| (located.key(), request))
+            }));
         self.execution.clear();
         self.response_viewer.clear();
         self.loaded_workspace = Some(workspace);
@@ -395,7 +452,7 @@ impl ProbeApp {
             return;
         };
         let state = self.session.clone();
-        self.save_task = Some(cx.spawn(async move |view, cx| {
+        self.session_save_task = Some(cx.spawn(async move |view, cx| {
             let result = cx.background_spawn(async move { store.save(&state) }).await;
             if let Err(error) = result {
                 let _ = view.update(cx, |view, cx| {
@@ -406,7 +463,7 @@ impl ProbeApp {
         }));
     }
 
-    fn close_workspace(&mut self, cx: &mut Context<Self>) {
+    fn close_workspace_now(&mut self, cx: &mut Context<Self>) {
         self.capture_selected_environment();
         self.execution.clear();
         self.response_viewer.clear();
@@ -414,6 +471,7 @@ impl ProbeApp {
         self.workspace_path = None;
         self.shell.reset_for_workspace();
         self.request_editor.clear();
+        self.persistence.clear();
         self.visible_tree_rows.clear();
         self.session.clear_active_collection();
         self.persist_session(cx);
@@ -439,11 +497,204 @@ impl ProbeApp {
         }
     }
 
-    fn close_tab(&mut self, key: RequestKey, cx: &mut Context<Self>) {
+    fn close_tab_now(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         self.shell.close_tab(key);
         self.reveal_active_tab();
         self.persist_session(cx);
         cx.notify();
+    }
+
+    fn dirty_keys(&self) -> Vec<RequestKey> {
+        let Some(loaded) = &self.loaded_workspace else {
+            return Vec::new();
+        };
+        self.persistence
+            .dirty_keys(loaded.requests().iter().filter_map(|located| {
+                loaded
+                    .workspace()
+                    .request(located.key())
+                    .map(|request| (located.key(), request))
+            }))
+    }
+
+    fn request_close_tab(&mut self, key: RequestKey, window: &mut Window, cx: &mut Context<Self>) {
+        let dirty = self
+            .loaded_workspace
+            .as_ref()
+            .and_then(|loaded| loaded.workspace().request(key))
+            .is_some_and(|request| self.persistence.is_dirty(key, request));
+        if dirty {
+            self.prompt_unsaved(vec![key], PendingClose::Tab(key), window, cx);
+        } else {
+            self.close_tab_now(key, cx);
+        }
+    }
+
+    fn request_close_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dirty = self.dirty_keys();
+        if dirty.is_empty() {
+            self.close_workspace_now(cx);
+        } else {
+            self.prompt_unsaved(dirty, PendingClose::Workspace, window, cx);
+        }
+    }
+
+    fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let dirty = self.dirty_keys();
+        if dirty.is_empty() {
+            return true;
+        }
+        self.prompt_unsaved(dirty, PendingClose::Quit, window, cx);
+        false
+    }
+
+    fn prompt_unsaved(
+        &mut self,
+        keys: Vec<RequestKey>,
+        pending: PendingClose,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pending_close.is_some() {
+            return;
+        }
+        let noun = if keys.len() == 1 {
+            "request"
+        } else {
+            "requests"
+        };
+        let prompt = window.prompt(
+            PromptLevel::Warning,
+            &format!("Save changes to {} {noun}?", keys.len()),
+            Some("Unsaved changes will be lost if you discard them."),
+            &["Save", "Discard", "Cancel"],
+            cx,
+        );
+        let view = cx.weak_entity();
+        window
+            .spawn(cx, async move |cx| {
+                let Ok(answer) = prompt.await else {
+                    return;
+                };
+                let _ = view.update_in(cx, |view, window, cx| match answer {
+                    0 => {
+                        view.pending_close = Some(pending);
+                        view.persistence.enqueue(keys);
+                        view.start_next_request_save(window, cx);
+                    }
+                    1 => view.finish_pending_close(pending, window, cx),
+                    _ => {}
+                });
+            })
+            .detach();
+    }
+
+    fn save_active_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(key) = self.shell.active_tab() {
+            let dirty = self
+                .loaded_workspace
+                .as_ref()
+                .and_then(|loaded| loaded.workspace().request(key))
+                .is_some_and(|request| self.persistence.is_dirty(key, request));
+            if dirty {
+                self.persistence.enqueue([key]);
+                self.start_next_request_save(window, cx);
+            }
+        }
+    }
+
+    fn start_next_request_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.request_save_task.is_some() {
+            return;
+        }
+        let Some(key) = self.persistence.next() else {
+            if let Some(pending) = self.pending_close.take() {
+                let dirty = match &pending {
+                    PendingClose::Tab(key) => self
+                        .loaded_workspace
+                        .as_ref()
+                        .and_then(|loaded| loaded.workspace().request(*key))
+                        .filter(|request| self.persistence.is_dirty(*key, request))
+                        .map(|_| vec![*key])
+                        .unwrap_or_default(),
+                    PendingClose::Workspace | PendingClose::Quit | PendingClose::Open { .. } => {
+                        self.dirty_keys()
+                    }
+                };
+                if dirty.is_empty() {
+                    self.finish_pending_close(pending, window, cx);
+                } else {
+                    self.prompt_unsaved(dirty, pending, window, cx);
+                }
+            }
+            return;
+        };
+        let Some(loaded) = &self.loaded_workspace else {
+            self.persistence.fail(key);
+            return;
+        };
+        let Some(request) = loaded.workspace().request(key) else {
+            self.persistence.fail(key);
+            return;
+        };
+        let Some(selector) = loaded.request_selector(key).map(str::to_owned) else {
+            self.persistence.fail(key);
+            return;
+        };
+        let (_revision, snapshot, update) = self.persistence.begin(key, request);
+        let prepared = match loaded.prepare_request_save(&selector, update) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.persistence.fail(key);
+                self.pending_close = None;
+                self.message = Some(format!("Could not save request: {error}"));
+                cx.notify();
+                return;
+            }
+        };
+        self.request_save_task = Some(cx.spawn_in(window, async move |view, window| {
+            let result = window
+                .background_spawn(async move { prepared.execute() })
+                .await;
+            let _ = view.update_in(window, |view, window, cx| {
+                view.request_save_task = None;
+                match result {
+                    Ok(saved) => {
+                        if let Some(loaded) = view.loaded_workspace.as_mut() {
+                            loaded.complete_request_save(saved);
+                        }
+                        view.persistence.complete(key, snapshot);
+                        view.message = None;
+                        view.start_next_request_save(window, cx);
+                    }
+                    Err(error) => {
+                        view.persistence.fail(key);
+                        view.pending_close = None;
+                        view.message = Some(format!("Could not save request: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn finish_pending_close(
+        &mut self,
+        pending: PendingClose,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_close = None;
+        match pending {
+            PendingClose::Tab(key) => self.close_tab_now(key, cx),
+            PendingClose::Workspace => self.close_workspace_now(cx),
+            PendingClose::Quit => window.remove_window(),
+            PendingClose::Open {
+                path,
+                restored_state,
+            } => self.load_workspace_path(path, restored_state, window, cx),
+        }
     }
 
     fn reveal_active_tab(&mut self) {
@@ -790,7 +1041,7 @@ impl ProbeApp {
                             let path = open_path.clone();
                             let _ = view.update(cx, |view, cx| {
                                 if !view.loading {
-                                    view.load_workspace_path(path, None, window, cx);
+                                    view.request_load_workspace(path, None, window, cx);
                                 }
                             });
                         })
@@ -861,6 +1112,7 @@ impl ProbeApp {
                 continue;
             };
             let active = self.shell.active_tab() == Some(*key);
+            let dirty = self.persistence.is_dirty(*key, request);
             let label = request
                 .metadata
                 .name
@@ -902,13 +1154,13 @@ impl ProbeApp {
                         let _ = select_view.update(cx, |view, cx| view.select_request(tab_key, cx));
                     })
                     .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
-                    .on_aux_click(move |event, _, cx| {
+                    .on_aux_click(move |event, window, cx| {
                         if !event.is_middle_click() {
                             return;
                         }
                         cx.stop_propagation();
-                        let _ =
-                            middle_close_view.update(cx, |view, cx| view.close_tab(tab_key, cx));
+                        let _ = middle_close_view
+                            .update(cx, |view, cx| view.request_close_tab(tab_key, window, cx));
                     })
                     .child(
                         components::truncated_label(label.to_owned())
@@ -917,6 +1169,17 @@ impl ProbeApp {
                                 label.debug_selector(|| "request-tab-label".into())
                             }),
                     )
+                    .when(dirty, |tab| {
+                        tab.child(
+                            div()
+                                .id(("request-dirty", key.slot()))
+                                .flex_none()
+                                .w(px(6.0))
+                                .h(px(6.0))
+                                .rounded(px(3.0))
+                                .bg(theme.colors.actions.accent),
+                        )
+                    })
                     .child(
                         Button::new(("close-tab", key.slot()))
                             .focusable(false)
@@ -930,10 +1193,11 @@ impl ProbeApp {
                             .rounded(px(theme.metrics.radius_small))
                             .hover(move |close| close.bg(theme.colors.actions.disabled))
                             .child(components::close_icon(theme))
-                            .on_click(move |_, _, cx| {
+                            .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
-                                let _ =
-                                    close_view.update(cx, |view, cx| view.close_tab(tab_key, cx));
+                                let _ = close_view.update(cx, |view, cx| {
+                                    view.request_close_tab(tab_key, window, cx)
+                                });
                             }),
                     ),
             );
@@ -998,6 +1262,7 @@ impl ProbeApp {
             return;
         };
         edit(request);
+        self.persistence.edited(key);
         cx.notify();
     }
 
@@ -1010,6 +1275,7 @@ impl ProbeApp {
             return;
         };
         self.request_editor.switch_body_kind(key, request, kind);
+        self.persistence.edited(key);
         cx.notify();
     }
 
@@ -1031,7 +1297,9 @@ impl ProbeApp {
         };
         let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
         let url = request.url.clone().unwrap_or_default();
+        let request_dirty = self.persistence.is_dirty(key, &request);
         let url_view = cx.weak_entity();
+        let save_view = cx.weak_entity();
         let execution_view = cx.weak_entity();
         let request_running = self
             .execution
@@ -1141,6 +1409,36 @@ impl ProbeApp {
                                     },
                                 ),
                             ))
+                            .when(request_dirty, |bar| {
+                                bar.child(
+                                    Button::new("request-save")
+                                        .accessibility_label("Save request")
+                                        .debug_selector(|| "request-save".into())
+                                        .ml(px(theme.metrics.spacing_2))
+                                        .flex_none()
+                                        .w(px(theme.metrics.control_height))
+                                        .h(px(theme.metrics.control_height))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(theme.metrics.radius_small))
+                                        .border_1()
+                                        .border_color(theme.colors.borders.standard)
+                                        .bg(theme.colors.surfaces.raised)
+                                        .hover(move |button| {
+                                            button.bg(theme.colors.selection.inactive_background)
+                                        })
+                                        .focus(move |button| {
+                                            button.border_color(theme.colors.borders.focused)
+                                        })
+                                        .child(components::save_icon(theme))
+                                        .on_click(move |_, window, cx| {
+                                            let _ = save_view.update(cx, |view, cx| {
+                                                view.save_active_request(window, cx);
+                                            });
+                                        }),
+                                )
+                            })
                             .child(div().ml(px(theme.metrics.spacing_2)).flex_none().child(
                                 components::primary_button(
                                     theme,
@@ -2645,7 +2943,7 @@ impl ProbeApp {
                         let _ = view.update(cx, |view, cx| {
                             view.workspace_switcher_open = false;
                             if !view.loading {
-                                view.load_workspace_path(path, None, window, cx);
+                                view.request_load_workspace(path, None, window, cx);
                             }
                         });
                     },
@@ -2677,10 +2975,10 @@ impl ProbeApp {
                 theme,
                 "workspace-switcher-close",
                 "Close Current Collection",
-                move |_, cx| {
+                move |window, cx| {
                     let _ = close_view.update(cx, |view, cx| {
                         view.workspace_switcher_open = false;
-                        view.close_workspace(cx);
+                        view.request_close_workspace(window, cx);
                     });
                 },
             ));
@@ -2838,6 +3136,9 @@ impl Render for ProbeApp {
                 MouseButton::Left,
                 cx.listener(|view, _, _, cx| view.reset_caret_blink(cx)),
             )
+            .on_action(cx.listener(|view, _: &SaveRequest, window, cx| {
+                view.save_active_request(window, cx);
+            }))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
                 MouseButton::Left,
@@ -3017,6 +3318,11 @@ fn render_windows_controls(_: Theme) -> gpui::Div {
 pub fn run() {
     gpui_platform::application().run(|cx: &mut App| {
         Theme::init(cx);
+        if cfg!(target_os = "macos") {
+            cx.bind_keys([KeyBinding::new("cmd-s", SaveRequest, None)]);
+        } else {
+            cx.bind_keys([KeyBinding::new("ctrl-s", SaveRequest, None)]);
+        }
 
         let bounds = Bounds::centered(None, size(px(1180.0), px(780.0)), cx);
         cx.open_window(
@@ -3050,7 +3356,11 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, time::Duration};
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
     use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size};
     use probe_http::{HttpResponse, ResponseHeader};
@@ -3080,6 +3390,144 @@ mod tests {
     fn http_environment_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/opencollection/phase5-http.yml")
+    }
+
+    fn writable_bundled_fixture(suffix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "probe-desktop-{}-{unique}-{suffix}.yml",
+            std::process::id()
+        ));
+        fs::copy(bundled_fixture(), &path).unwrap();
+        path
+    }
+
+    #[gpui::test]
+    fn request_save_runs_in_background_and_clears_dirty_state(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_bundled_fixture("save");
+        let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+        let key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                view.select_request(key, cx);
+                view.edit_request(
+                    key,
+                    |request| request.url = Some("https://saved.example/pets".to_owned()),
+                    cx,
+                );
+                assert!(
+                    view.persistence.is_dirty(
+                        key,
+                        view.loaded_workspace
+                            .as_ref()
+                            .unwrap()
+                            .workspace()
+                            .request(key)
+                            .unwrap()
+                    )
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let save = visual
+            .debug_bounds("request-save")
+            .expect("dirty request should show its save icon");
+        visual.simulate_click(save.center(), Modifiers::default());
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            visual.debug_bounds("request-save").is_none(),
+            "save icon should disappear when the request is clean"
+        );
+
+        let (dirty, message) = window
+            .update(cx, |view, _, _| {
+                let request = view
+                    .loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .workspace()
+                    .request(key)
+                    .unwrap();
+                (
+                    view.persistence.is_dirty(key, request),
+                    view.message.clone(),
+                )
+            })
+            .unwrap();
+        assert!(!dirty, "save failed: {message:?}");
+        let reloaded = probe_opencollection::load_workspace(&fixture).unwrap();
+        assert_eq!(
+            reloaded
+                .workspace()
+                .request(reloaded.requests()[0].key())
+                .unwrap()
+                .url
+                .as_deref(),
+            Some("https://saved.example/pets")
+        );
+        fs::remove_file(fixture).unwrap();
+    }
+
+    #[gpui::test]
+    fn save_conflict_keeps_the_request_dirty_and_visible(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_bundled_fixture("conflict");
+        let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+        let key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, window, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                view.select_request(key, cx);
+                view.edit_request(
+                    key,
+                    |request| request.url = Some("https://local.example".to_owned()),
+                    cx,
+                );
+                let mut external = fs::read_to_string(&fixture).unwrap();
+                external.push_str("external: true\n");
+                fs::write(&fixture, external).unwrap();
+                view.save_active_request(window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                let request = view
+                    .loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .workspace()
+                    .request(key)
+                    .unwrap();
+                assert!(view.persistence.is_dirty(key, request));
+                assert!(
+                    view.message
+                        .as_deref()
+                        .is_some_and(|message| message.contains("externally modified"))
+                );
+                assert_eq!(request.url.as_deref(), Some("https://local.example"));
+            })
+            .unwrap();
+        fs::remove_file(fixture).unwrap();
     }
 
     #[gpui::test]
@@ -3450,7 +3898,7 @@ mod tests {
                 view.set_workspace(fixture.clone(), workspace);
                 view.select_request(request_key, cx);
                 view.select_environment(Some("development".to_owned()), cx);
-                view.close_workspace(cx);
+                view.close_workspace_now(cx);
             })
             .expect("test window should be open");
 

@@ -430,6 +430,7 @@ fn extract_request_update(args: &mut Vec<String>) -> Result<RequestUpdate, CliEr
         name: extract_string_option(args, "--name")?,
         method: extract_string_option(args, "--method")?,
         url: extract_string_option(args, "--url")?,
+        ..RequestUpdate::default()
     })
 }
 

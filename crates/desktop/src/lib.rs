@@ -9,6 +9,7 @@ mod app;
 mod caret;
 pub mod components;
 mod execution;
+mod persistence;
 mod request_editor;
 mod response_viewer;
 mod session;

@@ -113,6 +113,9 @@ in a Pretty/Raw/Headers viewer with search. Large bodies are virtualized so navi
 stays responsive. The editor and response viewer support vertical or horizontal layouts,
 and the local desktop session restores the active workspace, tabs, collapsed folders,
 selected environment, pane orientation, and pane sizes automatically.
+Edited requests show a dirty indicator and expose a save icon beside the URL while dirty.
+Saves use the shared atomic OpenCollection repository on a background executor,
+and Probe asks before closing tabs, collections, or the application with unsaved changes.
 
 ```bash
 cargo run -p probe-cli -- --help

@@ -111,13 +111,27 @@ pub struct RequestUpdate {
     pub method: Option<String>,
     /// Replacement request URL.
     pub url: Option<String>,
+    /// Replacement headers.
+    pub headers: Option<Vec<Header>>,
+    /// Replacement query parameters.
+    pub query_parameters: Option<Vec<QueryParameter>>,
+    /// Replacement body. The inner `None` removes the body.
+    pub body: Option<Option<RequestBody>>,
+    /// Replacement authentication. The inner `None` removes authentication.
+    pub authentication: Option<Option<Authentication>>,
 }
 
 impl RequestUpdate {
     /// Returns whether the update leaves every field unchanged.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.name.is_none() && self.method.is_none() && self.url.is_none()
+        self.name.is_none()
+            && self.method.is_none()
+            && self.url.is_none()
+            && self.headers.is_none()
+            && self.query_parameters.is_none()
+            && self.body.is_none()
+            && self.authentication.is_none()
     }
 
     /// Applies the update to a domain request.
@@ -130,6 +144,18 @@ impl RequestUpdate {
         }
         if let Some(url) = &self.url {
             request.url = Some(url.clone());
+        }
+        if let Some(headers) = &self.headers {
+            request.headers.clone_from(headers);
+        }
+        if let Some(query_parameters) = &self.query_parameters {
+            request.query_parameters.clone_from(query_parameters);
+        }
+        if let Some(body) = &self.body {
+            request.body.clone_from(body);
+        }
+        if let Some(authentication) = &self.authentication {
+            request.authentication.clone_from(authentication);
         }
     }
 }

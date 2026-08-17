@@ -11,8 +11,10 @@ use atomic_write_file::AtomicWriteFile;
 #[cfg(any(unix, windows))]
 use fs4::FileExt;
 use probe_core::{
-    CollectionItem, Environment, FolderKey, RequestKey, RequestUpdate, Workspace, WorkspaceItemRef,
-    validate_environments,
+    Authentication, AuthenticationKind, AuthenticationValue, Body, CollectionItem, Environment,
+    FileReference, FolderKey, FormField, Header, MultipartPart, MultipartPartKind, MultipartValue,
+    QueryParameter, RawBodyKind, RequestBody, RequestKey, RequestUpdate, Workspace,
+    WorkspaceItemRef, validate_environments,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -189,6 +191,99 @@ impl LoadedWorkspace {
         );
         Ok(())
     }
+
+    /// Captures a request save that can be executed away from the UI thread.
+    ///
+    /// Preparing is in-memory only. [`PreparedRequestSave::execute`] performs the
+    /// conflict check and atomic filesystem write.
+    pub fn prepare_request_save(
+        &self,
+        selector: &str,
+        update: RequestUpdate,
+    ) -> Result<PreparedRequestSave, SaveError> {
+        if update.is_empty() {
+            return Err(SaveError::EmptyUpdate);
+        }
+        let persistence = self
+            .requests
+            .iter()
+            .find(|request| request.selector == selector)
+            .ok_or_else(|| SaveError::RequestNotFound(selector.to_owned()))?
+            .persistence
+            .clone()
+            .ok_or(SaveError::ReadOnlySource)?;
+        let original_source = self
+            .documents
+            .get(&persistence.document_path)
+            .expect("filesystem request must retain its source document")
+            .original_source
+            .clone();
+        Ok(PreparedRequestSave {
+            persistence,
+            original_source,
+            update,
+        })
+    }
+
+    /// Refreshes the retained conflict baseline after a prepared save succeeds.
+    pub fn complete_request_save(&mut self, saved: CompletedRequestSave) {
+        self.documents.insert(
+            saved.document_path,
+            SourceDocument {
+                original_source: saved.serialized_source,
+            },
+        );
+    }
+}
+
+/// A filesystem save captured from a loaded workspace for background execution.
+#[derive(Debug)]
+pub struct PreparedRequestSave {
+    persistence: RequestPersistence,
+    original_source: Vec<u8>,
+    update: RequestUpdate,
+}
+
+impl PreparedRequestSave {
+    /// Performs the exact-source check and atomic write.
+    pub fn execute(self) -> Result<CompletedRequestSave, SaveError> {
+        let _save_lock = SaveLock::acquire(&self.persistence.document_path)?;
+        let current =
+            fs::read(&self.persistence.document_path).map_err(|source| SaveError::Io {
+                path: self.persistence.document_path.clone(),
+                source,
+            })?;
+        if current != self.original_source {
+            return Err(SaveError::ConcurrentModification(
+                self.persistence.document_path,
+            ));
+        }
+        let mut document: Value =
+            serde_yaml_ng::from_slice(&self.original_source).map_err(|error| {
+                SaveError::InvalidDocument(format!("retained source cannot be parsed: {error}"))
+            })?;
+        let request = request_document_mut(&mut document, &self.persistence.item_path)?;
+        apply_request_update(request, &self.update)?;
+        let serialized = serde_yaml_ng::to_string(&document)
+            .map_err(SaveError::Serialize)?
+            .into_bytes();
+        atomic_write(
+            &self.persistence.document_path,
+            &serialized,
+            &self.original_source,
+        )?;
+        Ok(CompletedRequestSave {
+            document_path: self.persistence.document_path,
+            serialized_source: serialized,
+        })
+    }
+}
+
+/// The refreshed repository baseline produced by a successful prepared save.
+#[derive(Debug)]
+pub struct CompletedRequestSave {
+    document_path: PathBuf,
+    serialized_source: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -794,7 +889,13 @@ fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<
             Value::String(name.clone()),
         );
     }
-    if update.method.is_some() || update.url.is_some() {
+    if update.method.is_some()
+        || update.url.is_some()
+        || update.headers.is_some()
+        || update.query_parameters.is_some()
+        || update.body.is_some()
+        || update.authentication.is_some()
+    {
         let http = mapping_child(request, "http")?;
         if let Some(method) = &update.method {
             http.insert(
@@ -805,8 +906,307 @@ fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<
         if let Some(url) = &update.url {
             http.insert(Value::String("url".to_owned()), Value::String(url.clone()));
         }
+        if let Some(headers) = &update.headers {
+            merge_sequence(http, "headers", headers.iter().map(header_value).collect());
+        }
+        if let Some(parameters) = &update.query_parameters {
+            merge_sequence_preserving(
+                http,
+                "params",
+                parameters.iter().map(query_parameter_value).collect(),
+                &["type"],
+            );
+        }
+        if let Some(body) = &update.body {
+            set_optional_merged(http, "body", body.as_ref().map(request_body_value));
+        }
+        if let Some(authentication) = &update.authentication {
+            set_optional(
+                http,
+                "auth",
+                authentication.as_ref().map(authentication_value),
+            );
+        }
     }
     Ok(())
+}
+
+fn string_key(name: &str) -> Value {
+    Value::String(name.to_owned())
+}
+
+fn set_optional(mapping: &mut serde_yaml_ng::Mapping, name: &str, value: Option<Value>) {
+    let key = string_key(name);
+    if let Some(value) = value {
+        mapping.insert(key, value);
+    } else {
+        mapping.remove(&key);
+    }
+}
+
+fn set_optional_merged(mapping: &mut serde_yaml_ng::Mapping, name: &str, value: Option<Value>) {
+    let key = string_key(name);
+    if let Some(mut value) = value {
+        if let Some(existing) = mapping.remove(&key) {
+            merge_yaml(&mut value, existing);
+        }
+        mapping.insert(key, value);
+    } else {
+        mapping.remove(&key);
+    }
+}
+
+fn merge_yaml(replacement: &mut Value, existing: Value) {
+    match (replacement, existing) {
+        (Value::Mapping(replacement), Value::Mapping(existing)) => {
+            for (key, old_value) in existing {
+                if let Some(new_value) = replacement.get_mut(&key) {
+                    merge_yaml(new_value, old_value);
+                } else {
+                    replacement.insert(key, old_value);
+                }
+            }
+        }
+        (Value::Sequence(replacement), Value::Sequence(existing)) => {
+            for (new_value, old_value) in replacement.iter_mut().zip(existing) {
+                merge_yaml(new_value, old_value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn map(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
+    Value::Mapping(
+        entries
+            .into_iter()
+            .map(|(key, value)| (string_key(key), value))
+            .collect(),
+    )
+}
+
+fn merge_sequence(parent: &mut serde_yaml_ng::Mapping, name: &str, replacements: Vec<Value>) {
+    merge_sequence_preserving(parent, name, replacements, &[]);
+}
+
+fn merge_sequence_preserving(
+    parent: &mut serde_yaml_ng::Mapping,
+    name: &str,
+    replacements: Vec<Value>,
+    preserved_keys: &[&str],
+) {
+    let key = string_key(name);
+    let existing = parent
+        .get(&key)
+        .and_then(Value::as_sequence)
+        .cloned()
+        .unwrap_or_default();
+    let merged = replacements
+        .into_iter()
+        .enumerate()
+        .map(|(index, replacement)| {
+            let Some(Value::Mapping(mut old)) = existing.get(index).cloned() else {
+                return replacement;
+            };
+            let Value::Mapping(new) = replacement else {
+                return replacement;
+            };
+            for (key, value) in new {
+                if preserved_keys
+                    .iter()
+                    .any(|preserved| key == string_key(preserved))
+                    && old.contains_key(&key)
+                {
+                    continue;
+                }
+                old.insert(key, value);
+            }
+            Value::Mapping(old)
+        })
+        .collect();
+    parent.insert(key, Value::Sequence(merged));
+}
+
+fn header_value(header: &Header) -> Value {
+    map([
+        ("name", Value::String(header.name.clone())),
+        ("value", Value::String(header.value.clone())),
+        ("disabled", Value::Bool(header.disabled)),
+    ])
+}
+
+fn query_parameter_value(parameter: &QueryParameter) -> Value {
+    map([
+        ("name", Value::String(parameter.name.clone())),
+        ("value", Value::String(parameter.value.clone())),
+        ("type", Value::String("query".to_owned())),
+        ("disabled", Value::Bool(parameter.disabled)),
+    ])
+}
+
+fn request_body_value(body: &RequestBody) -> Value {
+    match body {
+        RequestBody::Single(body) => body_value(body),
+        RequestBody::Variants(variants) => Value::Sequence(
+            variants
+                .iter()
+                .map(|variant| {
+                    map([
+                        ("title", Value::String(variant.title.clone())),
+                        ("selected", Value::Bool(variant.selected)),
+                        ("body", body_value(&variant.body)),
+                    ])
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn body_value(body: &Body) -> Value {
+    match body {
+        Body::Raw(body) => map([
+            (
+                "type",
+                Value::String(
+                    match body.kind {
+                        RawBodyKind::Json => "json",
+                        RawBodyKind::Text => "text",
+                        RawBodyKind::Xml => "xml",
+                        RawBodyKind::Sparql => "sparql",
+                    }
+                    .to_owned(),
+                ),
+            ),
+            ("data", Value::String(body.data.clone())),
+        ]),
+        Body::FormUrlEncoded(fields) => map([
+            ("type", Value::String("form-urlencoded".to_owned())),
+            (
+                "data",
+                Value::Sequence(fields.iter().map(form_field_value).collect()),
+            ),
+        ]),
+        Body::Multipart(parts) => map([
+            ("type", Value::String("multipart-form".to_owned())),
+            (
+                "data",
+                Value::Sequence(parts.iter().map(multipart_part_value).collect()),
+            ),
+        ]),
+        Body::File(files) => map([
+            ("type", Value::String("file".to_owned())),
+            (
+                "data",
+                Value::Sequence(files.iter().map(file_reference_value).collect()),
+            ),
+        ]),
+    }
+}
+
+fn form_field_value(field: &FormField) -> Value {
+    map([
+        ("name", Value::String(field.name.clone())),
+        ("value", Value::String(field.value.clone())),
+        ("disabled", Value::Bool(field.disabled)),
+    ])
+}
+
+fn multipart_part_value(part: &MultipartPart) -> Value {
+    let mut value = match map([
+        ("name", Value::String(part.name.clone())),
+        (
+            "type",
+            Value::String(
+                match part.kind {
+                    MultipartPartKind::Text => "text",
+                    MultipartPartKind::File => "file",
+                }
+                .to_owned(),
+            ),
+        ),
+        (
+            "value",
+            match &part.value {
+                MultipartValue::Single(value) => Value::String(value.clone()),
+                MultipartValue::Multiple(values) => {
+                    Value::Sequence(values.iter().cloned().map(Value::String).collect())
+                }
+            },
+        ),
+        ("disabled", Value::Bool(part.disabled)),
+    ]) {
+        Value::Mapping(value) => value,
+        _ => unreachable!(),
+    };
+    value.insert(
+        string_key("contentType"),
+        part.content_type
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    Value::Mapping(value)
+}
+
+fn file_reference_value(file: &FileReference) -> Value {
+    map([
+        ("filePath", Value::String(file.file_path.clone())),
+        ("contentType", Value::String(file.content_type.clone())),
+        ("selected", Value::Bool(file.selected)),
+    ])
+}
+
+fn authentication_value(authentication: &Authentication) -> Value {
+    if authentication.kind == AuthenticationKind::Inherit {
+        return Value::String("inherit".to_owned());
+    }
+    let mut value = serde_yaml_ng::Mapping::new();
+    value.insert(
+        string_key("type"),
+        Value::String(
+            match &authentication.kind {
+                AuthenticationKind::Inherit => "inherit",
+                AuthenticationKind::AwsV4 => "awsv4",
+                AuthenticationKind::Basic => "basic",
+                AuthenticationKind::Wsse => "wsse",
+                AuthenticationKind::Bearer => "bearer",
+                AuthenticationKind::Digest => "digest",
+                AuthenticationKind::Ntlm => "ntlm",
+                AuthenticationKind::ApiKey => "apikey",
+                AuthenticationKind::OAuth1 => "oauth1",
+                AuthenticationKind::OAuth2 => "oauth2",
+                AuthenticationKind::Other(value) => value,
+            }
+            .to_owned(),
+        ),
+    );
+    value.extend(
+        authentication
+            .properties
+            .iter()
+            .map(|(name, value)| (Value::String(name.clone()), auth_property_value(value))),
+    );
+    Value::Mapping(value)
+}
+
+fn auth_property_value(value: &AuthenticationValue) -> Value {
+    match value {
+        AuthenticationValue::String(value) => Value::String(value.clone()),
+        AuthenticationValue::Number(value) => {
+            serde_yaml_ng::from_str(value).unwrap_or_else(|_| Value::String(value.clone()))
+        }
+        AuthenticationValue::Boolean(value) => Value::Bool(*value),
+        AuthenticationValue::Null => Value::Null,
+        AuthenticationValue::Sequence(values) => {
+            Value::Sequence(values.iter().map(auth_property_value).collect())
+        }
+        AuthenticationValue::Object(values) => Value::Mapping(
+            values
+                .iter()
+                .map(|(name, value)| (Value::String(name.clone()), auth_property_value(value)))
+                .collect(),
+        ),
+    }
 }
 
 fn mapping_child<'a>(

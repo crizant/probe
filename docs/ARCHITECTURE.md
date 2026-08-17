@@ -420,9 +420,18 @@ happen while that lock is held. Non-cooperating third-party writers cannot be fo
 the advisory lock, so the final compare-to-rename interval remains the smallest portable race
 window.
 
-The repository operation is synchronous and must be dispatched away from GPUI's UI thread by
-the future desktop adapter. This does not create a second persistence path; CLI and desktop use
-the same repository operation.
+The repository exposes a prepared request save that captures the retained source baseline and
+supported-field update in memory. The desktop executes that prepared save on GPUI's background
+executor, then returns the successful source snapshot to the loaded repository so later saves use
+the refreshed conflict baseline. This does not create a second persistence path; CLI and desktop
+use the same merge, exact-source check, locking, and atomic replacement implementation.
+
+Desktop dirty state compares each live request with its last loaded or successfully saved snapshot.
+One request save runs at a time, so close and quit protection can safely save several requests
+stored in the same bundled document. Completion acknowledges the captured request snapshot rather than the current
+request; edits made while I/O is running therefore remain dirty. Save failures leave the in-memory
+request unchanged, and destructive tab, workspace, and window closes require an explicit Save,
+Discard, or Cancel decision.
 
 ## OpenCollection Validation
 

@@ -21,8 +21,8 @@ use serde_yaml_ng::Value;
 mod repository;
 
 pub use repository::{
-    LoadError, LoadedWorkspace, LocatedFolder, LocatedRequest, SaveError, load_workspace,
-    load_workspace_from_str,
+    CompletedRequestSave, LoadError, LoadedWorkspace, LocatedFolder, LocatedRequest,
+    PreparedRequestSave, SaveError, load_workspace, load_workspace_from_str,
 };
 
 /// An OpenCollection document together with its supported domain projection.
