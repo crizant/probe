@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     thread,
@@ -26,6 +27,7 @@ use crate::{
         ExecutionState, ResponseState, execute_http_request, format_duration, format_size,
         workspace_base_directory,
     },
+    filesystem::{WATCH_DEBOUNCE, WorkspaceWatcher, event_affects_workspace, rename_hints},
     persistence::PersistenceState,
     request_editor::{
         BodyEditorKind, EditorSection, RequestEditorState, auth_label, auth_value, body_kind,
@@ -37,6 +39,9 @@ use crate::{
     },
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
+    synchronization::{
+        LocalRequestState, ReconcileResult, ReconciledWorkspace, SynchronizationConflict, reconcile,
+    },
     theme::Theme,
 };
 
@@ -69,6 +74,8 @@ pub struct ProbeApp {
     session: SessionState,
     session_save_task: Option<Task<()>>,
     request_save_task: Option<Task<()>>,
+    filesystem_watcher: Option<notify::RecommendedWatcher>,
+    filesystem_watch_task: Option<Task<()>>,
     persistence: PersistenceState,
     pending_close: Option<PendingClose>,
     workspace_switcher_open: bool,
@@ -127,6 +134,8 @@ impl ProbeApp {
             session: SessionState::default(),
             session_save_task: None,
             request_save_task: None,
+            filesystem_watcher: None,
+            filesystem_watch_task: None,
             persistence: PersistenceState::default(),
             pending_close: None,
             workspace_switcher_open: false,
@@ -259,7 +268,7 @@ impl ProbeApp {
                         Ok::<_, String>((canonical_path, workspace))
                     })
                     .await;
-                let _ = view.update_in(cx, |view, _, cx| {
+                let _ = view.update_in(cx, |view, window, cx| {
                     view.loading = false;
                     match result {
                         Ok((canonical_path, workspace)) => {
@@ -268,6 +277,7 @@ impl ProbeApp {
                                 view.session = state;
                                 view.restore_shell_state();
                             }
+                            view.start_workspace_watcher(window, cx);
                             view.persist_session(cx);
                         }
                         Err(error) => {
@@ -330,6 +340,302 @@ impl ProbeApp {
         self.restore_selected_environment();
         self.rebuild_visible_tree_rows();
         self.message = None;
+    }
+
+    fn start_workspace_watcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filesystem_watch_task = None;
+        self.filesystem_watcher = None;
+        let Some(path) = self.workspace_path.clone() else {
+            return;
+        };
+        let watcher = match WorkspaceWatcher::start(&path) {
+            Ok(watcher) => watcher,
+            Err(error) => {
+                self.message = Some(format!("Could not watch this collection: {error}"));
+                return;
+            }
+        };
+        let WorkspaceWatcher {
+            watcher,
+            mut receiver,
+            workspace_path,
+            ..
+        } = watcher;
+        self.filesystem_watcher = Some(watcher);
+        let view = cx.weak_entity();
+        self.filesystem_watch_task = Some(window.spawn(cx, async move |cx| {
+            while let Some(first) = receiver.recv().await {
+                cx.background_executor().timer(WATCH_DEBOUNCE).await;
+                let mut events = Vec::new();
+                let mut watch_error = None;
+                match first {
+                    Ok(event) => events.push(event),
+                    Err(error) => watch_error = Some(error.to_string()),
+                }
+                while let Ok(event) = receiver.try_recv() {
+                    match event {
+                        Ok(event) => events.push(event),
+                        Err(error) => watch_error = Some(error.to_string()),
+                    }
+                }
+                if let Some(error) = watch_error {
+                    let _ = view.update_in(cx, |view, _, cx| {
+                        view.message = Some(format!("Collection watcher error: {error}"));
+                        cx.notify();
+                    });
+                }
+                if !events
+                    .iter()
+                    .any(|event| event_affects_workspace(event, &workspace_path))
+                {
+                    continue;
+                }
+                let hints = rename_hints(&events, &workspace_path);
+                let reload_path = workspace_path.clone();
+                let result = cx
+                    .background_spawn(async move { load_workspace(&reload_path) })
+                    .await;
+                let _ = view.update_in(cx, |view, window, cx| {
+                    if view.workspace_path.as_ref() != Some(&workspace_path) {
+                        return;
+                    }
+                    match result {
+                        Ok(fresh) => view.reconcile_filesystem_workspace(fresh, hints, window, cx),
+                        Err(error) => {
+                            view.message = Some(format!(
+                                "The collection changed on disk but is not yet valid: {error}. The last valid version is still open."
+                            ));
+                            cx.notify();
+                        }
+                    }
+                });
+            }
+        }));
+    }
+
+    fn local_request_states(&self) -> Vec<LocalRequestState> {
+        let Some(loaded) = &self.loaded_workspace else {
+            return Vec::new();
+        };
+        loaded
+            .requests()
+            .iter()
+            .filter_map(|located| {
+                Some(LocalRequestState {
+                    selector: located.selector().to_owned(),
+                    baseline: self.persistence.saved_request(located.key())?.clone(),
+                    local: loaded.workspace().request(located.key())?.clone(),
+                })
+            })
+            .collect()
+    }
+
+    fn reconcile_filesystem_workspace(
+        &mut self,
+        fresh: LoadedWorkspace,
+        rename_hints: BTreeMap<String, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match reconcile(self.local_request_states(), fresh, &rename_hints) {
+            ReconcileResult::Applied(reconciled) => {
+                self.apply_reconciled_workspace(*reconciled, cx);
+            }
+            ReconcileResult::Conflicted(conflicts) => {
+                self.prompt_filesystem_conflict(conflicts, window, cx);
+            }
+        }
+    }
+
+    fn prompt_filesystem_conflict(
+        &mut self,
+        conflicts: Vec<SynchronizationConflict>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let detail = conflicts
+            .iter()
+            .take(3)
+            .map(SynchronizationConflict::description)
+            .collect::<Vec<_>>()
+            .join("; ");
+        let prompt = window.prompt(
+            PromptLevel::Warning,
+            "Collection changes conflict with local edits",
+            Some(&format!(
+                "{detail}. Choose Use Disk to discard the conflicting local edits, or Keep Local to retain them without overwriting disk."
+            )),
+            &["Use Disk", "Keep Local"],
+            cx,
+        );
+        let path = self.workspace_path.clone();
+        let view = cx.weak_entity();
+        window
+            .spawn(cx, async move |cx| {
+                let Ok(answer) = prompt.await else {
+                    return;
+                };
+                let _ = view.update_in(cx, |view, _, cx| {
+                    if view.workspace_path != path {
+                        return;
+                    }
+                    if answer == 0 {
+                        let Some(path) = path else {
+                            return;
+                        };
+                        view.loading = true;
+                        let reload = cx.background_spawn(async move { load_workspace(path) });
+                        cx.spawn(async move |view, cx| {
+                            let result = reload.await;
+                            let _ = view.update(cx, |view, cx| {
+                                view.loading = false;
+                                match result {
+                                    Ok(workspace) => {
+                                        let clean_local = view
+                                            .local_request_states()
+                                            .into_iter()
+                                            .map(|mut state| {
+                                                state.local.clone_from(&state.baseline);
+                                                state
+                                            })
+                                            .collect();
+                                        if let ReconcileResult::Applied(reconciled) = reconcile(
+                                            clean_local,
+                                            workspace,
+                                            &BTreeMap::new(),
+                                        ) {
+                                            view.apply_reconciled_workspace(*reconciled, cx);
+                                            view.message = Some(
+                                                "Reloaded the collection from disk; conflicting local edits were discarded."
+                                                    .to_owned(),
+                                            );
+                                        }
+                                    }
+                                    Err(error) => {
+                                        view.message = Some(format!(
+                                            "Could not reload the collection from disk: {error}"
+                                        ));
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                    } else {
+                        view.message = Some(
+                            "Kept local edits. Probe will not overwrite the changed disk files; resolve the conflict before saving."
+                                .to_owned(),
+                        );
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+    }
+
+    fn apply_reconciled_workspace(
+        &mut self,
+        mut reconciled: ReconciledWorkspace,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(old) = self.loaded_workspace.as_ref() else {
+            return;
+        };
+        let tab_selectors: Vec<_> = self
+            .shell
+            .tabs()
+            .iter()
+            .filter_map(|key| old.request_selector(*key).map(str::to_owned))
+            .collect();
+        let active_selector = self
+            .shell
+            .active_tab()
+            .and_then(|key| old.request_selector(key))
+            .map(str::to_owned);
+        let folder_selectors: Vec<_> = self
+            .shell
+            .collapsed_folders()
+            .filter_map(|key| old.folder_selector(key).map(str::to_owned))
+            .collect();
+        let key_remaps: BTreeMap<_, _> = old
+            .requests()
+            .iter()
+            .filter_map(|located| {
+                let selector = reconciled
+                    .selector_remaps
+                    .get(located.selector())
+                    .map(String::as_str)?;
+                reconciled
+                    .workspace
+                    .request_key(selector)
+                    .map(|new_key| (located.key(), new_key))
+            })
+            .collect();
+
+        let baselines = reconciled
+            .workspace
+            .requests()
+            .iter()
+            .filter_map(|located| {
+                reconciled
+                    .disk_baselines
+                    .remove(located.selector())
+                    .map(|request| (located.key(), request))
+            })
+            .collect::<Vec<_>>();
+        self.persistence.reset_with_baselines(baselines);
+        self.loaded_workspace = Some(reconciled.workspace);
+        self.shell.reset_for_workspace();
+        self.execution.clear();
+        self.response_viewer.clear();
+        self.request_editor.remap_requests(&key_remaps);
+        let loaded = self
+            .loaded_workspace
+            .as_ref()
+            .expect("workspace was replaced");
+        for selector in tab_selectors {
+            if let Some(key) = reconciled
+                .selector_remaps
+                .get(&selector)
+                .and_then(|selector| loaded.request_key(selector))
+            {
+                self.shell.open_request(key);
+            }
+        }
+        if let Some(selector) = active_selector
+            && let Some(key) = reconciled
+                .selector_remaps
+                .get(&selector)
+                .and_then(|selector| loaded.request_key(selector))
+        {
+            self.shell.open_request(key);
+        }
+        for selector in folder_selectors {
+            let selector = reconciled
+                .selector_remaps
+                .get(&selector)
+                .map_or(selector.as_str(), String::as_str);
+            if let Some(key) = loaded.folder_key(selector) {
+                self.shell.collapse_folder(key);
+            }
+        }
+        if self
+            .request_editor
+            .selected_environment()
+            .is_some_and(|name| {
+                !loaded
+                    .workspace()
+                    .environments()
+                    .iter()
+                    .any(|environment| environment.name == name)
+            })
+        {
+            self.request_editor.select_environment(None);
+        }
+        self.rebuild_visible_tree_rows();
+        self.message = None;
+        self.persist_session(cx);
+        cx.notify();
     }
 
     fn restore_shell_state(&mut self) {
@@ -472,6 +778,8 @@ impl ProbeApp {
         self.shell.reset_for_workspace();
         self.request_editor.clear();
         self.persistence.clear();
+        self.filesystem_watch_task = None;
+        self.filesystem_watcher = None;
         self.visible_tree_rows.clear();
         self.session.clear_active_collection();
         self.persist_session(cx);

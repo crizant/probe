@@ -9,11 +9,13 @@ mod app;
 mod caret;
 pub mod components;
 mod execution;
+mod filesystem;
 mod persistence;
 mod request_editor;
 mod response_viewer;
 mod session;
 mod shell;
+mod synchronization;
 mod syntax;
 pub mod theme;
 

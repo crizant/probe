@@ -433,6 +433,24 @@ request; edits made while I/O is running therefore remain dirty. Save failures l
 request unchanged, and destructive tab, workspace, and window closes require an explicit Save,
 Discard, or Cancel decision.
 
+### Filesystem Synchronization
+
+The desktop watches an unbundled collection recursively and watches the containing directory
+of a bundled collection so atomic file replacement does not detach the watch. Notifications are
+debounced and treated only as invalidation hints. Probe reloads and validates the collection
+through `OpenCollectionRepository` on a background executor before changing live state.
+
+Reconciliation is three-way: the repository's last loaded or saved request is the baseline, the
+editor owns a potentially dirty local request, and a fresh repository load supplies the disk
+request. Changes to different supported fields merge automatically. Changes to the same field,
+external deletion of a dirty request, and ambiguous dirty renames require an explicit Use Disk or
+Keep Local decision. Invalid or partially written files leave the last valid workspace open.
+
+Runtime keys are rebuilt after every accepted reload. Tabs and collapsed folders are captured as
+repository selectors and resolved to new keys, with paired filesystem renames and unique unchanged
+content used as rename evidence. A successful Probe save refreshes the repository baseline, so its
+watcher notification reconciles as a no-op instead of appearing as an external conflict.
+
 ## OpenCollection Validation
 
 Workspace loading requires the OpenCollection `1.0.0` format marker, collection metadata, and

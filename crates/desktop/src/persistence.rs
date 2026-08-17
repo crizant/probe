@@ -22,6 +22,17 @@ impl PersistenceState {
         *self = Self::default();
     }
 
+    pub(crate) fn saved_request(&self, key: RequestKey) -> Option<&HttpRequest> {
+        self.saved.get(&key)
+    }
+
+    pub(crate) fn reset_with_baselines(
+        &mut self,
+        requests: impl IntoIterator<Item = (RequestKey, HttpRequest)>,
+    ) {
+        self.reset(requests);
+    }
+
     pub(crate) fn edited(&mut self, key: RequestKey) {
         *self.revisions.entry(key).or_default() += 1;
     }

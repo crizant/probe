@@ -50,6 +50,17 @@ impl RequestEditorState {
         self.body_drafts.clear();
     }
 
+    pub(crate) fn remap_requests(&mut self, keys: &BTreeMap<RequestKey, RequestKey>) {
+        self.body_drafts = std::mem::take(&mut self.body_drafts)
+            .into_iter()
+            .filter_map(|((old_key, kind), body)| {
+                keys.get(&old_key)
+                    .copied()
+                    .map(|new_key| ((new_key, kind), body))
+            })
+            .collect();
+    }
+
     pub(crate) fn switch_body_kind(
         &mut self,
         key: RequestKey,
@@ -220,6 +231,8 @@ pub(crate) fn auth_value(value: &AuthenticationValue) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use probe_core::{AuthenticationKind, Body, HttpRequest, RawBodyKind, RequestBody};
 
     use super::{
@@ -317,6 +330,24 @@ mod tests {
         assert_eq!(fields[0].value, "value");
     }
 
+    #[test]
+    fn body_drafts_follow_remapped_runtime_keys() {
+        let old_key = request_key();
+        let new_key = replacement_request_key();
+        let mut editor = RequestEditorState::default();
+        let mut request = HttpRequest::default();
+        editor.switch_body_kind(old_key, &mut request, BodyEditorKind::Json);
+        raw_body_mut(&mut request)
+            .unwrap()
+            .push_str("{\"draft\":true}");
+        editor.switch_body_kind(old_key, &mut request, BodyEditorKind::Form);
+        editor.remap_requests(&BTreeMap::from([(old_key, new_key)]));
+
+        let mut reloaded = HttpRequest::default();
+        editor.switch_body_kind(new_key, &mut reloaded, BodyEditorKind::Json);
+        assert_eq!(raw_body_mut(&mut reloaded).unwrap(), "{\"draft\":true}");
+    }
+
     fn request_key() -> probe_core::RequestKey {
         let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
             items: vec![probe_core::CollectionItem::HttpRequest(
@@ -328,5 +359,20 @@ mod tests {
             panic!("fixture should contain one request");
         };
         *key
+    }
+
+    fn replacement_request_key() -> probe_core::RequestKey {
+        let mut workspace = probe_core::Workspace::from_collection(probe_core::Collection {
+            items: vec![probe_core::CollectionItem::HttpRequest(
+                HttpRequest::default(),
+            )],
+            ..probe_core::Collection::default()
+        });
+        let [probe_core::WorkspaceItemRef::Request(old_key)] = workspace.root_items() else {
+            panic!("fixture should contain one request");
+        };
+        let old_key = *old_key;
+        workspace.remove_request(old_key).unwrap();
+        workspace.add_root_request(HttpRequest::default())
     }
 }

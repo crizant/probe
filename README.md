@@ -116,6 +116,9 @@ selected environment, pane orientation, and pane sizes automatically.
 Edited requests show a dirty indicator and expose a save icon beside the URL while dirty.
 Saves use the shared atomic OpenCollection repository on a background executor,
 and Probe asks before closing tabs, collections, or the application with unsaved changes.
+Open collections are watched for filesystem changes; valid external edits, additions,
+deletions, and identifiable renames are reconciled in the background while conflicting
+local drafts remain protected until the user chooses which version to keep.
 
 ```bash
 cargo run -p probe-cli -- --help
