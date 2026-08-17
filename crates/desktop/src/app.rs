@@ -48,7 +48,14 @@ use crate::{
 
 gpui::actions!(
     probe,
-    [OpenWorkspace, SaveRequest, CloseActiveTab, QuitApplication]
+    [
+        OpenWorkspace,
+        SaveRequest,
+        CloseActiveTab,
+        QuitApplication,
+        FocusNextControl,
+        FocusPreviousControl
+    ]
 );
 
 #[derive(Clone, Debug)]
@@ -3479,6 +3486,12 @@ impl Render for ProbeApp {
             .on_action(cx.listener(|view, _: &QuitApplication, window, cx| {
                 view.quit_application(window, cx);
             }))
+            .on_action(cx.listener(|_, _: &FocusNextControl, window, cx| {
+                window.focus_next(cx);
+            }))
+            .on_action(cx.listener(|_, _: &FocusPreviousControl, window, cx| {
+                window.focus_prev(cx);
+            }))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
                 MouseButton::Left,
@@ -3691,6 +3704,11 @@ pub fn run() {
 }
 
 fn bind_platform_hotkeys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("tab", FocusNextControl, None),
+        KeyBinding::new("shift-tab", FocusPreviousControl, None),
+    ]);
+
     #[cfg(target_os = "macos")]
     cx.bind_keys([
         KeyBinding::new("cmd-o", OpenWorkspace, None),
@@ -4553,6 +4571,60 @@ mod tests {
             .expect("test window should remain open");
         assert_eq!(tabs, vec![first]);
         assert_eq!(active, Some(first));
+    }
+
+    #[gpui::test]
+    fn tab_and_shift_tab_move_focus_between_controls(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        cx.update(bind_platform_hotkeys);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(request_key, cx);
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let input_point = {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            let url_bar = visual
+                .debug_bounds("request-url-bar")
+                .expect("request URL input should render");
+            gpui::point(url_bar.right() - px(110.0), url_bar.center().y)
+        };
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual.simulate_click(input_point, Modifiers::default());
+            visual.run_until_parked();
+        }
+        let input = window
+            .update(cx, |_, window, cx| window.focused(cx))
+            .expect("test window should remain open")
+            .expect("clicking the request URL should focus its input");
+
+        cx.simulate_keystrokes(window.into(), "tab");
+        let next = window
+            .update(cx, |_, window, cx| window.focused(cx))
+            .expect("test window should remain open")
+            .expect("Tab should focus the next control");
+        assert_ne!(next, input);
+
+        cx.simulate_keystrokes(window.into(), "shift-tab");
+        let previous = window
+            .update(cx, |_, window, cx| window.focused(cx))
+            .expect("test window should remain open")
+            .expect("Shift-Tab should focus the previous control");
+        assert_eq!(previous, input);
     }
 
     #[gpui::test]

@@ -571,6 +571,9 @@ mod tests {
         for theme in [Theme::light(), Theme::dark()] {
             assert_ne!(theme.colors.actions.accent, theme.colors.actions.hover);
             assert_ne!(theme.colors.actions.hover, theme.colors.actions.pressed);
+            assert!(
+                contrast_ratio(theme.colors.actions.accent, theme.colors.surfaces.window) >= 2.75
+            );
             assert_ne!(theme.colors.borders.subtle, theme.colors.borders.focused);
             assert_ne!(
                 theme.colors.selection.active_background,

@@ -12,8 +12,8 @@ use crate::response_viewer::{SearchMatch, join_header_lines};
 use crate::shell::PaneLayout;
 use crate::theme::Theme;
 use gpui::{
-    App, AppContext as _, Bounds, ClickEvent, ContentMask, Context, Element, ElementId, Entity,
-    Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla, InspectorElementId,
+    App, AppContext as _, Bounds, BoxShadow, ClickEvent, ContentMask, Context, Element, ElementId,
+    Entity, Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla, InspectorElementId,
     InteractiveElement as _, IntoElement, LayoutId, MouseButton, PaintQuad, ParentElement as _,
     Pixels, Render, RenderOnce, Role, ShapedLine, SharedString, StatefulInteractiveElement as _,
     Style, Styled as _, Subscription, TextAlign, TextRun, TransformationMatrix, Window, canvas,
@@ -210,7 +210,14 @@ pub fn primary_button(
                 .bg(theme.colors.actions.hover)
                 .border_color(theme.colors.actions.hover)
         })
-        .focus(move |button| button.border_color(theme.colors.borders.focused))
+        .focus(move |button| {
+            button.shadow(vec![
+                BoxShadow::new(px(0.0), px(0.0), theme.colors.actions.accent.into())
+                    .spread_radius(px(3.0)),
+                BoxShadow::new(px(0.0), px(0.0), theme.colors.text.inverse.into())
+                    .spread_radius(px(1.0)),
+            ])
+        })
         .styles(move |styles| {
             styles.disabled(move |button| {
                 button
@@ -484,6 +491,8 @@ pub(crate) fn text_tab(
         .flex()
         .items_center()
         .rounded(px(theme.metrics.radius_medium))
+        .border_1()
+        .border_color(transparent_black())
         .text_size(px(theme.typography.caption_size))
         .text_color(if selected {
             theme.colors.text.primary
@@ -497,6 +506,7 @@ pub(crate) fn text_tab(
         .when(!selected, |tab| {
             tab.hover(move |tab| tab.bg(theme.colors.surfaces.raised))
         })
+        .focus(move |tab| tab.border_color(theme.colors.borders.focused))
         .cursor_pointer()
         .on_click(on_click)
         .child(label)
