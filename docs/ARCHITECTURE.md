@@ -159,7 +159,8 @@ application styled component
 feature UI
 
 Desktop components consume semantic design tokens. They must not hard-code theme
-colors or parse theme files. Platform presentation may map the same semantic intent to
+colors or parse theme files. Do not add automated tests for UI spacing or color
+values; review appearance visually against [docs/DESIGN.md](DESIGN.md). Platform presentation may map the same semantic intent to
 different macOS, Windows, and Linux conventions. macOS follows Apple HIG behavior,
 Windows follows Microsoft Windows App Design and Fluent conventions, and Linux uses a
 cross-desktop baseline informed by GNOME and KDE guidance plus applicable

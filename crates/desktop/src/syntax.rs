@@ -388,21 +388,8 @@ mod tests {
     }
 
     #[test]
-    fn probe_styles_use_theme_syntax_colors() {
-        let theme = Theme::light();
-        let styles = ProbeHighlightStyles::new(theme);
-        assert_eq!(
-            styles.style("property").and_then(|style| style.color),
-            Some(theme.colors.syntax.property.into())
-        );
-        assert_eq!(
-            styles.style("string").and_then(|style| style.color),
-            Some(theme.colors.syntax.string.into())
-        );
-        assert_eq!(
-            styles.style("comment").and_then(|style| style.color),
-            Some(theme.colors.syntax.null.into())
-        );
+    fn unknown_highlight_roles_have_no_style() {
+        let styles = ProbeHighlightStyles::new(Theme::light());
         assert!(styles.style("unknown").is_none());
     }
 }

@@ -643,6 +643,12 @@ CLI-specific integration tests should additionally verify:
 - JSON output
 - exit codes
 
+Do not add automated tests for UI spacing, padding, radii, typography sizes,
+palette values, or contrast ratios. Review appearance visually against
+[docs/DESIGN.md](docs/DESIGN.md). Tests may still cover behavior such as
+light/dark appearance selection, pane resize constraints, focus, and
+highlight span ranges without asserting pixel or color values.
+
 Before completing a task run:
 
 cargo fmt --check

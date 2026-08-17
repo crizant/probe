@@ -181,5 +181,7 @@ for:
 - screen-reader naming, role, value, and state where supported;
 - reduced-motion and increased-contrast settings where relevant.
 
-Visual review complements automated tests; it does not replace behavior, domain, or
-integration testing.
+Review appearance visually in light and dark. Do not add automated tests for UI
+spacing, padding, radii, typography sizes, palette values, or contrast ratios.
+Automated tests should cover behavior, domain, and integration — not visual design
+tokens.

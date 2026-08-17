@@ -1647,7 +1647,7 @@ fn pane_layout_icon(layout: PaneLayout, color: gpui::Rgba) -> gpui::Div {
 #[cfg(test)]
 mod tests {
     use gpui::{
-        AppContext as _, Context, Entity, Hsla, IntoElement, Modifiers, Render, SharedString,
+        AppContext as _, Context, Entity, IntoElement, Modifiers, Render, SharedString,
         TestAppContext, VisualTestContext, div, hsla, point, prelude::*, px, size,
         transparent_black,
     };
@@ -1894,7 +1894,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_paint_style_uses_visible_caret_and_theme_selection() {
+    fn editor_paint_style_uses_visible_caret_and_selection() {
         for theme in [Theme::light(), Theme::dark()] {
             let style = editor_paint_style(theme);
             assert!(
@@ -1905,10 +1905,6 @@ mod tests {
                 style.selection.a > 0.0,
                 "gpui-base default selection is transparent"
             );
-            assert_eq!(style.foreground, theme.colors.text.primary.into());
-            assert_eq!(style.caret, theme.colors.text.primary.into());
-            assert_eq!(style.selection, theme.editor_selection());
-            assert_ne!(style.selection, Hsla::default());
         }
     }
 
@@ -1941,10 +1937,6 @@ mod tests {
         let highlights = body_text_highlights(theme, &ranges);
         assert_eq!(highlights.len(), 1);
         assert_eq!(&value[highlights[0].range.clone()], "{{host}}");
-        assert_eq!(
-            highlights[0].style.color,
-            Some(theme.colors.syntax.string.into())
-        );
     }
 
     #[test]

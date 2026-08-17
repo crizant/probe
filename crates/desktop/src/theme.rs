@@ -544,7 +544,7 @@ const fn default_motion() -> Motion {
 #[cfg(test)]
 mod tests {
     use super::{Theme, ThemeAppearance};
-    use gpui::{Rgba, WindowAppearance, rgba};
+    use gpui::WindowAppearance;
 
     #[test]
     fn native_appearances_select_the_expected_built_in_theme() {
@@ -564,74 +564,5 @@ mod tests {
             Theme::for_window_appearance(WindowAppearance::VibrantDark).appearance,
             ThemeAppearance::Dark
         );
-    }
-
-    #[test]
-    fn built_in_themes_define_distinct_state_tokens() {
-        for theme in [Theme::light(), Theme::dark()] {
-            assert_ne!(theme.colors.actions.accent, theme.colors.actions.hover);
-            assert_ne!(theme.colors.actions.hover, theme.colors.actions.pressed);
-            assert!(
-                contrast_ratio(theme.colors.actions.accent, theme.colors.surfaces.window) >= 2.75
-            );
-            assert_ne!(theme.colors.borders.subtle, theme.colors.borders.focused);
-            assert_ne!(
-                theme.colors.selection.active_background,
-                theme.colors.selection.inactive_background
-            );
-            assert!(theme.metrics.control_height >= 28.0);
-            assert!(theme.typography.caption_size >= 12.0);
-            assert!(theme.typography.body_size >= theme.typography.caption_size);
-            assert_eq!(theme.typography.monospace_family, "JetBrains Mono");
-            assert!(theme.metrics.radius_small >= 4.0);
-            assert!(theme.metrics.radius_large <= 12.0);
-            assert!(theme.metrics.radius_small < theme.metrics.radius_medium);
-            assert!(theme.metrics.radius_medium < theme.metrics.radius_large);
-            assert_eq!(theme.method_color("GET"), theme.colors.methods.get);
-            assert_eq!(theme.method_color("post"), theme.colors.methods.post);
-            assert_ne!(theme.method_color("GET"), theme.method_color("DELETE"));
-        }
-    }
-
-    #[test]
-    fn built_in_themes_use_catppuccin_latte_and_mocha() {
-        assert_eq!(Theme::light().colors.surfaces.window, rgba(0xeff1f5ff));
-        assert_eq!(Theme::light().colors.actions.accent, rgba(0x1e66f5ff));
-        assert_eq!(Theme::dark().colors.surfaces.window, rgba(0x1e1e2eff));
-        assert_eq!(Theme::dark().colors.actions.accent, rgba(0x89b4faff));
-    }
-
-    #[test]
-    fn built_in_themes_keep_primary_content_and_controls_legible() {
-        for theme in [Theme::light(), Theme::dark()] {
-            let editor = theme.colors.surfaces.editor;
-            assert!(contrast_ratio(theme.colors.text.primary, editor) >= 7.0);
-            assert!(contrast_ratio(theme.colors.text.secondary, editor) >= 4.5);
-            assert!(contrast_ratio(theme.colors.text.inverse, theme.colors.actions.accent) >= 4.5);
-            assert!(
-                contrast_ratio(
-                    theme.colors.selection.active_foreground,
-                    theme.colors.selection.active_background
-                ) >= 4.5
-            );
-        }
-    }
-
-    fn contrast_ratio(a: Rgba, b: Rgba) -> f32 {
-        let light = luminance(a).max(luminance(b));
-        let dark = luminance(a).min(luminance(b));
-        (light + 0.05) / (dark + 0.05)
-    }
-
-    fn luminance(color: Rgba) -> f32 {
-        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
-    }
-
-    fn linear(channel: f32) -> f32 {
-        if channel <= 0.04045 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
     }
 }
