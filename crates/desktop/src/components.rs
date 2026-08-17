@@ -13,16 +13,17 @@ use crate::shell::PaneLayout;
 use crate::theme::Theme;
 use gpui::{
     App, AppContext as _, Bounds, BoxShadow, ClickEvent, ContentMask, Context, Element, ElementId,
-    Entity, Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla, InspectorElementId,
-    InteractiveElement as _, IntoElement, LayoutId, MouseButton, PaintQuad, ParentElement as _,
-    Pixels, Render, RenderOnce, Role, ShapedLine, SharedString, StatefulInteractiveElement as _,
-    Style, Styled as _, Subscription, TextAlign, TextRun, TransformationMatrix, Window, canvas,
-    div, fill, point, prelude::FluentBuilder as _, px, relative, size, transparent_black,
+    Entity, EntityId, FocusHandle, Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla,
+    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton, PaintQuad,
+    ParentElement as _, Pixels, Render, RenderOnce, Role, ShapedLine, SharedString,
+    StatefulInteractiveElement as _, Style, Styled as _, Subscription, TextAlign, TextRun,
+    TransformationMatrix, Window, canvas, div, fill, point, prelude::FluentBuilder as _, px,
+    relative, size, transparent_black,
 };
 use gpui_base::{
-    Button, Editor, Input, InputBase, Popover, Switch, SwitchThumb, SwitchTrack, Toggle,
+    Button, Editor, Input, InputBase, Popup, Select, Switch, SwitchThumb, SwitchTrack, Toggle,
     ToggleGroup,
-    actions::{Confirm, SelectDown, SelectUp},
+    actions::{Cancel, Confirm, SelectDown, SelectUp},
     input::{
         EditorState, InputEditorStyle, InputEvent, InputState, TextDecoration,
         TextDecorationCollection,
@@ -232,6 +233,177 @@ pub fn primary_button(
 
 type InputChangeHandler = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type DropdownChangeHandler<T> = Rc<dyn Fn(Option<&T>, &mut Window, &mut App)>;
+
+#[derive(Debug)]
+struct DropdownState {
+    open: bool,
+    highlighted: usize,
+}
+
+struct DropdownController {
+    state: Entity<DropdownState>,
+    parent: EntityId,
+    trigger_focus: FocusHandle,
+    selected_index: usize,
+}
+
+impl Clone for DropdownController {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            parent: self.parent,
+            trigger_focus: self.trigger_focus.clone(),
+            selected_index: self.selected_index,
+        }
+    }
+}
+
+impl DropdownController {
+    fn highlighted(&self, cx: &App) -> usize {
+        self.state.read(cx).highlighted
+    }
+
+    fn repaint(&self, cx: &mut App) {
+        cx.notify(self.parent);
+    }
+
+    fn set_open(&self, open: bool, list_focus: &FocusHandle, window: &mut Window, cx: &mut App) {
+        self.state.update(cx, |state, cx| {
+            state.open = open;
+            if open {
+                state.highlighted = self.selected_index;
+            }
+            cx.notify();
+        });
+        if open {
+            let list_focus = list_focus.clone();
+            let parent = self.parent;
+            window.defer(cx, move |window, cx| {
+                list_focus.focus(window, cx);
+                cx.notify(parent);
+            });
+        } else {
+            self.repaint(cx);
+        }
+    }
+
+    fn toggle_open(&self, list_focus: &FocusHandle, window: &mut Window, cx: &mut App) {
+        let open = !self.state.read(cx).open;
+        self.set_open(open, list_focus, window, cx);
+    }
+
+    fn close(&self, cx: &mut App) {
+        self.state.update(cx, |state, cx| {
+            state.open = false;
+            cx.notify();
+        });
+        self.repaint(cx);
+    }
+
+    fn restore_trigger_focus(&self, window: &mut Window, cx: &mut App) {
+        let trigger_focus = self.trigger_focus.clone();
+        window.defer(cx, move |window, cx| trigger_focus.focus(window, cx));
+    }
+
+    fn close_and_restore_trigger(&self, window: &mut Window, cx: &mut App) {
+        self.close(cx);
+        self.restore_trigger_focus(window, cx);
+    }
+
+    fn move_highlight(&self, delta: i32, len: usize, cx: &mut App) {
+        if len == 0 {
+            return;
+        }
+        self.state.update(cx, |state, cx| {
+            let next = state.highlighted as i32 + delta;
+            state.highlighted = next.rem_euclid(len as i32) as usize;
+            cx.notify();
+        });
+        self.repaint(cx);
+    }
+
+    fn set_highlight(&self, index: usize, cx: &mut App) {
+        self.state.update(cx, |state, cx| {
+            state.highlighted = index;
+            cx.notify();
+        });
+        self.repaint(cx);
+    }
+}
+
+#[derive(IntoElement)]
+struct DropdownOption<T: Clone + Eq + 'static> {
+    theme: Theme,
+    id: &'static str,
+    index: usize,
+    value: T,
+    label: String,
+    color: gpui::Rgba,
+    selected: bool,
+    highlighted: bool,
+    controller: DropdownController,
+    on_value_change: DropdownChangeHandler<T>,
+}
+
+impl<T: Clone + Eq + 'static> RenderOnce for DropdownOption<T> {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let highlight_background = self.theme.colors.selection.inactive_background;
+        let theme = self.theme;
+        let id = self.id;
+        let index = self.index;
+        div()
+            .id(format!("{id}-item-{index}"))
+            .role(Role::ListBoxOption)
+            .aria_selected(self.selected)
+            .when(self.highlighted, |item| item.aria_active_descendant())
+            .w_full()
+            .h(px(theme.metrics.control_height))
+            .px(px(theme.metrics.spacing_2))
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1))
+            .overflow_hidden()
+            .rounded(px(theme.metrics.radius_small))
+            .text_color(self.color)
+            .cursor_pointer()
+            .debug_selector(move || format!("{id}-item-{index}"))
+            .when(self.highlighted, |item| {
+                item.bg(highlight_background)
+                    .border_1()
+                    .border_color(theme.colors.borders.focused)
+            })
+            .when(!self.highlighted, |item| {
+                item.border_1().border_color(transparent_black())
+            })
+            .hover(move |item| item.bg(theme.colors.surfaces.sidebar))
+            .on_hover({
+                let controller = self.controller.clone();
+                move |hovered, _, cx| {
+                    if *hovered {
+                        controller.set_highlight(index, cx);
+                    }
+                }
+            })
+            .on_click({
+                let controller = self.controller.clone();
+                let value = self.value;
+                let on_value_change = self.on_value_change;
+                move |_, window, cx| {
+                    on_value_change(Some(&value), window, cx);
+                    controller.close_and_restore_trigger(window, cx);
+                }
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(14.0))
+                    .when(!self.selected, |marker| marker.invisible())
+                    .child("✓"),
+            )
+            .child(truncated_label(self.label).min_w(px(0.0)).flex_1())
+    }
+}
+
 type VisibleRangeHandler = Rc<dyn Fn(Range<usize>, &mut App)>;
 
 struct FieldInput {
@@ -595,12 +767,6 @@ struct ProbeDropdown<T: Clone + Eq + 'static> {
     on_value_change: DropdownChangeHandler<T>,
 }
 
-#[derive(Debug)]
-struct DropdownState {
-    open: bool,
-    highlighted: usize,
-}
-
 impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let selected_index = self
@@ -624,8 +790,27 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
                 state.highlighted = selected_index;
             }
         });
+
+        let theme = self.theme;
+        let id = self.id;
         let open = state.read(cx).open;
+        let highlighted_index = state.read(cx).highlighted;
         let parent = window.current_view();
+        let trigger_focus = window
+            .use_keyed_state(format!("{id}-trigger-focus"), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let list_focus = window
+            .use_keyed_state(format!("{id}-list-focus"), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let controller = DropdownController {
+            state: state.clone(),
+            parent,
+            trigger_focus: trigger_focus.clone(),
+            selected_index,
+        };
+
         let selected_label = self
             .value
             .as_ref()
@@ -645,25 +830,86 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
                     .find(|(value, _, _)| value == selected)
                     .and_then(|(_, _, color)| *color)
             })
-            .unwrap_or(self.theme.colors.text.primary);
-        let theme = self.theme;
-        let id = self.id;
+            .unwrap_or(theme.colors.text.primary);
+
         let option_count = self.options.len();
-        let option_focus_handles = (0..option_count)
-            .map(|index| {
-                window
-                    .use_keyed_state(format!("{id}-item-{index}-focus"), cx, |_, cx| {
-                        cx.focus_handle()
-                    })
-                    .read(cx)
-                    .clone()
+        let on_value_change = self.on_value_change.clone();
+        let selected_value = self.value;
+        let options = self.options;
+        let list = div()
+            .id(format!("{id}-list"))
+            .track_focus(&list_focus)
+            .role(Role::ListBox)
+            .key_context("Select")
+            .on_action({
+                let controller = controller.clone();
+                move |_: &SelectDown, _, cx| controller.move_highlight(1, option_count, cx)
             })
-            .collect::<Vec<_>>();
+            .on_action({
+                let controller = controller.clone();
+                move |_: &SelectUp, _, cx| controller.move_highlight(-1, option_count, cx)
+            })
+            .on_action({
+                let controller = controller.clone();
+                let on_value_change = on_value_change.clone();
+                let options = options.clone();
+                move |_: &Confirm, window, cx| {
+                    let index = controller.highlighted(cx);
+                    if let Some((value, _, _)) = options.get(index) {
+                        on_value_change(Some(value), window, cx);
+                        controller.close_and_restore_trigger(window, cx);
+                    }
+                }
+            })
+            .flex()
+            .flex_col()
+            .w(px(self.width.max(160.0)))
+            .p(px(theme.metrics.spacing_1))
+            .rounded(px(theme.metrics.radius_medium))
+            .bg(theme.colors.surfaces.overlay)
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .children(
+                options
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (value, label, color))| {
+                        let selected = selected_value.as_ref() == Some(&value);
+                        DropdownOption {
+                            theme,
+                            id,
+                            index,
+                            value,
+                            label,
+                            color: color.unwrap_or(theme.colors.text.primary),
+                            selected,
+                            highlighted: index == highlighted_index,
+                            controller: controller.clone(),
+                            on_value_change: on_value_change.clone(),
+                        }
+                    }),
+            );
+
+        let popup_content = div()
+            .occlude()
+            .key_context("Select")
+            .on_action({
+                let controller = controller.clone();
+                move |_: &Cancel, window, cx| {
+                    cx.stop_propagation();
+                    controller.close_and_restore_trigger(window, cx);
+                }
+            })
+            .on_mouse_down_out({
+                let controller = controller.clone();
+                move |_, _, cx| controller.close(cx)
+            })
+            .child(list);
+
         let trigger = Button::new(format!("{id}-trigger"))
-            .role(Role::ComboBox)
+            .track_focus(&trigger_focus)
             .accessibility_label(self.aria_label)
             .selected(open)
-            .aria_expanded(open)
             .w_full()
             .h(px(theme.metrics.control_height))
             .px(px(theme.metrics.spacing_2))
@@ -680,122 +926,28 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
             .debug_selector(move || format!("{id}-trigger"))
             .hover(move |trigger| trigger.bg(theme.colors.selection.inactive_background))
             .focus(move |trigger| trigger.border_color(theme.colors.borders.focused))
+            .on_click({
+                let controller = controller.clone();
+                let list_focus = list_focus.clone();
+                move |_, window, cx| controller.toggle_open(&list_focus, window, cx)
+            })
             .child(truncated_label(selected_label).min_w(px(0.0)).flex_1())
             .child(chevron_icon(theme, open));
-        let options = Rc::new(self.options);
-        let selected_value = self.value;
-        let on_value_change = self.on_value_change;
-        Popover::new(id)
+
+        let select_root = Select::new(format!("{id}-select"))
             .open(open)
+            .accessibility_label(self.aria_label)
+            .focus_handle(&trigger_focus)
+            .content_focus_handle(&list_focus)
             .on_open_change({
-                let state = state.clone();
-                move |next, _, cx| {
-                    state.update(cx, |state, _| {
-                        state.open = *next;
-                        if *next {
-                            state.highlighted = selected_index;
-                        }
-                    });
-                    cx.notify(parent);
-                }
+                let controller = controller.clone();
+                let list_focus = list_focus.clone();
+                move |next, window, cx| controller.set_open(next, &list_focus, window, cx)
             })
-            .trigger(trigger)
-            .content(move |popover_state, _window, cx| {
-                let list_focus = popover_state.focus_handle(cx);
-                let popover = cx.entity();
-                let values = options.clone();
-                let confirm_handler = on_value_change.clone();
-                let confirm_state = state.clone();
-                let mut list = div()
-                    .track_focus(&list_focus)
-                    .key_context("Select")
-                    .on_action({
-                        let state = state.clone();
-                        let handles = option_focus_handles.clone();
-                        move |_: &SelectDown, window, cx| {
-                            if handles.is_empty() {
-                                return;
-                            }
-                            let next = state.update(cx, |state, _| {
-                                state.highlighted = (state.highlighted + 1) % handles.len();
-                                state.highlighted
-                            });
-                            handles[next].focus(window, cx);
-                        }
-                    })
-                    .on_action({
-                        let state = state.clone();
-                        let handles = option_focus_handles.clone();
-                        move |_: &SelectUp, window, cx| {
-                            if handles.is_empty() {
-                                return;
-                            }
-                            let next = state.update(cx, |state, _| {
-                                state.highlighted =
-                                    (state.highlighted + handles.len() - 1) % handles.len();
-                                state.highlighted
-                            });
-                            handles[next].focus(window, cx);
-                        }
-                    })
-                    .on_action(move |_: &Confirm, window, cx| {
-                        let index = confirm_state.read(cx).highlighted;
-                        if let Some((value, _, _)) = values.get(index) {
-                            confirm_handler(Some(value), window, cx);
-                            popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                            cx.notify(parent);
-                        }
-                    })
-                    .flex()
-                    .flex_col()
-                    .w(px(self.width.max(160.0)))
-                    .p(px(theme.metrics.spacing_1))
-                    .rounded(px(theme.metrics.radius_medium))
-                    .bg(theme.colors.surfaces.overlay)
-                    .border_1()
-                    .border_color(theme.colors.borders.standard);
-                for (index, (value, label, color)) in options.iter().enumerate() {
-                    let color = color.unwrap_or(theme.colors.text.primary);
-                    let selected = selected_value.as_ref() == Some(value);
-                    let on_value_change = on_value_change.clone();
-                    let value = value.clone();
-                    let popover = cx.entity();
-                    let focus_handle = option_focus_handles[index].clone();
-                    list = list.child(
-                        Button::new(format!("{id}-item-{index}"))
-                            .role(Role::ListBoxOption)
-                            .aria_selected(selected)
-                            .track_focus(&focus_handle)
-                            .w_full()
-                            .h(px(theme.metrics.control_height))
-                            .px(px(theme.metrics.spacing_2))
-                            .flex()
-                            .items_center()
-                            .gap(px(theme.metrics.spacing_1))
-                            .overflow_hidden()
-                            .rounded(px(theme.metrics.radius_small))
-                            .text_color(color)
-                            .debug_selector(move || format!("{id}-item-{index}"))
-                            .hover(move |item| {
-                                item.bg(theme.colors.surfaces.sidebar).cursor_pointer()
-                            })
-                            .on_click(move |_, window, cx| {
-                                on_value_change(Some(&value), window, cx);
-                                popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                                cx.notify(parent);
-                            })
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .w(px(14.0))
-                                    .when(!selected, |marker| marker.invisible())
-                                    .child("✓"),
-                            )
-                            .child(truncated_label(label.clone()).min_w(px(0.0)).flex_1()),
-                    );
-                }
-                list
-            })
+            .child(trigger);
+
+        Popup::new(format!("{id}-popup"), select_root)
+            .when(open, |popup| popup.content(popup_content))
     }
 }
 
@@ -1862,6 +2014,38 @@ mod tests {
     }
 
     #[gpui::test]
+    fn dropdown_opens_from_keyboard_focused_trigger(cx: &mut TestAppContext) {
+        cx.update(crate::theme::Theme::init);
+        let window = cx.open_window(size(px(360.0), px(280.0)), |_, _| DropdownHoverLeakView {
+            value: Some("GET"),
+            underlay_hovered: false,
+        });
+        cx.run_until_parked();
+
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            let trigger = visual
+                .debug_bounds("hover-leak-select-trigger")
+                .expect("select trigger should render");
+            visual.simulate_click(trigger.center(), Modifiers::default());
+            visual.run_until_parked();
+        }
+        cx.simulate_keystrokes(window.into(), "escape");
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "down");
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "down");
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+
+        let value = window
+            .update(cx, |view, _, _| view.value)
+            .expect("test window should remain open");
+        assert_eq!(value, Some("POST"));
+    }
+
+    #[gpui::test]
     fn dropdown_keyboard_navigation_selects_and_dismisses(cx: &mut TestAppContext) {
         cx.update(crate::theme::Theme::init);
         let window = cx.open_window(size(px(360.0), px(280.0)), |_, _| DropdownHoverLeakView {
@@ -1890,6 +2074,14 @@ mod tests {
         assert!(
             visual.debug_bounds("hover-leak-select-item-1").is_none(),
             "keyboard selection should dismiss the dropdown"
+        );
+
+        cx.simulate_keystrokes(window.into(), "down");
+        cx.run_until_parked();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            visual.debug_bounds("hover-leak-select-item-1").is_some(),
+            "trigger should stay focused so the next arrow key reopens the menu"
         );
     }
 
