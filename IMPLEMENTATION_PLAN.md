@@ -459,7 +459,39 @@ Exit criteria:
 - request switching remains responsive
 
 
-## Phase 14 — Filesystem Synchronization
+## Phase 14 — Desktop Request Persistence
+
+Connect the desktop request editor to the existing shared OpenCollection
+persistence boundary.
+
+Implement:
+
+- dirty-state tracking against the last loaded or successfully saved request
+- explicit Save and Save All actions
+- platform-appropriate Save keyboard shortcuts
+- persistence for every request field editable by the desktop
+- atomic background saves that never block the GPUI thread
+- visible save failures that retain the dirty in-memory request
+- close-tab, close-workspace, and quit protection for unsaved changes
+
+Desktop code must not serialize YAML or write collection files directly. It invokes
+the same application/repository operations available to other interfaces. Saving must
+preserve unsupported OpenCollection fields and retain the existing exact-source conflict
+check so an external modification is never overwritten.
+
+This phase saves existing requests only. General request/file creation, folder creation,
+deletion, moves, and reordering belong to Phase 16.
+
+Exit criteria:
+
+- every desktop-editable request field survives save and reload
+- dirty state clears only after the corresponding revision is saved successfully
+- edits made while a background save is running remain dirty
+- save errors and external-modification conflicts do not discard local edits
+- closing dirty work requires an explicit Save, Discard, or Cancel decision
+
+
+## Phase 15 — Filesystem Synchronization
 
 Implement:
 
@@ -471,8 +503,73 @@ Implement:
 
 Never silently overwrite externally modified data.
 
+Filesystem notifications are invalidation hints, not authoritative workspace changes.
+Debounce event bursts, reload and validate through the OpenCollection repository on a
+background executor, and reconcile the last loaded version, dirty in-memory version,
+and new filesystem version. Clean external changes may update the desktop automatically;
+overlapping local and external edits require explicit conflict resolution.
 
-## Phase 15 — Streaming Protocol Architecture
+Probe's own successful saves must update the repository baseline so their resulting
+watcher events reconcile as no-ops. Invalid or partially written external files must not
+replace the last valid in-memory workspace.
+
+This phase detects requests and folders created by external tools. It does not add a
+general request-creation command or desktop creation workflow.
+
+Exit criteria:
+
+- valid external modifications appear without reopening the collection
+- external creation, deletion, and confidently identified renames update the workspace
+- open tabs and presentation state are remapped through repository selectors rather than
+  stale runtime keys
+- dirty local edits survive non-conflicting external changes
+- overlapping changes, ambiguous renames, and external deletion of dirty items cannot
+  cause silent data loss
+- filesystem parsing and reconciliation do not block GPUI
+
+
+## Phase 16 — Workspace Structure Editing
+
+Implement shared application/repository operations for:
+
+- request creation
+- folder creation
+- rename
+- deletion
+- moving requests and folders between folders
+- ordering requests and folders within a parent
+
+Expose the operations through desktop interactions, including drag-and-drop reordering,
+and through automation-safe CLI commands where the operation is meaningful. Both
+interfaces must invoke the same operations; GPUI and CLI code must not edit YAML or move
+collection files directly.
+
+Bundled collections persist hierarchy and ordering in their item structure. Unbundled
+collections use the OpenCollection filesystem representation and ordering metadata.
+Moves and renames must update repository selectors while preserving open tabs, dirty
+edits, and session restoration where identity can be established safely.
+
+Required:
+
+- clear insertion indicators and valid drop targets in the desktop tree
+- keyboard-accessible alternatives to drag and drop
+- deterministic CLI JSON output and stable error categories
+- duplicate-path and invalid-destination protection
+- atomic writes where one document is affected
+- recoverable behavior for multi-file moves
+- exact-source conflict checks before structural writes
+- fixture-based load, modify, save, and reload tests for bundled and unbundled collections
+
+Exit criteria:
+
+- requests and folders can be created, renamed, moved, reordered, and deleted
+- desktop drag-and-drop and CLI operations produce identical domain/repository results
+- persisted order and hierarchy survive reload
+- runtime keys are never serialized or treated as persistent identity
+- external modifications during a structural operation cannot be silently overwritten
+
+
+## Phase 17 — Streaming Protocol Architecture
 
 Design a shared event/session abstraction suitable for:
 
@@ -492,7 +589,7 @@ Session/Event Stream
  CLI      GPUI
 
 
-## Phase 16 — WebSocket
+## Phase 18 — WebSocket
 
 Implement shared WebSocket support.
 
@@ -503,7 +600,7 @@ Interactive terminal mode may be added but is not the architectural
 foundation.
 
 
-## Phase 17 — gRPC
+## Phase 19 — gRPC
 
 Implement:
 
@@ -515,7 +612,7 @@ Implement:
 The shared protocol implementation must work for both CLI and GPUI.
 
 
-## Phase 18 — Git Integration
+## Phase 20 — Git Integration
 
 Filesystem remains the primary Git integration boundary.
 
@@ -532,7 +629,7 @@ Optional built-in functionality:
 Keep basic Git behavior provider-independent.
 
 
-## Phase 19 — MCP
+## Phase 21 — MCP
 
 Consider exposing the shared application layer through an MCP server.
 
