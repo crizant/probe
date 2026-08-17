@@ -1,7 +1,7 @@
 //! Probe-styled compositions over headless Longbridge gpui-base behavior.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ops::Range,
     rc::Rc,
     sync::{Arc, LazyLock},
@@ -1008,17 +1008,7 @@ pub(crate) fn body_text_input(
         return wrapper.into_any_element();
     }
 
-    let rows = ranges
-        .into_iter()
-        .map(|(_, name)| {
-            let resolved = variables
-                .values
-                .get(&name)
-                .cloned()
-                .unwrap_or_else(|| variables.unavailable_message.clone());
-            (name, resolved)
-        })
-        .collect::<Vec<_>>();
+    let rows = variable_tooltip_rows(ranges, &variables);
     wrapper
         .tooltip(move |_, cx| {
             cx.new(|_| VariableTooltip {
@@ -1343,8 +1333,7 @@ fn variable_input_overlay(
         .child(variable_highlight_layer(
             theme,
             state,
-            value,
-            ranges.clone(),
+            ranges.is_empty(),
             theme.typography.monospace_family,
             theme.typography.body_size,
         ));
@@ -1352,17 +1341,7 @@ fn variable_input_overlay(
         return wrapper.into_any_element();
     }
 
-    let rows = ranges
-        .into_iter()
-        .map(|(_, name)| {
-            let resolved = variables
-                .values
-                .get(&name)
-                .cloned()
-                .unwrap_or_else(|| variables.unavailable_message.clone());
-            (name, resolved)
-        })
-        .collect::<Vec<_>>();
+    let rows = variable_tooltip_rows(ranges, &variables);
     wrapper
         .tooltip(move |_, cx| {
             cx.new(|_| VariableTooltip {
@@ -1378,8 +1357,7 @@ fn variable_input_overlay(
 fn variable_highlight_layer(
     theme: Theme,
     state: Entity<InputState>,
-    value: SharedString,
-    ranges: Vec<(Range<usize>, String)>,
+    ranges_empty: bool,
     font_family: &'static str,
     text_size: f32,
 ) -> impl IntoElement {
@@ -1402,13 +1380,11 @@ fn variable_highlight_layer(
         .overflow_hidden()
         .font_family(font_family)
         .text_size(px(text_size))
-        .when(!ranges.is_empty(), |layer| {
+        .when(!ranges_empty, |layer| {
             layer.debug_selector(|| "variable-highlight-overlay".into())
         })
         .child(VariableHighlightElement {
             state,
-            value,
-            ranges: ranges.into_iter().map(|(range, _)| range).collect(),
             highlight_color,
             caret_color,
             mask_color,
@@ -1417,8 +1393,6 @@ fn variable_highlight_layer(
 
 struct VariableHighlightElement {
     state: Entity<InputState>,
-    value: SharedString,
-    ranges: Vec<Range<usize>>,
     highlight_color: Hsla,
     caret_color: Hsla,
     mask_color: Hsla,
@@ -1475,27 +1449,32 @@ impl Element for VariableHighlightElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let state = self.state.clone();
+        let value = single_line(state.read(cx).value());
+        let ranges = variable_ranges(&value)
+            .into_iter()
+            .map(|(range, _)| range)
+            .collect::<Vec<_>>();
         let cursor = state.read(cx).cursor();
         let selected_range = state.read(cx).selected_range();
         let focused = state.read(cx).focus_handle(cx).is_focused(window);
         let style = window.text_style();
-        let display = single_line(self.value.clone());
         let run = TextRun {
-            len: display.len(),
+            len: value.len(),
             font: style.font(),
             color: transparent_black(),
             background_color: None,
             underline: None,
             strikethrough: None,
         };
-        let runs = variable_highlight_runs(&display, &self.ranges, &run, self.highlight_color);
+        let runs = variable_highlight_runs(&value, &ranges, &run, self.highlight_color);
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window
             .text_system()
-            .shape_line(display, font_size, &runs, None);
+            .shape_line(value, font_size, &runs, None);
         let cursor_x = line.x_for_index(cursor);
         let visible_width = bounds.right() - bounds.left();
-        let scroll_offset = input_text_scroll_offset(cursor_x, visible_width);
+        let scroll_offset =
+            input_text_scroll_offset(cursor_x, visible_width, state.read(cx).scroll_offset().x);
         let caret = if focused && selected_range.is_empty() {
             let bounds = Bounds::new(
                 point(bounds.left() + scroll_offset + cursor_x, bounds.top()),
@@ -1597,12 +1576,25 @@ fn variable_highlight_runs(
     runs
 }
 
-fn input_text_scroll_offset(cursor_x: Pixels, visible_width: Pixels) -> Pixels {
-    if cursor_x + px(2.0) > visible_width {
-        visible_width - cursor_x - px(2.0)
-    } else {
-        px(0.0)
+/// Horizontal scroll for single-line input highlights.
+///
+/// Matches gpui-base `InputBaseState::scroll_to` for left-aligned input without
+/// line numbers (`RIGHT_MARGIN` = 10px). The overlay must reuse the input's
+/// current scroll offset; recomputing from zero desyncs highlights from text
+/// once the caret moves while the field is already scrolled.
+fn input_text_scroll_offset(
+    cursor_x: Pixels,
+    visible_width: Pixels,
+    current_scroll_x: Pixels,
+) -> Pixels {
+    const RIGHT_MARGIN: Pixels = px(10.0);
+    let mut scroll_x = current_scroll_x;
+    if cursor_x - RIGHT_MARGIN < -scroll_x {
+        scroll_x = -cursor_x + RIGHT_MARGIN;
+    } else if cursor_x + RIGHT_MARGIN > -scroll_x + visible_width {
+        scroll_x = -(cursor_x - visible_width + RIGHT_MARGIN);
     }
+    scroll_x.min(px(0.0))
 }
 
 pub(crate) fn single_line(value: impl Into<SharedString>) -> SharedString {
@@ -1612,6 +1604,26 @@ pub(crate) fn single_line(value: impl Into<SharedString>) -> SharedString {
     } else {
         SharedString::from(value.replace(['\n', '\r'], " "))
     }
+}
+
+fn variable_tooltip_rows(
+    ranges: Vec<(Range<usize>, String)>,
+    variables: &VariableContext,
+) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (_, name) in ranges {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let resolved = variables
+            .values
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| variables.unavailable_message.clone());
+        rows.push((name, resolved));
+    }
+    rows
 }
 
 fn variable_ranges(value: &str) -> Vec<(Range<usize>, String)> {
@@ -1809,6 +1821,8 @@ fn pane_layout_icon(layout: PaneLayout, color: gpui::Rgba) -> gpui::Div {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use gpui::{
         AppContext as _, Context, Entity, IntoElement, Modifiers, Render, SharedString,
         TestAppContext, VisualTestContext, div, hsla, point, prelude::*, px, size,
@@ -1817,9 +1831,9 @@ mod tests {
     use gpui_base::{Button, Popover, input::InputState};
 
     use super::{
-        VariableHighlightElement, body_text_highlights, dropdown, editor_paint_style,
-        input_text_scroll_offset, menu_button, single_line, variable_highlight_runs,
-        variable_ranges,
+        VariableContext, VariableHighlightElement, body_text_highlights, dropdown,
+        editor_paint_style, input_text_scroll_offset, menu_button, single_line,
+        variable_highlight_runs, variable_ranges, variable_tooltip_rows,
     };
     use crate::theme::Theme;
 
@@ -2133,6 +2147,30 @@ mod tests {
     }
 
     #[test]
+    fn variable_tooltip_rows_deduplicate_repeated_names() {
+        let value = "https://{{host}}/api/{{host}}/users/{{id}}";
+        let ranges = variable_ranges(value);
+        assert_eq!(ranges.len(), 3);
+        let mut values = BTreeMap::new();
+        values.insert("host".to_owned(), "api.example".to_owned());
+        values.insert("id".to_owned(), "42".to_owned());
+        let rows = variable_tooltip_rows(
+            ranges,
+            &VariableContext {
+                values,
+                unavailable_message: "unavailable".to_owned(),
+            },
+        );
+        assert_eq!(
+            rows,
+            vec![
+                ("host".to_owned(), "api.example".to_owned()),
+                ("id".to_owned(), "42".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn body_text_highlights_overlay_mustache_variables() {
         let theme = Theme::light();
         let value = "{\"host\":\"{{host}}\"}";
@@ -2169,14 +2207,41 @@ mod tests {
     #[test]
     fn input_text_scroll_offset_shifts_left_when_caret_overflows() {
         assert_eq!(
-            input_text_scroll_offset(px(50.0), px(100.0)),
+            input_text_scroll_offset(px(50.0), px(100.0), px(0.0)),
             px(0.0),
             "caret inside the field should not scroll"
         );
         assert_eq!(
-            input_text_scroll_offset(px(200.0), px(100.0)),
-            px(-102.0),
-            "caret past the right edge should match gpui-base InputTextElement"
+            input_text_scroll_offset(px(200.0), px(100.0), px(0.0)),
+            px(-110.0),
+            "caret past the right edge should match gpui-base scroll_to"
+        );
+    }
+
+    #[test]
+    fn input_text_scroll_offset_keeps_existing_scroll_while_caret_stays_visible() {
+        assert_eq!(
+            input_text_scroll_offset(px(550.0), px(200.0), px(-500.0)),
+            px(-500.0),
+            "caret still visible in the scrolled viewport should not reset scroll"
+        );
+    }
+
+    #[test]
+    fn input_text_scroll_offset_does_not_reset_scroll_when_absolute_position_is_short() {
+        assert_eq!(
+            input_text_scroll_offset(px(150.0), px(200.0), px(-500.0)),
+            px(-140.0),
+            "absolute cursor position alone must not snap scroll back to zero"
+        );
+    }
+
+    #[test]
+    fn input_text_scroll_offset_scrolls_back_when_caret_moves_left_offscreen() {
+        assert_eq!(
+            input_text_scroll_offset(px(150.0), px(200.0), px(-500.0)),
+            px(-140.0),
+            "caret off the left edge should scroll right to reveal it"
         );
     }
 
@@ -2215,17 +2280,11 @@ mod tests {
         let input = window
             .update(cx, |harness, _window, _cx| harness.input.clone())
             .expect("highlight test window should be open");
-        let ranges = variable_ranges(&value)
-            .into_iter()
-            .map(|(range, _)| range)
-            .collect();
         let mut visual = VisualTestContext::from_window(window.into(), cx);
         let visible = size(px(160.0), px(24.0));
         let (_, prepaint) = visual.draw(point(px(0.0), px(0.0)), visible, |_, _| {
             VariableHighlightElement {
                 state: input.clone(),
-                value: value.clone(),
-                ranges,
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
                 caret_color: hsla(0.0, 0.0, 1.0, 1.0),
                 mask_color: hsla(0.0, 0.0, 0.2, 1.0),
@@ -2239,7 +2298,7 @@ mod tests {
         );
         assert_eq!(
             prepaint.scroll_offset,
-            input_text_scroll_offset(prepaint.cursor_x, visible.width)
+            input_text_scroll_offset(prepaint.cursor_x, visible.width, px(0.0))
         );
     }
 
@@ -2262,18 +2321,12 @@ mod tests {
                 harness.input.clone()
             })
             .expect("highlight test window should be open");
-        let ranges = variable_ranges(&value)
-            .into_iter()
-            .map(|(range, _)| range)
-            .collect();
         let mut visual = VisualTestContext::from_window(window.into(), cx);
         let (_, prepaint) = visual.draw(
             point(px(0.0), px(0.0)),
             size(px(160.0), px(24.0)),
             |_, _| VariableHighlightElement {
                 state: input,
-                value,
-                ranges,
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
                 caret_color: hsla(0.0, 0.0, 1.0, 1.0),
                 mask_color: hsla(0.0, 0.0, 0.2, 1.0),
@@ -2301,18 +2354,12 @@ mod tests {
         let input = window
             .update(cx, |harness, _window, _cx| harness.input.clone())
             .expect("highlight test window should be open");
-        let ranges = variable_ranges(&value)
-            .into_iter()
-            .map(|(range, _)| range)
-            .collect();
         let mut visual = VisualTestContext::from_window(window.into(), cx);
         let _ = visual.draw(
             point(px(0.0), px(0.0)),
             size(px(160.0), px(24.0)),
             |_, _| VariableHighlightElement {
                 state: input,
-                value,
-                ranges,
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
                 caret_color: hsla(0.0, 0.0, 1.0, 1.0),
                 mask_color: hsla(0.0, 0.0, 0.2, 1.0),
