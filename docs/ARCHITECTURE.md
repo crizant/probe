@@ -260,7 +260,8 @@ is the single request-name label above the editor, so the URL bar is not precede
 duplicate title. Persistence remains a separate repository operation and is not
 implicitly coupled to individual keystrokes. Environment selection lives at the fixed
 right edge of the request tab bar and is workspace-scoped presentation state, so every
-open request shares the same selected environment. Unsaved body representations are
+open request shares the same selected environment. The last selection for each
+collection is restored from the desktop session. Unsaved body representations are
 retained as local editor drafts per request, allowing users to switch body types without
 losing work.
 
@@ -287,18 +288,19 @@ expansion rebuilds this in-memory visible-row index without filesystem access.
 ### Desktop Session Restoration
 
 Probe stores a small, versioned desktop-session document in the operating system's
-local application-data directory. The document may contain the active and recent
-collection paths, open and active request selectors, collapsed folder selectors, and
-pane sizes and orientation. It is local presentation metadata and is never written into an
-OpenCollection workspace.
+local application-data directory. The document may contain the active and recent collection paths, open and active
+request selectors, collapsed folder selectors, the last selected environment for
+each recent collection, and pane sizes and orientation. It is local presentation
+metadata and is never written into an OpenCollection workspace.
 
 Session writes are atomic and run off the GPUI thread. On launch, the desktop loads the
 session and active collection on a background executor, rebuilds the in-memory
 workspace, and resolves repository selectors to fresh runtime keys. Invalid selectors
-are ignored because the underlying item may have been removed. A missing or invalid
-collection produces a recoverable diagnostic and remains available in the recent list;
-it does not prevent the application from opening. Explicitly closing a collection
-clears the active session without deleting collection files.
+and environment names are ignored because the underlying item may have been removed.
+A missing or invalid collection produces a recoverable diagnostic and remains available
+in the recent list; it does not prevent the application from opening. Explicitly closing
+a collection clears the active session without deleting collection files. The last
+selected environment for that collection remains available when it is opened again.
 
 ### Runtime Identity and Persistence Locators
 

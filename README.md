@@ -112,7 +112,7 @@ as the CLI, and completed responses expose status, duration, size, headers, and 
 in a Pretty/Raw/Headers viewer with search. Large bodies are virtualized so navigation
 stays responsive. The editor and response viewer support vertical or horizontal layouts,
 and the local desktop session restores the active workspace, tabs, collapsed folders,
-pane orientation, and pane sizes automatically.
+selected environment, pane orientation, and pane sizes automatically.
 
 ```bash
 cargo run -p probe-cli -- --help

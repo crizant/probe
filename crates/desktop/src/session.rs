@@ -1,8 +1,9 @@
 use std::{
+    collections::BTreeMap,
     error::Error,
     fmt, fs,
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use atomic_write_file::AtomicWriteFile;
@@ -25,6 +26,8 @@ pub(crate) struct SessionState {
     pub(crate) response_height: f32,
     pub(crate) response_width: f32,
     pub(crate) horizontal_panes: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) selected_environments: BTreeMap<PathBuf, String>,
 }
 
 impl Default for SessionState {
@@ -40,6 +43,7 @@ impl Default for SessionState {
             response_height: 220.0,
             response_width: 440.0,
             horizontal_panes: false,
+            selected_environments: BTreeMap::new(),
         }
     }
 }
@@ -50,6 +54,7 @@ impl SessionState {
         self.recent_collections.insert(0, path.clone());
         self.recent_collections.truncate(RECENT_COLLECTION_LIMIT);
         self.active_collection = Some(path);
+        self.prune_selected_environments();
     }
 
     pub(crate) fn clear_active_collection(&mut self) {
@@ -57,6 +62,30 @@ impl SessionState {
         self.open_tabs.clear();
         self.active_tab = None;
         self.collapsed_folders.clear();
+    }
+
+    pub(crate) fn selected_environment_for(&self, path: &Path) -> Option<&str> {
+        self.selected_environments.get(path).map(String::as_str)
+    }
+
+    pub(crate) fn remember_selected_environment(
+        &mut self,
+        path: PathBuf,
+        environment: Option<String>,
+    ) {
+        match environment.filter(|name| !name.is_empty()) {
+            Some(name) => {
+                self.selected_environments.insert(path, name);
+            }
+            None => {
+                self.selected_environments.remove(&path);
+            }
+        }
+    }
+
+    fn prune_selected_environments(&mut self) {
+        self.selected_environments
+            .retain(|path, _| self.recent_collections.contains(path));
     }
 }
 
@@ -141,7 +170,7 @@ impl Error for SessionError {}
 #[cfg(test)]
 mod tests {
     use std::{
-        path::Path,
+        path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -174,6 +203,7 @@ mod tests {
         state.sidebar_width = 312.0;
         state.response_width = 480.0;
         state.horizontal_panes = true;
+        state.remember_selected_environment("/tmp/example".into(), Some("development".to_owned()));
 
         store.save(&state).unwrap();
         assert_eq!(store.load().unwrap(), state);
@@ -190,5 +220,73 @@ mod tests {
 
         assert_eq!(state.recent_collections.len(), 10);
         assert_eq!(state.recent_collections[0], Path::new("/tmp/collection-5"));
+    }
+
+    #[test]
+    fn selected_environments_are_remembered_per_collection() {
+        let mut state = SessionState::default();
+        state.remember_selected_environment("/tmp/a".into(), Some("development".to_owned()));
+        state.remember_selected_environment("/tmp/b".into(), Some("staging".to_owned()));
+        state.remember_selected_environment("/tmp/a".into(), None);
+
+        assert_eq!(state.selected_environment_for(Path::new("/tmp/a")), None);
+        assert_eq!(
+            state.selected_environment_for(Path::new("/tmp/b")),
+            Some("staging")
+        );
+    }
+
+    #[test]
+    fn selected_environments_are_pruned_with_recent_collections() {
+        let mut state = SessionState::default();
+        for index in 0..12 {
+            let path = PathBuf::from(format!("/tmp/collection-{index}"));
+            state.activate_collection(path.clone());
+            state.remember_selected_environment(path, Some("development".to_owned()));
+        }
+
+        assert_eq!(state.selected_environments.len(), 10);
+        assert_eq!(
+            state.selected_environment_for(Path::new("/tmp/collection-0")),
+            None
+        );
+        assert_eq!(
+            state.selected_environment_for(Path::new("/tmp/collection-1")),
+            None
+        );
+        assert_eq!(
+            state.selected_environment_for(Path::new("/tmp/collection-2")),
+            Some("development")
+        );
+    }
+
+    #[test]
+    fn missing_selected_environments_default_to_empty() {
+        let store = store();
+        let parent = store
+            .path()
+            .parent()
+            .expect("desktop session path must have a parent directory");
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::write(
+            store.path(),
+            r#"{
+  "schema_version": 1,
+  "active_collection": null,
+  "recent_collections": [],
+  "open_tabs": [],
+  "active_tab": null,
+  "collapsed_folders": [],
+  "sidebar_width": 260.0,
+  "response_height": 220.0,
+  "response_width": 440.0,
+  "horizontal_panes": false
+}
+"#,
+        )
+        .unwrap();
+
+        let state = store.load().unwrap();
+        assert!(state.selected_environments.is_empty());
     }
 }

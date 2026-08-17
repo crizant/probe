@@ -215,6 +215,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.capture_selected_environment();
         self.loading = true;
         self.message = None;
         cx.notify();
@@ -269,6 +270,7 @@ impl ProbeApp {
         self.workspace_path = Some(path);
         self.shell.reset_for_workspace();
         self.request_editor.clear();
+        self.restore_selected_environment();
         self.rebuild_visible_tree_rows();
         self.message = None;
     }
@@ -346,6 +348,45 @@ impl ProbeApp {
             .filter_map(|key| loaded.folder_selector(key).map(str::to_owned))
             .collect();
         self.session.collapsed_folders.sort();
+        self.session.remember_selected_environment(
+            path.clone(),
+            self.request_editor
+                .selected_environment()
+                .map(str::to_owned),
+        );
+    }
+
+    fn capture_selected_environment(&mut self) {
+        let Some(path) = self.workspace_path.clone() else {
+            return;
+        };
+        self.session.remember_selected_environment(
+            path,
+            self.request_editor
+                .selected_environment()
+                .map(str::to_owned),
+        );
+    }
+
+    fn restore_selected_environment(&mut self) {
+        let (Some(path), Some(loaded)) = (&self.workspace_path, &self.loaded_workspace) else {
+            return;
+        };
+        let Some(name) = self
+            .session
+            .selected_environment_for(path)
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        if loaded
+            .workspace()
+            .environments()
+            .iter()
+            .any(|environment| environment.name == name)
+        {
+            self.request_editor.select_environment(Some(name));
+        }
     }
 
     fn persist_session(&mut self, cx: &mut Context<Self>) {
@@ -366,6 +407,7 @@ impl ProbeApp {
     }
 
     fn close_workspace(&mut self, cx: &mut Context<Self>) {
+        self.capture_selected_environment();
         self.execution.clear();
         self.response_viewer.clear();
         self.loaded_workspace = None;
@@ -374,6 +416,12 @@ impl ProbeApp {
         self.request_editor.clear();
         self.visible_tree_rows.clear();
         self.session.clear_active_collection();
+        self.persist_session(cx);
+        cx.notify();
+    }
+
+    fn select_environment(&mut self, environment: Option<String>, cx: &mut Context<Self>) {
+        self.request_editor.select_environment(environment);
         self.persist_session(cx);
         cx.notify();
     }
@@ -927,9 +975,7 @@ impl ProbeApp {
                     move |value, _, cx| {
                         let value = value.cloned().unwrap_or_default();
                         let _ = environment_view.update(cx, |view, cx| {
-                            view.request_editor
-                                .select_environment((!value.is_empty()).then_some(value));
-                            cx.notify();
+                            view.select_environment((!value.is_empty()).then_some(value), cx);
                         });
                     },
                 ),
@@ -3031,6 +3077,11 @@ mod tests {
             .join("../../tests/fixtures/opencollection/phase4-environments.yml")
     }
 
+    fn http_environment_fixture() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/opencollection/phase5-http.yml")
+    }
+
     #[gpui::test]
     fn recent_collection_in_sidebar_loads_the_workspace(cx: &mut TestAppContext) {
         cx.update(Theme::init);
@@ -3377,6 +3428,112 @@ mod tests {
                     view.request_editor.selected_environment(),
                     Some("development")
                 );
+            })
+            .expect("test window should be open");
+    }
+
+    #[gpui::test]
+    fn environment_selection_is_restored_when_reopening_a_workspace(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = environment_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                view.select_request(request_key, cx);
+                view.select_environment(Some("development".to_owned()), cx);
+                view.close_workspace(cx);
+            })
+            .expect("test window should be open");
+
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should reload");
+        window
+            .update(cx, |view, _, _| {
+                view.set_workspace(fixture, workspace);
+                assert_eq!(
+                    view.request_editor.selected_environment(),
+                    Some("development")
+                );
+            })
+            .expect("test window should remain open");
+    }
+
+    #[gpui::test]
+    fn environment_selection_is_remembered_per_workspace(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let first_fixture = environment_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let second_fixture = http_environment_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let first_workspace =
+            probe_opencollection::load_workspace(&first_fixture).expect("fixture should load");
+        let second_workspace =
+            probe_opencollection::load_workspace(&second_fixture).expect("fixture should load");
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(first_fixture.clone(), first_workspace);
+                view.select_environment(Some("development".to_owned()), cx);
+                view.capture_selected_environment();
+                view.set_workspace(second_fixture.clone(), second_workspace);
+                view.select_environment(Some("local".to_owned()), cx);
+                view.capture_selected_environment();
+            })
+            .expect("test window should be open");
+
+        let first_workspace =
+            probe_opencollection::load_workspace(&first_fixture).expect("fixture should reload");
+        let second_workspace =
+            probe_opencollection::load_workspace(&second_fixture).expect("fixture should reload");
+        window
+            .update(cx, |view, _, _| {
+                view.set_workspace(first_fixture, first_workspace);
+                assert_eq!(
+                    view.request_editor.selected_environment(),
+                    Some("development")
+                );
+                view.capture_selected_environment();
+                view.set_workspace(second_fixture, second_workspace);
+                assert_eq!(view.request_editor.selected_environment(), Some("local"));
+            })
+            .expect("test window should remain open");
+    }
+
+    #[gpui::test]
+    fn missing_environment_is_not_restored(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = environment_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.session.remember_selected_environment(
+                    fixture.clone(),
+                    Some("missing-environment".to_owned()),
+                );
+                view.set_workspace(fixture, workspace);
+                assert_eq!(view.request_editor.selected_environment(), None);
+                cx.notify();
             })
             .expect("test window should be open");
     }

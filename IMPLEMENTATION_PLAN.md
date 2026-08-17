@@ -386,6 +386,7 @@ Exit criteria:
 - restore tabs using repository selectors rather than runtime keys
 - restore collapsed folders and pane sizes
 - restore the selected editor/response layout and its size in each orientation
+- restore the last selected environment for each collection
 - recover safely when a remembered collection is missing or invalid
 
 Desktop session state is local presentation metadata. Store it in the platform
