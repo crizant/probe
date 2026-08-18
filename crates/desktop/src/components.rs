@@ -1774,8 +1774,10 @@ pub fn menu_button(
     theme: Theme,
     id: impl Into<ElementId>,
     label: impl Into<String>,
+    shortcut: Option<&'static str>,
     on_activate: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let label = label.into();
     let on_activate = Rc::new(on_activate);
     let pointer_activate = on_activate.clone();
     let keyboard_activate = on_activate;
@@ -1813,7 +1815,23 @@ pub fn menu_button(
                         keyboard_activate(window, cx);
                     }
                 })
-                .child(truncated_label(label.into()).w_full()),
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_2))
+                        .child(truncated_label(label).flex_1())
+                        .when_some(shortcut, |row, shortcut| {
+                            row.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(theme.typography.caption_size))
+                                    .text_color(theme.colors.text.muted)
+                                    .child(shortcut),
+                            )
+                        }),
+                ),
         )
 }
 
@@ -2001,6 +2019,7 @@ mod tests {
                                 Theme::light(),
                                 "menu-test-item",
                                 "Workspace",
+                                None,
                                 move |_, cx| {
                                     let _ = activate_view.update(cx, |view, cx| {
                                         view.activations += 1;

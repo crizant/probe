@@ -6,14 +6,14 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, CursorStyle, FocusHandle, FontWeight,
-    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, MouseMoveEvent,
-    ParentElement as _, PathPromptOptions, PromptLevel, Render, ScrollHandle, ScrollStrategy,
-    StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions, UniformListScrollHandle,
-    Window, WindowBounds, WindowControlArea, WindowOptions, div, point,
-    prelude::FluentBuilder as _, px, relative, size, uniform_list,
+    Anchor, App, AppContext as _, Bounds, Context, CursorStyle, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement as _, PathPromptOptions, Pixels, Point, PromptLevel, Render, ScrollHandle,
+    ScrollStrategy, StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions,
+    UniformListScrollHandle, Window, WindowBounds, WindowControlArea, WindowOptions, deferred, div,
+    point, prelude::FluentBuilder as _, px, relative, size, uniform_list,
 };
-use gpui_base::{Button, Popover, Tab, Tabs};
+use gpui_base::{Button, POPUP_PRIORITY, Popover, Positioner, Tab, Tabs};
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, FileReference, FormField, Header, HttpRequest,
     MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind, RequestBody,
@@ -111,6 +111,8 @@ pub struct ProbeApp {
     pending_close: Option<PendingClose>,
     workspace_switcher_open: bool,
     structure_add_menu_open: bool,
+    tree_context_menu: Option<WorkspaceItemRef>,
+    tree_context_menu_position: Option<Point<Pixels>>,
     visible_tree_rows: Vec<TreeRow>,
     selected_tree_item: Option<WorkspaceItemRef>,
     structure_dialog: Option<StructureDialog>,
@@ -181,6 +183,8 @@ impl ProbeApp {
             pending_close: None,
             workspace_switcher_open: false,
             structure_add_menu_open: false,
+            tree_context_menu: None,
+            tree_context_menu_position: None,
             visible_tree_rows: Vec::new(),
             selected_tree_item: None,
             structure_dialog: None,
@@ -384,6 +388,8 @@ impl ProbeApp {
         self.selected_tree_item = None;
         self.structure_dialog = None;
         self.structure_add_menu_open = false;
+        self.tree_context_menu = None;
+        self.tree_context_menu_position = None;
         self.request_editor.clear();
         self.restore_selected_environment();
         self.rebuild_visible_tree_rows();
@@ -851,6 +857,8 @@ impl ProbeApp {
         self.selected_tree_item = None;
         self.structure_dialog = None;
         self.structure_add_menu_open = false;
+        self.tree_context_menu = None;
+        self.tree_context_menu_position = None;
         self.request_editor.clear();
         self.persistence.clear();
         self.filesystem_watch_task = None;
@@ -1757,6 +1765,106 @@ impl ProbeApp {
         self.visible_tree_rows = rows;
     }
 
+    fn open_tree_context_menu(
+        &mut self,
+        item: WorkspaceItemRef,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.structure_task.is_some() {
+            return;
+        }
+        self.tree_context_menu = Some(item);
+        self.tree_context_menu_position = Some(position);
+        self.select_tree_item(item, cx);
+    }
+
+    fn close_tree_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.tree_context_menu.is_none() {
+            return;
+        }
+        self.tree_context_menu = None;
+        self.tree_context_menu_position = None;
+        cx.notify();
+    }
+
+    fn render_tree_context_menu(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(item) = self.tree_context_menu else {
+            return div().into_any_element();
+        };
+        let Some(position) = self.tree_context_menu_position else {
+            return div().into_any_element();
+        };
+        let rename_id = match item {
+            WorkspaceItemRef::Request(key) => ("tree-context-rename", key.slot()),
+            WorkspaceItemRef::Folder(key) => ("tree-context-rename", key.slot()),
+        };
+        let delete_id = match item {
+            WorkspaceItemRef::Request(key) => ("tree-context-delete", key.slot()),
+            WorkspaceItemRef::Folder(key) => ("tree-context-delete", key.slot()),
+        };
+        let rename_view = cx.weak_entity();
+        let delete_view = cx.weak_entity();
+        let dismiss_view = cx.weak_entity();
+        let menu = div()
+            .id("tree-context-menu")
+            .w(px(200.0))
+            .p(px(theme.metrics.spacing_1))
+            .flex()
+            .flex_col()
+            .gap(px(theme.metrics.spacing_1))
+            .rounded(px(theme.metrics.radius_medium))
+            .bg(theme.colors.surfaces.overlay)
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down_out({
+                let dismiss_view = dismiss_view.clone();
+                move |_, _, cx| {
+                    let _ = dismiss_view.update(cx, |view, cx| {
+                        view.close_tree_context_menu(cx);
+                    });
+                }
+            })
+            .child(components::menu_button(
+                theme,
+                rename_id,
+                "Rename",
+                Some(tree_rename_shortcut_label()),
+                move |window, cx| {
+                    let _ = rename_view.update(cx, |view, cx| {
+                        view.tree_context_menu = None;
+                        view.tree_context_menu_position = None;
+                        view.select_tree_item(item, cx);
+                        view.open_rename_dialog(window, cx);
+                    });
+                },
+            ))
+            .child(components::menu_button(
+                theme,
+                delete_id,
+                "Delete",
+                Some(tree_delete_shortcut_label()),
+                move |window, cx| {
+                    let _ = delete_view.update(cx, |view, cx| {
+                        view.tree_context_menu = None;
+                        view.tree_context_menu_position = None;
+                        view.select_tree_item(item, cx);
+                        view.request_delete_selected(window, cx);
+                    });
+                },
+            ));
+        deferred(
+            Positioner::corner(Anchor::TopLeft, position)
+                .margin(px(8.0))
+                .child(menu),
+        )
+        .with_priority(POPUP_PRIORITY)
+        .into_any_element()
+    }
+
     fn render_tree_row(
         &self,
         row: TreeRow,
@@ -1767,6 +1875,7 @@ impl ProbeApp {
             return div().into_any_element();
         };
         let TreeRow { item, depth } = row;
+        let can_edit = self.structure_task.is_none();
         match item {
             WorkspaceItemRef::Request(key) => {
                 let Some(request) = loaded.workspace().request(key) else {
@@ -1780,7 +1889,9 @@ impl ProbeApp {
                 let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
                 let selected = self.selected_tree_item == Some(WorkspaceItemRef::Request(key));
                 let view = cx.weak_entity();
-                Button::new(("request-tree-item", key.slot()))
+                let context_menu_view = cx.weak_entity();
+                let item = WorkspaceItemRef::Request(key);
+                let button = Button::new(("request-tree-item", key.slot()))
                     .focusable(true)
                     .tab_stop(true)
                     .key_context("RequestTree")
@@ -1805,6 +1916,17 @@ impl ProbeApp {
                     .on_click(move |_, _, cx| {
                         let _ = view.update(cx, |view, cx| view.select_request(key, cx));
                     })
+                    .when(can_edit, |row| {
+                        row.on_mouse_down(
+                            MouseButton::Right,
+                            move |event: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                let _ = context_menu_view.update(cx, |view, cx| {
+                                    view.open_tree_context_menu(item, event.position, cx);
+                                });
+                            },
+                        )
+                    })
                     .child(
                         div()
                             .w(px(64.0))
@@ -1825,8 +1947,8 @@ impl ProbeApp {
                             .when(selected, |label| {
                                 label.debug_selector(|| "request-tree-label".into())
                             }),
-                    )
-                    .into_any_element()
+                    );
+                button.into_any_element()
             }
             WorkspaceItemRef::Folder(key) => {
                 let Some(folder) = loaded.workspace().folder(key) else {
@@ -1836,7 +1958,9 @@ impl ProbeApp {
                 let label = folder.metadata.name.as_deref().unwrap_or("Untitled folder");
                 let selected = self.selected_tree_item == Some(WorkspaceItemRef::Folder(key));
                 let view = cx.weak_entity();
-                Button::new(("folder-tree-item", key.slot()))
+                let context_menu_view = cx.weak_entity();
+                let item = WorkspaceItemRef::Folder(key);
+                let button = Button::new(("folder-tree-item", key.slot()))
                     .focusable(true)
                     .tab_stop(true)
                     .key_context("RequestTree")
@@ -1867,6 +1991,17 @@ impl ProbeApp {
                             cx.notify();
                         });
                     })
+                    .when(can_edit, |row| {
+                        row.on_mouse_down(
+                            MouseButton::Right,
+                            move |event: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                let _ = context_menu_view.update(cx, |view, cx| {
+                                    view.open_tree_context_menu(item, event.position, cx);
+                                });
+                            },
+                        )
+                    })
                     .child(components::tree_folder_icon(theme, expanded, selected))
                     .child(
                         components::truncated_label(label.to_owned())
@@ -1875,8 +2010,8 @@ impl ProbeApp {
                                 label.text_color(theme.colors.selection.active_foreground)
                             })
                             .font_weight(FontWeight::SEMIBOLD),
-                    )
-                    .into_any_element()
+                    );
+                button.into_any_element()
             }
         }
     }
@@ -1884,11 +2019,9 @@ impl ProbeApp {
     fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let new_request_view = cx.weak_entity();
         let new_folder_view = cx.weak_entity();
-        let rename_view = cx.weak_entity();
         let move_view = cx.weak_entity();
         let move_up_view = cx.weak_entity();
         let move_down_view = cx.weak_entity();
-        let delete_view = cx.weak_entity();
         let can_edit = self.loaded_workspace.is_some() && self.structure_task.is_none();
         let has_selection = can_edit && self.selected_tree_item.is_some();
         let add_menu_state_view = cx.weak_entity();
@@ -1906,6 +2039,7 @@ impl ProbeApp {
                 theme,
                 "tree-new-request",
                 "Add Request",
+                None,
                 move |window, cx| {
                     let _ = new_request_view.update(cx, |view, cx| {
                         view.structure_add_menu_open = false;
@@ -1917,6 +2051,7 @@ impl ProbeApp {
                 theme,
                 "tree-new-folder",
                 "Add Folder",
+                None,
                 move |window, cx| {
                     let _ = new_folder_view.update(cx, |view, cx| {
                         view.structure_add_menu_open = false;
@@ -2063,17 +2198,6 @@ impl ProbeApp {
                             .gap(px(theme.metrics.spacing_1))
                             .child(tree_toolbar_button(
                                 theme,
-                                "tree-rename",
-                                "Rename",
-                                has_selection,
-                                move |window, cx| {
-                                    let _ = rename_view.update(cx, |view, cx| {
-                                        view.open_rename_dialog(window, cx);
-                                    });
-                                },
-                            ))
-                            .child(tree_toolbar_button(
-                                theme,
                                 "tree-move",
                                 "Move…",
                                 has_selection,
@@ -2102,17 +2226,6 @@ impl ProbeApp {
                                 move |window, cx| {
                                     let _ = move_down_view.update(cx, |view, cx| {
                                         view.reorder_selected(1, window, cx);
-                                    });
-                                },
-                            ))
-                            .child(tree_toolbar_button(
-                                theme,
-                                "tree-delete",
-                                "Delete",
-                                has_selection,
-                                move |window, cx| {
-                                    let _ = delete_view.update(cx, |view, cx| {
-                                        view.request_delete_selected(window, cx);
                                     });
                                 },
                             )),
@@ -4048,6 +4161,7 @@ impl ProbeApp {
                     theme,
                     ("workspace-switcher-recent", index),
                     label,
+                    None,
                     move |window, cx| {
                         let path = open_path.clone();
                         let _ = view.update(cx, |view, cx| {
@@ -4071,6 +4185,7 @@ impl ProbeApp {
             theme,
             "workspace-switcher-open",
             "Open Collection…",
+            None,
             move |window, cx| {
                 let _ = open_view.update(cx, |view, cx| {
                     view.workspace_switcher_open = false;
@@ -4085,6 +4200,7 @@ impl ProbeApp {
                 theme,
                 "workspace-switcher-close",
                 "Close Current Collection",
+                None,
                 move |window, cx| {
                     let _ = close_view.update(cx, |view, cx| {
                         view.workspace_switcher_open = false;
@@ -4567,6 +4683,23 @@ impl Render for ProbeApp {
                     ),
             )
             .child(self.render_structure_dialog(theme, cx))
+            .child(self.render_tree_context_menu(theme, cx))
+    }
+}
+
+fn tree_rename_shortcut_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌘E"
+    } else {
+        "F2"
+    }
+}
+
+fn tree_delete_shortcut_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌫"
+    } else {
+        "Del"
     }
 }
 
@@ -4768,8 +4901,6 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("right", ExpandTreeItem, Some("RequestTree")),
         KeyBinding::new("enter", ActivateTreeItem, Some("RequestTree")),
         KeyBinding::new("space", ActivateTreeItem, Some("RequestTree")),
-        KeyBinding::new("f2", RenameTreeItem, Some("RequestTree")),
-        KeyBinding::new("delete", DeleteTreeItem, Some("RequestTree")),
         KeyBinding::new("n", NewRequest, Some("RequestTree")),
         KeyBinding::new("shift-n", NewFolder, Some("RequestTree")),
         KeyBinding::new("m", MoveTreeItem, Some("RequestTree")),
@@ -4784,6 +4915,14 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("cmd-s", SaveRequest, None),
         KeyBinding::new("cmd-w", CloseActiveTab, None),
         KeyBinding::new("cmd-q", QuitApplication, None),
+        KeyBinding::new("cmd-e", RenameTreeItem, Some("RequestTree")),
+        KeyBinding::new("backspace", DeleteTreeItem, Some("RequestTree")),
+    ]);
+
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([
+        KeyBinding::new("f2", RenameTreeItem, Some("RequestTree")),
+        KeyBinding::new("delete", DeleteTreeItem, Some("RequestTree")),
     ]);
 
     #[cfg(target_os = "windows")]
