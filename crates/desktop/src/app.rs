@@ -9,7 +9,7 @@ use gpui::{
     Anchor, App, AppContext as _, Bounds, Context, CursorStyle, FocusHandle, FontWeight,
     InteractiveElement as _, IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
     ParentElement as _, PathPromptOptions, Pixels, Point, PromptLevel, Render, ScrollHandle,
-    ScrollStrategy, StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions,
+    ScrollStrategy, StatefulInteractiveElement as _, Styled as _, Task, TextAlign, TitlebarOptions,
     UniformListScrollHandle, Window, WindowBounds, WindowControlArea, WindowOptions, deferred, div,
     point, prelude::FluentBuilder as _, px, relative, size, uniform_list,
 };
@@ -1929,9 +1929,10 @@ impl ProbeApp {
                     })
                     .child(
                         div()
-                            .w(px(64.0))
+                            .w(px(48.0))
                             .flex_none()
                             .truncate()
+                            .text_align(TextAlign::Right)
                             .text_size(px(theme.typography.caption_size))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(if selected {
@@ -4704,7 +4705,7 @@ fn tree_delete_shortcut_label() -> &'static str {
 }
 
 fn tree_folder_indent(theme: Theme, depth: usize) -> f32 {
-    theme.metrics.spacing_1 + depth as f32 * theme.metrics.spacing_2
+    theme.metrics.spacing_2 + depth as f32 * theme.metrics.spacing_2
 }
 
 fn tree_request_indent(theme: Theme, depth: usize) -> f32 {
