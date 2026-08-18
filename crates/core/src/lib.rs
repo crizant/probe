@@ -14,7 +14,10 @@ pub use environment::{
     EnvironmentResolutionError, ResolvedEnvironment, resolve_environment, resolve_request,
     validate_environments,
 };
-pub use workspace::{FolderKey, RequestKey, Workspace, WorkspaceFolder, WorkspaceItemRef};
+pub use workspace::{
+    FolderKey, RequestKey, Workspace, WorkspaceEditError, WorkspaceFolder, WorkspaceItemRef,
+    WorkspaceParent,
+};
 
 /// A parsed API collection.
 #[derive(Clone, Debug, Default, PartialEq)]

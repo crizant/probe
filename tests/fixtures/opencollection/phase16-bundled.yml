@@ -1,0 +1,26 @@
+opencollection: 1.0.0
+info:
+  name: Phase 16 bundled
+bundled: true
+extensions:
+  vendor.example:
+    retained: true
+items:
+  - info:
+      name: Alpha
+      type: http
+    http:
+      method: GET
+      url: https://example.com/alpha
+    x-request: retained
+  - info:
+      name: Folder
+      type: folder
+    x-folder: retained
+    items:
+      - info:
+          name: Nested
+          type: http
+        http:
+          method: POST
+          url: https://example.com/nested

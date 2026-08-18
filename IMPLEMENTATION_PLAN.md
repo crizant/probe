@@ -528,9 +528,9 @@ Exit criteria:
 - filesystem parsing and reconciliation do not block GPUI
 
 
-## Phase 16 — Workspace Structure Editing
+## Phase 16 — Workspace Structure Operations
 
-Implement shared application/repository operations for:
+Implement shared domain, application, and repository operations for:
 
 - request creation
 - folder creation
@@ -539,10 +539,8 @@ Implement shared application/repository operations for:
 - moving requests and folders between folders
 - ordering requests and folders within a parent
 
-Expose the operations through desktop interactions, including drag-and-drop reordering,
-and through automation-safe CLI commands where the operation is meaningful. Both
-interfaces must invoke the same operations; GPUI and CLI code must not edit YAML or move
-collection files directly.
+Frontend adapters must invoke these operations rather than edit YAML or move collection
+files directly.
 
 Bundled collections persist hierarchy and ordering in their item structure. Unbundled
 collections use the OpenCollection filesystem representation and ordering metadata.
@@ -551,9 +549,6 @@ edits, and session restoration where identity can be established safely.
 
 Required:
 
-- clear insertion indicators and valid drop targets in the desktop tree
-- keyboard-accessible alternatives to drag and drop
-- deterministic CLI JSON output and stable error categories
 - duplicate-path and invalid-destination protection
 - atomic writes where one document is affected
 - recoverable behavior for multi-file moves
@@ -563,13 +558,84 @@ Required:
 Exit criteria:
 
 - requests and folders can be created, renamed, moved, reordered, and deleted
-- desktop drag-and-drop and CLI operations produce identical domain/repository results
 - persisted order and hierarchy survive reload
 - runtime keys are never serialized or treated as persistent identity
 - external modifications during a structural operation cannot be silently overwritten
 
 
-## Phase 17 — Streaming Protocol Architecture
+## Phase 17 — CLI Workspace Structure Editing
+
+Expose the Phase 16 operations through automation-safe CLI commands where each operation
+is meaningful.
+
+Required:
+
+- request and folder creation, rename, deletion, move, and reorder commands
+- non-interactive arguments for parent and insertion position
+- deterministic JSON output
+- stable error categories and exit codes
+- repository selectors in every command and result
+- no YAML serialization or filesystem move logic in the CLI
+
+Exit criteria:
+
+- an external program can perform every supported structural operation without parsing
+  human-readable output
+- CLI operations produce the same persisted domain and repository results as direct
+  Phase 16 operations
+- duplicate paths, invalid destinations, missing selectors, read-only sources, and
+  external-modification conflicts are distinguishable programmatically
+
+
+## Phase 18 — Desktop Workspace Structure Editing
+
+Expose the Phase 16 operations through keyboard-accessible desktop interactions.
+
+Implement:
+
+- request and folder creation
+- inline or dialog-based rename
+- deletion with data-loss protection
+- moving and reordering through explicit controls
+- focusable tree rows and keyboard navigation
+- selector-based remapping after structural changes
+
+Structural filesystem work must run away from the GPUI thread. Open tabs, dirty edits,
+collapsed folders, and restored session state must follow safely established selector
+changes rather than runtime keys.
+
+Exit criteria:
+
+- every structural operation is available without drag and drop
+- dirty requests are never silently discarded by rename, move, or deletion
+- tabs and presentation state survive selector changes where identity is safely
+  established
+- save and filesystem-watch events caused by Probe reconcile as no-ops
+
+
+## Phase 19 — Desktop Tree Drag and Drop
+
+Add drag-and-drop movement and reordering to the desktop request tree using the same
+Phase 16 operations as the CLI and keyboard workflows.
+
+Required:
+
+- clear insertion indicators
+- valid folder and sibling drop targets
+- rejection of self, descendant, duplicate-path, and otherwise invalid destinations
+- autoscroll where needed for large virtualized trees
+- equivalent keyboard-accessible operations from Phase 18
+
+Exit criteria:
+
+- requests and folders can be moved and reordered by drag and drop
+- drag-and-drop and CLI operations produce identical domain and repository results
+- large virtualized trees remain responsive while dragging
+- failed persistence or conflict checks leave the previous valid workspace visible and
+  recoverable
+
+
+## Phase 20 — Streaming Protocol Architecture
 
 Design a shared event/session abstraction suitable for:
 
@@ -589,7 +655,7 @@ Session/Event Stream
  CLI      GPUI
 
 
-## Phase 18 — WebSocket
+## Phase 21 — WebSocket
 
 Implement shared WebSocket support.
 
@@ -600,7 +666,7 @@ Interactive terminal mode may be added but is not the architectural
 foundation.
 
 
-## Phase 19 — gRPC
+## Phase 22 — gRPC
 
 Implement:
 
@@ -612,7 +678,7 @@ Implement:
 The shared protocol implementation must work for both CLI and GPUI.
 
 
-## Phase 20 — Git Integration
+## Phase 23 — Git Integration
 
 Filesystem remains the primary Git integration boundary.
 
@@ -629,7 +695,7 @@ Optional built-in functionality:
 Keep basic Git behavior provider-independent.
 
 
-## Phase 21 — MCP
+## Phase 24 — MCP
 
 Consider exposing the shared application layer through an MCP server.
 

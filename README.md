@@ -92,6 +92,15 @@ probe request run ./api reports/download.yml \
 probe request set ./api users/list-users.yml \
   --method GET --url https://api.example.com/v2/users --json
 
+probe folder create ./api --name Admin --index 0 --json
+
+probe request create ./api --parent admin --name "List admins" \
+  --method GET --url https://api.example.com/admins --json
+
+probe request move ./api list-admins.yml --parent admin --index 0 --json
+
+probe folder rename ./api admin --name Administration --json
+
 probe collection validate ./api --quiet
 ```
 

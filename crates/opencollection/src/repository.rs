@@ -74,7 +74,15 @@ pub struct LoadedWorkspace {
     folder_keys_by_selector: BTreeMap<String, FolderKey>,
     request_selectors_by_key: BTreeMap<RequestKey, String>,
     folder_selectors_by_key: BTreeMap<FolderKey, String>,
-    documents: BTreeMap<PathBuf, SourceDocument>,
+    pub(crate) documents: BTreeMap<PathBuf, SourceDocument>,
+    pub(crate) source: WorkspaceSource,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorkspaceSource {
+    Bundled(PathBuf),
+    Unbundled(PathBuf),
+    Memory,
 }
 
 impl LoadedWorkspace {
@@ -293,8 +301,8 @@ struct RequestPersistence {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct SourceDocument {
-    original_source: Vec<u8>,
+pub(crate) struct SourceDocument {
+    pub(crate) original_source: Vec<u8>,
 }
 
 /// Loads a bundled OpenCollection file or an unbundled collection directory.
@@ -492,6 +500,7 @@ fn load_bundled_source(
                 original_source: source.as_bytes().to_vec(),
             },
         );
+        loaded.source = WorkspaceSource::Bundled(path.to_owned());
     }
     Ok(loaded)
 }
@@ -512,6 +521,12 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
     }
     let mut collection = parsed.into_collection();
     let mut documents = BTreeMap::new();
+    documents.insert(
+        root_config.clone(),
+        SourceDocument {
+            original_source: source.as_bytes().to_vec(),
+        },
+    );
     let loaded_items = read_items(root, root, "opencollection", &mut documents)?;
     let (items, nodes): (Vec<_>, Vec<_>) = loaded_items.into_iter().unzip();
     collection.items = items;
@@ -524,6 +539,7 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
     let workspace = Workspace::from_collection(collection);
     let mut loaded = index_locators(workspace, &nodes);
     loaded.documents = documents;
+    loaded.source = WorkspaceSource::Unbundled(root.to_owned());
     Ok(loaded)
 }
 
@@ -551,7 +567,14 @@ fn read_items(
             let Some(folder_config) = config_file(&path, "folder") else {
                 continue;
             };
-            let mut folder = match read_item(&folder_config)?.item {
+            let read = read_item(&folder_config)?;
+            documents.insert(
+                folder_config.clone(),
+                SourceDocument {
+                    original_source: read.original_source.clone(),
+                },
+            );
+            let mut folder = match read.item {
                 Some(CollectionItem::Folder(folder)) => folder,
                 Some(CollectionItem::HttpRequest(_)) => {
                     return Err(LoadError::InvalidItem {
@@ -575,16 +598,16 @@ fn read_items(
             && path.file_stem().and_then(|stem| stem.to_str()) != Some(reserved_stem)
         {
             let read = read_item(&path)?;
+            documents.insert(
+                path.clone(),
+                SourceDocument {
+                    original_source: read.original_source.clone(),
+                },
+            );
             if let Some(item) = read.item {
                 match item {
                     CollectionItem::HttpRequest(request) => {
                         let selector = relative_selector(root, &path);
-                        documents.insert(
-                            path.clone(),
-                            SourceDocument {
-                                original_source: read.original_source,
-                            },
-                        );
                         items.push((
                             CollectionItem::HttpRequest(request),
                             LocatorNode::Request {
@@ -608,6 +631,11 @@ fn read_items(
         }
     }
 
+    items.sort_by(|(left, left_node), (right, right_node)| {
+        item_sequence(left)
+            .total_cmp(&item_sequence(right))
+            .then_with(|| locator_selector(left_node).cmp(locator_selector(right_node)))
+    });
     Ok(items)
 }
 
@@ -767,6 +795,21 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
         request_selectors_by_key,
         folder_selectors_by_key,
         documents: BTreeMap::new(),
+        source: WorkspaceSource::Memory,
+    }
+}
+
+fn item_sequence(item: &CollectionItem) -> f64 {
+    match item {
+        CollectionItem::Folder(folder) => folder.metadata.sequence,
+        CollectionItem::HttpRequest(request) => request.metadata.sequence,
+    }
+    .unwrap_or(f64::INFINITY)
+}
+
+fn locator_selector(node: &LocatorNode) -> &str {
+    match node {
+        LocatorNode::Folder { selector, .. } | LocatorNode::Request { selector, .. } => selector,
     }
 }
 
@@ -1223,7 +1266,11 @@ fn mapping_child<'a>(
         .ok_or_else(|| SaveError::InvalidDocument(format!("'{name}' is not a mapping")))
 }
 
-fn atomic_write(path: &Path, contents: &[u8], expected_source: &[u8]) -> Result<(), SaveError> {
+pub(crate) fn atomic_write(
+    path: &Path,
+    contents: &[u8],
+    expected_source: &[u8],
+) -> Result<(), SaveError> {
     let map_io = |source| SaveError::Io {
         path: path.to_owned(),
         source,
@@ -1239,12 +1286,12 @@ fn atomic_write(path: &Path, contents: &[u8], expected_source: &[u8]) -> Result<
     Ok(())
 }
 
-struct SaveLock {
+pub(crate) struct SaveLock {
     file: fs::File,
 }
 
 impl SaveLock {
-    fn acquire(destination: &Path) -> Result<Self, SaveError> {
+    pub(crate) fn acquire(destination: &Path) -> Result<Self, SaveError> {
         let directory = std::env::temp_dir().join("probe-persistence-locks");
         fs::create_dir_all(&directory).map_err(|source| SaveError::Io {
             path: destination.to_owned(),

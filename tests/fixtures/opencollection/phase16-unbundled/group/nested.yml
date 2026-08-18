@@ -1,0 +1,7 @@
+info:
+  name: Nested
+  type: http
+  seq: 1
+http:
+  method: POST
+  url: https://example.com/nested

@@ -3,13 +3,20 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeMap,
     io::{self, Read},
     path::PathBuf,
 };
 
-use probe_core::{EnvironmentResolutionError, RequestUpdate, resolve_environment, resolve_request};
+use probe_core::{
+    EnvironmentResolutionError, FolderKey, RequestUpdate, WorkspaceItemRef, resolve_environment,
+    resolve_request,
+};
 use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpResponse};
-use probe_opencollection::{LoadedWorkspace, SaveError, load_workspace, load_workspace_from_str};
+use probe_opencollection::{
+    LoadedWorkspace, SaveError, StructureError, StructureOperation, StructureResult,
+    load_workspace, load_workspace_from_str,
+};
 use serde_json::json;
 
 mod presentation;
@@ -89,6 +96,9 @@ pub const fn help() -> &'static str {
         "  request get <path> <selector>       Inspect an HTTP request\n",
         "  request run <path> <selector>       Execute an HTTP request\n",
         "  request set <path> <selector>       Set and persist HTTP request fields\n",
+        "  request create|rename|delete|move|reorder   Edit request structure\n",
+        "  folder list <path>                  List folders\n",
+        "  folder create|rename|delete|move|reorder    Edit folder structure\n",
         "\n",
         "Options:\n",
         "      --environment <name>  Resolve request variables with an environment\n",
@@ -96,6 +106,8 @@ pub const fn help() -> &'static str {
         "      --name <name>          Set a request name\n",
         "      --method <method>      Set an HTTP method\n",
         "      --url <url>            Set a request URL\n",
+        "      --parent <selector>    Destination folder (omit for collection root)\n",
+        "      --index <index>        Zero-based insertion position (omit to append)\n",
         "      --json                Emit versioned deterministic JSON\n",
         "  -q, --quiet               Suppress successful command output\n",
         "  -h, --help                Print help\n",
@@ -116,6 +128,23 @@ const REQUEST_HELP: &str = concat!(
     "  get <path|-> <selector> [--environment <name>]  Inspect one request\n",
     "  run <path|-> <selector> [--environment <name>] [--output <file>]\n",
     "  set <path> <selector> [--name <name>] [--method <method>] [--url <url>]\n",
+    "  create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>]\n",
+    "  rename <path> <selector> --name <name>\n",
+    "  delete <path> <selector>\n",
+    "  move <path> <selector> [--parent <folder>] [--index <index>]\n",
+    "  reorder <path> <selector> --index <index>\n",
+);
+
+const FOLDER_HELP: &str = concat!(
+    "Usage: probe folder <COMMAND>\n",
+    "\n",
+    "Commands:\n",
+    "  list <path|->                 List folders and repository selectors\n",
+    "  create <path> --name <name> [--parent <folder>] [--index <index>]\n",
+    "  rename <path> <selector> --name <name>\n",
+    "  delete <path> <selector>\n",
+    "  move <path> <selector> [--parent <folder>] [--index <index>]\n",
+    "  reorder <path> <selector> --index <index>\n",
 );
 
 /// Runs the CLI adapter for arguments that exclude the executable name.
@@ -180,6 +209,7 @@ where
         let help = match args.first().map(String::as_str) {
             Some("collection") => COLLECTION_HELP,
             Some("request") => REQUEST_HELP,
+            Some("folder") => FOLDER_HELP,
             _ => help(),
         };
         return RunOutput::success(help.to_owned());
@@ -197,7 +227,15 @@ where
         Ok(update) => update,
         Err(error) => return RunOutput::failure(error, json_output),
     };
-    match parse_command(&args, environment, output, update)
+    let parent = match extract_string_option(&mut args, "--parent") {
+        Ok(parent) => parent,
+        Err(error) => return RunOutput::failure(error, json_output),
+    };
+    let index = match extract_index(&mut args) {
+        Ok(index) => index,
+        Err(error) => return RunOutput::failure(error, json_output),
+    };
+    match parse_command(&args, environment, output, update, parent, index)
         .and_then(|command| execute(command, stdin))
     {
         Ok(output) => RunOutput::success(output.render(json_output, quiet)),
@@ -210,7 +248,10 @@ enum Command {
     Validate {
         input: WorkspaceInput,
     },
-    List {
+    ListRequests {
+        input: WorkspaceInput,
+    },
+    ListFolders {
         input: WorkspaceInput,
     },
     Get {
@@ -228,6 +269,11 @@ enum Command {
         input: WorkspaceInput,
         selector: String,
         update: RequestUpdate,
+    },
+    Structure {
+        input: WorkspaceInput,
+        operation_name: &'static str,
+        operation: StructureOperation,
     },
 }
 
@@ -375,6 +421,30 @@ impl CliError {
             exit_code,
         }
     }
+
+    fn structure(error: StructureError) -> Self {
+        let category = error.category();
+        let exit_code = match category {
+            "request_not_found" | "folder_not_found" => REQUEST_NOT_FOUND_EXIT_CODE,
+            "duplicate_destination"
+            | "destination_not_found"
+            | "invalid_destination"
+            | "invalid_name"
+            | "invalid_index" => INVALID_ARGUMENTS_EXIT_CODE,
+            "persistence_read_only"
+            | "workspace_modified"
+            | "recovery_required"
+            | "committed_refresh_failed"
+            | "committed_cleanup_failed"
+            | "persistence_error" => PERSISTENCE_EXIT_CODE,
+            _ => PERSISTENCE_EXIT_CODE,
+        };
+        Self {
+            category,
+            message: error.to_string(),
+            exit_code,
+        }
+    }
 }
 
 fn extract_environment(args: &mut Vec<String>) -> Result<Option<String>, CliError> {
@@ -464,11 +534,24 @@ fn extract_string_option(
     }
 }
 
+fn extract_index(args: &mut Vec<String>) -> Result<Option<usize>, CliError> {
+    let value = extract_string_option(args, "--index")?;
+    value
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| CliError::invalid_arguments("--index requires a non-negative integer"))
+        })
+        .transpose()
+}
+
 fn parse_command(
     args: &[String],
     environment: Option<String>,
     output: Option<PathBuf>,
     update: RequestUpdate,
+    parent: Option<String>,
+    index: Option<usize>,
 ) -> Result<Command, CliError> {
     match args {
         [group, action, path]
@@ -476,6 +559,8 @@ fn parse_command(
                 && action == "validate"
                 && environment.is_none()
                 && output.is_none()
+                && parent.is_none()
+                && index.is_none()
                 && update.is_empty() =>
         {
             Ok(Command::Validate {
@@ -487,14 +572,34 @@ fn parse_command(
                 && action == "list"
                 && environment.is_none()
                 && output.is_none()
+                && parent.is_none()
+                && index.is_none()
                 && update.is_empty() =>
         {
-            Ok(Command::List {
+            Ok(Command::ListRequests {
+                input: WorkspaceInput::from_argument(path),
+            })
+        }
+        [group, action, path]
+            if group == "folder"
+                && action == "list"
+                && environment.is_none()
+                && output.is_none()
+                && parent.is_none()
+                && index.is_none()
+                && update.is_empty() =>
+        {
+            Ok(Command::ListFolders {
                 input: WorkspaceInput::from_argument(path),
             })
         }
         [group, action, path, selector]
-            if group == "request" && action == "get" && output.is_none() && update.is_empty() =>
+            if group == "request"
+                && action == "get"
+                && output.is_none()
+                && parent.is_none()
+                && index.is_none()
+                && update.is_empty() =>
         {
             Ok(Command::Get {
                 input: WorkspaceInput::from_argument(path),
@@ -503,7 +608,11 @@ fn parse_command(
             })
         }
         [group, action, path, selector]
-            if group == "request" && action == "run" && update.is_empty() =>
+            if group == "request"
+                && action == "run"
+                && parent.is_none()
+                && index.is_none()
+                && update.is_empty() =>
         {
             Ok(Command::Run {
                 input: WorkspaceInput::from_argument(path),
@@ -517,12 +626,157 @@ fn parse_command(
                 && action == "set"
                 && environment.is_none()
                 && output.is_none()
+                && parent.is_none()
+                && index.is_none()
                 && !update.is_empty() =>
         {
             Ok(Command::Set {
                 input: WorkspaceInput::from_argument(path),
                 selector: selector.clone(),
                 update,
+            })
+        }
+        [group, action, path]
+            if group == "request"
+                && action == "create"
+                && environment.is_none()
+                && output.is_none()
+                && update.name.is_some() =>
+        {
+            Ok(Command::Structure {
+                input: WorkspaceInput::from_argument(path),
+                operation_name: "create",
+                operation: StructureOperation::CreateRequest {
+                    parent,
+                    index,
+                    name: update.name.expect("guarded request name"),
+                    method: update.method,
+                    url: update.url,
+                },
+            })
+        }
+        [group, action, path]
+            if group == "folder"
+                && action == "create"
+                && environment.is_none()
+                && output.is_none()
+                && update.name.is_some()
+                && update.method.is_none()
+                && update.url.is_none() =>
+        {
+            Ok(Command::Structure {
+                input: WorkspaceInput::from_argument(path),
+                operation_name: "create",
+                operation: StructureOperation::CreateFolder {
+                    parent,
+                    index,
+                    name: update.name.expect("guarded folder name"),
+                },
+            })
+        }
+        [group, action, path, selector]
+            if matches!(group.as_str(), "request" | "folder")
+                && action == "rename"
+                && environment.is_none()
+                && output.is_none()
+                && parent.is_none()
+                && index.is_none()
+                && update.name.is_some()
+                && update.method.is_none()
+                && update.url.is_none() =>
+        {
+            let operation = if group == "request" {
+                StructureOperation::RenameRequest {
+                    selector: selector.clone(),
+                    name: update.name.expect("guarded rename name"),
+                }
+            } else {
+                StructureOperation::RenameFolder {
+                    selector: selector.clone(),
+                    name: update.name.expect("guarded rename name"),
+                }
+            };
+            Ok(Command::Structure {
+                input: WorkspaceInput::from_argument(path),
+                operation_name: "rename",
+                operation,
+            })
+        }
+        [group, action, path, selector]
+            if matches!(group.as_str(), "request" | "folder")
+                && action == "delete"
+                && environment.is_none()
+                && output.is_none()
+                && parent.is_none()
+                && index.is_none()
+                && update.is_empty() =>
+        {
+            let operation = if group == "request" {
+                StructureOperation::DeleteRequest {
+                    selector: selector.clone(),
+                }
+            } else {
+                StructureOperation::DeleteFolder {
+                    selector: selector.clone(),
+                }
+            };
+            Ok(Command::Structure {
+                input: WorkspaceInput::from_argument(path),
+                operation_name: "delete",
+                operation,
+            })
+        }
+        [group, action, path, selector]
+            if matches!(group.as_str(), "request" | "folder")
+                && action == "move"
+                && environment.is_none()
+                && output.is_none()
+                && update.is_empty() =>
+        {
+            let operation = if group == "request" {
+                StructureOperation::MoveRequest {
+                    selector: selector.clone(),
+                    parent,
+                    index,
+                }
+            } else {
+                StructureOperation::MoveFolder {
+                    selector: selector.clone(),
+                    parent,
+                    index,
+                }
+            };
+            Ok(Command::Structure {
+                input: WorkspaceInput::from_argument(path),
+                operation_name: "move",
+                operation,
+            })
+        }
+        [group, action, path, selector]
+            if matches!(group.as_str(), "request" | "folder")
+                && action == "reorder"
+                && environment.is_none()
+                && output.is_none()
+                && parent.is_none()
+                && index.is_some()
+                && update.is_empty() =>
+        {
+            let index = index.expect("guarded reorder index");
+            let operation = if group == "request" {
+                StructureOperation::ReorderRequest {
+                    selector: selector.clone(),
+                    index,
+                }
+            } else {
+                StructureOperation::ReorderFolder {
+                    selector: selector.clone(),
+                    index,
+                }
+            };
+            Ok(Command::Structure {
+                input: WorkspaceInput::from_argument(path),
+                operation_name: "reorder",
+                operation,
             })
         }
         _ => Err(CliError::invalid_arguments(
@@ -534,7 +788,8 @@ fn parse_command(
 fn execute(command: Command, stdin: &mut impl Read) -> Result<CommandOutput, CliError> {
     match command {
         Command::Validate { input } => validate(&input, stdin),
-        Command::List { input } => list_requests(&input, stdin),
+        Command::ListRequests { input } => list_requests(&input, stdin),
+        Command::ListFolders { input } => list_folders(&input, stdin),
         Command::Get {
             input,
             selector,
@@ -557,6 +812,40 @@ fn execute(command: Command, stdin: &mut impl Read) -> Result<CommandOutput, Cli
             selector,
             update,
         } => update_request(&input, &selector, &update, stdin),
+        Command::Structure {
+            input,
+            operation_name,
+            operation,
+        } => edit_structure(&input, operation_name, operation, stdin),
+    }
+}
+
+fn edit_structure(
+    input: &WorkspaceInput,
+    operation_name: &str,
+    operation: StructureOperation,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let mut loaded = load(input, stdin)?;
+    let result = loaded
+        .apply_structure(operation)
+        .map_err(CliError::structure)?;
+    Ok(structure_output(operation_name, &result))
+}
+
+fn structure_output(operation: &str, result: &StructureResult) -> CommandOutput {
+    let selector = result.selector.as_deref().unwrap_or("<deleted>");
+    CommandOutput {
+        human: format!("{} {}: {selector}\n", operation, result.kind.as_str()),
+        json: json!({
+            "index": result.index,
+            "itemType": result.kind.as_str(),
+            "operation": operation,
+            "parent": result.parent,
+            "previousSelector": result.previous_selector,
+            "selector": result.selector,
+            "selectorRemaps": result.selector_remaps,
+        }),
     }
 }
 
@@ -691,6 +980,59 @@ fn list_requests(input: &WorkspaceInput, stdin: &mut impl Read) -> Result<Comman
         human: format!("{}\n", lines.join("\n")),
         json: json!({ "requests": requests }),
     })
+}
+
+fn list_folders(input: &WorkspaceInput, stdin: &mut impl Read) -> Result<CommandOutput, CliError> {
+    let loaded = load(input, stdin)?;
+    let mut parents = BTreeMap::new();
+    collect_folder_parents(&loaded, loaded.workspace().root_items(), None, &mut parents);
+    let mut lines = vec!["SELECTOR\tNAME\tPARENT".to_owned()];
+    let mut folders = Vec::with_capacity(loaded.folders().len());
+    for located in loaded.folders() {
+        let folder = loaded
+            .workspace()
+            .folder(located.key())
+            .expect("repository folder key must resolve");
+        let name = folder.metadata.name.as_deref().unwrap_or("");
+        let parent = parents
+            .get(&located.key())
+            .and_then(|parent| parent.as_deref());
+        lines.push(format!(
+            "{}\t{name}\t{}",
+            located.selector(),
+            parent.unwrap_or("")
+        ));
+        folders.push(json!({
+            "name": folder.metadata.name,
+            "parent": parent,
+            "selector": located.selector(),
+        }));
+    }
+    Ok(CommandOutput {
+        human: format!("{}\n", lines.join("\n")),
+        json: json!({ "folders": folders }),
+    })
+}
+
+fn collect_folder_parents(
+    loaded: &LoadedWorkspace,
+    items: &[WorkspaceItemRef],
+    parent: Option<&str>,
+    output: &mut BTreeMap<FolderKey, Option<String>>,
+) {
+    for item in items {
+        if let WorkspaceItemRef::Folder(key) = item {
+            output.insert(*key, parent.map(str::to_owned));
+            let selector = loaded
+                .folder_selector(*key)
+                .expect("repository folder key must have a selector");
+            let folder = loaded
+                .workspace()
+                .folder(*key)
+                .expect("repository folder key must resolve");
+            collect_folder_parents(loaded, &folder.children, Some(selector), output);
+        }
+    }
 }
 
 fn get_request(

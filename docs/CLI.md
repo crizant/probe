@@ -11,6 +11,17 @@ probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--json]
 probe request run <path> <selector> [--environment <name>] [--output <file>] [--json]
 probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--json]
+probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--json]
+probe request rename <path> <selector> --name <name> [--json]
+probe request delete <path> <selector> [--json]
+probe request move <path> <selector> [--parent <folder>] [--index <index>] [--json]
+probe request reorder <path> <selector> --index <index> [--json]
+probe folder list <path> [--json]
+probe folder create <path> --name <name> [--parent <folder>] [--index <index>] [--json]
+probe folder rename <path> <selector> --name <name> [--json]
+probe folder delete <path> <selector> [--json]
+probe folder move <path> <selector> [--parent <folder>] [--index <index>] [--json]
+probe folder reorder <path> <selector> --index <index> [--json]
 ```
 
 `<path>` may be a bundled OpenCollection YAML file or an unbundled collection
@@ -39,6 +50,20 @@ Before committing, Probe compares the source file with the exact bytes that were
 loaded. If another process changed it, the command fails with `workspace_modified`
 instead of overwriting the external edit. Unknown YAML fields are retained, although
 comments and original formatting may change when the YAML document is serialized.
+
+Structural commands are non-interactive and use the same repository operation for bundled and
+unbundled workspaces. Omit `--parent` for the collection root and omit `--index` to append.
+`reorder` keeps an item in its current parent and requires its new zero-based `--index`.
+Bundled selectors are structural and may change when siblings move. Unbundled creation and rename
+derive lowercase hyphenated paths from names (requests use `.yml`); an existing destination is
+never overwritten.
+
+Bundled edits atomically replace the single collection document. Unbundled ordering is persisted
+as `info.seq` in each affected sibling document. Multi-file ordering writes retain rollback
+snapshots, and file/directory moves are rolled back if metadata persistence fails. Every retained
+source is compared byte-for-byte before a structural write, so external changes fail safely.
+Durable recovery directories with manifests are retained if a multi-document rollback cannot
+complete.
 
 `--quiet` (or `-q`) suppresses stdout for successful commands, which is useful when
 only the exit status matters. Failure diagnostics remain on stderr. `--quiet` and
@@ -83,6 +108,9 @@ change type without incrementing the version.
 `request list --json` returns a `requests` array. Each entry has nullable `method`,
 `name`, and `url` fields plus a string `selector`.
 
+`folder list --json` returns a `folders` array in deterministic collection order.
+Each entry has nullable `name` and `parent` fields plus a string `selector`.
+
 `request get --json` returns `authentication`, `body`, `environment`, `headers`,
 `method`, `name`, `queryParameters`, `selector`, and `url`. `environment` is the
 selected name or JSON `null`. Missing optional values are JSON `null`. Headers and
@@ -90,6 +118,11 @@ query parameters contain stable `disabled`, `name`, and `value` fields.
 
 `request set --json` returns the same request shape after the persisted update,
 with `environment` set to JSON `null`.
+
+Structural commands return stable fields `operation`, `itemType`, `previousSelector`, `selector`,
+`parent`, `index`, and `selectorRemaps`. The remap object contains every surviving known
+repository selector, including siblings whose bundled structural selector shifted. `selector`
+and `index` are `null` after deletion; `previousSelector` is `null` after creation.
 
 `request run --json` returns:
 
@@ -156,8 +189,17 @@ Failure to read a stdin workspace uses `stdin_error` and exit code 3; invalid YA
 from stdin uses `invalid_workspace` and exit code 3.
 
 Persistence failures use exit code 7. Stable categories are `workspace_modified` for
-external-modification conflicts, `persistence_read_only` for stdin sources, and
-`persistence_error` for serialization or filesystem failures.
+external-modification conflicts, `persistence_read_only` for stdin sources,
+`recovery_required` when a multi-file rollback could not be completed, and
+`committed_refresh_failed` when persistence succeeded but the workspace could not be refreshed.
+`committed_cleanup_failed` means deletion committed but an out-of-workspace tombstone requires
+manual cleanup. Callers must not retry operations reported as committed failures without
+reloading the workspace. Other serialization or filesystem failures use `persistence_error`.
+
+Structural validation uses stable categories `folder_not_found`, `destination_not_found`,
+`duplicate_destination`, `invalid_destination`, `invalid_name`, and `invalid_index`.
+Missing request/folder selectors use exit code 4; invalid destinations, names, duplicates, and
+indices use exit code 2.
 
 `collection validate` requires the OpenCollection `1.0.0` marker, explicit collection
 metadata, and a `bundled` flag matching whether the source is a bundled file/stdin document or
@@ -170,7 +212,7 @@ an unbundled directory. Duplicate environments and invalid inheritance graphs ar
 | 0 | Success |
 | 2 | Invalid arguments |
 | 3 | Invalid workspace or parse failure |
-| 4 | Request not found |
+| 4 | Request or folder not found |
 | 5 | Configuration or environment error |
 | 6 | Network, cancellation, execution, or response-output error |
 | 7 | Persistence failure or external-modification conflict |

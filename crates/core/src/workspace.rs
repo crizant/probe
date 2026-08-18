@@ -2,6 +2,7 @@ use crate::{
     Collection, CollectionItem, CollectionMetadata, Environment, HttpRequest, ItemMetadata,
 };
 use std::collections::BTreeMap;
+use std::{error::Error, fmt};
 
 /// Session-only generational key for an HTTP request in a loaded workspace.
 ///
@@ -82,6 +83,41 @@ pub struct Workspace {
     environments: Vec<Environment>,
 }
 
+/// A parent location for a structural workspace edit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceParent {
+    /// The collection root.
+    Root,
+    /// A folder in the loaded workspace.
+    Folder(FolderKey),
+}
+
+/// Errors produced by in-memory hierarchy operations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceEditError {
+    /// A runtime key does not resolve in this workspace.
+    ItemNotFound,
+    /// The destination folder does not resolve.
+    DestinationNotFound,
+    /// A folder cannot be moved into itself or one of its descendants.
+    InvalidDestination,
+    /// The requested insertion index is greater than the child count.
+    InvalidIndex,
+}
+
+impl fmt::Display for WorkspaceEditError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ItemNotFound => "workspace item not found",
+            Self::DestinationNotFound => "destination folder not found",
+            Self::InvalidDestination => "folder cannot be moved into itself or its descendant",
+            Self::InvalidIndex => "insertion index is out of bounds",
+        })
+    }
+}
+
+impl Error for WorkspaceEditError {}
+
 impl Workspace {
     /// Builds an indexed workspace from a domain collection.
     #[must_use]
@@ -144,6 +180,125 @@ impl Workspace {
         key
     }
 
+    /// Inserts a request at an exact position under a parent.
+    pub fn insert_request(
+        &mut self,
+        parent: WorkspaceParent,
+        index: usize,
+        request: HttpRequest,
+    ) -> Result<RequestKey, WorkspaceEditError> {
+        self.validate_insertion(parent, index)?;
+        let key = RequestKey::from(self.requests.insert(request));
+        self.insert_reference(parent, index, WorkspaceItemRef::Request(key))?;
+        self.rebuild_request_ancestors();
+        Ok(key)
+    }
+
+    /// Inserts an empty folder at an exact position under a parent.
+    pub fn insert_folder(
+        &mut self,
+        parent: WorkspaceParent,
+        index: usize,
+        metadata: ItemMetadata,
+    ) -> Result<FolderKey, WorkspaceEditError> {
+        self.validate_insertion(parent, index)?;
+        let arena_key = self.folders.insert(WorkspaceFolder {
+            key: FolderKey {
+                slot: 0,
+                generation: 0,
+            },
+            metadata,
+            children: Vec::new(),
+        });
+        let key = FolderKey::from(arena_key);
+        self.folders
+            .get_mut(arena_key)
+            .expect("new folder must resolve")
+            .key = key;
+        self.insert_reference(parent, index, WorkspaceItemRef::Folder(key))?;
+        Ok(key)
+    }
+
+    /// Renames a request in memory.
+    pub fn rename_request(
+        &mut self,
+        key: RequestKey,
+        name: String,
+    ) -> Result<(), WorkspaceEditError> {
+        self.request_mut(key)
+            .ok_or(WorkspaceEditError::ItemNotFound)?
+            .metadata
+            .name = Some(name);
+        Ok(())
+    }
+
+    /// Renames a folder in memory.
+    pub fn rename_folder(
+        &mut self,
+        key: FolderKey,
+        name: String,
+    ) -> Result<(), WorkspaceEditError> {
+        self.folders
+            .get_mut(key.into())
+            .ok_or(WorkspaceEditError::ItemNotFound)?
+            .metadata
+            .name = Some(name);
+        Ok(())
+    }
+
+    /// Moves or reorders a request under a parent.
+    pub fn move_request(
+        &mut self,
+        key: RequestKey,
+        parent: WorkspaceParent,
+        index: usize,
+    ) -> Result<(), WorkspaceEditError> {
+        if self.request(key).is_none() {
+            return Err(WorkspaceEditError::ItemNotFound);
+        }
+        self.move_reference(WorkspaceItemRef::Request(key), parent, index)?;
+        self.rebuild_request_ancestors();
+        Ok(())
+    }
+
+    /// Moves or reorders a folder under a parent.
+    pub fn move_folder(
+        &mut self,
+        key: FolderKey,
+        parent: WorkspaceParent,
+        index: usize,
+    ) -> Result<(), WorkspaceEditError> {
+        if self.folder(key).is_none() {
+            return Err(WorkspaceEditError::ItemNotFound);
+        }
+        if parent == WorkspaceParent::Folder(key)
+            || matches!(parent, WorkspaceParent::Folder(destination) if self.folder_contains(key, destination))
+        {
+            return Err(WorkspaceEditError::InvalidDestination);
+        }
+        self.move_reference(WorkspaceItemRef::Folder(key), parent, index)?;
+        self.rebuild_request_ancestors();
+        Ok(())
+    }
+
+    /// Removes a folder and all descendant folders and requests.
+    pub fn remove_folder(&mut self, key: FolderKey) -> Result<WorkspaceFolder, WorkspaceEditError> {
+        let folder = self
+            .folders
+            .get(key.into())
+            .cloned()
+            .ok_or(WorkspaceEditError::ItemNotFound)?;
+        self.remove_reference(WorkspaceItemRef::Folder(key))
+            .ok_or(WorkspaceEditError::ItemNotFound)?;
+        self.remove_descendants(&folder.children);
+        let removed = self
+            .folders
+            .remove(key.into())
+            .expect("validated folder key must remain live");
+        self.rebuild_request_ancestors();
+        Ok(removed)
+    }
+
     /// Removes a request and every hierarchy reference to it.
     ///
     /// A later request may reuse the storage slot, but receives a new generation so
@@ -186,6 +341,158 @@ impl Workspace {
     #[must_use]
     pub fn environments(&self) -> &[Environment] {
         &self.environments
+    }
+
+    fn children(&self, parent: WorkspaceParent) -> Result<&[WorkspaceItemRef], WorkspaceEditError> {
+        match parent {
+            WorkspaceParent::Root => Ok(&self.root_items),
+            WorkspaceParent::Folder(key) => self
+                .folder(key)
+                .map(|folder| folder.children.as_slice())
+                .ok_or(WorkspaceEditError::DestinationNotFound),
+        }
+    }
+
+    fn children_mut(
+        &mut self,
+        parent: WorkspaceParent,
+    ) -> Result<&mut Vec<WorkspaceItemRef>, WorkspaceEditError> {
+        match parent {
+            WorkspaceParent::Root => Ok(&mut self.root_items),
+            WorkspaceParent::Folder(key) => self
+                .folders
+                .get_mut(key.into())
+                .map(|folder| &mut folder.children)
+                .ok_or(WorkspaceEditError::DestinationNotFound),
+        }
+    }
+
+    fn validate_insertion(
+        &self,
+        parent: WorkspaceParent,
+        index: usize,
+    ) -> Result<(), WorkspaceEditError> {
+        if index > self.children(parent)?.len() {
+            return Err(WorkspaceEditError::InvalidIndex);
+        }
+        Ok(())
+    }
+
+    fn insert_reference(
+        &mut self,
+        parent: WorkspaceParent,
+        index: usize,
+        item: WorkspaceItemRef,
+    ) -> Result<(), WorkspaceEditError> {
+        let children = self.children_mut(parent)?;
+        if index > children.len() {
+            return Err(WorkspaceEditError::InvalidIndex);
+        }
+        children.insert(index, item);
+        Ok(())
+    }
+
+    fn remove_reference(&mut self, item: WorkspaceItemRef) -> Option<(WorkspaceParent, usize)> {
+        if let Some(index) = self
+            .root_items
+            .iter()
+            .position(|candidate| *candidate == item)
+        {
+            self.root_items.remove(index);
+            return Some((WorkspaceParent::Root, index));
+        }
+        for folder in self.folders.values_mut() {
+            if let Some(index) = folder
+                .children
+                .iter()
+                .position(|candidate| *candidate == item)
+            {
+                folder.children.remove(index);
+                return Some((WorkspaceParent::Folder(folder.key), index));
+            }
+        }
+        None
+    }
+
+    fn move_reference(
+        &mut self,
+        item: WorkspaceItemRef,
+        parent: WorkspaceParent,
+        index: usize,
+    ) -> Result<(), WorkspaceEditError> {
+        // Validate the destination before detaching the item so an invalid runtime
+        // key cannot mutate the existing hierarchy.
+        self.children(parent)?;
+        let (old_parent, old_index) = self
+            .remove_reference(item)
+            .ok_or(WorkspaceEditError::ItemNotFound)?;
+        if index > self.children(parent)?.len() {
+            self.insert_reference(old_parent, old_index, item)
+                .expect("original position must remain valid");
+            return Err(WorkspaceEditError::InvalidIndex);
+        }
+        self.insert_reference(parent, index, item)
+    }
+
+    fn folder_contains(&self, ancestor: FolderKey, candidate: FolderKey) -> bool {
+        self.folder(ancestor).is_some_and(|folder| {
+            folder.children.iter().any(|item| match item {
+                WorkspaceItemRef::Folder(child) => {
+                    *child == candidate || self.folder_contains(*child, candidate)
+                }
+                WorkspaceItemRef::Request(_) => false,
+            })
+        })
+    }
+
+    fn remove_descendants(&mut self, items: &[WorkspaceItemRef]) {
+        for item in items {
+            match *item {
+                WorkspaceItemRef::Request(key) => {
+                    let _ = self.requests.remove(key.into());
+                    self.request_ancestors.remove(&key);
+                }
+                WorkspaceItemRef::Folder(key) => {
+                    if let Some(folder) = self.folders.get(key.into()).cloned() {
+                        self.remove_descendants(&folder.children);
+                    }
+                    let _ = self.folders.remove(key.into());
+                }
+            }
+        }
+    }
+
+    fn rebuild_request_ancestors(&mut self) {
+        let mut ancestors = BTreeMap::new();
+        collect_request_ancestors(
+            &self.folders,
+            &self.root_items,
+            &mut ancestors,
+            &mut Vec::new(),
+        );
+        self.request_ancestors = ancestors;
+    }
+}
+
+fn collect_request_ancestors(
+    folders: &Arena<WorkspaceFolder>,
+    items: &[WorkspaceItemRef],
+    output: &mut BTreeMap<RequestKey, Vec<FolderKey>>,
+    path: &mut Vec<FolderKey>,
+) {
+    for item in items {
+        match *item {
+            WorkspaceItemRef::Request(key) => {
+                output.insert(key, path.clone());
+            }
+            WorkspaceItemRef::Folder(key) => {
+                if let Some(folder) = folders.get(key.into()) {
+                    path.push(key);
+                    collect_request_ancestors(folders, &folder.children, output, path);
+                    path.pop();
+                }
+            }
+        }
     }
 }
 
@@ -387,7 +694,7 @@ mod tests {
         Collection, CollectionItem, CollectionMetadata, Folder, HttpRequest, ItemMetadata,
     };
 
-    use super::{Workspace, WorkspaceItemRef};
+    use super::{Workspace, WorkspaceEditError, WorkspaceItemRef, WorkspaceParent};
 
     fn request(name: &str) -> CollectionItem {
         CollectionItem::HttpRequest(HttpRequest {
@@ -536,6 +843,90 @@ mod tests {
         assert_eq!(
             workspace.root_items(),
             [WorkspaceItemRef::Request(request_y_key)]
+        );
+    }
+
+    #[test]
+    fn structural_operations_preserve_hierarchy_and_reject_folder_cycles() {
+        let mut workspace = Workspace::from_collection(Collection {
+            items: vec![request("Root")],
+            ..Collection::default()
+        });
+        let request_key = match workspace.root_items()[0] {
+            WorkspaceItemRef::Request(key) => key,
+            WorkspaceItemRef::Folder(_) => unreachable!(),
+        };
+        let folder_key = workspace
+            .insert_folder(
+                WorkspaceParent::Root,
+                0,
+                ItemMetadata {
+                    name: Some("Folder".to_owned()),
+                    sequence: None,
+                },
+            )
+            .unwrap();
+        let child_key = workspace
+            .insert_folder(
+                WorkspaceParent::Folder(folder_key),
+                0,
+                ItemMetadata {
+                    name: Some("Child".to_owned()),
+                    sequence: None,
+                },
+            )
+            .unwrap();
+        workspace
+            .move_request(request_key, WorkspaceParent::Folder(child_key), 0)
+            .unwrap();
+        assert_eq!(
+            workspace.request_ancestor_folders(request_key),
+            Some([folder_key, child_key].as_slice())
+        );
+        workspace
+            .move_folder(child_key, WorkspaceParent::Root, 0)
+            .unwrap();
+        assert_eq!(
+            workspace.request_ancestor_folders(request_key),
+            Some([child_key].as_slice())
+        );
+        workspace
+            .move_folder(child_key, WorkspaceParent::Folder(folder_key), 0)
+            .unwrap();
+        assert_eq!(
+            workspace.move_folder(folder_key, WorkspaceParent::Folder(child_key), 0),
+            Err(WorkspaceEditError::InvalidDestination)
+        );
+        workspace
+            .rename_folder(child_key, "Renamed".to_owned())
+            .unwrap();
+        workspace.remove_folder(folder_key).unwrap();
+        assert!(workspace.request(request_key).is_none());
+        assert_eq!(workspace.folder_count(), 0);
+        assert_eq!(workspace.request_count(), 0);
+    }
+
+    #[test]
+    fn invalid_move_destination_does_not_detach_the_item() {
+        let mut workspace = Workspace::from_collection(Collection {
+            items: vec![request("Root"), CollectionItem::Folder(Folder::default())],
+            ..Collection::default()
+        });
+        let WorkspaceItemRef::Request(request_key) = workspace.root_items()[0] else {
+            panic!("first item should be a request");
+        };
+        let WorkspaceItemRef::Folder(folder_key) = workspace.root_items()[1] else {
+            panic!("second item should be a folder");
+        };
+        workspace.remove_folder(folder_key).unwrap();
+
+        assert_eq!(
+            workspace.move_request(request_key, WorkspaceParent::Folder(folder_key), 0),
+            Err(WorkspaceEditError::DestinationNotFound)
+        );
+        assert_eq!(
+            workspace.root_items(),
+            [WorkspaceItemRef::Request(request_key)]
         );
     }
 }

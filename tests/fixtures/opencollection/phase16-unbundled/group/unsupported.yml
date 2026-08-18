@@ -1,0 +1,6 @@
+info:
+  name: Unsupported
+  type: graphql
+graphql:
+  url: https://example.com/graphql
+x-unsupported: retained

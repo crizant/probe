@@ -19,11 +19,13 @@ use serde::Deserialize;
 use serde_yaml_ng::Value;
 
 mod repository;
+mod structure;
 
 pub use repository::{
     CompletedRequestSave, LoadError, LoadedWorkspace, LocatedFolder, LocatedRequest,
     PreparedRequestSave, SaveError, load_workspace, load_workspace_from_str,
 };
+pub use structure::{ItemKind, StructureError, StructureOperation, StructureResult};
 
 /// An OpenCollection document together with its supported domain projection.
 #[derive(Clone, Debug)]

@@ -1,0 +1,8 @@
+info:
+  name: Alpha
+  type: http
+  seq: 1
+http:
+  method: GET
+  url: https://example.com/alpha
+x-request: retained

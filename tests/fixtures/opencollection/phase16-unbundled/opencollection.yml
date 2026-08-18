@@ -1,0 +1,7 @@
+opencollection: 1.0.0
+info:
+  name: Phase 16 unbundled
+bundled: false
+extensions:
+  vendor.example:
+    retained: true

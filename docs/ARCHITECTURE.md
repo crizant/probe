@@ -414,6 +414,18 @@ committed on Unix, Windows, and WASI through a focused filesystem dependency.
 Successful saves refresh the retained byte snapshot so subsequent edits from the same
 loaded workspace remain safe.
 
+Workspace structure editing is also repository-owned. Interfaces submit one typed create,
+rename, delete, move, or reorder operation using repository selectors; the repository validates
+the destination, applies the corresponding in-memory/domain semantics, persists it, reloads the
+workspace, and returns refreshed selectors. Bundled edits retain unknown YAML and atomically
+replace one document. Unbundled edits use paths as locators and `info.seq` as sibling ordering
+metadata. Multi-document ordering changes retain rollback bytes, while directory moves are
+reversed if metadata persistence fails. Ordering transactions write a hidden recovery directory
+and manifest before mutation and retain them when rollback cannot complete. Folder deletion moves
+the source to an out-of-workspace tombstone before sibling metadata changes, so failed cleanup
+cannot expose partial data in the canonical collection. Every retained source document is checked
+byte-for-byte under the workspace writer lock before structural mutation begins.
+
 Filesystem paths are canonicalized when the workspace opens, so saving through a symlink
 updates its target without replacing the symlink. A stable sidecar advisory lock serializes
 Probe writers across processes; the exact source-byte comparison and atomic replacement both
