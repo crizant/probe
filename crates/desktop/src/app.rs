@@ -2362,38 +2362,36 @@ impl ProbeApp {
             .border_b_1()
             .border_color(theme.colors.borders.subtle)
             .child(tab_strip);
-        if self.shell.active_tab().is_some() {
-            let selected = self
-                .request_editor
-                .selected_environment()
-                .unwrap_or("")
-                .to_owned();
-            let mut options = vec![(String::new(), "No environment".to_owned())];
-            options.extend(
-                loaded
-                    .workspace()
-                    .environments()
-                    .iter()
-                    .map(|environment| (environment.name.clone(), environment.name.clone())),
-            );
-            let environment_view = cx.weak_entity();
-            tabs = tabs.child(div().flex_none().px(px(theme.metrics.spacing_2)).child(
-                components::dropdown(
-                    theme,
-                    "request-environment",
-                    "Request environment",
-                    Some(selected),
-                    options,
-                    170.0,
-                    move |value, _, cx| {
-                        let value = value.cloned().unwrap_or_default();
-                        let _ = environment_view.update(cx, |view, cx| {
-                            view.select_environment((!value.is_empty()).then_some(value), cx);
-                        });
-                    },
-                ),
-            ));
-        }
+        let selected = self
+            .request_editor
+            .selected_environment()
+            .unwrap_or("")
+            .to_owned();
+        let mut options = vec![(String::new(), "No environment".to_owned())];
+        options.extend(
+            loaded
+                .workspace()
+                .environments()
+                .iter()
+                .map(|environment| (environment.name.clone(), environment.name.clone())),
+        );
+        let environment_view = cx.weak_entity();
+        tabs = tabs.child(div().flex_none().px(px(theme.metrics.spacing_2)).child(
+            components::dropdown(
+                theme,
+                "request-environment",
+                "Request environment",
+                Some(selected),
+                options,
+                170.0,
+                move |value, _, cx| {
+                    let value = value.cloned().unwrap_or_default();
+                    let _ = environment_view.update(cx, |view, cx| {
+                        view.select_environment((!value.is_empty()).then_some(value), cx);
+                    });
+                },
+            ),
+        ));
         tabs
     }
 
@@ -5532,6 +5530,31 @@ mod tests {
             rendered_rows < total_rows,
             "virtualized response viewer rendered all {total_rows} rows"
         );
+    }
+
+    #[gpui::test]
+    fn environment_switcher_is_visible_without_a_selected_request(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = environment_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                assert!(view.shell.active_tab().is_none());
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("request-environment-trigger").is_some());
     }
 
     #[gpui::test]
