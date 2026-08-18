@@ -8,10 +8,10 @@ use std::{
 use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, FocusHandle, FontWeight,
     InteractiveElement as _, IntoElement, KeyBinding, MouseButton, MouseMoveEvent,
-    ParentElement as _, PathPromptOptions, PromptLevel, Render, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions, Window, WindowBounds,
-    WindowControlArea, WindowOptions, div, point, prelude::FluentBuilder as _, px, relative, size,
-    uniform_list,
+    ParentElement as _, PathPromptOptions, PromptLevel, Render, ScrollHandle, ScrollStrategy,
+    StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions, UniformListScrollHandle,
+    Window, WindowBounds, WindowControlArea, WindowOptions, div, point,
+    prelude::FluentBuilder as _, px, relative, size, uniform_list,
 };
 use gpui_base::{Button, Popover, Tab, Tabs};
 use probe_core::{
@@ -20,7 +20,9 @@ use probe_core::{
     RequestKey, Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
-use probe_opencollection::{LoadedWorkspace, load_workspace};
+use probe_opencollection::{
+    ItemKind, LoadedWorkspace, StructureOperation, StructureResult, load_workspace,
+};
 
 use crate::{
     components,
@@ -40,6 +42,7 @@ use crate::{
     },
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
+    structure_editor::{ROOT_PARENT, StructureDialog, descendant_requests, item_position},
     synchronization::{
         LocalRequestState, ReconcileResult, ReconciledWorkspace, SynchronizationConflict, reconcile,
     },
@@ -54,7 +57,20 @@ gpui::actions!(
         CloseActiveTab,
         QuitApplication,
         FocusNextControl,
-        FocusPreviousControl
+        FocusPreviousControl,
+        NewRequest,
+        NewFolder,
+        RenameTreeItem,
+        DeleteTreeItem,
+        MoveTreeItem,
+        MoveTreeItemUp,
+        MoveTreeItemDown,
+        SelectPreviousTreeItem,
+        SelectNextTreeItem,
+        CollapseTreeItem,
+        ExpandTreeItem,
+        ActivateTreeItem,
+        CancelStructureDialog
     ]
 );
 
@@ -78,6 +94,7 @@ struct TreeRow {
 
 pub struct ProbeApp {
     focus_handle: FocusHandle,
+    structure_dialog_focus: FocusHandle,
     loaded_workspace: Option<LoadedWorkspace>,
     workspace_path: Option<PathBuf>,
     shell: ShellState,
@@ -87,15 +104,20 @@ pub struct ProbeApp {
     session: SessionState,
     session_save_task: Option<Task<()>>,
     request_save_task: Option<Task<()>>,
+    structure_task: Option<Task<()>>,
     filesystem_watcher: Option<notify::RecommendedWatcher>,
     filesystem_watch_task: Option<Task<()>>,
     persistence: PersistenceState,
     pending_close: Option<PendingClose>,
     workspace_switcher_open: bool,
+    structure_add_menu_open: bool,
     visible_tree_rows: Vec<TreeRow>,
+    selected_tree_item: Option<WorkspaceItemRef>,
+    structure_dialog: Option<StructureDialog>,
     request_editor: RequestEditorState,
     execution: ExecutionState,
     response_viewer: ResponseViewerState,
+    tree_scroll: UniformListScrollHandle,
     tab_bar_scroll: ScrollHandle,
     pending_tab_reveal: bool,
     #[cfg(test)]
@@ -138,9 +160,11 @@ impl ProbeApp {
         });
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
+        let structure_dialog_focus = cx.focus_handle();
 
         Self {
             focus_handle,
+            structure_dialog_focus,
             loaded_workspace: None,
             workspace_path: None,
             shell: ShellState::default(),
@@ -150,15 +174,20 @@ impl ProbeApp {
             session: SessionState::default(),
             session_save_task: None,
             request_save_task: None,
+            structure_task: None,
             filesystem_watcher: None,
             filesystem_watch_task: None,
             persistence: PersistenceState::default(),
             pending_close: None,
             workspace_switcher_open: false,
+            structure_add_menu_open: false,
             visible_tree_rows: Vec::new(),
+            selected_tree_item: None,
+            structure_dialog: None,
             request_editor: RequestEditorState::default(),
             execution: ExecutionState::default(),
             response_viewer: ResponseViewerState::default(),
+            tree_scroll: UniformListScrollHandle::new(),
             tab_bar_scroll: ScrollHandle::new(),
             pending_tab_reveal: false,
             #[cfg(test)]
@@ -352,6 +381,9 @@ impl ProbeApp {
         self.loaded_workspace = Some(workspace);
         self.workspace_path = Some(path);
         self.shell.reset_for_workspace();
+        self.selected_tree_item = None;
+        self.structure_dialog = None;
+        self.structure_add_menu_open = false;
         self.request_editor.clear();
         self.restore_selected_environment();
         self.rebuild_visible_tree_rows();
@@ -413,6 +445,9 @@ impl ProbeApp {
                     .await;
                 let _ = view.update_in(cx, |view, window, cx| {
                     if view.workspace_path.as_ref() != Some(&workspace_path) {
+                        return;
+                    }
+                    if view.structure_task.is_some() {
                         return;
                     }
                     match result {
@@ -573,6 +608,14 @@ impl ProbeApp {
             .collapsed_folders()
             .filter_map(|key| old.folder_selector(key).map(str::to_owned))
             .collect();
+        let selected = self.selected_tree_item.and_then(|item| match item {
+            WorkspaceItemRef::Request(key) => old
+                .request_selector(key)
+                .map(|selector| (ItemKind::Request, selector.to_owned())),
+            WorkspaceItemRef::Folder(key) => old
+                .folder_selector(key)
+                .map(|selector| (ItemKind::Folder, selector.to_owned())),
+        });
         let key_remaps: BTreeMap<_, _> = old
             .requests()
             .iter()
@@ -635,6 +678,17 @@ impl ProbeApp {
                 self.shell.collapse_folder(key);
             }
         }
+        self.selected_tree_item = selected.and_then(|(kind, selector)| {
+            let selector = reconciled
+                .selector_remaps
+                .get(&selector)
+                .map_or(selector.as_str(), String::as_str);
+            match kind {
+                ItemKind::Request => loaded.request_key(selector).map(WorkspaceItemRef::Request),
+                ItemKind::Folder => loaded.folder_key(selector).map(WorkspaceItemRef::Folder),
+            }
+        });
+        self.structure_dialog = None;
         if self
             .request_editor
             .selected_environment()
@@ -794,6 +848,9 @@ impl ProbeApp {
         self.loaded_workspace = None;
         self.workspace_path = None;
         self.shell.reset_for_workspace();
+        self.selected_tree_item = None;
+        self.structure_dialog = None;
+        self.structure_add_menu_open = false;
         self.request_editor.clear();
         self.persistence.clear();
         self.filesystem_watch_task = None;
@@ -816,8 +873,507 @@ impl ProbeApp {
             .as_ref()
             .is_some_and(|loaded| loaded.workspace().request(key).is_some())
         {
+            self.selected_tree_item = Some(WorkspaceItemRef::Request(key));
             self.shell.open_request(key);
             self.reveal_active_tab();
+            self.persist_session(cx);
+            cx.notify();
+        }
+    }
+
+    fn select_tree_item(&mut self, item: WorkspaceItemRef, cx: &mut Context<Self>) {
+        self.selected_tree_item = Some(item);
+        cx.notify();
+    }
+
+    fn selected_parent_selector(&self) -> Option<String> {
+        let loaded = self.loaded_workspace.as_ref()?;
+        let selected = self.selected_tree_item?;
+        if let WorkspaceItemRef::Folder(key) = selected {
+            return loaded.folder_selector(key).map(str::to_owned);
+        }
+        let (parent, _) = item_position(loaded.workspace(), selected)?;
+        parent.and_then(|key| loaded.folder_selector(key).map(str::to_owned))
+    }
+
+    fn open_create_request_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.loaded_workspace.is_none() || self.structure_task.is_some() {
+            return;
+        }
+        self.structure_dialog = Some(StructureDialog::create_request(
+            self.selected_parent_selector(),
+        ));
+        self.structure_dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn open_create_folder_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.loaded_workspace.is_none() || self.structure_task.is_some() {
+            return;
+        }
+        self.structure_dialog = Some(StructureDialog::create_folder(
+            self.selected_parent_selector(),
+        ));
+        self.structure_dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn selected_item_details(&self) -> Option<(ItemKind, String, String)> {
+        let loaded = self.loaded_workspace.as_ref()?;
+        match self.selected_tree_item? {
+            WorkspaceItemRef::Request(key) => Some((
+                ItemKind::Request,
+                loaded.request_selector(key)?.to_owned(),
+                loaded
+                    .workspace()
+                    .request(key)?
+                    .metadata
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "Untitled request".to_owned()),
+            )),
+            WorkspaceItemRef::Folder(key) => Some((
+                ItemKind::Folder,
+                loaded.folder_selector(key)?.to_owned(),
+                loaded
+                    .workspace()
+                    .folder(key)?
+                    .metadata
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "Untitled folder".to_owned()),
+            )),
+        }
+    }
+
+    fn open_rename_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.structure_task.is_some() {
+            return;
+        }
+        let Some((kind, selector, name)) = self.selected_item_details() else {
+            return;
+        };
+        self.structure_dialog = Some(StructureDialog::rename(kind, selector, name));
+        self.structure_dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn open_move_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.structure_task.is_some() {
+            return;
+        }
+        let Some((kind, selector, _)) = self.selected_item_details() else {
+            return;
+        };
+        let Some(loaded) = &self.loaded_workspace else {
+            return;
+        };
+        let selected = self
+            .selected_tree_item
+            .expect("details require a selection");
+        let Some((parent, _)) = item_position(loaded.workspace(), selected) else {
+            return;
+        };
+        let parent = parent.and_then(|key| loaded.folder_selector(key).map(str::to_owned));
+        self.structure_dialog = Some(StructureDialog::move_item(kind, selector, parent));
+        self.structure_dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn reorder_selected(&mut self, offset: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.structure_task.is_some() {
+            return;
+        }
+        let Some((kind, selector, _)) = self.selected_item_details() else {
+            return;
+        };
+        let Some(loaded) = &self.loaded_workspace else {
+            return;
+        };
+        let selected = self
+            .selected_tree_item
+            .expect("details require a selection");
+        let Some((_, index)) = item_position(loaded.workspace(), selected) else {
+            return;
+        };
+        let Some(index) = index.checked_add_signed(offset) else {
+            return;
+        };
+        let operation = match kind {
+            ItemKind::Request => StructureOperation::ReorderRequest { selector, index },
+            ItemKind::Folder => StructureOperation::ReorderFolder { selector, index },
+        };
+        self.apply_structure(operation, window, cx);
+    }
+
+    fn request_delete_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.structure_task.is_some() {
+            return;
+        }
+        let Some((kind, selector, name)) = self.selected_item_details() else {
+            return;
+        };
+        let dirty_count = match self.selected_tree_item {
+            Some(WorkspaceItemRef::Request(key)) => self
+                .loaded_workspace
+                .as_ref()
+                .and_then(|loaded| {
+                    loaded
+                        .workspace()
+                        .request(key)
+                        .map(|request| (key, request))
+                })
+                .is_some_and(|(key, request)| self.persistence.is_dirty(key, request))
+                as usize,
+            Some(WorkspaceItemRef::Folder(key)) => {
+                let mut requests = Vec::new();
+                if let Some(loaded) = &self.loaded_workspace {
+                    descendant_requests(loaded.workspace(), key, &mut requests);
+                }
+                requests
+                    .into_iter()
+                    .filter(|key| {
+                        self.loaded_workspace
+                            .as_ref()
+                            .and_then(|loaded| loaded.workspace().request(*key))
+                            .is_some_and(|request| self.persistence.is_dirty(*key, request))
+                    })
+                    .count()
+            }
+            None => 0,
+        };
+        let detail = if dirty_count == 0 {
+            "This cannot be undone.".to_owned()
+        } else {
+            format!(
+                "This will discard unsaved changes in {dirty_count} request(s) and cannot be undone."
+            )
+        };
+        let prompt = window.prompt(
+            PromptLevel::Warning,
+            &format!("Delete “{name}”?"),
+            Some(&detail),
+            &["Cancel", "Delete"],
+            cx,
+        );
+        let view = cx.weak_entity();
+        window
+            .spawn(cx, async move |cx| {
+                let Ok(answer) = prompt.await else {
+                    return;
+                };
+                if answer != 1 {
+                    return;
+                }
+                let _ = view.update_in(cx, |view, window, cx| {
+                    let operation = match kind {
+                        ItemKind::Request => StructureOperation::DeleteRequest { selector },
+                        ItemKind::Folder => StructureOperation::DeleteFolder { selector },
+                    };
+                    view.apply_structure(operation, window, cx);
+                });
+            })
+            .detach();
+    }
+
+    fn submit_structure_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.structure_dialog.as_ref() else {
+            return;
+        };
+        match dialog.operation() {
+            Ok(operation) => {
+                self.structure_dialog = None;
+                self.focus_handle.focus(window, cx);
+                self.apply_structure(operation, window, cx);
+            }
+            Err(message) => {
+                self.message = Some(message);
+                cx.notify();
+            }
+        }
+    }
+
+    fn apply_structure(
+        &mut self,
+        operation: StructureOperation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.structure_task.is_some() {
+            return;
+        }
+        if self.request_save_task.is_some() {
+            self.message = Some(
+                "Wait for the current request save before changing collection structure."
+                    .to_owned(),
+            );
+            cx.notify();
+            return;
+        }
+        let (Some(mut workspace), Some(path)) =
+            (self.loaded_workspace.clone(), self.workspace_path.clone())
+        else {
+            return;
+        };
+        self.loading = true;
+        self.message = None;
+        let operation_for_task = operation.clone();
+        self.structure_task = Some(cx.spawn_in(window, async move |view, window| {
+            let result = window
+                .background_spawn(async move {
+                    let structure_result = workspace
+                        .apply_structure(operation_for_task)
+                        .map_err(|error| error.to_string())?;
+                    let disk_workspace =
+                        load_workspace(&path).map_err(|error| error.to_string())?;
+                    Ok::<_, String>((workspace, disk_workspace, structure_result))
+                })
+                .await;
+            let _ = view.update_in(window, |view, _, cx| {
+                view.structure_task = None;
+                view.loading = false;
+                match result {
+                    Ok((workspace, disk_workspace, result)) => {
+                        view.apply_structure_result(
+                            workspace,
+                            disk_workspace,
+                            result,
+                            &operation,
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        view.message =
+                            Some(format!("Could not edit collection structure: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn apply_structure_result(
+        &mut self,
+        mut workspace: LoadedWorkspace,
+        disk_workspace: LoadedWorkspace,
+        result: StructureResult,
+        operation: &StructureOperation,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(old) = self.loaded_workspace.as_ref() else {
+            return;
+        };
+        let tab_selectors: Vec<_> = self
+            .shell
+            .tabs()
+            .iter()
+            .filter_map(|key| old.request_selector(*key).map(str::to_owned))
+            .collect();
+        let active_selector = self
+            .shell
+            .active_tab()
+            .and_then(|key| old.request_selector(key))
+            .map(str::to_owned);
+        let folder_selectors: Vec<_> = self
+            .shell
+            .collapsed_folders()
+            .filter_map(|key| old.folder_selector(key).map(str::to_owned))
+            .collect();
+        let selected = self.selected_tree_item.and_then(|item| match item {
+            WorkspaceItemRef::Request(key) => old
+                .request_selector(key)
+                .map(|selector| (ItemKind::Request, selector.to_owned())),
+            WorkspaceItemRef::Folder(key) => old
+                .folder_selector(key)
+                .map(|selector| (ItemKind::Folder, selector.to_owned())),
+        });
+        let key_remaps: BTreeMap<_, _> = old
+            .requests()
+            .iter()
+            .filter_map(|located| {
+                let new_selector = result.selector_remaps.get(located.selector())?;
+                workspace
+                    .request_key(new_selector)
+                    .map(|new_key| (located.key(), new_key))
+            })
+            .collect();
+        let current_requests = old
+            .requests()
+            .iter()
+            .filter_map(|located| {
+                old.workspace()
+                    .request(located.key())
+                    .cloned()
+                    .map(|request| (located.selector().to_owned(), request))
+            })
+            .collect::<Vec<_>>();
+
+        for (old_selector, mut request) in current_requests {
+            let Some(new_selector) = result.selector_remaps.get(&old_selector) else {
+                continue;
+            };
+            let Some(new_key) = workspace.request_key(new_selector) else {
+                continue;
+            };
+            let persisted = disk_workspace
+                .request_key(new_selector)
+                .and_then(|key| disk_workspace.workspace().request(key));
+            if let Some(persisted) = persisted {
+                request.metadata.sequence = persisted.metadata.sequence;
+                if matches!(
+                    operation,
+                    StructureOperation::RenameRequest { selector, .. }
+                        if selector == &old_selector
+                ) {
+                    request.metadata.name.clone_from(&persisted.metadata.name);
+                }
+            }
+            if let Some(target) = workspace.request_mut(new_key) {
+                *target = request;
+            }
+        }
+
+        let baselines = workspace
+            .requests()
+            .iter()
+            .filter_map(|located| {
+                let disk_key = disk_workspace.request_key(located.selector())?;
+                let baseline = disk_workspace.workspace().request(disk_key)?.clone();
+                Some((located.key(), baseline))
+            })
+            .collect::<Vec<_>>();
+        self.persistence.reset_with_baselines(baselines);
+        self.loaded_workspace = Some(workspace);
+        self.shell.reset_for_workspace();
+        self.execution.clear();
+        self.response_viewer.clear();
+        self.request_editor.remap_requests(&key_remaps);
+        let loaded = self
+            .loaded_workspace
+            .as_ref()
+            .expect("workspace was replaced after structural edit");
+        for selector in tab_selectors {
+            if let Some(key) = result
+                .selector_remaps
+                .get(&selector)
+                .and_then(|selector| loaded.request_key(selector))
+            {
+                self.shell.open_request(key);
+            }
+        }
+        if let Some(selector) = active_selector
+            && let Some(key) = result
+                .selector_remaps
+                .get(&selector)
+                .and_then(|selector| loaded.request_key(selector))
+        {
+            self.shell.open_request(key);
+        }
+        for selector in folder_selectors {
+            if let Some(key) = result
+                .selector_remaps
+                .get(&selector)
+                .and_then(|selector| loaded.folder_key(selector))
+            {
+                self.shell.collapse_folder(key);
+            }
+        }
+        self.selected_tree_item = selected.and_then(|(kind, selector)| {
+            let selector = result.selector_remaps.get(&selector)?;
+            match kind {
+                ItemKind::Request => loaded.request_key(selector).map(WorkspaceItemRef::Request),
+                ItemKind::Folder => loaded.folder_key(selector).map(WorkspaceItemRef::Folder),
+            }
+        });
+        if self.selected_tree_item.is_none()
+            && let Some(selector) = result.selector.as_deref()
+        {
+            self.selected_tree_item = match result.kind {
+                ItemKind::Request => loaded.request_key(selector).map(WorkspaceItemRef::Request),
+                ItemKind::Folder => loaded.folder_key(selector).map(WorkspaceItemRef::Folder),
+            };
+        }
+        if let Some(WorkspaceItemRef::Request(key)) = self.selected_tree_item
+            && result.previous_selector.is_none()
+        {
+            self.shell.open_request(key);
+        }
+        self.rebuild_visible_tree_rows();
+        self.reveal_active_tab();
+        self.message = None;
+        self.persist_session(cx);
+    }
+
+    fn select_tree_offset(&mut self, offset: isize, cx: &mut Context<Self>) {
+        if self.visible_tree_rows.is_empty() {
+            return;
+        }
+        let current = self
+            .selected_tree_item
+            .and_then(|item| {
+                self.visible_tree_rows
+                    .iter()
+                    .position(|row| row.item == item)
+            })
+            .unwrap_or(if offset < 0 {
+                self.visible_tree_rows.len()
+            } else {
+                0
+            });
+        let next = current
+            .checked_add_signed(offset)
+            .unwrap_or(0)
+            .min(self.visible_tree_rows.len() - 1);
+        self.selected_tree_item = Some(self.visible_tree_rows[next].item);
+        self.tree_scroll
+            .scroll_to_item(next, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    fn activate_selected_tree_item(&mut self, cx: &mut Context<Self>) {
+        match self.selected_tree_item {
+            Some(WorkspaceItemRef::Request(key)) => self.select_request(key, cx),
+            Some(WorkspaceItemRef::Folder(key)) => {
+                self.shell.toggle_folder(key);
+                self.rebuild_visible_tree_rows();
+                self.persist_session(cx);
+                cx.notify();
+            }
+            None => self.select_tree_offset(0, cx),
+        }
+    }
+
+    fn collapse_selected_tree_item(&mut self, cx: &mut Context<Self>) {
+        let Some(selected) = self.selected_tree_item else {
+            return;
+        };
+        match selected {
+            WorkspaceItemRef::Folder(key) if self.shell.folder_is_expanded(key) => {
+                self.shell.collapse_folder(key);
+                self.rebuild_visible_tree_rows();
+                self.persist_session(cx);
+                cx.notify();
+            }
+            _ => {
+                let Some(loaded) = &self.loaded_workspace else {
+                    return;
+                };
+                if let Some((Some(parent), _)) = item_position(loaded.workspace(), selected) {
+                    self.selected_tree_item = Some(WorkspaceItemRef::Folder(parent));
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn expand_selected_tree_item(&mut self, cx: &mut Context<Self>) {
+        let Some(WorkspaceItemRef::Folder(key)) = self.selected_tree_item else {
+            return;
+        };
+        if !self.shell.folder_is_expanded(key) {
+            self.shell.toggle_folder(key);
+            self.rebuild_visible_tree_rows();
             self.persist_session(cx);
             cx.notify();
         }
@@ -1222,11 +1778,13 @@ impl ProbeApp {
                     .as_deref()
                     .unwrap_or("Untitled request");
                 let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
-                let selected = self.shell.active_tab() == Some(key);
+                let selected = self.selected_tree_item == Some(WorkspaceItemRef::Request(key));
                 let view = cx.weak_entity();
                 Button::new(("request-tree-item", key.slot()))
-                    .focusable(false)
-                    .tab_stop(false)
+                    .focusable(true)
+                    .tab_stop(true)
+                    .key_context("RequestTree")
+                    .accessibility_label(format!("Request {label}"))
                     .w_full()
                     .h(px(theme.metrics.tree_row_height))
                     .pl(px(tree_request_indent(theme, depth)))
@@ -1276,10 +1834,13 @@ impl ProbeApp {
                 };
                 let expanded = self.shell.folder_is_expanded(key);
                 let label = folder.metadata.name.as_deref().unwrap_or("Untitled folder");
+                let selected = self.selected_tree_item == Some(WorkspaceItemRef::Folder(key));
                 let view = cx.weak_entity();
                 Button::new(("folder-tree-item", key.slot()))
-                    .focusable(false)
-                    .tab_stop(false)
+                    .focusable(true)
+                    .tab_stop(true)
+                    .key_context("RequestTree")
+                    .accessibility_label(format!("Folder {label}"))
                     .w_full()
                     .h(px(theme.metrics.tree_row_height))
                     .pl(px(tree_folder_indent(theme, depth)))
@@ -1289,10 +1850,17 @@ impl ProbeApp {
                     .gap(px(theme.metrics.spacing_1))
                     .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
+                    .when(selected, |row| {
+                        row.bg(theme.colors.selection.active_background)
+                            .text_color(theme.colors.selection.active_foreground)
+                    })
+                    .when(!selected, |row| {
+                        row.hover(move |row| row.bg(theme.colors.surfaces.window))
+                    })
                     .cursor_pointer()
-                    .hover(move |row| row.bg(theme.colors.surfaces.window))
                     .on_click(move |_, _, cx| {
                         let _ = view.update(cx, |view, cx| {
+                            view.select_tree_item(WorkspaceItemRef::Folder(key), cx);
                             view.shell.toggle_folder(key);
                             view.rebuild_visible_tree_rows();
                             view.persist_session(cx);
@@ -1311,6 +1879,61 @@ impl ProbeApp {
     }
 
     fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let new_request_view = cx.weak_entity();
+        let new_folder_view = cx.weak_entity();
+        let rename_view = cx.weak_entity();
+        let move_view = cx.weak_entity();
+        let move_up_view = cx.weak_entity();
+        let move_down_view = cx.weak_entity();
+        let delete_view = cx.weak_entity();
+        let can_edit = self.loaded_workspace.is_some() && self.structure_task.is_none();
+        let has_selection = can_edit && self.selected_tree_item.is_some();
+        let add_menu_state_view = cx.weak_entity();
+        let add_popup = div()
+            .w(px(180.0))
+            .p(px(theme.metrics.spacing_1))
+            .flex()
+            .flex_col()
+            .gap(px(theme.metrics.spacing_1))
+            .rounded(px(theme.metrics.radius_medium))
+            .bg(theme.colors.surfaces.overlay)
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .child(components::menu_button(
+                theme,
+                "tree-new-request",
+                "Add Request",
+                move |window, cx| {
+                    let _ = new_request_view.update(cx, |view, cx| {
+                        view.structure_add_menu_open = false;
+                        view.open_create_request_dialog(window, cx);
+                    });
+                },
+            ))
+            .child(components::menu_button(
+                theme,
+                "tree-new-folder",
+                "Add Folder",
+                move |window, cx| {
+                    let _ = new_folder_view.update(cx, |view, cx| {
+                        view.structure_add_menu_open = false;
+                        view.open_create_folder_dialog(window, cx);
+                    });
+                },
+            ));
+        let add_menu = Popover::new("tree-add-menu")
+            .open(self.structure_add_menu_open)
+            .on_open_change(move |open, _, cx| {
+                let _ = add_menu_state_view.update(cx, |view, cx| {
+                    view.structure_add_menu_open = *open;
+                    cx.notify();
+                });
+            })
+            .trigger(
+                components::add_menu_button(theme, self.structure_add_menu_open)
+                    .disabled(!can_edit),
+            )
+            .content(move |_, _, _| add_popup);
         let tree = if self.loaded_workspace.is_some() {
             let row_count = self.visible_tree_rows.len();
             uniform_list("request-tree", row_count, {
@@ -1327,6 +1950,7 @@ impl ProbeApp {
             })
             .flex_1()
             .min_h(px(0.0))
+            .track_scroll(&self.tree_scroll)
             .px(px(theme.metrics.spacing_1))
             .py(px(2.0))
             .into_any_element()
@@ -1405,19 +2029,90 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.sidebar)
             .child(
                 div()
-                    .h(px(theme.metrics.tab_bar_height))
-                    .px(px(theme.metrics.spacing_2))
                     .flex()
-                    .items_center()
-                    .justify_between()
+                    .flex_col()
                     .border_b_1()
                     .border_color(theme.colors.borders.subtle)
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Collection"))
                     .child(
                         div()
-                            .text_size(px(theme.typography.caption_size))
-                            .text_color(theme.colors.text.muted)
-                            .child(self.request_count_label()),
+                            .h(px(theme.metrics.tab_bar_height))
+                            .px(px(theme.metrics.spacing_2))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Collection"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(theme.metrics.spacing_1))
+                                    .text_size(px(theme.typography.caption_size))
+                                    .text_color(theme.colors.text.muted)
+                                    .child(self.request_count_label())
+                                    .child(add_menu),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .px(px(theme.metrics.spacing_2))
+                            .pb(px(theme.metrics.spacing_2))
+                            .flex()
+                            .gap(px(theme.metrics.spacing_1))
+                            .child(tree_toolbar_button(
+                                theme,
+                                "tree-rename",
+                                "Rename",
+                                has_selection,
+                                move |window, cx| {
+                                    let _ = rename_view.update(cx, |view, cx| {
+                                        view.open_rename_dialog(window, cx);
+                                    });
+                                },
+                            ))
+                            .child(tree_toolbar_button(
+                                theme,
+                                "tree-move",
+                                "Move…",
+                                has_selection,
+                                move |window, cx| {
+                                    let _ = move_view.update(cx, |view, cx| {
+                                        view.open_move_dialog(window, cx);
+                                    });
+                                },
+                            ))
+                            .child(tree_toolbar_button(
+                                theme,
+                                "tree-move-up",
+                                "↑",
+                                has_selection,
+                                move |window, cx| {
+                                    let _ = move_up_view.update(cx, |view, cx| {
+                                        view.reorder_selected(-1, window, cx);
+                                    });
+                                },
+                            ))
+                            .child(tree_toolbar_button(
+                                theme,
+                                "tree-move-down",
+                                "↓",
+                                has_selection,
+                                move |window, cx| {
+                                    let _ = move_down_view.update(cx, |view, cx| {
+                                        view.reorder_selected(1, window, cx);
+                                    });
+                                },
+                            ))
+                            .child(tree_toolbar_button(
+                                theme,
+                                "tree-delete",
+                                "Delete",
+                                has_selection,
+                                move |window, cx| {
+                                    let _ = delete_view.update(cx, |view, cx| {
+                                        view.request_delete_selected(window, cx);
+                                    });
+                                },
+                            )),
                     ),
             )
             .child(tree)
@@ -3482,6 +4177,190 @@ impl ProbeApp {
             .child(render_windows_controls(theme))
     }
 
+    fn render_structure_dialog(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(dialog) = self.structure_dialog.as_ref() else {
+            return div().into_any_element();
+        };
+        let name_view = cx.weak_entity();
+        let name_enter_view = cx.weak_entity();
+        let parent_view = cx.weak_entity();
+        let index_view = cx.weak_entity();
+        let index_enter_view = cx.weak_entity();
+        let cancel_view = cx.weak_entity();
+        let submit_view = cx.weak_entity();
+        let mut content = div()
+            .w(px(420.0))
+            .p(px(theme.metrics.spacing_4))
+            .flex()
+            .flex_col()
+            .gap(px(theme.metrics.spacing_3))
+            .rounded(px(theme.metrics.radius_medium))
+            .bg(theme.colors.surfaces.overlay)
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .child(
+                div()
+                    .text_size(px(theme.typography.title_size))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(dialog.title()),
+            );
+        if dialog.edits_name() {
+            content = content
+                .child(
+                    div()
+                        .text_size(px(theme.typography.caption_size))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Name"),
+                )
+                .child(components::dialog_text_input(
+                    theme,
+                    "structure-name",
+                    dialog.name.clone(),
+                    "Name",
+                    true,
+                    move |value, _, cx| {
+                        let _ = name_view.update(cx, |view, cx| {
+                            if let Some(dialog) = view.structure_dialog.as_mut() {
+                                dialog.name = value.to_string();
+                            }
+                            cx.notify();
+                        });
+                    },
+                    move |value, window, cx| {
+                        let _ = name_enter_view.update(cx, |view, cx| {
+                            if let Some(dialog) = view.structure_dialog.as_mut() {
+                                dialog.name = value.to_string();
+                            }
+                            view.submit_structure_dialog(window, cx);
+                        });
+                    },
+                ));
+        }
+        if dialog.edits_destination() {
+            let mut options = vec![(ROOT_PARENT.to_owned(), "Collection root".to_owned())];
+            if let Some(loaded) = &self.loaded_workspace {
+                options.extend(loaded.folders().iter().filter_map(|located| {
+                    let name = loaded
+                        .workspace()
+                        .folder(located.key())?
+                        .metadata
+                        .name
+                        .as_deref()
+                        .unwrap_or("Untitled folder");
+                    Some((
+                        located.selector().to_owned(),
+                        format!("{name} — {}", located.selector()),
+                    ))
+                }));
+            }
+            content = content
+                .child(
+                    div()
+                        .text_size(px(theme.typography.caption_size))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Destination"),
+                )
+                .child(components::dropdown(
+                    theme,
+                    "structure-parent",
+                    "Destination folder",
+                    Some(dialog.parent.clone()),
+                    options,
+                    380.0,
+                    move |value, _, cx| {
+                        let Some(value) = value else {
+                            return;
+                        };
+                        let value = value.clone();
+                        let _ = parent_view.update(cx, |view, cx| {
+                            if let Some(dialog) = view.structure_dialog.as_mut() {
+                                dialog.parent = value;
+                                dialog.index.clear();
+                            }
+                            cx.notify();
+                        });
+                    },
+                ))
+                .child(
+                    div()
+                        .text_size(px(theme.typography.caption_size))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Position"),
+                )
+                .child(components::dialog_text_input(
+                    theme,
+                    "structure-index",
+                    dialog.index.clone(),
+                    "Append",
+                    false,
+                    move |value, _, cx| {
+                        let _ = index_view.update(cx, |view, cx| {
+                            if let Some(dialog) = view.structure_dialog.as_mut() {
+                                dialog.index = value.to_string();
+                            }
+                            cx.notify();
+                        });
+                    },
+                    move |value, window, cx| {
+                        let _ = index_enter_view.update(cx, |view, cx| {
+                            if let Some(dialog) = view.structure_dialog.as_mut() {
+                                dialog.index = value.to_string();
+                            }
+                            view.submit_structure_dialog(window, cx);
+                        });
+                    },
+                ));
+        }
+        let submit_label = dialog.submit_label();
+        content = content.child(
+            div()
+                .flex()
+                .justify_end()
+                .gap(px(theme.metrics.spacing_2))
+                .child(tree_toolbar_button(
+                    theme,
+                    "structure-cancel",
+                    "Cancel",
+                    true,
+                    move |window, cx| {
+                        let _ = cancel_view.update(cx, |view, cx| {
+                            view.structure_dialog = None;
+                            view.focus_handle.focus(window, cx);
+                            cx.notify();
+                        });
+                    },
+                ))
+                .child(components::primary_button(
+                    theme,
+                    "structure-submit",
+                    submit_label,
+                    move |_, window, cx| {
+                        let _ = submit_view.update(cx, |view, cx| {
+                            view.submit_structure_dialog(window, cx);
+                        });
+                    },
+                )),
+        );
+
+        div()
+            .absolute()
+            .top(px(0.0))
+            .right(px(0.0))
+            .bottom(px(0.0))
+            .left(px(0.0))
+            .occlude()
+            .track_focus(&self.structure_dialog_focus)
+            .tab_stop(true)
+            .key_context("StructureDialog")
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.colors.selection.inactive_background)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(content)
+            .into_any_element()
+    }
+
     fn active_request(&self) -> Option<&HttpRequest> {
         let key = self.shell.active_tab()?;
         self.loaded_workspace.as_ref()?.workspace().request(key)
@@ -3548,6 +4427,7 @@ impl Render for ProbeApp {
 
         div()
             .size_full()
+            .relative()
             .track_focus(&self.focus_handle)
             .bg(theme.colors.surfaces.window)
             .text_color(theme.colors.text.primary)
@@ -3579,6 +4459,47 @@ impl Render for ProbeApp {
             }))
             .on_action(cx.listener(|_, _: &FocusPreviousControl, window, cx| {
                 window.focus_prev(cx);
+            }))
+            .on_action(cx.listener(|view, _: &NewRequest, window, cx| {
+                view.open_create_request_dialog(window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &NewFolder, window, cx| {
+                view.open_create_folder_dialog(window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &RenameTreeItem, window, cx| {
+                view.open_rename_dialog(window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &DeleteTreeItem, window, cx| {
+                view.request_delete_selected(window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveTreeItem, window, cx| {
+                view.open_move_dialog(window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveTreeItemUp, window, cx| {
+                view.reorder_selected(-1, window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveTreeItemDown, window, cx| {
+                view.reorder_selected(1, window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &SelectPreviousTreeItem, _, cx| {
+                view.select_tree_offset(-1, cx);
+            }))
+            .on_action(cx.listener(|view, _: &SelectNextTreeItem, _, cx| {
+                view.select_tree_offset(1, cx);
+            }))
+            .on_action(cx.listener(|view, _: &CollapseTreeItem, _, cx| {
+                view.collapse_selected_tree_item(cx);
+            }))
+            .on_action(cx.listener(|view, _: &ExpandTreeItem, _, cx| {
+                view.expand_selected_tree_item(cx);
+            }))
+            .on_action(cx.listener(|view, _: &ActivateTreeItem, _, cx| {
+                view.activate_selected_tree_item(cx);
+            }))
+            .on_action(cx.listener(|view, _: &CancelStructureDialog, window, cx| {
+                view.structure_dialog = None;
+                view.focus_handle.focus(window, cx);
+                cx.notify();
             }))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
@@ -3634,6 +4555,7 @@ impl Render for ProbeApp {
                             .child(self.render_editor_response(theme, cx)),
                     ),
             )
+            .child(self.render_structure_dialog(theme, cx))
     }
 }
 
@@ -3675,6 +4597,39 @@ fn placeholder_message(theme: Theme, message: &str) -> gpui::AnyElement {
         .text_color(theme.colors.text.muted)
         .child(message.to_owned())
         .into_any_element()
+}
+
+fn tree_toolbar_button(
+    theme: Theme,
+    id: &'static str,
+    label: &'static str,
+    enabled: bool,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    Button::new(id)
+        .disabled(!enabled)
+        .h(px(theme.metrics.control_height - 4.0))
+        .px(px(theme.metrics.spacing_2))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.metrics.radius_small))
+        .border_1()
+        .border_color(theme.colors.borders.standard)
+        .bg(theme.colors.surfaces.raised)
+        .text_size(px(theme.typography.caption_size))
+        .hover(move |button| button.bg(theme.colors.selection.inactive_background))
+        .focus(move |button| button.border_color(theme.colors.borders.focused))
+        .styles(move |styles| {
+            styles.disabled(move |button| {
+                button
+                    .bg(theme.colors.actions.disabled)
+                    .text_color(theme.colors.actions.disabled_foreground)
+                    .border_color(theme.colors.actions.disabled)
+            })
+        })
+        .on_click(move |_, window, cx| on_click(window, cx))
+        .child(label)
 }
 
 fn request_method_options(
@@ -3796,6 +4751,20 @@ fn bind_platform_hotkeys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("tab", FocusNextControl, None),
         KeyBinding::new("shift-tab", FocusPreviousControl, None),
+        KeyBinding::new("up", SelectPreviousTreeItem, Some("RequestTree")),
+        KeyBinding::new("down", SelectNextTreeItem, Some("RequestTree")),
+        KeyBinding::new("left", CollapseTreeItem, Some("RequestTree")),
+        KeyBinding::new("right", ExpandTreeItem, Some("RequestTree")),
+        KeyBinding::new("enter", ActivateTreeItem, Some("RequestTree")),
+        KeyBinding::new("space", ActivateTreeItem, Some("RequestTree")),
+        KeyBinding::new("f2", RenameTreeItem, Some("RequestTree")),
+        KeyBinding::new("delete", DeleteTreeItem, Some("RequestTree")),
+        KeyBinding::new("n", NewRequest, Some("RequestTree")),
+        KeyBinding::new("shift-n", NewFolder, Some("RequestTree")),
+        KeyBinding::new("m", MoveTreeItem, Some("RequestTree")),
+        KeyBinding::new("alt-up", MoveTreeItemUp, Some("RequestTree")),
+        KeyBinding::new("alt-down", MoveTreeItemDown, Some("RequestTree")),
+        KeyBinding::new("escape", CancelStructureDialog, Some("StructureDialog")),
     ]);
 
     #[cfg(target_os = "macos")]
@@ -3872,6 +4841,86 @@ mod tests {
         ));
         fs::copy(bundled_fixture(), &path).unwrap();
         path
+    }
+
+    fn writable_structure_fixture(suffix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "probe-desktop-structure-{}-{unique}-{suffix}.yml",
+            std::process::id()
+        ));
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/opencollection/phase16-bundled.yml"),
+            &path,
+        )
+        .unwrap();
+        path
+    }
+
+    #[gpui::test]
+    fn structural_move_remaps_tabs_and_preserves_dirty_drafts(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_structure_fixture("move");
+        let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+        let request = workspace.request_key("items/0").unwrap();
+        let folder = workspace.folder_key("items/1").unwrap();
+        window
+            .update(cx, |view, window, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                view.select_request(request, cx);
+                view.shell.collapse_folder(folder);
+                view.edit_request(
+                    request,
+                    |request| request.url = Some("https://local.example/dirty".to_owned()),
+                    cx,
+                );
+                view.apply_structure(
+                    probe_opencollection::StructureOperation::MoveRequest {
+                        selector: "items/0".to_owned(),
+                        parent: Some("items/1".to_owned()),
+                        index: Some(1),
+                    },
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.structure_task.is_none(), "{:?}", view.message);
+                let loaded = view.loaded_workspace.as_ref().unwrap();
+                let moved = loaded.request_key("items/0/items/1").unwrap();
+                let request = loaded.workspace().request(moved).unwrap();
+                assert_eq!(request.url.as_deref(), Some("https://local.example/dirty"));
+                assert!(view.persistence.is_dirty(moved, request));
+                assert_eq!(view.shell.active_tab(), Some(moved));
+                assert!(view.shell.tabs().contains(&moved));
+                let remapped_folder = loaded.folder_key("items/0").unwrap();
+                assert!(!view.shell.folder_is_expanded(remapped_folder));
+            })
+            .unwrap();
+
+        let disk = probe_opencollection::load_workspace(&fixture).unwrap();
+        let persisted = disk
+            .workspace()
+            .request(disk.request_key("items/0/items/1").unwrap())
+            .unwrap();
+        assert_ne!(
+            persisted.url.as_deref(),
+            Some("https://local.example/dirty"),
+            "structural moves must not silently save an unrelated dirty draft"
+        );
+        fs::remove_file(fixture).unwrap();
     }
 
     #[gpui::test]

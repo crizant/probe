@@ -15,6 +15,7 @@ mod request_editor;
 mod response_viewer;
 mod session;
 mod shell;
+mod structure_editor;
 mod synchronization;
 mod syntax;
 pub mod theme;

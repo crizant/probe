@@ -286,6 +286,17 @@ expanded nodes. Its fixed-height GPUI list is virtualized, so scrolling construc
 paints only the viewport range rather than every request in a large workspace. Folder
 expansion rebuilds this in-memory visible-row index without filesystem access.
 
+Tree rows are focusable collection items with directional navigation and explicit
+create, rename, delete, move, and reorder controls, so drag and drop is never required.
+The desktop converts these interactions into repository-owned `StructureOperation`
+values and executes them on GPUI's background executor. A successful operation returns
+a complete old-to-new selector map and a refreshed repository workspace. The desktop
+uses that map to rebuild runtime keys for open tabs, the active tree item, collapsed
+folders, editor drafts, and session state. Dirty request fields are overlaid onto their
+remapped request after the structural refresh; a structural move or rename does not
+implicitly save unrelated request edits. Folder and request deletion always requires
+confirmation, with a stronger warning when dirty requests would be discarded.
+
 ### Desktop Session Restoration
 
 Probe stores a small, versioned desktop-session document in the operating system's

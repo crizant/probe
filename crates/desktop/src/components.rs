@@ -132,6 +132,26 @@ fn plus_icon(theme: Theme) -> gpui::Div {
     library_icon("lucide-plus", &PLUS_SVG, theme.metrics.icon_small)
 }
 
+pub(crate) fn add_menu_button(theme: Theme, open: bool) -> Button {
+    Button::new("tree-add-menu-trigger")
+        .accessibility_label("Add request or folder")
+        .debug_selector(|| "tree-add-menu-trigger".into())
+        .selected(open)
+        .size(px(theme.metrics.control_height - 4.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.metrics.radius_small))
+        .border_1()
+        .border_color(theme.colors.borders.subtle)
+        .hover(move |button| button.bg(theme.colors.surfaces.window))
+        .focus(move |button| button.border_color(theme.colors.borders.focused))
+        .styles(move |styles| {
+            styles.selected(move |button| button.bg(theme.colors.surfaces.window))
+        })
+        .child(plus_icon(theme).text_color(theme.colors.text.secondary))
+}
+
 pub(crate) fn save_icon(theme: Theme) -> gpui::Div {
     library_icon("lucide-save", &SAVE_SVG, theme.metrics.icon_standard)
         .text_color(theme.colors.text.primary)
@@ -463,6 +483,7 @@ struct FieldInput {
     state: Entity<InputState>,
     on_change: InputChangeHandler,
     on_enter: Option<InputChangeHandler>,
+    autofocused: bool,
     _subscription: Subscription,
 }
 
@@ -504,6 +525,7 @@ struct ProbeTextInput {
     debug_selector: Option<&'static str>,
     on_change: InputChangeHandler,
     on_enter: Option<InputChangeHandler>,
+    autofocus: bool,
 }
 
 impl RenderOnce for ProbeTextInput {
@@ -523,6 +545,7 @@ impl RenderOnce for ProbeTextInput {
                 state,
                 on_change: on_change.clone(),
                 on_enter: on_enter.clone(),
+                autofocused: false,
                 _subscription: subscription,
             }
         });
@@ -537,6 +560,13 @@ impl RenderOnce for ProbeTextInput {
             });
         });
         let state = field.read(cx).state.clone();
+        if self.autofocus && !field.read(cx).autofocused {
+            field.update(cx, |field, _| field.autofocused = true);
+            let focus_state = state.clone();
+            window.defer(cx, move |window, cx| {
+                focus_state.update(cx, |input, cx| input.focus(window, cx));
+            });
+        }
         let focused = state.read(cx).focus_handle(cx).is_focused(window);
         let tooltip_id = ElementId::NamedChild(
             Arc::new(self.id.clone()),
@@ -615,6 +645,34 @@ pub(crate) fn variable_text_input(
         debug_selector: None,
         on_change: Rc::new(on_value_change),
         on_enter: None,
+        autofocus: false,
+    }
+    .into_any_element()
+}
+
+pub(crate) fn dialog_text_input(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    value: impl Into<SharedString>,
+    placeholder: impl Into<SharedString>,
+    autofocus: bool,
+    on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+    on_enter: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+) -> gpui::AnyElement {
+    ProbeTextInput {
+        theme,
+        id: id.into(),
+        value: single_line(value),
+        placeholder: placeholder.into(),
+        variables: VariableContext::default(),
+        font_family: theme.typography.interface_family,
+        text_size: theme.typography.body_size,
+        height: theme.metrics.control_height,
+        width: None,
+        debug_selector: None,
+        on_change: Rc::new(on_value_change),
+        on_enter: Some(Rc::new(on_enter)),
+        autofocus,
     }
     .into_any_element()
 }
@@ -640,6 +698,7 @@ pub(crate) fn search_input(
         debug_selector: Some("response-search"),
         on_change: Rc::new(on_value_change),
         on_enter: Some(Rc::new(on_enter)),
+        autofocus: false,
     }
 }
 

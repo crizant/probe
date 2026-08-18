@@ -128,6 +128,10 @@ and Probe asks before closing tabs, collections, or the application with unsaved
 Open collections are watched for filesystem changes; valid external edits, additions,
 deletions, and identifiable renames are reconciled in the background while conflicting
 local drafts remain protected until the user chooses which version to keep.
+The desktop collection tree also exposes keyboard-accessible controls for creating,
+renaming, deleting, moving, and reordering requests and folders. Structural writes run
+in the background through the shared repository, while open tabs, collapsed folders,
+session selectors, and unsaved request drafts follow persisted selector remaps.
 
 ```bash
 cargo run -p probe-cli -- --help
