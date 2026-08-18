@@ -835,6 +835,35 @@ pub(crate) fn remove_row_button(
         .child(trash_icon(color))
 }
 
+pub(crate) fn browse_file_button(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    aria_label: impl Into<SharedString>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let color = theme.colors.text.secondary;
+    Button::new(id)
+        .accessibility_label(aria_label)
+        .w(px(30.0))
+        .h(px(theme.metrics.control_height))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.metrics.radius_small))
+        .bg(theme.colors.surfaces.raised)
+        .border_1()
+        .border_color(theme.colors.borders.standard)
+        .cursor_pointer()
+        .hover(move |button| button.bg(theme.colors.selection.inactive_background))
+        .focus(move |button| button.border_color(theme.colors.borders.focused))
+        .on_click(on_click)
+        .child(folder_open_icon(color))
+}
+
+fn folder_open_icon(color: gpui::Rgba) -> gpui::Div {
+    library_icon("lucide-folder-open", &FOLDER_OPEN_SVG, 14.0).text_color(color)
+}
+
 fn trash_icon(color: gpui::Rgba) -> gpui::Div {
     library_icon("lucide-trash-2", &TRASH_SVG, 14.0).text_color(color)
 }

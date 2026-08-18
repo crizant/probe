@@ -27,8 +27,8 @@ use probe_opencollection::{
 use crate::{
     components,
     execution::{
-        ExecutionState, ResponseState, execute_http_request, format_duration, format_size,
-        workspace_base_directory,
+        ExecutionState, ResponseState, body_file_path_for_storage, execute_http_request,
+        format_duration, format_size, workspace_base_directory,
     },
     filesystem::{WATCH_DEBOUNCE, WorkspaceWatcher, event_affects_workspace, rename_hints},
     persistence::PersistenceState,
@@ -290,6 +290,79 @@ impl ProbeApp {
                 });
             })
             .detach();
+    }
+
+    fn choose_file_path(
+        &mut self,
+        key: RequestKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        apply: impl FnOnce(&mut HttpRequest, String) + Send + 'static,
+    ) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose File".into()),
+        });
+        let workspace_path = self.workspace_path.clone();
+        let view = cx.weak_entity();
+
+        window
+            .spawn(cx, async move |cx| {
+                let paths = match receiver.await {
+                    Ok(Ok(Some(paths))) => paths,
+                    Ok(Ok(None)) => return,
+                    Ok(Err(error)) => {
+                        let _ = view.update_in(cx, |view, _, cx| {
+                            view.message = Some(format!("Could not open the file picker: {error}"));
+                            cx.notify();
+                        });
+                        return;
+                    }
+                    Err(_) => return,
+                };
+                let Some(path) = paths.into_iter().next() else {
+                    return;
+                };
+                let stored = body_file_path_for_storage(&path, workspace_path.as_deref());
+                let _ = view.update_in(cx, |view, _, cx| {
+                    view.edit_request(key, |request| apply(request, stored), cx);
+                });
+            })
+            .detach();
+    }
+
+    fn choose_body_file(
+        &mut self,
+        key: RequestKey,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.choose_file_path(key, window, cx, move |request, stored| {
+            if let Some(RequestBody::Single(Body::File(files))) = request.body.as_mut()
+                && let Some(file) = files.get_mut(index)
+            {
+                file.file_path = stored;
+            }
+        });
+    }
+
+    fn choose_multipart_file(
+        &mut self,
+        key: RequestKey,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.choose_file_path(key, window, cx, move |request, stored| {
+            if let Some(RequestBody::Single(Body::Multipart(parts))) = request.body.as_mut()
+                && let Some(part) = parts.get_mut(index)
+            {
+                part.value = MultipartValue::Single(stored);
+            }
+        });
     }
 
     fn load_workspace_path(
@@ -3229,6 +3302,8 @@ impl ProbeApp {
             let kind_view = cx.weak_entity();
             let enabled_view = cx.weak_entity();
             let remove_view = cx.weak_entity();
+            let browse_view = cx.weak_entity();
+            let is_file = part.kind == MultipartPartKind::File;
             rows =
                 rows.child(
                     div()
@@ -3238,12 +3313,8 @@ impl ProbeApp {
                         .child(components::editor_button(
                             theme,
                             ("multipart-kind", index),
-                            if part.kind == MultipartPartKind::File {
-                                "File"
-                            } else {
-                                "Text"
-                            },
-                            part.kind == MultipartPartKind::File,
+                            if is_file { "File" } else { "Text" },
+                            is_file,
                             move |_, _, cx| {
                                 let _ = kind_view.update(cx, |view, cx| {
                                     view.edit_request(
@@ -3291,33 +3362,84 @@ impl ProbeApp {
                                 },
                             ),
                         ))
-                        .child(div().flex_1().min_w(px(0.0)).child(
-                            components::variable_text_input(
-                                theme,
-                                ("multipart-value", index),
-                                value,
-                                "Value or file path",
-                                self.variable_context(),
-                                move |value, _, input_cx| {
-                                    let _ = value_view.update(input_cx, |view, cx| {
-                                        view.edit_request(
-                                            key,
-                                            |request| {
-                                                if let Some(RequestBody::Single(Body::Multipart(
-                                                    parts,
-                                                ))) = request.body.as_mut()
-                                                    && let Some(part) = parts.get_mut(index)
-                                                {
-                                                    part.value =
-                                                        MultipartValue::Single(value.to_string());
-                                                }
-                                            },
-                                            cx,
-                                        );
-                                    });
-                                },
-                            ),
-                        ))
+                        .child(if is_file {
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(theme.metrics.spacing_1))
+                                .child(div().flex_1().min_w(px(0.0)).child(
+                                    components::variable_text_input(
+                                        theme,
+                                        ("multipart-value", index),
+                                        value,
+                                        "File path",
+                                        self.variable_context(),
+                                        move |value, _, input_cx| {
+                                            let _ = value_view.update(input_cx, |view, cx| {
+                                                view.edit_request(
+                                                    key,
+                                                    |request| {
+                                                        if let Some(RequestBody::Single(
+                                                            Body::Multipart(parts),
+                                                        )) = request.body.as_mut()
+                                                            && let Some(part) = parts.get_mut(index)
+                                                        {
+                                                            part.value = MultipartValue::Single(
+                                                                value.to_string(),
+                                                            );
+                                                        }
+                                                    },
+                                                    cx,
+                                                );
+                                            });
+                                        },
+                                    ),
+                                ))
+                                .child(components::browse_file_button(
+                                    theme,
+                                    ("multipart-file-browse", index),
+                                    "Browse for file",
+                                    move |_, window, cx| {
+                                        let _ = browse_view.update(cx, |view, cx| {
+                                            view.choose_multipart_file(key, index, window, cx);
+                                        });
+                                    },
+                                ))
+                                .into_any_element()
+                        } else {
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .child(components::variable_text_input(
+                                    theme,
+                                    ("multipart-value", index),
+                                    value,
+                                    "Value",
+                                    self.variable_context(),
+                                    move |value, _, input_cx| {
+                                        let _ = value_view.update(input_cx, |view, cx| {
+                                            view.edit_request(
+                                                key,
+                                                |request| {
+                                                    if let Some(RequestBody::Single(
+                                                        Body::Multipart(parts),
+                                                    )) = request.body.as_mut()
+                                                        && let Some(part) = parts.get_mut(index)
+                                                    {
+                                                        part.value = MultipartValue::Single(
+                                                            value.to_string(),
+                                                        );
+                                                    }
+                                                },
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                ))
+                                .into_any_element()
+                        })
                         .child(components::switch(
                             theme,
                             ("multipart-enabled", index),
@@ -3406,37 +3528,57 @@ impl ProbeApp {
             let type_view = cx.weak_entity();
             let selected_view = cx.weak_entity();
             let remove_view = cx.weak_entity();
+            let browse_view = cx.weak_entity();
             rows =
                 rows.child(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(theme.metrics.spacing_2))
-                        .child(div().flex_1().min_w(px(0.0)).child(
-                            components::variable_text_input(
-                                theme,
-                                ("body-file-path", index),
-                                file.file_path.clone(),
-                                "File path",
-                                self.variable_context(),
-                                move |value, _, input_cx| {
-                                    let _ = path_view.update(input_cx, |view, cx| {
-                                        view.edit_request(
-                                    key,
-                                    |request| {
-                                        if let Some(RequestBody::Single(Body::File(files))) =
-                                            request.body.as_mut()
-                                            && let Some(file) = files.get_mut(index)
-                                        {
-                                            file.file_path = value.to_string();
-                                        }
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(theme.metrics.spacing_1))
+                                .child(div().flex_1().min_w(px(0.0)).child(
+                                    components::variable_text_input(
+                                        theme,
+                                        ("body-file-path", index),
+                                        file.file_path.clone(),
+                                        "File path",
+                                        self.variable_context(),
+                                        move |value, _, input_cx| {
+                                            let _ = path_view.update(input_cx, |view, cx| {
+                                                view.edit_request(
+                                                    key,
+                                                    |request| {
+                                                        if let Some(RequestBody::Single(
+                                                            Body::File(files),
+                                                        )) = request.body.as_mut()
+                                                            && let Some(file) = files.get_mut(index)
+                                                        {
+                                                            file.file_path = value.to_string();
+                                                        }
+                                                    },
+                                                    cx,
+                                                );
+                                            });
+                                        },
+                                    ),
+                                ))
+                                .child(components::browse_file_button(
+                                    theme,
+                                    ("body-file-browse", index),
+                                    "Browse for file",
+                                    move |_, window, cx| {
+                                        let _ = browse_view.update(cx, |view, cx| {
+                                            view.choose_body_file(key, index, window, cx);
+                                        });
                                     },
-                                    cx,
-                                );
-                                    });
-                                },
-                            ),
-                        ))
+                                )),
+                        )
                         .child(div().flex_1().min_w(px(0.0)).child(
                             components::variable_text_input(
                                 theme,

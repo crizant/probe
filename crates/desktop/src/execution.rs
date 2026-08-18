@@ -109,6 +109,27 @@ pub(crate) fn workspace_base_directory(path: &Path) -> Option<std::path::PathBuf
     }
 }
 
+pub(crate) fn body_file_path_for_storage(selected: &Path, workspace_path: Option<&Path>) -> String {
+    if let Some(workspace_path) = workspace_path
+        && let Some(base) = workspace_base_directory(workspace_path)
+        && let Ok(relative) = selected.strip_prefix(&base)
+    {
+        let relative = relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        if relative.is_empty() {
+            return selected.display().to_string();
+        }
+        if relative.contains('/') {
+            return relative;
+        }
+        return format!("./{relative}");
+    }
+    selected.display().to_string()
+}
+
 pub(crate) fn execute_http_request(
     request: HttpRequest,
     options: ExecutionOptions,
@@ -156,7 +177,8 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::{
-        ExecutionState, ResponseState, execute_http_request, format_duration, format_size,
+        ExecutionState, ResponseState, body_file_path_for_storage, execute_http_request,
+        format_duration, format_size,
     };
 
     fn key() -> probe_core::RequestKey {
@@ -238,5 +260,33 @@ mod tests {
             body: Vec::new(),
             body_complete: true,
         }
+    }
+
+    #[test]
+    fn body_file_paths_prefer_workspace_relative_storage() {
+        let workspace = std::path::Path::new("/tmp/collection/opencollection.yml");
+        assert_eq!(
+            body_file_path_for_storage(
+                std::path::Path::new("/tmp/collection/archive.zip"),
+                Some(workspace),
+            ),
+            "./archive.zip"
+        );
+        assert_eq!(
+            body_file_path_for_storage(
+                std::path::Path::new("/tmp/collection/assets/data.json"),
+                Some(workspace),
+            ),
+            "assets/data.json"
+        );
+    }
+
+    #[test]
+    fn body_file_paths_fall_back_to_absolute_storage() {
+        let workspace = std::path::Path::new("/tmp/collection/opencollection.yml");
+        assert_eq!(
+            body_file_path_for_storage(std::path::Path::new("/etc/hosts"), Some(workspace),),
+            "/etc/hosts"
+        );
     }
 }
