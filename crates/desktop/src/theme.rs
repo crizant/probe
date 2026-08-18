@@ -48,6 +48,8 @@ pub struct SurfaceColors {
     pub editor: Rgba,
     pub raised: Rgba,
     pub overlay: Rgba,
+    /// Semi-transparent dimming layer for modal overlays.
+    pub scrim: Rgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -330,6 +332,7 @@ fn latte() -> Colors {
             editor: rgba(0xeff1f5ff),  // base
             raised: rgba(0xdce0e8ff),  // crust
             overlay: rgba(0xeff1f5ff), // base
+            scrim: rgba(0x00000059),   // black @ ~35%
         },
         text: TextColors {
             primary: rgba(0x4c4f69ff),     // text
@@ -400,6 +403,7 @@ fn mocha() -> Colors {
             editor: rgba(0x1e1e2eff),  // base
             raised: rgba(0x11111bff),  // crust
             overlay: rgba(0x313244ff), // surface0
+            scrim: rgba(0x00000066),   // black @ ~40%
         },
         text: TextColors {
             primary: rgba(0xcdd6f4ff),     // text

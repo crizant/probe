@@ -4358,7 +4358,15 @@ impl ProbeApp {
             .flex()
             .items_center()
             .justify_center()
-            .bg(theme.colors.selection.inactive_background)
+            .child(
+                div()
+                    .absolute()
+                    .top(px(0.0))
+                    .right(px(0.0))
+                    .bottom(px(0.0))
+                    .left(px(0.0))
+                    .bg(theme.colors.surfaces.scrim),
+            )
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(content)
             .into_any_element()
