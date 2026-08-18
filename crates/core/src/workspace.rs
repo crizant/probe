@@ -1,6 +1,7 @@
 use crate::{
     Collection, CollectionItem, CollectionMetadata, Environment, HttpRequest, ItemMetadata,
 };
+use std::collections::BTreeMap;
 
 /// Session-only generational key for an HTTP request in a loaded workspace.
 ///
@@ -77,6 +78,7 @@ pub struct Workspace {
     root_items: Vec<WorkspaceItemRef>,
     requests: Arena<HttpRequest>,
     folders: Arena<WorkspaceFolder>,
+    request_ancestors: BTreeMap<RequestKey, Vec<FolderKey>>,
     environments: Vec<Environment>,
 }
 
@@ -86,13 +88,21 @@ impl Workspace {
     pub fn from_collection(collection: Collection) -> Self {
         let mut requests = Arena::default();
         let mut folders = Arena::default();
-        let root_items = index_items(collection.items, &mut requests, &mut folders);
+        let mut request_ancestors = BTreeMap::new();
+        let root_items = index_items(
+            collection.items,
+            &mut requests,
+            &mut folders,
+            &mut request_ancestors,
+            &[],
+        );
 
         Self {
             metadata: collection.metadata,
             root_items,
             requests,
             folders,
+            request_ancestors,
             environments: collection.environments,
         }
     }
@@ -129,6 +139,7 @@ impl Workspace {
     /// Adds a request at the workspace root and returns its new runtime key.
     pub fn add_root_request(&mut self, request: HttpRequest) -> RequestKey {
         let key = RequestKey::from(self.requests.insert(request));
+        self.request_ancestors.insert(key, Vec::new());
         self.root_items.push(WorkspaceItemRef::Request(key));
         key
     }
@@ -139,6 +150,7 @@ impl Workspace {
     /// the removed key can never resolve to the replacement.
     pub fn remove_request(&mut self, key: RequestKey) -> Option<HttpRequest> {
         let request = self.requests.remove(key.into())?;
+        self.request_ancestors.remove(&key);
         self.root_items
             .retain(|item| *item != WorkspaceItemRef::Request(key));
         for folder in self.folders.values_mut() {
@@ -159,6 +171,15 @@ impl Workspace {
     #[must_use]
     pub const fn folder_count(&self) -> usize {
         self.folders.len()
+    }
+
+    /// Returns a request's ancestor folder keys from the collection root inward.
+    ///
+    /// The path is indexed when the workspace is built, so request selection and
+    /// presentation do not need to scan the collection tree.
+    #[must_use]
+    pub fn request_ancestor_folders(&self, key: RequestKey) -> Option<&[FolderKey]> {
+        self.request_ancestors.get(&key).map(Vec::as_slice)
     }
 
     /// Returns collection environments in source order.
@@ -308,10 +329,12 @@ fn index_items(
     items: Vec<CollectionItem>,
     requests: &mut Arena<HttpRequest>,
     folders: &mut Arena<WorkspaceFolder>,
+    request_ancestors: &mut BTreeMap<RequestKey, Vec<FolderKey>>,
+    ancestors: &[FolderKey],
 ) -> Vec<WorkspaceItemRef> {
     items
         .into_iter()
-        .map(|item| index_item(item, requests, folders))
+        .map(|item| index_item(item, requests, folders, request_ancestors, ancestors))
         .collect()
 }
 
@@ -319,10 +342,14 @@ fn index_item(
     item: CollectionItem,
     requests: &mut Arena<HttpRequest>,
     folders: &mut Arena<WorkspaceFolder>,
+    request_ancestors: &mut BTreeMap<RequestKey, Vec<FolderKey>>,
+    ancestors: &[FolderKey],
 ) -> WorkspaceItemRef {
     match item {
         CollectionItem::HttpRequest(request) => {
-            WorkspaceItemRef::Request(requests.insert(request).into())
+            let key = RequestKey::from(requests.insert(request));
+            request_ancestors.insert(key, ancestors.to_vec());
+            WorkspaceItemRef::Request(key)
         }
         CollectionItem::Folder(folder) => {
             let placeholder = WorkspaceFolder {
@@ -335,7 +362,15 @@ fn index_item(
             };
             let arena_key = folders.insert(placeholder);
             let key = FolderKey::from(arena_key);
-            let children = index_items(folder.items, requests, folders);
+            let mut child_ancestors = ancestors.to_vec();
+            child_ancestors.push(key);
+            let children = index_items(
+                folder.items,
+                requests,
+                folders,
+                request_ancestors,
+                &child_ancestors,
+            );
             let indexed_folder = folders
                 .get_mut(arena_key)
                 .expect("newly inserted folder key must remain valid");
@@ -419,6 +454,58 @@ mod tests {
                 .and_then(|request| request.metadata.name.as_deref()),
             Some("Health")
         );
+    }
+
+    #[test]
+    fn indexes_request_ancestor_folders_from_root_inward() {
+        let collection = Collection {
+            items: vec![CollectionItem::Folder(Folder {
+                metadata: ItemMetadata {
+                    name: Some("Accounts".to_owned()),
+                    sequence: None,
+                },
+                items: vec![CollectionItem::Folder(Folder {
+                    metadata: ItemMetadata {
+                        name: Some("Users".to_owned()),
+                        sequence: None,
+                    },
+                    items: vec![request("List users")],
+                })],
+            })],
+            ..Collection::default()
+        };
+
+        let workspace = Workspace::from_collection(collection);
+        let request_key = workspace
+            .root_items()
+            .iter()
+            .find_map(|item| match item {
+                WorkspaceItemRef::Folder(folder_key) => workspace.folder(*folder_key),
+                WorkspaceItemRef::Request(_) => None,
+            })
+            .and_then(|folder| match folder.children[0] {
+                WorkspaceItemRef::Folder(folder_key) => workspace.folder(folder_key),
+                WorkspaceItemRef::Request(_) => None,
+            })
+            .and_then(|folder| match folder.children[0] {
+                WorkspaceItemRef::Request(request_key) => Some(request_key),
+                WorkspaceItemRef::Folder(_) => None,
+            })
+            .expect("nested request should resolve");
+
+        let ancestor_names = workspace
+            .request_ancestor_folders(request_key)
+            .expect("request ancestry should be indexed")
+            .iter()
+            .map(|key| {
+                workspace
+                    .folder(*key)
+                    .and_then(|folder| folder.metadata.name.as_deref())
+                    .expect("ancestor folder should resolve")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(ancestor_names, ["Accounts", "Users"]);
     }
 
     #[test]

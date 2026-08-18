@@ -1635,8 +1635,111 @@ impl ProbeApp {
         let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
         let url = request.url.clone().unwrap_or_default();
         let request_dirty = self.persistence.is_dirty(key, &request);
-        let url_view = cx.weak_entity();
+        let mut breadcrumb_labels = self
+            .loaded_workspace
+            .as_ref()
+            .and_then(|loaded| {
+                loaded
+                    .workspace()
+                    .request_ancestor_folders(key)
+                    .map(|folders| {
+                        folders
+                            .iter()
+                            .filter_map(|folder_key| loaded.workspace().folder(*folder_key))
+                            .map(|folder| {
+                                folder
+                                    .metadata
+                                    .name
+                                    .as_deref()
+                                    .unwrap_or("Untitled folder")
+                                    .to_owned()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .unwrap_or_default();
+        let request_breadcrumb_index = breadcrumb_labels.len();
+        breadcrumb_labels.push(
+            request
+                .metadata
+                .name
+                .as_deref()
+                .unwrap_or("Untitled request")
+                .to_owned(),
+        );
         let save_view = cx.weak_entity();
+        let mut breadcrumb_path = div()
+            .id("request-breadcrumb-path")
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1))
+            .overflow_x_scroll()
+            .text_size(px(theme.typography.caption_size))
+            .text_color(theme.colors.text.muted);
+        for (index, label) in breadcrumb_labels.into_iter().enumerate() {
+            if index > 0 {
+                breadcrumb_path = breadcrumb_path.child(div().flex_none().child("›"));
+            }
+            let segment = components::truncated_label(label)
+                .max_w(px(220.0))
+                .flex_none();
+            let segment = if index == request_breadcrumb_index {
+                segment
+                    .debug_selector(|| "request-breadcrumb-request".into())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.colors.text.primary)
+            } else {
+                segment.debug_selector(move || format!("request-breadcrumb-folder-{index}"))
+            };
+            breadcrumb_path = breadcrumb_path.child(segment);
+        }
+        let breadcrumb = div()
+            .id("request-breadcrumb")
+            .debug_selector(|| "request-breadcrumb".into())
+            .h(px(theme.metrics.control_height))
+            .w_full()
+            .flex()
+            .items_center()
+            .child(breadcrumb_path)
+            .child(
+                Button::new("request-save")
+                    .accessibility_label("Save request")
+                    .debug_selector(|| "request-save".into())
+                    .disabled(!request_dirty)
+                    .ml(px(theme.metrics.spacing_2))
+                    .flex_none()
+                    .w(px(theme.metrics.control_height))
+                    .h(px(theme.metrics.control_height))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(theme.metrics.radius_small))
+                    .border_1()
+                    .border_color(theme.colors.borders.standard)
+                    .bg(theme.colors.surfaces.raised)
+                    .hover(move |button| button.bg(theme.colors.selection.inactive_background))
+                    .focus(move |button| button.border_color(theme.colors.borders.focused))
+                    .styles(move |styles| {
+                        styles.disabled(move |button| {
+                            button
+                                .bg(theme.colors.actions.disabled)
+                                .border_color(theme.colors.actions.disabled)
+                                .text_color(theme.colors.actions.disabled_foreground)
+                        })
+                    })
+                    .child(components::save_icon(theme).when(!request_dirty, |icon| {
+                        icon.text_color(theme.colors.actions.disabled_foreground)
+                    }))
+                    .on_click(move |_, window, cx| {
+                        let _ = save_view.update(cx, |view, cx| {
+                            view.save_active_request(window, cx);
+                        });
+                    }),
+            );
+        let url_view = cx.weak_entity();
         let execution_view = cx.weak_entity();
         let request_running = self
             .execution
@@ -1695,6 +1798,7 @@ impl ProbeApp {
                     .flex()
                     .flex_col()
                     .gap(px(theme.metrics.spacing_2))
+                    .child(breadcrumb)
                     .child(
                         div()
                             .id("request-url-bar")
@@ -1746,36 +1850,6 @@ impl ProbeApp {
                                     },
                                 ),
                             ))
-                            .when(request_dirty, |bar| {
-                                bar.child(
-                                    Button::new("request-save")
-                                        .accessibility_label("Save request")
-                                        .debug_selector(|| "request-save".into())
-                                        .ml(px(theme.metrics.spacing_2))
-                                        .flex_none()
-                                        .w(px(theme.metrics.control_height))
-                                        .h(px(theme.metrics.control_height))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(theme.metrics.radius_small))
-                                        .border_1()
-                                        .border_color(theme.colors.borders.standard)
-                                        .bg(theme.colors.surfaces.raised)
-                                        .hover(move |button| {
-                                            button.bg(theme.colors.selection.inactive_background)
-                                        })
-                                        .focus(move |button| {
-                                            button.border_color(theme.colors.borders.focused)
-                                        })
-                                        .child(components::save_icon(theme))
-                                        .on_click(move |_, window, cx| {
-                                            let _ = save_view.update(cx, |view, cx| {
-                                                view.save_active_request(window, cx);
-                                            });
-                                        }),
-                                )
-                            })
                             .child(div().ml(px(theme.metrics.spacing_2)).flex_none().child(
                                 components::primary_button(
                                     theme,
@@ -3838,15 +3912,26 @@ mod tests {
         let save = visual
             .debug_bounds("request-save")
             .expect("dirty request should show its save icon");
+        let breadcrumb = visual
+            .debug_bounds("request-breadcrumb")
+            .expect("request breadcrumb should render");
+        assert_eq!(
+            save.right(),
+            breadcrumb.right(),
+            "save icon should be anchored to the breadcrumb's right edge"
+        );
         visual.simulate_click(save.center(), Modifiers::default());
         visual.run_until_parked();
         cx.run_until_parked();
 
         let mut visual = VisualTestContext::from_window(window.into(), cx);
-        assert!(
-            visual.debug_bounds("request-save").is_none(),
-            "save icon should disappear when the request is clean"
-        );
+        let clean_save = visual
+            .debug_bounds("request-save")
+            .expect("save icon should remain visible when the request is clean");
+        let breadcrumb = visual
+            .debug_bounds("request-breadcrumb")
+            .expect("request breadcrumb should remain visible");
+        assert_eq!(clean_save.right(), breadcrumb.right());
 
         let (dirty, message) = window
             .update(cx, |view, _, _| {
@@ -4033,6 +4118,9 @@ mod tests {
             {
                 let mut visual = VisualTestContext::from_window(window.into(), cx);
                 assert!(visual.debug_bounds("request-url-bar").is_some());
+                assert!(visual.debug_bounds("request-breadcrumb").is_some());
+                assert!(visual.debug_bounds("request-breadcrumb-folder-0").is_some());
+                assert!(visual.debug_bounds("request-breadcrumb-request").is_some());
                 assert!(visual.debug_bounds("request-method-trigger").is_some());
                 assert!(visual.debug_bounds("request-environment-trigger").is_some());
                 if section == EditorSection::Body {
