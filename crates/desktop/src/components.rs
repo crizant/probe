@@ -38,8 +38,9 @@ pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
 static CHEVRON_DOWN_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuChevronDown));
 static CHEVRON_UP_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuChevronUp));
-static CHEVRON_RIGHT_SVG: LazyLock<Vec<u8>> =
-    LazyLock::new(|| icon_svg_bytes(icondata::LuChevronRight));
+static FOLDER_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuFolder));
+static FOLDER_OPEN_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuFolderOpen));
 static PLUS_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuPlus));
 static SAVE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuSave));
 static CLOSE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuX));
@@ -111,21 +112,25 @@ pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
     icon.text_color(theme.colors.text.muted)
 }
 
-pub(crate) fn tree_chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
+fn tree_item_icon_color(theme: Theme, selected: bool) -> gpui::Rgba {
+    if selected {
+        theme.colors.selection.active_foreground
+    } else {
+        theme.colors.text.muted
+    }
+}
+
+pub(crate) fn tree_folder_icon(theme: Theme, expanded: bool, selected: bool) -> gpui::Div {
     let icon = if expanded {
         library_icon(
-            "lucide-chevron-down",
-            &CHEVRON_DOWN_SVG,
+            "lucide-folder-open",
+            &FOLDER_OPEN_SVG,
             theme.metrics.icon_small,
         )
     } else {
-        library_icon(
-            "lucide-chevron-right",
-            &CHEVRON_RIGHT_SVG,
-            theme.metrics.icon_small,
-        )
+        library_icon("lucide-folder", &FOLDER_SVG, theme.metrics.icon_small)
     };
-    icon.text_color(theme.colors.text.muted)
+    icon.text_color(tree_item_icon_color(theme, selected))
 }
 
 fn plus_icon(theme: Theme) -> gpui::Div {

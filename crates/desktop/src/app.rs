@@ -1847,7 +1847,7 @@ impl ProbeApp {
                     .pr(px(theme.metrics.spacing_1))
                     .flex()
                     .items_center()
-                    .gap(px(theme.metrics.spacing_1))
+                    .gap(px(theme.metrics.spacing_2))
                     .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
                     .when(selected, |row| {
@@ -1867,10 +1867,13 @@ impl ProbeApp {
                             cx.notify();
                         });
                     })
-                    .child(components::tree_chevron_icon(theme, expanded))
+                    .child(components::tree_folder_icon(theme, expanded, selected))
                     .child(
                         components::truncated_label(label.to_owned())
                             .flex_1()
+                            .when(selected, |label| {
+                                label.text_color(theme.colors.selection.active_foreground)
+                            })
                             .font_weight(FontWeight::SEMIBOLD),
                     )
                     .into_any_element()
@@ -4566,7 +4569,7 @@ fn tree_folder_indent(theme: Theme, depth: usize) -> f32 {
 fn tree_request_indent(theme: Theme, depth: usize) -> f32 {
     tree_folder_indent(theme, depth.saturating_sub(1))
         + theme.metrics.icon_small
-        + theme.metrics.spacing_1
+        + theme.metrics.spacing_2
 }
 
 fn flatten_visible_tree_rows(
