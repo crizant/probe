@@ -49,6 +49,9 @@ use crate::{
     theme::Theme,
 };
 
+#[cfg(test)]
+use crate::filesystem::{WATCH_POLL, drain_watch_events};
+
 gpui::actions!(
     probe,
     [
@@ -484,27 +487,61 @@ impl ProbeApp {
         };
         let WorkspaceWatcher {
             watcher,
-            mut receiver,
+            receiver,
             workspace_path,
             ..
         } = watcher;
         self.filesystem_watcher = Some(watcher);
+        #[cfg(not(test))]
+        let mut receiver = receiver;
+        #[cfg(test)]
+        let receiver = receiver;
         let view = cx.weak_entity();
         self.filesystem_watch_task = Some(window.spawn(cx, async move |cx| {
-            while let Some(first) = receiver.recv().await {
-                cx.background_executor().timer(WATCH_DEBOUNCE).await;
-                let mut events = Vec::new();
-                let mut watch_error = None;
-                match first {
-                    Ok(event) => events.push(event),
-                    Err(error) => watch_error = Some(error.to_string()),
-                }
-                while let Ok(event) = receiver.try_recv() {
-                    match event {
-                        Ok(event) => events.push(event),
-                        Err(error) => watch_error = Some(error.to_string()),
+            loop {
+                let (events, watch_error, disconnected) = {
+                    #[cfg(not(test))]
+                    {
+                        let Some(first) = receiver.recv().await else {
+                            return;
+                        };
+                        cx.background_executor().timer(WATCH_DEBOUNCE).await;
+                        let mut events = Vec::new();
+                        let mut watch_error = None;
+                        match first {
+                            Ok(event) => events.push(event),
+                            Err(error) => watch_error = Some(error.to_string()),
+                        }
+                        while let Ok(event) = receiver.try_recv() {
+                            match event {
+                                Ok(event) => events.push(event),
+                                Err(error) => watch_error = Some(error.to_string()),
+                            }
+                        }
+                        (events, watch_error, false)
                     }
-                }
+
+                    #[cfg(test)]
+                    {
+                        loop {
+                            let mut events = Vec::new();
+                            let mut watch_error = None;
+                            let mut disconnected =
+                                drain_watch_events(&receiver, &mut events, &mut watch_error);
+                            if events.is_empty() && watch_error.is_none() {
+                                if disconnected {
+                                    return;
+                                }
+                                cx.background_executor().timer(WATCH_POLL).await;
+                                continue;
+                            }
+                            cx.background_executor().timer(WATCH_DEBOUNCE).await;
+                            disconnected |=
+                                drain_watch_events(&receiver, &mut events, &mut watch_error);
+                            break (events, watch_error, disconnected);
+                        }
+                    }
+                };
                 if let Some(error) = watch_error {
                     let _ = view.update_in(cx, |view, _, cx| {
                         view.message = Some(format!("Collection watcher error: {error}"));
@@ -515,6 +552,9 @@ impl ProbeApp {
                     .iter()
                     .any(|event| event_affects_workspace(event, &workspace_path))
                 {
+                    if disconnected {
+                        return;
+                    }
                     continue;
                 }
                 let hints = rename_hints(&events, &workspace_path);
@@ -539,6 +579,9 @@ impl ProbeApp {
                         }
                     }
                 });
+                if disconnected {
+                    return;
+                }
             }
         }));
     }
