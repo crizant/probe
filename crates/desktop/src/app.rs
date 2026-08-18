@@ -681,6 +681,7 @@ impl ProbeApp {
             self.session.response_height,
             self.session.response_width,
         );
+        self.shell.sidebar_collapsed = self.session.sidebar_collapsed;
         self.shell
             .set_pane_layout(if self.session.horizontal_panes {
                 PaneLayout::Horizontal
@@ -702,6 +703,7 @@ impl ProbeApp {
 
     fn capture_session(&mut self) {
         self.session.sidebar_width = self.shell.sidebar_width;
+        self.session.sidebar_collapsed = self.shell.sidebar_collapsed;
         self.session.response_height = self.shell.response_height;
         self.session.response_width = self.shell.response_width;
         self.session.horizontal_panes = self.shell.pane_layout == PaneLayout::Horizontal;
@@ -3235,6 +3237,7 @@ impl ProbeApp {
 
     fn render_titlebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let switcher_view = cx.weak_entity();
+        let sidebar_toggle_view = cx.weak_entity();
         let open_view = cx.weak_entity();
         let close_view = cx.weak_entity();
         let layout_view = cx.weak_entity();
@@ -3370,6 +3373,17 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.raised)
             .border_b_1()
             .border_color(theme.colors.borders.subtle)
+            .child(components::sidebar_toggle(
+                theme,
+                self.shell.sidebar_collapsed,
+                move |_, cx| {
+                    let _ = sidebar_toggle_view.update(cx, |view, cx| {
+                        view.shell.toggle_sidebar();
+                        view.persist_session(cx);
+                        cx.notify();
+                    });
+                },
+            ))
             .child(switcher)
             .child(
                 div()
@@ -3517,23 +3531,24 @@ impl Render for ProbeApp {
                     .flex_1()
                     .min_h(px(0.0))
                     .flex()
-                    .child(self.render_sidebar(theme, cx))
-                    .child(
-                        div()
-                            .id("sidebar-resize-handle")
-                            .w(px(5.0))
-                            .h_full()
-                            .flex_none()
-                            .cursor(CursorStyle::ResizeLeftRight)
-                            .bg(theme.colors.borders.subtle)
-                            .hover(move |handle| handle.bg(theme.colors.borders.focused))
-                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                let _ = sidebar_view.update(cx, |view, cx| {
-                                    view.shell.resizing = Some(ResizePane::Sidebar);
-                                    cx.notify();
-                                });
-                            }),
-                    )
+                    .when(!self.shell.sidebar_collapsed, |row| {
+                        row.child(self.render_sidebar(theme, cx)).child(
+                            div()
+                                .id("sidebar-resize-handle")
+                                .w(px(5.0))
+                                .h_full()
+                                .flex_none()
+                                .cursor(CursorStyle::ResizeLeftRight)
+                                .bg(theme.colors.borders.subtle)
+                                .hover(move |handle| handle.bg(theme.colors.borders.focused))
+                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                    let _ = sidebar_view.update(cx, |view, cx| {
+                                        view.shell.resizing = Some(ResizePane::Sidebar);
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()

@@ -23,6 +23,7 @@ pub(crate) struct SessionState {
     pub(crate) active_tab: Option<String>,
     pub(crate) collapsed_folders: Vec<String>,
     pub(crate) sidebar_width: f32,
+    pub(crate) sidebar_collapsed: bool,
     pub(crate) response_height: f32,
     pub(crate) response_width: f32,
     pub(crate) horizontal_panes: bool,
@@ -40,6 +41,7 @@ impl Default for SessionState {
             active_tab: None,
             collapsed_folders: Vec::new(),
             sidebar_width: 260.0,
+            sidebar_collapsed: false,
             response_height: 220.0,
             response_width: 440.0,
             horizontal_panes: false,
@@ -201,6 +203,7 @@ mod tests {
         state.active_tab = state.open_tabs.first().cloned();
         state.collapsed_folders = vec!["users".to_owned()];
         state.sidebar_width = 312.0;
+        state.sidebar_collapsed = true;
         state.response_width = 480.0;
         state.horizontal_panes = true;
         state.remember_selected_environment("/tmp/example".into(), Some("development".to_owned()));

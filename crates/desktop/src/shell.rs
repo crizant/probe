@@ -28,6 +28,7 @@ pub(crate) struct ShellState {
     active_tab: Option<RequestKey>,
     collapsed_folders: HashSet<FolderKey>,
     pub(crate) sidebar_width: f32,
+    pub(crate) sidebar_collapsed: bool,
     pub(crate) response_height: f32,
     pub(crate) response_width: f32,
     pub(crate) pane_layout: PaneLayout,
@@ -41,6 +42,7 @@ impl Default for ShellState {
             active_tab: None,
             collapsed_folders: HashSet::new(),
             sidebar_width: 260.0,
+            sidebar_collapsed: false,
             response_height: 220.0,
             response_width: 440.0,
             pane_layout: PaneLayout::Vertical,
@@ -99,6 +101,10 @@ impl ShellState {
 
     pub(crate) fn resize_sidebar(&mut self, position: f32) {
         self.sidebar_width = position.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+    }
+
+    pub(crate) fn toggle_sidebar(&mut self) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
     }
 
     pub(crate) fn resize_response(&mut self, window_height: f32, position: f32) {
@@ -207,5 +213,10 @@ mod tests {
         state.set_pane_layout(PaneLayout::Horizontal);
         assert_eq!(state.response_width, 240.0);
         assert_eq!(state.pane_layout, PaneLayout::Horizontal);
+
+        state.toggle_sidebar();
+        assert!(state.sidebar_collapsed);
+        state.toggle_sidebar();
+        assert!(!state.sidebar_collapsed);
     }
 }

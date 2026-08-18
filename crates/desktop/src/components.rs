@@ -44,6 +44,10 @@ static PLUS_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::L
 static SAVE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuSave));
 static CLOSE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuX));
 static TRASH_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuTrash2));
+static SIDEBAR_COLLAPSE_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuPanelLeftClose));
+static SIDEBAR_EXPAND_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuPanelLeftOpen));
 
 fn icon_svg_bytes(icon: icondata::Icon) -> Vec<u8> {
     format!(
@@ -136,6 +140,50 @@ pub(crate) fn save_icon(theme: Theme) -> gpui::Div {
 pub(crate) fn close_icon(theme: Theme) -> gpui::Div {
     library_icon("lucide-x", &CLOSE_SVG, theme.metrics.icon_standard)
         .text_color(theme.colors.text.secondary)
+}
+
+fn sidebar_icon(theme: Theme, collapsed: bool) -> gpui::Div {
+    if collapsed {
+        library_icon(
+            "lucide-panel-left-open",
+            &SIDEBAR_EXPAND_SVG,
+            theme.metrics.icon_standard,
+        )
+    } else {
+        library_icon(
+            "lucide-panel-left-close",
+            &SIDEBAR_COLLAPSE_SVG,
+            theme.metrics.icon_standard,
+        )
+    }
+    .text_color(theme.colors.text.secondary)
+}
+
+pub(crate) fn sidebar_toggle(
+    theme: Theme,
+    collapsed: bool,
+    on_toggle: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let label = if collapsed {
+        "Show sidebar"
+    } else {
+        "Hide sidebar"
+    };
+    Button::new("sidebar-toggle")
+        .accessibility_label(label)
+        .debug_selector(|| "sidebar-toggle".into())
+        .w(px(theme.metrics.control_height))
+        .h(px(theme.metrics.control_height))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.metrics.radius_small))
+        .border_1()
+        .border_color(theme.colors.borders.subtle)
+        .hover(move |button| button.bg(theme.colors.surfaces.sidebar))
+        .focus(move |button| button.border_color(theme.colors.borders.focused))
+        .child(sidebar_icon(theme, collapsed))
+        .on_click(move |_, window, cx| on_toggle(window, cx))
 }
 
 #[derive(Clone, Debug, Default)]
