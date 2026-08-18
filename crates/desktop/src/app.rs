@@ -2095,6 +2095,7 @@ impl ProbeApp {
         let move_view = cx.weak_entity();
         let move_up_view = cx.weak_entity();
         let move_down_view = cx.weak_entity();
+        let open_collection_view = cx.weak_entity();
         let can_edit = self.loaded_workspace.is_some() && self.structure_task.is_none();
         let has_selection = can_edit && self.selected_tree_item.is_some();
         let add_menu_state_view = cx.weak_entity();
@@ -2132,19 +2133,23 @@ impl ProbeApp {
                     });
                 },
             ));
-        let add_menu = Popover::new("tree-add-menu")
-            .open(self.structure_add_menu_open)
-            .on_open_change(move |open, _, cx| {
-                let _ = add_menu_state_view.update(cx, |view, cx| {
-                    view.structure_add_menu_open = *open;
-                    cx.notify();
-                });
-            })
-            .trigger(
-                components::add_menu_button(theme, self.structure_add_menu_open)
-                    .disabled(!can_edit),
-            )
-            .content(move |_, _, _| add_popup);
+        let add_trigger =
+            components::add_menu_button(theme, self.structure_add_menu_open, can_edit);
+        let add_menu = if can_edit {
+            Popover::new("tree-add-menu")
+                .open(self.structure_add_menu_open)
+                .on_open_change(move |open, _, cx| {
+                    let _ = add_menu_state_view.update(cx, |view, cx| {
+                        view.structure_add_menu_open = *open;
+                        cx.notify();
+                    });
+                })
+                .trigger(add_trigger)
+                .content(move |_, _, _| add_popup)
+                .into_any_element()
+        } else {
+            add_trigger.into_any_element()
+        };
         let tree = if self.loaded_workspace.is_some() {
             let row_count = self.visible_tree_rows.len();
             uniform_list("request-tree", row_count, {
@@ -2175,15 +2180,37 @@ impl ProbeApp {
                 .flex_col()
                 .child(
                     div()
-                        .p(px(theme.metrics.spacing_3))
-                        .text_color(theme.colors.text.muted)
-                        .child("Open a collection to browse its requests."),
+                        .px(px(theme.metrics.spacing_2))
+                        .pt(px(theme.metrics.spacing_1))
+                        .pb(px(theme.metrics.spacing_2))
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .gap(px(theme.metrics.spacing_2))
+                        .child(
+                            div()
+                                .text_color(theme.colors.text.muted)
+                                .child("Open a collection to browse its requests."),
+                        )
+                        .child(components::primary_button(
+                            theme,
+                            "sidebar-open-collection",
+                            "Open Collection…",
+                            move |_, window, cx| {
+                                let _ = open_collection_view.update(cx, |view, cx| {
+                                    if !view.loading {
+                                        view.choose_workspace(window, cx);
+                                    }
+                                });
+                            },
+                        )),
                 );
             if !self.session.recent_collections.is_empty() {
                 tree = tree.child(
                     div()
-                        .px(px(theme.metrics.spacing_3))
-                        .pb(px(theme.metrics.spacing_2))
+                        .px(px(theme.metrics.spacing_2))
+                        .pt(px(theme.metrics.spacing_2))
+                        .pb(px(theme.metrics.spacing_1))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("Recent Collections"),
                 );
@@ -2199,8 +2226,8 @@ impl ProbeApp {
                     let row = Button::new(("recent-collection", index))
                         .focusable(false)
                         .tab_stop(false)
-                        .mx(px(theme.metrics.spacing_2))
-                        .p(px(theme.metrics.spacing_2))
+                        .py(px(theme.metrics.spacing_2))
+                        .px(px(theme.metrics.spacing_2))
                         .flex()
                         .flex_col()
                         .items_start()
@@ -4263,17 +4290,17 @@ impl ProbeApp {
     fn render_titlebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let switcher_view = cx.weak_entity();
         let sidebar_toggle_view = cx.weak_entity();
+        let home_view = cx.weak_entity();
         let open_view = cx.weak_entity();
-        let close_view = cx.weak_entity();
         let layout_view = cx.weak_entity();
+        let collection_open = self.loaded_workspace.is_some();
         let mut popup = div()
             .id("workspace-switcher-popup")
             .aria_label("Workspaces")
             .w(px(300.0))
-            .p(px(theme.metrics.spacing_3))
+            .p(px(theme.metrics.spacing_1))
             .flex()
             .flex_col()
-            .gap(px(theme.metrics.spacing_1))
             .rounded(px(theme.metrics.radius_medium))
             .bg(theme.colors.surfaces.overlay)
             .border_1()
@@ -4282,12 +4309,12 @@ impl ProbeApp {
         if !self.session.recent_collections.is_empty() {
             popup = popup.child(
                 div()
-                    .px(px(theme.metrics.spacing_2))
+                    .px(px(theme.metrics.spacing_3))
                     .py(px(theme.metrics.spacing_1))
                     .text_size(px(theme.typography.caption_size))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.colors.text.muted)
-                    .child("RECENT WORKSPACES"),
+                    .child("RECENT COLLECTIONS"),
             );
             for (index, path) in self.session.recent_collections.iter().enumerate() {
                 let open_path = path.clone();
@@ -4315,9 +4342,11 @@ impl ProbeApp {
             }
             popup = popup.child(
                 div()
-                    .h(px(1.0))
                     .my(px(theme.metrics.spacing_1))
-                    .bg(theme.colors.borders.subtle),
+                    .mx(px(theme.metrics.spacing_3))
+                    .flex_none()
+                    .h(px(1.0))
+                    .bg(theme.colors.borders.standard),
             );
         }
 
@@ -4335,20 +4364,6 @@ impl ProbeApp {
                 });
             },
         ));
-        if self.loaded_workspace.is_some() {
-            popup = popup.child(components::menu_button(
-                theme,
-                "workspace-switcher-close",
-                "Close Current Collection",
-                None,
-                move |window, cx| {
-                    let _ = close_view.update(cx, |view, cx| {
-                        view.workspace_switcher_open = false;
-                        view.request_close_workspace(window, cx);
-                    });
-                },
-            ));
-        }
 
         let switcher = Popover::new("workspace-switcher")
             .open(self.workspace_switcher_open)
@@ -4397,7 +4412,7 @@ impl ProbeApp {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(theme.metrics.spacing_2))
+            .gap(px(theme.metrics.spacing_1))
             .bg(theme.colors.surfaces.raised)
             .border_b_1()
             .border_color(theme.colors.borders.subtle)
@@ -4409,6 +4424,17 @@ impl ProbeApp {
                         view.shell.toggle_sidebar();
                         view.persist_session(cx);
                         cx.notify();
+                    });
+                },
+            ))
+            .child(components::home_button(
+                theme,
+                collection_open,
+                move |window, cx| {
+                    let _ = home_view.update(cx, |view, cx| {
+                        if view.loaded_workspace.is_some() {
+                            view.request_close_workspace(window, cx);
+                        }
                     });
                 },
             ))
@@ -4849,7 +4875,7 @@ fn tree_folder_indent(theme: Theme, depth: usize) -> f32 {
 
 fn tree_request_indent(theme: Theme, depth: usize) -> f32 {
     tree_folder_indent(theme, depth.saturating_sub(1))
-        + theme.metrics.icon_small
+        + theme.metrics.icon_standard
         + theme.metrics.spacing_2
 }
 

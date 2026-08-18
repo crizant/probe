@@ -49,6 +49,7 @@ static SIDEBAR_COLLAPSE_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuPanelLeftClose));
 static SIDEBAR_EXPAND_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuPanelLeftOpen));
+static HOME_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuHouse));
 
 fn icon_svg_bytes(icon: icondata::Icon) -> Vec<u8> {
     format!(
@@ -125,10 +126,10 @@ pub(crate) fn tree_folder_icon(theme: Theme, expanded: bool, selected: bool) -> 
         library_icon(
             "lucide-folder-open",
             &FOLDER_OPEN_SVG,
-            theme.metrics.icon_small,
+            theme.metrics.icon_standard,
         )
     } else {
-        library_icon("lucide-folder", &FOLDER_SVG, theme.metrics.icon_small)
+        library_icon("lucide-folder", &FOLDER_SVG, theme.metrics.icon_standard)
     };
     icon.text_color(tree_item_icon_color(theme, selected))
 }
@@ -137,24 +138,42 @@ fn plus_icon(theme: Theme) -> gpui::Div {
     library_icon("lucide-plus", &PLUS_SVG, theme.metrics.icon_small)
 }
 
-pub(crate) fn add_menu_button(theme: Theme, open: bool) -> Button {
-    Button::new("tree-add-menu-trigger")
+pub(crate) fn add_menu_button(theme: Theme, open: bool, enabled: bool) -> Button {
+    let disabled_background = theme.colors.actions.disabled;
+    let disabled_border = theme.colors.actions.disabled;
+    let disabled_foreground = theme.colors.actions.disabled_foreground;
+    let mut button = Button::new("tree-add-menu-trigger")
         .accessibility_label("Add request or folder")
         .debug_selector(|| "tree-add-menu-trigger".into())
-        .selected(open)
+        .selected(open && enabled)
+        .disabled(!enabled)
         .size(px(theme.metrics.control_height - 4.0))
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(theme.metrics.radius_small))
         .border_1()
-        .border_color(theme.colors.borders.subtle)
-        .hover(move |button| button.bg(theme.colors.surfaces.window))
-        .focus(move |button| button.border_color(theme.colors.borders.focused))
-        .styles(move |styles| {
-            styles.selected(move |button| button.bg(theme.colors.surfaces.window))
+        .border_color(if enabled {
+            theme.colors.borders.subtle
+        } else {
+            disabled_border
         })
-        .child(plus_icon(theme).text_color(theme.colors.text.secondary))
+        .when(!enabled, |button| button.bg(disabled_background));
+
+    if enabled {
+        button = button
+            .hover(move |button| button.bg(theme.colors.surfaces.window))
+            .focus(move |button| button.border_color(theme.colors.borders.focused))
+            .styles(move |styles| {
+                styles.selected(move |button| button.bg(theme.colors.surfaces.window))
+            });
+    }
+
+    button.child(plus_icon(theme).text_color(if enabled {
+        theme.colors.text.secondary
+    } else {
+        disabled_foreground
+    }))
 }
 
 pub(crate) fn save_icon(theme: Theme) -> gpui::Div {
@@ -203,12 +222,48 @@ pub(crate) fn sidebar_toggle(
         .items_center()
         .justify_center()
         .rounded(px(theme.metrics.radius_small))
-        .border_1()
-        .border_color(theme.colors.borders.subtle)
         .hover(move |button| button.bg(theme.colors.surfaces.sidebar))
-        .focus(move |button| button.border_color(theme.colors.borders.focused))
+        .focus(move |button| button.bg(theme.colors.surfaces.sidebar))
         .child(sidebar_icon(theme, collapsed))
         .on_click(move |_, window, cx| on_toggle(window, cx))
+}
+
+pub(crate) fn home_button(
+    theme: Theme,
+    enabled: bool,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> Button {
+    let disabled_background = theme.colors.actions.disabled;
+    let disabled_foreground = theme.colors.actions.disabled_foreground;
+    let mut button = Button::new("home-button")
+        .accessibility_label("Close collection")
+        .debug_selector(|| "home-button".into())
+        .disabled(!enabled)
+        .w(px(theme.metrics.control_height))
+        .h(px(theme.metrics.control_height))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.metrics.radius_small))
+        .when(!enabled, |button| button.bg(disabled_background));
+
+    if enabled {
+        button = button
+            .hover(move |button| button.bg(theme.colors.surfaces.sidebar))
+            .focus(move |button| button.bg(theme.colors.surfaces.sidebar));
+    }
+
+    button
+        .child(
+            library_icon("lucide-house", &HOME_SVG, theme.metrics.icon_standard).text_color(
+                if enabled {
+                    theme.colors.text.secondary
+                } else {
+                    disabled_foreground
+                },
+            ),
+        )
+        .on_click(move |_, window, cx| on_click(window, cx))
 }
 
 #[derive(Clone, Debug, Default)]
