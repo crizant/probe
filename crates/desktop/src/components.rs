@@ -14,11 +14,11 @@ use crate::theme::Theme;
 use gpui::{
     App, AppContext as _, Bounds, BoxShadow, ClickEvent, ContentMask, Context, Element, ElementId,
     Entity, EntityId, FocusHandle, Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla,
-    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton, PaintQuad,
+    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton,
     ParentElement as _, Pixels, Render, RenderOnce, Role, ShapedLine, SharedString,
     StatefulInteractiveElement as _, Style, Styled as _, Subscription, TextAlign, TextRun,
-    TransformationMatrix, Window, canvas, div, fill, point, prelude::FluentBuilder as _, px,
-    relative, size, transparent_black,
+    TransformationMatrix, Window, canvas, div, point, prelude::FluentBuilder as _, px, relative,
+    transparent_black,
 };
 use gpui_base::{
     Button, Editor, Input, InputBase, Popup, Select, Switch, SwitchThumb, SwitchTrack, Toggle,
@@ -508,6 +508,7 @@ struct ProbeTextInput {
 
 impl RenderOnce for ProbeTextInput {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let overlay_paints_text = !variable_ranges(&self.value).is_empty();
         let placeholder = self.placeholder.clone();
         let on_change = self.on_change.clone();
         let on_enter = self.on_enter.clone();
@@ -552,7 +553,15 @@ impl RenderOnce for ProbeTextInput {
             .rounded(px(theme.metrics.radius_small))
             .font_family(self.font_family)
             .text_size(px(self.text_size))
-            .text_color(theme.colors.text.primary)
+            // gpui-base's single-line Input takes glyph color from the
+            // enclosing GPUI text style, not InputEditorStyle::foreground.
+            // Hide that native glyph copy when the variable layer paints the
+            // complete value, otherwise both layers visibly diverge on scroll.
+            .text_color(if overlay_paints_text {
+                transparent_black()
+            } else {
+                theme.colors.text.primary.into()
+            })
             .bg(theme.colors.surfaces.raised)
             .border_1()
             .border_color(if focused {
@@ -1410,8 +1419,11 @@ fn variable_highlight_layer(
     text_size: f32,
 ) -> impl IntoElement {
     let highlight_color = theme.colors.syntax.string.into();
-    let caret_color = theme.colors.text.primary.into();
-    let mask_color = theme.colors.surfaces.raised.into();
+    let base_color = if ranges_empty {
+        transparent_black()
+    } else {
+        theme.colors.text.primary.into()
+    };
     div()
         .absolute()
         .top(px(0.0))
@@ -1433,24 +1445,20 @@ fn variable_highlight_layer(
         })
         .child(VariableHighlightElement {
             state,
+            base_color,
             highlight_color,
-            caret_color,
-            mask_color,
         })
 }
 
 struct VariableHighlightElement {
     state: Entity<InputState>,
+    base_color: Hsla,
     highlight_color: Hsla,
-    caret_color: Hsla,
-    mask_color: Hsla,
 }
 
 struct VariableHighlightPrepaintState {
     line: Option<ShapedLine>,
-    caret: Option<PaintQuad>,
     scroll_offset: Pixels,
-    #[cfg(test)]
     cursor_x: Pixels,
 }
 
@@ -1491,7 +1499,7 @@ impl Element for VariableHighlightElement {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
@@ -1503,13 +1511,11 @@ impl Element for VariableHighlightElement {
             .map(|(range, _)| range)
             .collect::<Vec<_>>();
         let cursor = state.read(cx).cursor();
-        let selected_range = state.read(cx).selected_range();
-        let focused = state.read(cx).focus_handle(cx).is_focused(window);
         let style = window.text_style();
         let run = TextRun {
             len: value.len(),
             font: style.font(),
-            color: transparent_black(),
+            color: self.base_color,
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -1520,30 +1526,9 @@ impl Element for VariableHighlightElement {
             .text_system()
             .shape_line(value, font_size, &runs, None);
         let cursor_x = line.x_for_index(cursor);
-        let visible_width = bounds.right() - bounds.left();
-        let scroll_offset =
-            input_text_scroll_offset(cursor_x, visible_width, state.read(cx).scroll_offset().x);
-        let caret = if focused && selected_range.is_empty() {
-            let bounds = Bounds::new(
-                point(bounds.left() + scroll_offset + cursor_x, bounds.top()),
-                size(px(1.0), bounds.bottom() - bounds.top()),
-            );
-            Some(fill(
-                bounds,
-                if crate::caret::CaretBlink::is_visible(cx) {
-                    self.caret_color
-                } else {
-                    self.mask_color
-                },
-            ))
-        } else {
-            None
-        };
         VariableHighlightPrepaintState {
             line: Some(line),
-            caret,
-            scroll_offset,
-            #[cfg(test)]
+            scroll_offset: px(0.0),
             cursor_x,
         }
     }
@@ -1558,24 +1543,39 @@ impl Element for VariableHighlightElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let scroll_offset = prepaint.scroll_offset;
-        let caret = prepaint.caret.take();
-        let line = prepaint
+        // Input is the previous sibling and paints first. gpui-base commits
+        // its finalized cursor-follow scroll offset during that paint, so read
+        // it here instead of trying to predict it during prepaint. The fallback
+        // keeps isolated element tests meaningful before an Input has laid out.
+        let visible_width = bounds.right() - bounds.left();
+        let current_scroll_offset = {
+            let input = self.state.read(cx);
+            input.scroll_offset().x
+        };
+        let line_width = prepaint
             .line
-            .take()
-            .expect("variable highlight text should be shaped during prepaint");
+            .as_ref()
+            .map(|line| line.width)
+            .unwrap_or(px(0.0));
+        let scroll_offset = input_text_scroll_offset(
+            prepaint.cursor_x,
+            line_width,
+            visible_width,
+            current_scroll_offset,
+        );
+        prepaint.scroll_offset = scroll_offset;
+        let line = prepaint.line.take();
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            line.paint(
-                bounds.origin + point(scroll_offset, px(0.0)),
-                window.line_height(),
-                TextAlign::Left,
-                None,
-                window,
-                cx,
-            )
-            .expect("variable highlight text should paint");
-            if let Some(caret) = caret {
-                window.paint_quad(caret);
+            if let Some(line) = line {
+                line.paint(
+                    bounds.origin + point(scroll_offset, px(0.0)),
+                    window.line_height(),
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                )
+                .expect("variable highlight text should paint");
             }
         });
     }
@@ -1597,7 +1597,7 @@ fn variable_highlight_runs(
         if ix < start {
             runs.push(TextRun {
                 len: start - ix,
-                color: transparent_black(),
+                color: base.color,
                 ..base.clone()
             });
         }
@@ -1613,7 +1613,7 @@ fn variable_highlight_runs(
     if ix < value.len() {
         runs.push(TextRun {
             len: value.len() - ix,
-            color: transparent_black(),
+            color: base.color,
             ..base.clone()
         });
     }
@@ -1632,6 +1632,7 @@ fn variable_highlight_runs(
 /// once the caret moves while the field is already scrolled.
 fn input_text_scroll_offset(
     cursor_x: Pixels,
+    line_width: Pixels,
     visible_width: Pixels,
     current_scroll_x: Pixels,
 ) -> Pixels {
@@ -1642,7 +1643,16 @@ fn input_text_scroll_offset(
     } else if cursor_x + RIGHT_MARGIN > -scroll_x + visible_width {
         scroll_x = -(cursor_x - visible_width + RIGHT_MARGIN);
     }
-    scroll_x.min(px(0.0))
+    // gpui-base clamps the offset after shaping. This matters when deleting
+    // from the end of a scrolled value: the valid left edge moves right on
+    // every keystroke, before the updated offset is observable from state.
+    let scroll_width = if line_width + RIGHT_MARGIN > visible_width {
+        line_width + RIGHT_MARGIN
+    } else {
+        line_width
+    };
+    let minimum_scroll_x = (-scroll_width + visible_width).min(px(0.0));
+    scroll_x.clamp(minimum_scroll_x, px(0.0))
 }
 
 pub(crate) fn single_line(value: impl Into<SharedString>) -> SharedString {
@@ -1876,7 +1886,7 @@ mod tests {
         TestAppContext, VisualTestContext, div, hsla, point, prelude::*, px, size,
         transparent_black,
     };
-    use gpui_base::{Button, Popover, input::InputState};
+    use gpui_base::{Button, Input, InputBase, Popover, input::InputState};
 
     use super::{
         VariableContext, VariableHighlightElement, body_text_highlights, dropdown,
@@ -2253,14 +2263,40 @@ mod tests {
     }
 
     #[test]
+    fn variable_highlight_runs_paint_non_variable_text_with_the_base_color() {
+        let value = "https://{{host}}/users";
+        let ranges = variable_ranges(value)
+            .into_iter()
+            .map(|(range, _)| range)
+            .collect::<Vec<_>>();
+        let base_color = hsla(0.0, 0.0, 0.25, 1.0);
+        let highlight = hsla(0.33, 0.6, 0.5, 1.0);
+        let base = gpui::TextRun {
+            len: value.len(),
+            font: gpui::Font::default(),
+            color: base_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+
+        let runs = variable_highlight_runs(value, &ranges, &base, highlight);
+
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].color, base_color);
+        assert_eq!(runs[1].color, highlight);
+        assert_eq!(runs[2].color, base_color);
+    }
+
+    #[test]
     fn input_text_scroll_offset_shifts_left_when_caret_overflows() {
         assert_eq!(
-            input_text_scroll_offset(px(50.0), px(100.0), px(0.0)),
+            input_text_scroll_offset(px(50.0), px(50.0), px(100.0), px(0.0)),
             px(0.0),
             "caret inside the field should not scroll"
         );
         assert_eq!(
-            input_text_scroll_offset(px(200.0), px(100.0), px(0.0)),
+            input_text_scroll_offset(px(200.0), px(200.0), px(100.0), px(0.0)),
             px(-110.0),
             "caret past the right edge should match gpui-base scroll_to"
         );
@@ -2269,7 +2305,7 @@ mod tests {
     #[test]
     fn input_text_scroll_offset_keeps_existing_scroll_while_caret_stays_visible() {
         assert_eq!(
-            input_text_scroll_offset(px(550.0), px(200.0), px(-500.0)),
+            input_text_scroll_offset(px(550.0), px(700.0), px(200.0), px(-500.0)),
             px(-500.0),
             "caret still visible in the scrolled viewport should not reset scroll"
         );
@@ -2278,7 +2314,7 @@ mod tests {
     #[test]
     fn input_text_scroll_offset_does_not_reset_scroll_when_absolute_position_is_short() {
         assert_eq!(
-            input_text_scroll_offset(px(150.0), px(200.0), px(-500.0)),
+            input_text_scroll_offset(px(150.0), px(700.0), px(200.0), px(-500.0)),
             px(-140.0),
             "absolute cursor position alone must not snap scroll back to zero"
         );
@@ -2287,9 +2323,18 @@ mod tests {
     #[test]
     fn input_text_scroll_offset_scrolls_back_when_caret_moves_left_offscreen() {
         assert_eq!(
-            input_text_scroll_offset(px(150.0), px(200.0), px(-500.0)),
+            input_text_scroll_offset(px(150.0), px(700.0), px(200.0), px(-500.0)),
             px(-140.0),
             "caret off the left edge should scroll right to reveal it"
+        );
+    }
+
+    #[test]
+    fn input_text_scroll_offset_clamps_immediately_when_deleting_at_end() {
+        assert_eq!(
+            input_text_scroll_offset(px(692.0), px(692.0), px(200.0), px(-510.0)),
+            px(-502.0),
+            "a shorter line should move the overlay with the input on the deletion frame"
         );
     }
 
@@ -2303,7 +2348,10 @@ mod tests {
             _window: &mut gpui::Window,
             _cx: &mut Context<Self>,
         ) -> impl IntoElement {
-            div()
+            InputBase::new("variable-highlight-harness-input")
+                .w(px(160.0))
+                .h(px(24.0))
+                .child(Input::new(&self.input))
         }
     }
 
@@ -2319,23 +2367,27 @@ mod tests {
         cx.update(crate::theme::Theme::init);
         let value = long_variable_url();
         let window = cx.open_window(size(px(240.0), px(48.0)), |window, cx| HighlightHarness {
-            input: cx.new(|cx| {
-                let mut input = InputState::new(window, cx);
-                input.set_value(value.clone(), window, cx);
-                input
-            }),
+            input: cx.new(|cx| InputState::new(window, cx)),
         });
+        cx.run_until_parked();
         let input = window
-            .update(cx, |harness, _window, _cx| harness.input.clone())
+            .update(cx, |harness, window, cx| {
+                harness.input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                });
+                harness.input.clone()
+            })
             .expect("highlight test window should be open");
+        cx.simulate_input(window.into(), value.as_ref());
+        cx.run_until_parked();
+        let native_scroll_offset = input.read_with(cx, |input, _| input.scroll_offset().x);
         let mut visual = VisualTestContext::from_window(window.into(), cx);
         let visible = size(px(160.0), px(24.0));
         let (_, prepaint) = visual.draw(point(px(0.0), px(0.0)), visible, |_, _| {
             VariableHighlightElement {
                 state: input.clone(),
+                base_color: transparent_black(),
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
-                caret_color: hsla(0.0, 0.0, 1.0, 1.0),
-                mask_color: hsla(0.0, 0.0, 0.2, 1.0),
             }
         });
 
@@ -2345,8 +2397,8 @@ mod tests {
             prepaint.scroll_offset
         );
         assert_eq!(
-            prepaint.scroll_offset,
-            input_text_scroll_offset(prepaint.cursor_x, visible.width, px(0.0))
+            prepaint.scroll_offset, native_scroll_offset,
+            "the variable overlay must use gpui-base's finalized scroll offset"
         );
     }
 
@@ -2361,6 +2413,7 @@ mod tests {
                 input
             }),
         });
+        cx.run_until_parked();
         let input = window
             .update(cx, |harness, _window, cx| {
                 harness.input.update(cx, |input, cx| {
@@ -2369,15 +2422,15 @@ mod tests {
                 harness.input.clone()
             })
             .expect("highlight test window should be open");
+        cx.run_until_parked();
         let mut visual = VisualTestContext::from_window(window.into(), cx);
         let (_, prepaint) = visual.draw(
             point(px(0.0), px(0.0)),
             size(px(160.0), px(24.0)),
             |_, _| VariableHighlightElement {
                 state: input,
+                base_color: transparent_black(),
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
-                caret_color: hsla(0.0, 0.0, 1.0, 1.0),
-                mask_color: hsla(0.0, 0.0, 0.2, 1.0),
             },
         );
 
@@ -2408,9 +2461,8 @@ mod tests {
             size(px(160.0), px(24.0)),
             |_, _| VariableHighlightElement {
                 state: input,
+                base_color: transparent_black(),
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
-                caret_color: hsla(0.0, 0.0, 1.0, 1.0),
-                mask_color: hsla(0.0, 0.0, 0.2, 1.0),
             },
         );
     }
