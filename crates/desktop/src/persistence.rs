@@ -65,6 +65,10 @@ impl PersistenceState {
         Some(key)
     }
 
+    pub(crate) fn has_outstanding_saves(&self) -> bool {
+        !self.queue.is_empty() || !self.saving.is_empty()
+    }
+
     pub(crate) fn begin(
         &self,
         key: RequestKey,

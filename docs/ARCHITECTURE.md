@@ -263,7 +263,10 @@ implicitly coupled to individual keystrokes. Hovering a `{{variable}}` span in a
 single-line field shows only that variable, aligned to its left edge, with an input
 for copying or updating the value on the selected environment. The popup stays open
 while the pointer moves from the span onto the popup. Those edits update the in-memory
-environment used by Send; they are not yet written back to OpenCollection YAML.
+environment used by Send, then persist through the same OpenCollection repository
+operation used by the CLI: merge the changed variable into the retained YAML, compare
+source bytes, and atomically write. Secrets remain read-only. After a successful save,
+the value survives collection reload.
 Environment selection lives at the fixed right edge of the request tab bar and is
 workspace-scoped presentation state, so every
 open request shares the same selected environment. The last selection for each
@@ -451,10 +454,13 @@ the advisory lock, so the final compare-to-rename interval remains the smallest 
 window.
 
 The repository exposes a prepared request save that captures the retained source baseline and
-supported-field update in memory. The desktop executes that prepared save on GPUI's background
-executor, then returns the successful source snapshot to the loaded repository so later saves use
-the refreshed conflict baseline. This does not create a second persistence path; CLI and desktop
-use the same merge, exact-source check, locking, and atomic replacement implementation.
+supported-field update in memory. Environment-variable set and unset use the same retained-source
+merge, exact-byte conflict check, save lock, and atomic replacement for both bundled
+`config.environments` and unbundled `environments/*.yml` documents. The desktop executes prepared
+saves on GPUI's background executor, then returns the successful source snapshot to the loaded
+repository so later saves use the refreshed conflict baseline. This does not create a second
+persistence path; CLI and desktop use the same implementation. Request and environment writes
+are serialized so a bundled collection file is not saved concurrently with itself.
 
 Desktop dirty state compares each live request with its last loaded or successfully saved snapshot.
 One request save runs at a time, so close and quit protection can safely save several requests

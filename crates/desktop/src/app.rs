@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     rc::Rc,
@@ -109,6 +109,9 @@ pub struct ProbeApp {
     session: SessionState,
     session_save_task: Option<Task<()>>,
     request_save_task: Option<Task<()>>,
+    environment_save_task: Option<Task<()>>,
+    environment_save_workspace_path: Option<PathBuf>,
+    pending_environment_saves: BTreeSet<(String, String)>,
     structure_task: Option<Task<()>>,
     filesystem_watcher: Option<notify::RecommendedWatcher>,
     filesystem_watch_task: Option<Task<()>>,
@@ -181,6 +184,9 @@ impl ProbeApp {
             session: SessionState::default(),
             session_save_task: None,
             request_save_task: None,
+            environment_save_task: None,
+            environment_save_workspace_path: None,
+            pending_environment_saves: BTreeSet::new(),
             structure_task: None,
             filesystem_watcher: None,
             filesystem_watch_task: None,
@@ -434,9 +440,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         let dirty = self.dirty_keys();
-        if dirty.is_empty() {
-            self.load_workspace_path(path, restored_state, window, cx);
-        } else {
+        if !dirty.is_empty() {
             self.prompt_unsaved(
                 dirty,
                 PendingClose::Open {
@@ -446,6 +450,53 @@ impl ProbeApp {
                 window,
                 cx,
             );
+            return;
+        }
+        if self.has_pending_environment_work() {
+            self.pending_close = Some(PendingClose::Open {
+                path,
+                restored_state,
+            });
+            self.start_next_environment_save(window, cx);
+            return;
+        }
+        self.load_workspace_path(path, restored_state, window, cx);
+    }
+
+    fn has_pending_environment_work(&self) -> bool {
+        self.environment_save_task.is_some() || !self.pending_environment_saves.is_empty()
+    }
+
+    fn finish_pending_close_if_idle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.request_save_task.is_some()
+            || self.environment_save_task.is_some()
+            || self.persistence.has_outstanding_saves()
+        {
+            return;
+        }
+        if !self.pending_environment_saves.is_empty() {
+            self.start_next_environment_save(window, cx);
+            return;
+        }
+        if let Some(pending) = self.pending_close.take() {
+            let dirty = match &pending {
+                PendingClose::Tab(key) => self
+                    .loaded_workspace
+                    .as_ref()
+                    .and_then(|loaded| loaded.workspace().request(*key))
+                    .filter(|request| self.persistence.is_dirty(*key, request))
+                    .map(|_| vec![*key])
+                    .unwrap_or_default(),
+                PendingClose::Workspace
+                | PendingClose::Window
+                | PendingClose::Quit
+                | PendingClose::Open { .. } => self.dirty_keys(),
+            };
+            if dirty.is_empty() {
+                self.finish_pending_close(pending, window, cx);
+            } else {
+                self.prompt_unsaved(dirty, pending, window, cx);
+            }
         }
     }
 
@@ -469,6 +520,8 @@ impl ProbeApp {
         self.tree_context_menu = None;
         self.tree_context_menu_position = None;
         self.request_editor.clear();
+        self.pending_environment_saves.clear();
+        self.environment_save_workspace_path = None;
         self.restore_selected_environment();
         self.rebuild_visible_tree_rows();
         self.message = None;
@@ -969,6 +1022,8 @@ impl ProbeApp {
         self.capture_selected_environment();
         self.execution.clear();
         self.response_viewer.clear();
+        self.pending_environment_saves.clear();
+        self.environment_save_workspace_path = None;
         self.loaded_workspace = None;
         self.workspace_path = None;
         self.shell.reset_for_workspace();
@@ -1236,11 +1291,9 @@ impl ProbeApp {
         if self.structure_task.is_some() {
             return;
         }
-        if self.request_save_task.is_some() {
-            self.message = Some(
-                "Wait for the current request save before changing collection structure."
-                    .to_owned(),
-            );
+        if self.request_save_task.is_some() || self.environment_save_task.is_some() {
+            self.message =
+                Some("Wait for the current save before changing collection structure.".to_owned());
             cx.notify();
             return;
         }
@@ -1548,29 +1601,44 @@ impl ProbeApp {
 
     fn request_close_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dirty = self.dirty_keys();
-        if dirty.is_empty() {
-            self.close_workspace_now(cx);
-        } else {
+        if !dirty.is_empty() {
             self.prompt_unsaved(dirty, PendingClose::Workspace, window, cx);
+            return;
         }
+        if self.has_pending_environment_work() {
+            self.pending_close = Some(PendingClose::Workspace);
+            self.start_next_environment_save(window, cx);
+            return;
+        }
+        self.close_workspace_now(cx);
     }
 
     fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let dirty = self.dirty_keys();
-        if dirty.is_empty() {
-            return true;
+        if !dirty.is_empty() {
+            self.prompt_unsaved(dirty, PendingClose::Window, window, cx);
+            return false;
         }
-        self.prompt_unsaved(dirty, PendingClose::Window, window, cx);
-        false
+        if self.has_pending_environment_work() {
+            self.pending_close = Some(PendingClose::Window);
+            self.start_next_environment_save(window, cx);
+            return false;
+        }
+        true
     }
 
     fn quit_application(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dirty = self.dirty_keys();
-        if dirty.is_empty() {
-            cx.quit();
-        } else {
+        if !dirty.is_empty() {
             self.prompt_unsaved(dirty, PendingClose::Quit, window, cx);
+            return;
         }
+        if self.has_pending_environment_work() {
+            self.pending_close = Some(PendingClose::Quit);
+            self.start_next_environment_save(window, cx);
+            return;
+        }
+        cx.quit();
     }
 
     fn prompt_unsaved(
@@ -1629,30 +1697,11 @@ impl ProbeApp {
     }
 
     fn start_next_request_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.request_save_task.is_some() {
+        if self.request_save_task.is_some() || self.environment_save_task.is_some() {
             return;
         }
         let Some(key) = self.persistence.next() else {
-            if let Some(pending) = self.pending_close.take() {
-                let dirty = match &pending {
-                    PendingClose::Tab(key) => self
-                        .loaded_workspace
-                        .as_ref()
-                        .and_then(|loaded| loaded.workspace().request(*key))
-                        .filter(|request| self.persistence.is_dirty(*key, request))
-                        .map(|_| vec![*key])
-                        .unwrap_or_default(),
-                    PendingClose::Workspace
-                    | PendingClose::Window
-                    | PendingClose::Quit
-                    | PendingClose::Open { .. } => self.dirty_keys(),
-                };
-                if dirty.is_empty() {
-                    self.finish_pending_close(pending, window, cx);
-                } else {
-                    self.prompt_unsaved(dirty, pending, window, cx);
-                }
-            }
+            self.finish_pending_close_if_idle(window, cx);
             return;
         };
         let Some(loaded) = &self.loaded_workspace else {
@@ -1692,6 +1741,7 @@ impl ProbeApp {
                         view.persistence.complete(key, snapshot);
                         view.message = None;
                         view.start_next_request_save(window, cx);
+                        view.start_next_environment_save(window, cx);
                     }
                     Err(error) => {
                         view.persistence.fail(key);
@@ -4775,8 +4825,8 @@ impl ProbeApp {
         let on_change = Rc::new(
             move |name: &str, value: String, _: &mut Window, cx: &mut App| {
                 let name = name.to_owned();
-                let _ = view.update(cx, |view, cx| {
-                    view.update_environment_variable(&name, value, cx);
+                let _ = view.update_in(cx, |view, window, cx| {
+                    view.update_environment_variable(&name, value, window, cx);
                 });
             },
         );
@@ -4807,7 +4857,13 @@ impl ProbeApp {
         }
     }
 
-    fn update_environment_variable(&mut self, name: &str, value: String, cx: &mut Context<Self>) {
+    fn update_environment_variable(
+        &mut self,
+        name: &str,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(environment) = self
             .request_editor
             .selected_environment()
@@ -4822,8 +4878,69 @@ impl ProbeApp {
             .set_environment_variable(&environment, name, value)
             .is_ok()
         {
+            self.pending_environment_saves
+                .insert((environment, name.to_owned()));
+            self.start_next_environment_save(window, cx);
             cx.notify();
         }
+    }
+
+    fn start_next_environment_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.environment_save_task.is_some()
+            || self.request_save_task.is_some()
+            || self.structure_task.is_some()
+        {
+            return;
+        }
+        let Some((environment, name)) = self.pending_environment_saves.pop_first() else {
+            self.finish_pending_close_if_idle(window, cx);
+            return;
+        };
+        let Some(loaded) = &self.loaded_workspace else {
+            self.pending_environment_saves.insert((environment, name));
+            self.finish_pending_close_if_idle(window, cx);
+            return;
+        };
+        let prepared = match loaded.prepare_environment_variable_save(&environment, &name) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.pending_environment_saves.insert((environment, name));
+                self.pending_close = None;
+                self.message = Some(format!("Could not save environment variable: {error}"));
+                cx.notify();
+                return;
+            }
+        };
+        self.environment_save_workspace_path = self.workspace_path.clone();
+        self.environment_save_task = Some(cx.spawn_in(window, async move |view, window| {
+            let result = window
+                .background_spawn(async move { prepared.execute() })
+                .await;
+            let _ = view.update_in(window, |view, window, cx| {
+                view.environment_save_task = None;
+                match result {
+                    Ok(saved) => {
+                        if view.environment_save_workspace_path == view.workspace_path
+                            && let Some(loaded) = view.loaded_workspace.as_mut()
+                        {
+                            loaded.complete_environment_save(saved);
+                        }
+                        view.environment_save_workspace_path = None;
+                        view.message = None;
+                        view.start_next_request_save(window, cx);
+                        view.start_next_environment_save(window, cx);
+                    }
+                    Err(error) => {
+                        view.environment_save_workspace_path = None;
+                        view.pending_close = None;
+                        view.message =
+                            Some(format!("Could not save environment variable: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
 
     fn request_count_label(&self) -> String {
@@ -5289,6 +5406,19 @@ mod tests {
     fn http_environment_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/opencollection/phase5-http.yml")
+    }
+
+    fn writable_environment_fixture(suffix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "probe-desktop-env-{}-{unique}-{suffix}.yml",
+            std::process::id()
+        ));
+        fs::copy(environment_fixture(), &path).unwrap();
+        path
     }
 
     fn writable_bundled_fixture(suffix: &str) -> PathBuf {
@@ -6010,7 +6140,7 @@ mod tests {
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
             ProbeApp::new(window, cx)
         });
-        let fixture = environment_fixture()
+        let fixture = writable_environment_fixture("tooltip")
             .canonicalize()
             .expect("fixture should exist");
         let workspace =
@@ -6019,7 +6149,7 @@ mod tests {
         window
             .update(cx, |view, _, cx| {
                 view.session_store = None;
-                view.set_workspace(fixture, workspace);
+                view.set_workspace(fixture.clone(), workspace);
                 view.select_request(request_key, cx);
                 view.request_editor
                     .select_environment(Some("development".to_owned()));
@@ -6097,14 +6227,16 @@ mod tests {
             );
         }
         window
-            .update(cx, |view, _, cx| {
+            .update(cx, |view, window, cx| {
                 view.update_environment_variable(
                     "baseUrl",
                     "https://changed.example".to_owned(),
+                    window,
                     cx,
                 );
             })
             .expect("test window should remain open");
+        cx.run_until_parked();
         let updated = window
             .update(cx, |view, _, _| {
                 let environment = view.request_editor.selected_environment()?.to_owned();
@@ -6117,6 +6249,14 @@ mod tests {
             })
             .expect("test window should remain open");
         assert_eq!(updated.as_deref(), Some("https://changed.example"));
+        let reloaded =
+            probe_opencollection::load_workspace(&fixture).expect("saved env should load");
+        assert_eq!(
+            probe_core::resolve_environment(reloaded.workspace().environments(), "development")
+                .unwrap()
+                .variable("baseUrl"),
+            Some("https://changed.example")
+        );
         {
             let mut visual = VisualTestContext::from_window(window.into(), cx);
             visual.simulate_click(input_point, Modifiers::default());
@@ -6137,6 +6277,7 @@ mod tests {
             })
             .expect("test window should remain open");
         assert_eq!(edited_url.as_deref(), Some("https://url.example"));
+        fs::remove_file(fixture).unwrap();
     }
 
     #[gpui::test]

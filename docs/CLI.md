@@ -22,6 +22,8 @@ probe folder rename <path> <selector> --name <name> [--json]
 probe folder delete <path> <selector> [--json]
 probe folder move <path> <selector> [--parent <folder>] [--index <index>] [--json]
 probe folder reorder <path> <selector> --index <index> [--json]
+probe environment set <path> --environment <name> --name <var> --value <value> [--json]
+probe environment unset <path> --environment <name> --name <var> [--json]
 ```
 
 `<path>` may be a bundled OpenCollection YAML file or an unbundled collection
@@ -30,7 +32,8 @@ directory containing `opencollection.yml` or `opencollection.yaml`.
 For `request get` and `request run`, `--environment <name>` selects an environment,
 applies parent environments from `extends`, and interpolates variables in supported
 request fields. Without it, `request get` returns the request as stored, including
-unresolved `{{variable}}` expressions.
+unresolved `{{variable}}` expressions. That flag is not a write operation; use
+`environment set` and `environment unset` to persist variable values.
 
 `request run` resolves the request and executes it through the shared asynchronous HTTP
 engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes the raw
@@ -45,6 +48,14 @@ use bundled structural selectors.
 least one of `--name`, `--method`, or `--url` is required. It updates the in-memory
 request first, merges only those fields into the retained YAML document, and then
 atomically replaces the source file. It is unavailable for stdin workspaces.
+
+`environment set` and `environment unset` persist OpenCollection environment variables
+through the same repository path. `--environment` names the environment to mutate; it
+does not resolve a request. `set` writes a plain variable on that environment, updating
+it when present or adding an override when the value currently comes from a parent.
+`--name` is the variable and `--value` is required. `unset` removes the variable entry
+from that environment only, so a parent value can show through. Both commands reject
+secrets, empty names, and stdin workspaces.
 
 Before committing, Probe compares the source file with the exact bytes that were
 loaded. If another process changed it, the command fails with `workspace_modified`
@@ -120,6 +131,9 @@ parameters are referenced from URLs with `:variableName` segments.
 `request set --json` returns the same request shape after the persisted update,
 with `environment` set to JSON `null`.
 
+`environment set --json` and `environment unset --json` return `environment`, `name`,
+and `operation`. `set` also returns `value`.
+
 Structural commands return stable fields `operation`, `itemType`, `previousSelector`, `selector`,
 `parent`, `index`, and `selectorRemaps`. The remap object contains every surviving known
 repository selector, including siblings whose bundled structural selector shifted. `selector`
@@ -177,7 +191,8 @@ text, so automation must not parse it. JSON stdout never contains progress outpu
 terminal escape sequences, or logs.
 
 Environment failures use exit code 5 and stable categories including
-`environment_not_found`, `missing_variable`, `secret_variable_unavailable`, and
+`environment_not_found`, `missing_variable`, `variable_not_found`,
+`secret_variable_unavailable`, and
 `environment_resolution`. Secret variables declared by OpenCollection do not contain
 their values; until a secure runtime provider is added, referencing one reports
 `secret_variable_unavailable` rather than silently substituting an empty value.

@@ -358,6 +358,15 @@ impl Workspace {
         )
     }
 
+    /// Removes a plain variable from the named environment only.
+    pub fn unset_environment_variable(
+        &mut self,
+        environment_name: &str,
+        variable_name: &str,
+    ) -> Result<(), crate::EnvironmentResolutionError> {
+        crate::unset_environment_variable(&mut self.environments, environment_name, variable_name)
+    }
+
     fn children(&self, parent: WorkspaceParent) -> Result<&[WorkspaceItemRef], WorkspaceEditError> {
         match parent {
             WorkspaceParent::Root => Ok(&self.root_items),

@@ -92,6 +92,11 @@ probe request run ./api reports/download.yml \
 probe request set ./api users/list-users.yml \
   --method GET --url https://api.example.com/v2/users --json
 
+probe environment set ./api --environment development \
+  --name baseUrl --value https://dev.example.com --json
+
+probe environment unset ./api --environment development --name host --json
+
 probe folder create ./api --name Admin --index 0 --json
 
 probe request create ./api --parent admin --name "List admins" \
@@ -106,6 +111,8 @@ probe collection validate ./api --quiet
 
 `--environment <name>` selects an OpenCollection environment, applies its `extends`
 chain, and interpolates request variables before output or execution preflight.
+Use `environment set` and `environment unset` to persist variable values on a named
+environment.
 
 ## Development
 

@@ -12,9 +12,10 @@ use atomic_write_file::AtomicWriteFile;
 use fs4::FileExt;
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, CollectionItem, Environment,
-    FileReference, FolderKey, FormField, Header, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBodyKind, RequestBody, RequestKey, RequestUpdate, Workspace,
-    WorkspaceItemRef, validate_environments,
+    EnvironmentResolutionError, EnvironmentVariable, FileReference, FolderKey, FormField, Header,
+    MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind, RequestBody,
+    RequestKey, RequestUpdate, Variable, VariableValue, VariableValueSet, VariableValueType,
+    VariableValueVariant, Workspace, WorkspaceItemRef, validate_environments,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -74,6 +75,7 @@ pub struct LoadedWorkspace {
     folder_keys_by_selector: BTreeMap<String, FolderKey>,
     request_selectors_by_key: BTreeMap<RequestKey, String>,
     folder_selectors_by_key: BTreeMap<FolderKey, String>,
+    environment_persistence: BTreeMap<String, EnvironmentPersistence>,
     pub(crate) documents: BTreeMap<PathBuf, SourceDocument>,
     pub(crate) source: WorkspaceSource,
 }
@@ -106,9 +108,158 @@ impl LoadedWorkspace {
         environment_name: &str,
         variable_name: &str,
         value: String,
-    ) -> Result<(), probe_core::EnvironmentResolutionError> {
+    ) -> Result<(), EnvironmentResolutionError> {
         self.workspace
             .set_environment_variable(environment_name, variable_name, value)
+    }
+
+    /// Applies a variable set in memory and atomically persists its OpenCollection document.
+    ///
+    /// The save is rejected if the source file no longer exactly matches the bytes
+    /// loaded by this repository instance. On persistence failure, the in-memory
+    /// environment remains updated so callers can report or retry the dirty state.
+    pub fn update_environment_variable(
+        &mut self,
+        environment_name: &str,
+        variable_name: &str,
+        value: String,
+    ) -> Result<(), SaveError> {
+        self.workspace
+            .set_environment_variable(environment_name, variable_name, value)
+            .map_err(SaveError::Environment)?;
+        let variable = self
+            .plain_environment_variable(environment_name, variable_name)
+            .cloned()
+            .ok_or_else(|| {
+                SaveError::InvalidDocument(format!(
+                    "environment '{environment_name}' is missing variable '{variable_name}' after update"
+                ))
+            })?;
+        self.persist_environment_mutation(
+            environment_name,
+            EnvironmentYamlMutation::Set { variable },
+        )
+    }
+
+    /// Removes a variable from the named environment and atomically persists the document.
+    pub fn unset_environment_variable(
+        &mut self,
+        environment_name: &str,
+        variable_name: &str,
+    ) -> Result<(), SaveError> {
+        self.workspace
+            .unset_environment_variable(environment_name, variable_name)
+            .map_err(SaveError::Environment)?;
+        self.persist_environment_mutation(
+            environment_name,
+            EnvironmentYamlMutation::Unset {
+                name: variable_name.to_owned(),
+            },
+        )
+    }
+
+    /// Captures an environment-variable save that can be executed away from the UI thread.
+    ///
+    /// The in-memory workspace must already contain the updated variable. Preparing is
+    /// in-memory only. [`PreparedEnvironmentSave::execute`] performs the conflict check
+    /// and atomic filesystem write.
+    pub fn prepare_environment_variable_save(
+        &self,
+        environment_name: &str,
+        variable_name: &str,
+    ) -> Result<PreparedEnvironmentSave, SaveError> {
+        let variable = self
+            .plain_environment_variable(environment_name, variable_name)
+            .cloned()
+            .ok_or_else(|| {
+                SaveError::Environment(EnvironmentResolutionError::VariableNotFound {
+                    environment: environment_name.to_owned(),
+                    variable: variable_name.to_owned(),
+                })
+            })?;
+        self.prepare_environment_mutation(
+            environment_name,
+            EnvironmentYamlMutation::Set { variable },
+        )
+    }
+
+    /// Captures an environment-variable unset that can be executed away from the UI thread.
+    pub fn prepare_environment_variable_unset(
+        &self,
+        environment_name: &str,
+        variable_name: &str,
+    ) -> Result<PreparedEnvironmentSave, SaveError> {
+        self.prepare_environment_mutation(
+            environment_name,
+            EnvironmentYamlMutation::Unset {
+                name: variable_name.to_owned(),
+            },
+        )
+    }
+
+    /// Refreshes the retained conflict baseline after a prepared environment save succeeds.
+    pub fn complete_environment_save(&mut self, saved: CompletedEnvironmentSave) {
+        self.documents.insert(
+            saved.document_path,
+            SourceDocument {
+                original_source: saved.serialized_source,
+            },
+        );
+    }
+
+    fn persist_environment_mutation(
+        &mut self,
+        environment_name: &str,
+        mutation: EnvironmentYamlMutation,
+    ) -> Result<(), SaveError> {
+        let prepared = self.prepare_environment_mutation(environment_name, mutation)?;
+        let saved = prepared.execute()?;
+        self.complete_environment_save(saved);
+        Ok(())
+    }
+
+    fn prepare_environment_mutation(
+        &self,
+        environment_name: &str,
+        mutation: EnvironmentYamlMutation,
+    ) -> Result<PreparedEnvironmentSave, SaveError> {
+        let persistence = self
+            .environment_persistence
+            .get(environment_name)
+            .cloned()
+            .ok_or(SaveError::ReadOnlySource)?;
+        let original_source = self
+            .documents
+            .get(&persistence.document_path)
+            .expect("filesystem environment must retain its source document")
+            .original_source
+            .clone();
+        Ok(PreparedEnvironmentSave {
+            persistence,
+            original_source,
+            mutation,
+        })
+    }
+
+    fn plain_environment_variable(
+        &self,
+        environment_name: &str,
+        variable_name: &str,
+    ) -> Option<&Variable> {
+        self.workspace
+            .environments()
+            .iter()
+            .find(|environment| environment.name == environment_name)?
+            .variables
+            .iter()
+            .find_map(|variable| match variable {
+                EnvironmentVariable::Plain(variable)
+                    if variable.name.as_deref() == Some(variable_name) =>
+                {
+                    Some(variable)
+                }
+                _ => None,
+            })
     }
 
     /// Returns requests in collection traversal order.
@@ -305,6 +456,45 @@ pub struct CompletedRequestSave {
     serialized_source: Vec<u8>,
 }
 
+/// A filesystem environment-variable save captured for background execution.
+#[derive(Debug)]
+pub struct PreparedEnvironmentSave {
+    persistence: EnvironmentPersistence,
+    original_source: Vec<u8>,
+    mutation: EnvironmentYamlMutation,
+}
+
+impl PreparedEnvironmentSave {
+    /// Performs the exact-source check and atomic write.
+    pub fn execute(self) -> Result<CompletedEnvironmentSave, SaveError> {
+        let serialized =
+            persist_environment_yaml(&self.persistence, &self.original_source, &self.mutation)?;
+        Ok(CompletedEnvironmentSave {
+            document_path: self.persistence.document_path,
+            serialized_source: serialized,
+        })
+    }
+}
+
+/// The refreshed repository baseline produced by a successful environment save.
+#[derive(Debug)]
+pub struct CompletedEnvironmentSave {
+    document_path: PathBuf,
+    serialized_source: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EnvironmentPersistence {
+    document_path: PathBuf,
+    bundled_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum EnvironmentYamlMutation {
+    Set { variable: Variable },
+    Unset { name: String },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RequestPersistence {
     document_path: PathBuf,
@@ -418,6 +608,8 @@ pub enum SaveError {
     ConcurrentModification(PathBuf),
     /// A retained source document no longer has the expected OpenCollection shape.
     InvalidDocument(String),
+    /// Domain environment mutation failed.
+    Environment(EnvironmentResolutionError),
     /// YAML serialization failed.
     Serialize(serde_yaml_ng::Error),
     /// An atomic filesystem operation failed.
@@ -445,6 +637,7 @@ impl fmt::Display for SaveError {
                     "cannot update retained OpenCollection document: {message}"
                 )
             }
+            Self::Environment(error) => write!(formatter, "{error}"),
             Self::Serialize(source) => {
                 write!(formatter, "cannot serialize OpenCollection YAML: {source}")
             }
@@ -464,7 +657,8 @@ impl Error for SaveError {
             | Self::EmptyUpdate
             | Self::ReadOnlySource
             | Self::ConcurrentModification(_)
-            | Self::InvalidDocument(_) => None,
+            | Self::InvalidDocument(_)
+            | Self::Environment(_) => None,
         }
     }
 }
@@ -505,6 +699,8 @@ fn load_bundled_source(
     let workspace = Workspace::from_collection(parsed.into_collection());
     let mut loaded = index_locators(workspace, &nodes);
     if let Some(path) = document_path {
+        loaded.environment_persistence =
+            bundled_environment_persistences(loaded.workspace.environments(), path);
         loaded.documents.insert(
             path.to_owned(),
             SourceDocument {
@@ -541,7 +737,19 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
     let loaded_items = read_items(root, root, "opencollection", &mut documents)?;
     let (items, nodes): (Vec<_>, Vec<_>) = loaded_items.into_iter().unzip();
     collection.items = items;
-    collection.environments.extend(read_environments(root)?);
+    let mut environment_persistence =
+        bundled_environment_persistences(&collection.environments, &root_config);
+    let file_environments = read_environments(root, &mut documents)?;
+    for (environment, path) in file_environments {
+        environment_persistence.insert(
+            environment.name.clone(),
+            EnvironmentPersistence {
+                document_path: path,
+                bundled_index: None,
+            },
+        );
+        collection.environments.push(environment);
+    }
     validate_environments(&collection.environments).map_err(|error| LoadError::Validation {
         path: root.to_owned(),
         message: error.to_string(),
@@ -549,6 +757,7 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
 
     let workspace = Workspace::from_collection(collection);
     let mut loaded = index_locators(workspace, &nodes);
+    loaded.environment_persistence = environment_persistence;
     loaded.documents = documents;
     loaded.source = WorkspaceSource::Unbundled(root.to_owned());
     Ok(loaded)
@@ -671,7 +880,10 @@ fn read_item(path: &Path) -> Result<ReadItem, LoadError> {
     })
 }
 
-fn read_environments(root: &Path) -> Result<Vec<Environment>, LoadError> {
+fn read_environments(
+    root: &Path,
+    documents: &mut BTreeMap<PathBuf, SourceDocument>,
+) -> Result<Vec<(Environment, PathBuf)>, LoadError> {
     let directory = root.join("environments");
     if !directory.is_dir() {
         return Ok(Vec::new());
@@ -699,9 +911,34 @@ fn read_environments(root: &Path) -> Result<Vec<Environment>, LoadError> {
                 path: path.clone(),
                 source: ParseError::new(source),
             })?;
-        environments.push(environment.into_domain());
+        documents.insert(
+            path.clone(),
+            SourceDocument {
+                original_source: source.into_bytes(),
+            },
+        );
+        environments.push((environment.into_domain(), path));
     }
     Ok(environments)
+}
+
+fn bundled_environment_persistences(
+    environments: &[Environment],
+    document_path: &Path,
+) -> BTreeMap<String, EnvironmentPersistence> {
+    environments
+        .iter()
+        .enumerate()
+        .map(|(index, environment)| {
+            (
+                environment.name.clone(),
+                EnvironmentPersistence {
+                    document_path: document_path.to_owned(),
+                    bundled_index: Some(index),
+                },
+            )
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -805,6 +1042,7 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
         folder_keys_by_selector,
         request_selectors_by_key,
         folder_selectors_by_key,
+        environment_persistence: BTreeMap::new(),
         documents: BTreeMap::new(),
         source: WorkspaceSource::Memory,
     }
@@ -907,6 +1145,253 @@ fn relative_selector(root: &Path, path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+fn persist_environment_yaml(
+    persistence: &EnvironmentPersistence,
+    original_source: &[u8],
+    mutation: &EnvironmentYamlMutation,
+) -> Result<Vec<u8>, SaveError> {
+    let _save_lock = SaveLock::acquire(&persistence.document_path)?;
+    let current = fs::read(&persistence.document_path).map_err(|source| SaveError::Io {
+        path: persistence.document_path.clone(),
+        source,
+    })?;
+    if current != original_source {
+        return Err(SaveError::ConcurrentModification(
+            persistence.document_path.clone(),
+        ));
+    }
+    let mut document: Value = serde_yaml_ng::from_slice(original_source).map_err(|error| {
+        SaveError::InvalidDocument(format!("retained source cannot be parsed: {error}"))
+    })?;
+    let environment = environment_document_mut(&mut document, persistence)?;
+    apply_environment_mutation(environment, mutation)?;
+    let serialized = serde_yaml_ng::to_string(&document)
+        .map_err(SaveError::Serialize)?
+        .into_bytes();
+    atomic_write(&persistence.document_path, &serialized, original_source)?;
+    Ok(serialized)
+}
+
+fn environment_document_mut<'a>(
+    document: &'a mut Value,
+    persistence: &EnvironmentPersistence,
+) -> Result<&'a mut Value, SaveError> {
+    let Some(index) = persistence.bundled_index else {
+        return Ok(document);
+    };
+    let mapping = document.as_mapping_mut().ok_or_else(|| {
+        SaveError::InvalidDocument("the collection document is not a mapping".to_owned())
+    })?;
+    let config = mapping_child(mapping, "config")?;
+    let environments = config
+        .get_mut(string_key("environments"))
+        .and_then(Value::as_sequence_mut)
+        .ok_or_else(|| {
+            SaveError::InvalidDocument("collection config has no environments sequence".to_owned())
+        })?;
+    environments.get_mut(index).ok_or_else(|| {
+        SaveError::InvalidDocument(format!("environment index {index} is out of bounds"))
+    })
+}
+
+fn apply_environment_mutation(
+    environment: &mut Value,
+    mutation: &EnvironmentYamlMutation,
+) -> Result<(), SaveError> {
+    match mutation {
+        EnvironmentYamlMutation::Set { variable } => {
+            apply_environment_variable_set(environment, variable)
+        }
+        EnvironmentYamlMutation::Unset { name } => {
+            apply_environment_variable_unset(environment, name)
+        }
+    }
+}
+
+fn apply_environment_variable_set(
+    environment: &mut Value,
+    variable: &Variable,
+) -> Result<(), SaveError> {
+    let name = variable.name.as_deref().ok_or_else(|| {
+        SaveError::InvalidDocument("updated environment variable has no name".to_owned())
+    })?;
+    let mapping = environment.as_mapping_mut().ok_or_else(|| {
+        SaveError::InvalidDocument("the environment document is not a mapping".to_owned())
+    })?;
+    let variables = sequence_child(mapping, "variables")?;
+    if let Some(existing) = variables.iter_mut().find_map(|entry| {
+        let mapping = entry.as_mapping_mut()?;
+        (yaml_string_field(mapping, "name") == Some(name)).then_some(mapping)
+    }) {
+        if yaml_bool_field(existing, "secret") == Some(true) {
+            return Err(SaveError::InvalidDocument(format!(
+                "cannot overwrite secret variable '{name}'"
+            )));
+        }
+        existing.insert(string_key("disabled"), Value::Bool(variable.disabled));
+        merge_environment_variable_value(existing, variable);
+        return Ok(());
+    }
+    variables.push(new_environment_variable_value(variable));
+    Ok(())
+}
+
+fn apply_environment_variable_unset(environment: &mut Value, name: &str) -> Result<(), SaveError> {
+    let mapping = environment.as_mapping_mut().ok_or_else(|| {
+        SaveError::InvalidDocument("the environment document is not a mapping".to_owned())
+    })?;
+    let variables = sequence_child(mapping, "variables")?;
+    let Some(index) = variables.iter().position(|entry| {
+        entry
+            .as_mapping()
+            .is_some_and(|mapping| yaml_string_field(mapping, "name") == Some(name))
+    }) else {
+        return Err(SaveError::InvalidDocument(format!(
+            "variable '{name}' is missing from the retained environment document"
+        )));
+    };
+    if variables[index]
+        .as_mapping()
+        .is_some_and(|mapping| yaml_bool_field(mapping, "secret") == Some(true))
+    {
+        return Err(SaveError::InvalidDocument(format!(
+            "cannot unset secret variable '{name}'"
+        )));
+    }
+    variables.remove(index);
+    Ok(())
+}
+
+fn merge_environment_variable_value(existing: &mut serde_yaml_ng::Mapping, variable: &Variable) {
+    match (&variable.value, existing.get_mut(string_key("value"))) {
+        (Some(VariableValueSet::Variants(variants)), Some(Value::Sequence(existing_variants))) => {
+            merge_variable_variants(existing_variants, variants);
+        }
+        (Some(value), Some(existing_value)) => {
+            merge_yaml_variable_value(existing_value, value);
+        }
+        (Some(value), None) => {
+            existing.insert(string_key("value"), variable_value_set_yaml(value));
+        }
+        (None, _) => {
+            existing.remove(string_key("value"));
+        }
+    }
+}
+
+fn merge_variable_variants(existing: &mut [Value], variants: &[VariableValueVariant]) {
+    for (index, variant) in variants.iter().enumerate() {
+        let Some(existing) = existing.get_mut(index).and_then(Value::as_mapping_mut) else {
+            continue;
+        };
+        existing.insert(string_key("selected"), Value::Bool(variant.selected));
+        match existing.get_mut(string_key("value")) {
+            Some(existing_value) => {
+                merge_yaml_variable_value(
+                    existing_value,
+                    &VariableValueSet::Single(variant.value.clone()),
+                );
+            }
+            None => {
+                existing.insert(string_key("value"), variable_value_yaml(&variant.value));
+            }
+        }
+    }
+}
+
+fn merge_yaml_variable_value(existing: &mut Value, value: &VariableValueSet) {
+    match (existing, value) {
+        (Value::Mapping(existing), VariableValueSet::Single(VariableValue::Typed { data, .. }))
+            if existing.contains_key(string_key("data")) =>
+        {
+            existing.insert(string_key("data"), Value::String(data.clone()));
+        }
+        (Value::Mapping(existing), VariableValueSet::Single(VariableValue::String(data)))
+            if existing.contains_key(string_key("data")) =>
+        {
+            existing.insert(string_key("data"), Value::String(data.clone()));
+        }
+        (existing, value) => *existing = variable_value_set_yaml(value),
+    }
+}
+
+fn new_environment_variable_value(variable: &Variable) -> Value {
+    let mut mapping = serde_yaml_ng::Mapping::new();
+    if let Some(name) = &variable.name {
+        mapping.insert(string_key("name"), Value::String(name.clone()));
+    }
+    if let Some(value) = &variable.value {
+        mapping.insert(string_key("value"), variable_value_set_yaml(value));
+    }
+    if variable.disabled {
+        mapping.insert(string_key("disabled"), Value::Bool(true));
+    }
+    Value::Mapping(mapping)
+}
+
+fn variable_value_set_yaml(value: &VariableValueSet) -> Value {
+    match value {
+        VariableValueSet::Single(value) => variable_value_yaml(value),
+        VariableValueSet::Variants(variants) => Value::Sequence(
+            variants
+                .iter()
+                .map(|variant| {
+                    map([
+                        ("title", Value::String(variant.title.clone())),
+                        ("selected", Value::Bool(variant.selected)),
+                        ("value", variable_value_yaml(&variant.value)),
+                    ])
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn variable_value_yaml(value: &VariableValue) -> Value {
+    match value {
+        VariableValue::String(value) => Value::String(value.clone()),
+        VariableValue::Typed { kind, data } => map([
+            (
+                "type",
+                Value::String(variable_value_type_name(kind).to_owned()),
+            ),
+            ("data", Value::String(data.clone())),
+        ]),
+    }
+}
+
+fn variable_value_type_name(kind: &VariableValueType) -> &'static str {
+    match kind {
+        VariableValueType::String => "string",
+        VariableValueType::Number => "number",
+        VariableValueType::Boolean => "boolean",
+        VariableValueType::Null => "null",
+        VariableValueType::Object => "object",
+    }
+}
+
+fn sequence_child<'a>(
+    parent: &'a mut serde_yaml_ng::Mapping,
+    name: &str,
+) -> Result<&'a mut Vec<Value>, SaveError> {
+    let key = string_key(name);
+    if !parent.contains_key(&key) {
+        parent.insert(key.clone(), Value::Sequence(Vec::new()));
+    }
+    parent
+        .get_mut(&key)
+        .and_then(Value::as_sequence_mut)
+        .ok_or_else(|| SaveError::InvalidDocument(format!("'{name}' is not a sequence")))
+}
+
+fn yaml_string_field<'a>(mapping: &'a serde_yaml_ng::Mapping, name: &str) -> Option<&'a str> {
+    mapping.get(string_key(name)).and_then(Value::as_str)
+}
+
+fn yaml_bool_field(mapping: &serde_yaml_ng::Mapping, name: &str) -> Option<bool> {
+    mapping.get(string_key(name)).and_then(Value::as_bool)
 }
 
 fn request_document_mut<'a>(

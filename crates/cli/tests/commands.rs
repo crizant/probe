@@ -717,3 +717,173 @@ fn structural_cli_rejects_stdin_as_read_only() {
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["error"]["category"], "persistence_read_only");
 }
+
+#[test]
+fn sets_and_unsets_environment_variables_as_json() {
+    let workspace = temporary_path("phase-env-workspace.yml");
+    fs::copy(fixture("phase4-environments.yml"), &workspace).unwrap();
+
+    let output = probe()
+        .args(["environment", "set"])
+        .arg(&workspace)
+        .args([
+            "--environment",
+            "development",
+            "--name",
+            "token",
+            "--value",
+            "rotated",
+            "--json",
+        ])
+        .output()
+        .expect("environment set should run");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["environment"], "development");
+    assert_eq!(value["name"], "token");
+    assert_eq!(value["operation"], "set");
+    assert_eq!(value["value"], "rotated");
+
+    let override_host = probe()
+        .args(["environment", "set"])
+        .arg(&workspace)
+        .args([
+            "--environment",
+            "development",
+            "--name",
+            "host",
+            "--value",
+            "local.example.com",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(override_host.status.success());
+
+    let unset = probe()
+        .args(["environment", "unset"])
+        .arg(&workspace)
+        .args(["--environment", "development", "--name", "host", "--json"])
+        .output()
+        .unwrap();
+    assert!(unset.status.success());
+    let value: Value = serde_json::from_slice(&unset.stdout).unwrap();
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["operation"], "unset");
+    assert_eq!(value["environment"], "development");
+    assert_eq!(value["name"], "host");
+    assert!(value.get("value").is_none());
+
+    let resolved = probe()
+        .args(["request", "get"])
+        .arg(&workspace)
+        .args(["items/0", "--environment", "development", "--json"])
+        .output()
+        .unwrap();
+    assert!(resolved.status.success());
+    let value: Value = serde_json::from_slice(&resolved.stdout).unwrap();
+    assert_eq!(value["headers"][0]["value"], "Bearer rotated");
+    assert_eq!(value["url"], "https://api.example.com/au/users");
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn environment_commands_have_stable_errors() {
+    let missing = probe()
+        .args(["environment", "set"])
+        .arg(fixture("phase4-environments.yml"))
+        .args([
+            "--environment",
+            "production",
+            "--name",
+            "token",
+            "--value",
+            "nope",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "environment_not_found");
+    assert_eq!(value["error"]["exitCode"], 5);
+
+    let secret = probe()
+        .args(["environment", "set"])
+        .arg(fixture("phase4-environments.yml"))
+        .args([
+            "--environment",
+            "development",
+            "--name",
+            "secretToken",
+            "--value",
+            "nope",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(secret.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&secret.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "secret_variable_unavailable");
+
+    let unset_missing = probe()
+        .args(["environment", "unset"])
+        .arg(fixture("phase4-environments.yml"))
+        .args([
+            "--environment",
+            "development",
+            "--name",
+            "baseUrl",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(unset_missing.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&unset_missing.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "variable_not_found");
+
+    let invalid = probe()
+        .args(["environment", "set"])
+        .arg(fixture("phase4-environments.yml"))
+        .args(["--json"])
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&invalid.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+}
+
+#[test]
+fn environment_set_rejects_stdin_as_read_only() {
+    let source = fs::read(fixture("phase4-environments.yml")).unwrap();
+    let mut child = probe()
+        .args([
+            "environment",
+            "set",
+            "-",
+            "--environment",
+            "development",
+            "--name",
+            "token",
+            "--value",
+            "rotated",
+            "--json",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("environment set should start");
+    child.stdin.take().unwrap().write_all(&source).unwrap();
+    let output = child
+        .wait_with_output()
+        .expect("environment set should finish");
+
+    assert_eq!(output.status.code(), Some(7));
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["exitCode"], 7);
+    assert_eq!(value["error"]["category"], "persistence_read_only");
+}

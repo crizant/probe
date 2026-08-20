@@ -236,6 +236,7 @@ impl From<SaveError> for StructureError {
                 selector,
             },
             SaveError::EmptyUpdate => Self::InvalidDocument("empty structural update".to_owned()),
+            SaveError::Environment(error) => Self::InvalidDocument(error.to_string()),
         }
     }
 }

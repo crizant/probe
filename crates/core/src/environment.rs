@@ -97,6 +97,15 @@ pub enum EnvironmentResolutionError {
     VariableInterpolationCycle(Vec<String>),
     /// An interpolation starts with `{{` but has no valid closing expression.
     MalformedInterpolation,
+    /// A variable name is empty or otherwise unusable for set/unset.
+    InvalidVariableName,
+    /// The named environment has no entry for this variable.
+    VariableNotFound {
+        /// Environment that was asked to unset the variable.
+        environment: String,
+        /// Variable name.
+        variable: String,
+    },
 }
 
 /// Validates environment identity and inheritance independently of variable use.
@@ -210,6 +219,14 @@ impl fmt::Display for EnvironmentResolutionError {
                 )
             }
             Self::MalformedInterpolation => write!(formatter, "malformed variable interpolation"),
+            Self::InvalidVariableName => formatter.write_str("variable name must not be empty"),
+            Self::VariableNotFound {
+                environment,
+                variable,
+            } => write!(
+                formatter,
+                "variable '{variable}' is not defined on environment '{environment}'"
+            ),
         }
     }
 }
@@ -234,7 +251,7 @@ pub fn set_environment_variable(
     value: String,
 ) -> Result<(), EnvironmentResolutionError> {
     if variable_name.is_empty() {
-        return Err(EnvironmentResolutionError::MalformedInterpolation);
+        return Err(EnvironmentResolutionError::InvalidVariableName);
     }
     let raw = raw_variables(environments, environment_name)?;
     if matches!(raw.get(variable_name), Some(RawVariable::Secret)) {
@@ -242,16 +259,7 @@ pub fn set_environment_variable(
             variable_name.to_owned(),
         ));
     }
-    let Some(position) = environments
-        .iter()
-        .position(|environment| environment.name == environment_name)
-    else {
-        return Err(EnvironmentResolutionError::EnvironmentNotFound(
-            environment_name.to_owned(),
-        ));
-    };
-
-    let environment = &mut environments[position];
+    let environment = named_environment_mut(environments, environment_name)?;
     for variable in &mut environment.variables {
         let EnvironmentVariable::Plain(variable) = variable else {
             continue;
@@ -272,6 +280,55 @@ pub fn set_environment_variable(
             disabled: false,
         }));
     Ok(())
+}
+
+/// Removes a plain variable from the named environment so a parent value can show through.
+///
+/// Only that environment's entry is deleted. Parent variables are left unchanged.
+/// Secrets are not converted into plain values or removed.
+pub fn unset_environment_variable(
+    environments: &mut [Environment],
+    environment_name: &str,
+    variable_name: &str,
+) -> Result<(), EnvironmentResolutionError> {
+    if variable_name.is_empty() {
+        return Err(EnvironmentResolutionError::InvalidVariableName);
+    }
+    let environment = named_environment_mut(environments, environment_name)?;
+    let Some(index) = environment
+        .variables
+        .iter()
+        .position(|variable| variable_entry_name(variable) == Some(variable_name))
+    else {
+        return Err(EnvironmentResolutionError::VariableNotFound {
+            environment: environment_name.to_owned(),
+            variable: variable_name.to_owned(),
+        });
+    };
+    if matches!(environment.variables[index], EnvironmentVariable::Secret(_)) {
+        return Err(EnvironmentResolutionError::SecretVariableUnavailable(
+            variable_name.to_owned(),
+        ));
+    }
+    environment.variables.remove(index);
+    Ok(())
+}
+
+fn named_environment_mut<'a>(
+    environments: &'a mut [Environment],
+    environment_name: &str,
+) -> Result<&'a mut Environment, EnvironmentResolutionError> {
+    environments
+        .iter_mut()
+        .find(|environment| environment.name == environment_name)
+        .ok_or_else(|| EnvironmentResolutionError::EnvironmentNotFound(environment_name.to_owned()))
+}
+
+fn variable_entry_name(variable: &EnvironmentVariable) -> Option<&str> {
+    match variable {
+        EnvironmentVariable::Plain(variable) => variable.name.as_deref(),
+        EnvironmentVariable::Secret(variable) => variable.name.as_deref(),
+    }
 }
 
 fn assign_variable_value(slot: &mut Option<VariableValueSet>, value: String) {

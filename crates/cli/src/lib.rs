@@ -99,13 +99,16 @@ pub const fn help() -> &'static str {
         "  request create|rename|delete|move|reorder   Edit request structure\n",
         "  folder list <path>                  List folders\n",
         "  folder create|rename|delete|move|reorder    Edit folder structure\n",
+        "  environment set <path>              Set and persist an environment variable\n",
+        "  environment unset <path>            Remove an environment variable override\n",
         "\n",
         "Options:\n",
-        "      --environment <name>  Resolve request variables with an environment\n",
+        "      --environment <name>  Environment used to resolve or mutate variables\n",
         "      --output <file>        Write the response body to a file\n",
-        "      --name <name>          Set a request name\n",
+        "      --name <name>          Set a request, folder, or variable name\n",
         "      --method <method>      Set an HTTP method\n",
         "      --url <url>            Set a request URL\n",
+        "      --value <value>        Set an environment variable value\n",
         "      --parent <selector>    Destination folder (omit for collection root)\n",
         "      --index <index>        Zero-based insertion position (omit to append)\n",
         "      --json                Emit versioned deterministic JSON\n",
@@ -145,6 +148,18 @@ const FOLDER_HELP: &str = concat!(
     "  delete <path> <selector>\n",
     "  move <path> <selector> [--parent <folder>] [--index <index>]\n",
     "  reorder <path> <selector> --index <index>\n",
+);
+
+const ENVIRONMENT_HELP: &str = concat!(
+    "Usage: probe environment <COMMAND>\n",
+    "\n",
+    "Commands:\n",
+    "  set <path> --environment <name> --name <var> --value <value>\n",
+    "  unset <path> --environment <name> --name <var>\n",
+    "\n",
+    "Set writes a plain variable on the named environment. A parent-only variable is\n",
+    "overridden on the selected environment. Unset removes that environment's entry so\n",
+    "a parent value can show through. Stdin workspaces cannot be persisted.\n",
 );
 
 /// Runs the CLI adapter for arguments that exclude the executable name.
@@ -210,6 +225,7 @@ where
             Some("collection") => COLLECTION_HELP,
             Some("request") => REQUEST_HELP,
             Some("folder") => FOLDER_HELP,
+            Some("environment") => ENVIRONMENT_HELP,
             _ => help(),
         };
         return RunOutput::success(help.to_owned());
@@ -235,7 +251,11 @@ where
         Ok(index) => index,
         Err(error) => return RunOutput::failure(error, json_output),
     };
-    match parse_command(&args, environment, output, update, parent, index)
+    let value = match extract_string_option(&mut args, "--value") {
+        Ok(value) => value,
+        Err(error) => return RunOutput::failure(error, json_output),
+    };
+    match parse_command(&args, environment, output, update, parent, index, value)
         .and_then(|command| execute(command, stdin))
     {
         Ok(output) => RunOutput::success(output.render(json_output, quiet)),
@@ -274,6 +294,17 @@ enum Command {
         input: WorkspaceInput,
         operation_name: &'static str,
         operation: StructureOperation,
+    },
+    EnvironmentSet {
+        input: WorkspaceInput,
+        environment: String,
+        name: String,
+        value: String,
+    },
+    EnvironmentUnset {
+        input: WorkspaceInput,
+        environment: String,
+        name: String,
     },
 }
 
@@ -352,9 +383,13 @@ impl CliError {
     }
 
     fn configuration(error: EnvironmentResolutionError) -> Self {
+        if matches!(error, EnvironmentResolutionError::InvalidVariableName) {
+            return Self::invalid_arguments(error.to_string());
+        }
         let category = match error {
             EnvironmentResolutionError::EnvironmentNotFound(_) => "environment_not_found",
             EnvironmentResolutionError::MissingVariable(_) => "missing_variable",
+            EnvironmentResolutionError::VariableNotFound { .. } => "variable_not_found",
             EnvironmentResolutionError::SecretVariableUnavailable(_) => {
                 "secret_variable_unavailable"
             }
@@ -411,6 +446,7 @@ impl CliError {
             SaveError::EmptyUpdate => ("invalid_arguments", INVALID_ARGUMENTS_EXIT_CODE),
             SaveError::ReadOnlySource => ("persistence_read_only", PERSISTENCE_EXIT_CODE),
             SaveError::ConcurrentModification(_) => ("workspace_modified", PERSISTENCE_EXIT_CODE),
+            SaveError::Environment(error) => return Self::configuration(error.clone()),
             SaveError::InvalidDocument(_) | SaveError::Serialize(_) | SaveError::Io { .. } => {
                 ("persistence_error", PERSISTENCE_EXIT_CODE)
             }
@@ -552,7 +588,17 @@ fn parse_command(
     update: RequestUpdate,
     parent: Option<String>,
     index: Option<usize>,
+    value: Option<String>,
 ) -> Result<Command, CliError> {
+    let is_environment_set = matches!(
+        args,
+        [group, action, _] if group == "environment" && action == "set"
+    );
+    if value.is_some() && !is_environment_set {
+        return Err(CliError::invalid_arguments(
+            "invalid command; run 'probe --help' for usage",
+        ));
+    }
     match args {
         [group, action, path]
             if group == "collection"
@@ -779,6 +825,43 @@ fn parse_command(
                 operation,
             })
         }
+        [group, action, path]
+            if group == "environment"
+                && action == "set"
+                && environment.is_some()
+                && output.is_none()
+                && parent.is_none()
+                && index.is_none()
+                && update.name.is_some()
+                && update.method.is_none()
+                && update.url.is_none()
+                && value.is_some() =>
+        {
+            Ok(Command::EnvironmentSet {
+                input: WorkspaceInput::from_argument(path),
+                environment: environment.expect("guarded environment name"),
+                name: update.name.expect("guarded variable name"),
+                value: value.expect("guarded variable value"),
+            })
+        }
+        [group, action, path]
+            if group == "environment"
+                && action == "unset"
+                && environment.is_some()
+                && output.is_none()
+                && parent.is_none()
+                && index.is_none()
+                && update.name.is_some()
+                && update.method.is_none()
+                && update.url.is_none()
+                && value.is_none() =>
+        {
+            Ok(Command::EnvironmentUnset {
+                input: WorkspaceInput::from_argument(path),
+                environment: environment.expect("guarded environment name"),
+                name: update.name.expect("guarded variable name"),
+            })
+        }
         _ => Err(CliError::invalid_arguments(
             "invalid command; run 'probe --help' for usage",
         )),
@@ -817,6 +900,83 @@ fn execute(command: Command, stdin: &mut impl Read) -> Result<CommandOutput, Cli
             operation_name,
             operation,
         } => edit_structure(&input, operation_name, operation, stdin),
+        Command::EnvironmentSet {
+            input,
+            environment,
+            name,
+            value,
+        } => set_environment_variable(&input, &environment, &name, value, stdin),
+        Command::EnvironmentUnset {
+            input,
+            environment,
+            name,
+        } => unset_environment_variable(&input, &environment, &name, stdin),
+    }
+}
+
+fn set_environment_variable(
+    input: &WorkspaceInput,
+    environment: &str,
+    name: &str,
+    value: String,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let mut loaded = load(input, stdin)?;
+    loaded
+        .update_environment_variable(environment, name, value.clone())
+        .map_err(CliError::persistence)?;
+    Ok(environment_variable_output(
+        "set",
+        environment,
+        name,
+        Some(&value),
+    ))
+}
+
+fn unset_environment_variable(
+    input: &WorkspaceInput,
+    environment: &str,
+    name: &str,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let mut loaded = load(input, stdin)?;
+    loaded
+        .unset_environment_variable(environment, name)
+        .map_err(CliError::persistence)?;
+    Ok(environment_variable_output(
+        "unset",
+        environment,
+        name,
+        None,
+    ))
+}
+
+fn environment_variable_output(
+    operation: &str,
+    environment: &str,
+    name: &str,
+    value: Option<&str>,
+) -> CommandOutput {
+    let mut json = json!({
+        "environment": environment,
+        "name": name,
+        "operation": operation,
+    });
+    if let Some(value) = value {
+        json.as_object_mut()
+            .expect("environment JSON output must be an object")
+            .insert("value".to_owned(), json!(value));
+    }
+    CommandOutput {
+        human: format!(
+            "{} environment variable {environment}.{name}\n",
+            match operation {
+                "set" => "Set",
+                "unset" => "Unset",
+                _ => operation,
+            }
+        ),
+        json,
     }
 }
 

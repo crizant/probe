@@ -5,8 +5,8 @@ use std::{
 };
 
 use probe_core::{
-    Authentication, AuthenticationKind, AuthenticationValue, Body, FormField, Header,
-    QueryParameter, RequestBody, RequestUpdate,
+    Authentication, AuthenticationKind, AuthenticationValue, Body, EnvironmentResolutionError,
+    FormField, Header, QueryParameter, RequestBody, RequestUpdate, resolve_environment,
 };
 use probe_opencollection::{
     SaveError, StructureError, StructureOperation, load_workspace, load_workspace_from_str,
@@ -856,4 +856,220 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
     ));
     assert!(root.join("alpha.yml").exists());
     fs::remove_dir_all(root).unwrap();
+}
+
+fn resolved_variable(
+    loaded: &probe_opencollection::LoadedWorkspace,
+    environment: &str,
+    name: &str,
+) -> Option<String> {
+    resolve_environment(loaded.workspace().environments(), environment)
+        .ok()
+        .and_then(|resolved| resolved.variable(name).map(str::to_owned))
+}
+
+#[test]
+fn bundled_environment_set_unset_save_reload_preserves_unknown_fields() {
+    let path = temporary_path("bundled-env.yml");
+    fs::write(
+        &path,
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n  name: Env persist\n",
+            "bundled: true\n",
+            "config:\n",
+            "  environments:\n",
+            "    - name: base\n",
+            "      vendor.example: retained-base\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: api.example.com\n",
+            "          description: Canonical host\n",
+            "        - name: region\n",
+            "          value:\n",
+            "            - title: AU\n",
+            "              selected: true\n",
+            "              value: au\n",
+            "              note: default\n",
+            "            - title: US\n",
+            "              value: us\n",
+            "    - name: development\n",
+            "      extends: base\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: dev.example.com\n",
+            "        - name: token\n",
+            "          value: development-token\n",
+            "items:\n",
+            "  - info:\n",
+            "      name: Health\n",
+            "      type: http\n",
+            "    http:\n",
+            "      method: GET\n",
+            "      url: https://example.com/health\n",
+        ),
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+
+    loaded
+        .update_environment_variable("development", "host", "local.example.com".to_owned())
+        .unwrap();
+    loaded
+        .update_environment_variable("development", "baseUrl", "https://local.example".to_owned())
+        .unwrap();
+    loaded
+        .update_environment_variable("base", "region", "nz".to_owned())
+        .unwrap();
+    loaded
+        .unset_environment_variable("development", "host")
+        .unwrap();
+
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(
+        resolved_variable(&reloaded, "development", "host").as_deref(),
+        Some("api.example.com")
+    );
+    assert_eq!(
+        resolved_variable(&reloaded, "development", "baseUrl").as_deref(),
+        Some("https://local.example")
+    );
+    assert_eq!(
+        resolved_variable(&reloaded, "base", "region").as_deref(),
+        Some("nz")
+    );
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("vendor.example: retained-base"));
+    assert!(saved.contains("description: Canonical host"));
+    assert!(saved.contains("note: default"));
+    assert!(saved.contains("title: US"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn unbundled_environment_set_unset_save_reload_preserves_unknown_fields() {
+    let root = temporary_path("unbundled-env");
+    copy_directory(&fixture("unbundled"), &root);
+    fs::write(
+        root.join("environments/base.yml"),
+        concat!(
+            "name: base\n",
+            "variables:\n",
+            "  - name: host\n",
+            "    value: api.example.com\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("environments/development.yml"),
+        concat!(
+            "name: development\n",
+            "extends: base\n",
+            "color: green\n",
+            "vendor.example: retained-env\n",
+            "variables:\n",
+            "  - name: host\n",
+            "    value: dev.example.com\n",
+            "    description: Child host\n",
+            "  - name: baseUrl\n",
+            "    value: https://{{host}}\n",
+        ),
+    )
+    .unwrap();
+
+    let mut loaded = load_workspace(&root).unwrap();
+    loaded
+        .update_environment_variable("development", "host", "local.example.com".to_owned())
+        .unwrap();
+    loaded
+        .unset_environment_variable("development", "host")
+        .unwrap();
+    loaded
+        .update_environment_variable("development", "token", "dev-token".to_owned())
+        .unwrap();
+
+    let reloaded = load_workspace(&root).unwrap();
+    assert_eq!(
+        resolved_variable(&reloaded, "development", "host").as_deref(),
+        Some("api.example.com")
+    );
+    assert_eq!(
+        resolved_variable(&reloaded, "development", "token").as_deref(),
+        Some("dev-token")
+    );
+    let saved = fs::read_to_string(root.join("environments/development.yml")).unwrap();
+    assert!(saved.contains("vendor.example: retained-env"));
+    assert!(saved.contains("color: green"));
+    let base = fs::read_to_string(root.join("environments/base.yml")).unwrap();
+    assert!(base.contains("value: api.example.com"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn environment_update_refuses_externally_modified_document() {
+    let path = temporary_path("env-conflict.yml");
+    fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let mut external = fs::read_to_string(&path).unwrap();
+    external.push_str("external: true\n");
+    fs::write(&path, &external).unwrap();
+
+    let error = loaded
+        .update_environment_variable("development", "token", "rotated".to_owned())
+        .expect_err("external modification should be rejected");
+    assert!(matches!(error, SaveError::ConcurrentModification(_)));
+    assert_eq!(fs::read_to_string(&path).unwrap(), external);
+    assert_eq!(
+        resolved_variable(&loaded, "development", "token").as_deref(),
+        Some("rotated")
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn environment_update_rejects_secrets_and_missing_environments() {
+    let path = temporary_path("env-secrets.yml");
+    fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+
+    let secret = loaded
+        .update_environment_variable("development", "secretToken", "nope".to_owned())
+        .unwrap_err();
+    assert!(matches!(
+        secret,
+        SaveError::Environment(EnvironmentResolutionError::SecretVariableUnavailable(_))
+    ));
+    let missing = loaded
+        .update_environment_variable("production", "host", "nope".to_owned())
+        .unwrap_err();
+    assert!(matches!(
+        missing,
+        SaveError::Environment(EnvironmentResolutionError::EnvironmentNotFound(_))
+    ));
+    let unset_missing = loaded
+        .unset_environment_variable("development", "baseUrl")
+        .unwrap_err();
+    assert!(matches!(
+        unset_missing,
+        SaveError::Environment(EnvironmentResolutionError::VariableNotFound { .. })
+    ));
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        fs::read_to_string(fixture("phase4-environments.yml")).unwrap()
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn environment_update_rejects_stdin_workspaces() {
+    let source = fs::read_to_string(fixture("phase4-environments.yml")).unwrap();
+    let mut loaded = load_workspace_from_str(&source).unwrap();
+    let error = loaded
+        .update_environment_variable("development", "token", "rotated".to_owned())
+        .unwrap_err();
+    assert!(matches!(error, SaveError::ReadOnlySource));
+    assert_eq!(
+        resolved_variable(&loaded, "development", "token").as_deref(),
+        Some("rotated")
+    );
 }
