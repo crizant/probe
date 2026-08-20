@@ -2154,18 +2154,30 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return;
         };
+        let pointer_y = pointer.y.into();
+        let list_top = bounds.top().into();
+        let scroll_y = self.tree_scroll.0.borrow().base_handle.offset().y.into();
         let Some((hovered_index, relative_y)) = hovered_row_index(
-            pointer.y.into(),
-            bounds.top().into(),
+            pointer_y,
+            list_top,
             TREE_LIST_PADDING_Y,
-            self.tree_scroll.0.borrow().base_handle.offset().y.into(),
+            scroll_y,
             self.tree_row_height,
-            self.visible_tree_rows.len(),
+            self.visible_tree_rows.len() + 1,
         ) else {
             self.tree_drop_target = None;
             return;
         };
-        let hovered = self.visible_tree_rows[hovered_index];
+        let root_end_drop = hovered_index == self.visible_tree_rows.len();
+        let hovered = if root_end_drop {
+            self.visible_tree_rows.last().copied()
+        } else {
+            self.visible_tree_rows.get(hovered_index).copied()
+        };
+        let Some(hovered) = hovered else {
+            self.tree_drop_target = None;
+            return;
+        };
         let folder_expanded = match hovered.item {
             WorkspaceItemRef::Folder(key) => self.shell.folder_is_expanded(key),
             WorkspaceItemRef::Request(_) => false,
@@ -2174,10 +2186,19 @@ impl ProbeApp {
             matches!(hovered.item, WorkspaceItemRef::Folder(_)),
             relative_y,
         );
-        let Some(intent) = drop_intent(loaded.workspace(), hovered.item, zone, folder_expanded)
-        else {
-            self.tree_drop_target = None;
-            return;
+        let intent = if root_end_drop {
+            TreeDropIntent {
+                parent: None,
+                index: loaded.workspace().root_items().len(),
+                indicator: DropIndicator::RootEnd,
+            }
+        } else {
+            let Some(intent) = drop_intent(loaded.workspace(), hovered.item, zone, folder_expanded)
+            else {
+                self.tree_drop_target = None;
+                return;
+            };
+            intent
         };
         let Some((source_parent, source_index)) = item_position(loaded.workspace(), source) else {
             self.tree_drop_target = None;
@@ -2627,6 +2648,31 @@ impl ProbeApp {
             .into_any_element()
     }
 
+    fn render_tree_root_drop_row(&self, theme: Theme) -> gpui::AnyElement {
+        let show_line = matches!(
+            self.tree_drop_target.map(|intent| intent.indicator),
+            Some(DropIndicator::RootEnd)
+        );
+        div()
+            .id("tree-drop-root-end")
+            .relative()
+            .w_full()
+            .h(px(theme.metrics.tree_row_height))
+            .when(show_line, |row| {
+                row.child(
+                    div()
+                        .absolute()
+                        .top(px(0.0))
+                        .left(px(tree_level_indent(theme, 0)))
+                        .right(px(theme.metrics.spacing_1))
+                        .h(px(2.0))
+                        .rounded(px(1.0))
+                        .bg(theme.colors.actions.accent),
+                )
+            })
+            .into_any_element()
+    }
+
     fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let new_request_view = cx.weak_entity();
         let new_folder_view = cx.weak_entity();
@@ -2686,7 +2732,7 @@ impl ProbeApp {
             add_trigger.into_any_element()
         };
         let tree = if self.loaded_workspace.is_some() {
-            let row_count = self.visible_tree_rows.len();
+            let row_count = self.visible_tree_rows.len() + 1;
             let drag_view = cx.weak_entity();
             let drop_view = cx.weak_entity();
             uniform_list("request-tree", row_count, {
@@ -2696,8 +2742,16 @@ impl ProbeApp {
                         view.rendered_sidebar_rows = range.len();
                     }
                     range
-                        .filter_map(|index| view.visible_tree_rows.get(index).copied())
-                        .map(|row| view.render_tree_row(row, theme, cx))
+                        .filter_map(|index| {
+                            view.visible_tree_rows
+                                .get(index)
+                                .copied()
+                                .map(|row| view.render_tree_row(row, theme, cx))
+                                .or_else(|| {
+                                    (index == view.visible_tree_rows.len())
+                                        .then(|| view.render_tree_root_drop_row(theme))
+                                })
+                        })
                         .collect::<Vec<_>>()
                 })
             })
@@ -6102,6 +6156,60 @@ mod tests {
         let disk = probe_opencollection::load_workspace(&fixture).unwrap();
         assert!(disk.folder_key("items/0").is_some());
         assert!(disk.request_key("items/1").is_some());
+        fs::remove_file(fixture).unwrap();
+    }
+
+    #[gpui::test]
+    fn tree_drag_moves_a_nested_request_to_root_end(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_structure_fixture("tree-drag-root-end");
+        let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let nested = visual
+            .debug_bounds("tree-row-items/1/items/0")
+            .expect("nested request row should render");
+        simulate_tree_drag(
+            &mut visual,
+            nested,
+            point(nested.center().x, nested.bottom() + px(48.0)),
+        );
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.structure_task.is_none(), "{:?}", view.message);
+                let loaded = view.loaded_workspace.as_ref().unwrap();
+                let root = loaded.workspace().root_items();
+                assert_eq!(root.len(), 3);
+                assert!(matches!(root[2], probe_core::WorkspaceItemRef::Request(_)));
+                assert!(loaded.request_key("items/2").is_some());
+                let folder = loaded.folder_key("items/1").unwrap();
+                assert!(
+                    loaded
+                        .workspace()
+                        .folder(folder)
+                        .unwrap()
+                        .children
+                        .is_empty()
+                );
+            })
+            .unwrap();
+
+        let disk = probe_opencollection::load_workspace(&fixture).unwrap();
+        assert!(disk.request_key("items/2").is_some());
         fs::remove_file(fixture).unwrap();
     }
 

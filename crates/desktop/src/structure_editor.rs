@@ -210,6 +210,7 @@ pub(crate) enum DropIndicator {
     Before(WorkspaceItemRef),
     After(WorkspaceItemRef),
     IntoFolder(FolderKey),
+    RootEnd,
 }
 
 /// Destination implied by hovering a visible tree row.
@@ -552,6 +553,10 @@ mod tests {
         assert_eq!(
             hovered_row_index(10.0 + 2.0 + 200.0, 10.0, 2.0, 0.0, 28.0, 3),
             Some((2, 1.0))
+        );
+        assert_eq!(
+            hovered_row_index(10.0 + 2.0 + 3.5 * 28.0, 10.0, 2.0, 0.0, 28.0, 4),
+            Some((3, 0.5))
         );
     }
 
