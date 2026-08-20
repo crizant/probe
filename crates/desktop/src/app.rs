@@ -3687,6 +3687,7 @@ impl ProbeApp {
                                 RawBodyKind::Xml => components::BodySyntax::Xml,
                                 _ => components::BodySyntax::Plain,
                             },
+                            self.variable_context(cx),
                             move |value, _, input_cx| {
                                 let _ = body_view.update(input_cx, |view, cx| {
                                     view.edit_request(
@@ -5256,15 +5257,6 @@ impl ProbeApp {
     }
 
     fn variable_context(&self, cx: &mut Context<Self>) -> components::VariableContext {
-        let view = cx.weak_entity();
-        let on_change = Rc::new(
-            move |name: &str, value: String, _: &mut Window, cx: &mut App| {
-                let name = name.to_owned();
-                let _ = view.update_in(cx, |view, window, cx| {
-                    view.update_environment_variable(&name, value, window, cx);
-                });
-            },
-        );
         let Some(selected) = self.shell.selected_environment() else {
             return components::VariableContext {
                 values: Default::default(),
@@ -5277,12 +5269,23 @@ impl ProbeApp {
             return components::VariableContext::default();
         };
         match resolve_environment(loaded.workspace().environments(), selected) {
-            Ok(environment) => components::VariableContext {
-                values: environment.variables().clone(),
-                secrets: environment.secrets_without_values().clone(),
-                unavailable_message: "Variable value is unavailable".to_owned(),
-                on_change: Some(on_change),
-            },
+            Ok(environment) => {
+                let view = cx.weak_entity();
+                components::VariableContext {
+                    values: environment.variables().clone(),
+                    secrets: environment.secrets_without_values().clone(),
+                    unavailable_message: "Variable value is unavailable".to_owned(),
+                    on_change: Some(Rc::new(move |name, value, window, cx| {
+                        let name = name.to_owned();
+                        let view = view.clone();
+                        window.defer(cx, move |window, cx| {
+                            let _ = view.update(cx, |view, cx| {
+                                view.update_environment_variable(&name, value, window, cx);
+                            });
+                        });
+                    })),
+                }
+            }
             Err(error) => components::VariableContext {
                 values: Default::default(),
                 unavailable_message: error.to_string(),
@@ -5863,6 +5866,20 @@ mod tests {
         ));
         fs::copy(environment_fixture(), &path).unwrap();
         path
+    }
+
+    fn hover_and_wait(
+        cx: &mut TestAppContext,
+        window: gpui::WindowHandle<ProbeApp>,
+        point: gpui::Point<gpui::Pixels>,
+    ) {
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual.simulate_mouse_move(point, None, Modifiers::default());
+            visual.run_until_parked();
+        }
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
     }
 
     fn writable_bundled_fixture(suffix: &str) -> PathBuf {
@@ -6895,19 +6912,7 @@ mod tests {
                 variable.left(),
             )
         };
-        {
-            let mut visual = VisualTestContext::from_window(window.into(), cx);
-            visual.simulate_mouse_move(variable_point, None, Modifiers::default());
-            visual.run_until_parked();
-        }
-        cx.executor()
-            .advance_clock(std::time::Duration::from_millis(200));
-        cx.run_until_parked();
-        {
-            let visual = VisualTestContext::from_window(window.into(), cx);
-            visual.run_until_parked();
-        }
-        cx.run_until_parked();
+        hover_and_wait(cx, window, variable_point);
         let popup_point = {
             let mut visual = VisualTestContext::from_window(window.into(), cx);
             let popup = visual
@@ -6921,14 +6926,7 @@ mod tests {
             );
             popup.center()
         };
-        {
-            let mut visual = VisualTestContext::from_window(window.into(), cx);
-            visual.simulate_mouse_move(popup_point, None, Modifiers::default());
-            visual.run_until_parked();
-        }
-        cx.executor()
-            .advance_clock(std::time::Duration::from_millis(200));
-        cx.run_until_parked();
+        hover_and_wait(cx, window, popup_point);
         {
             let mut visual = VisualTestContext::from_window(window.into(), cx);
             assert!(
@@ -7000,6 +6998,185 @@ mod tests {
             })
             .expect("test window should remain open");
         assert_eq!(edited_url.as_deref(), Some("https://url.example"));
+        fs::remove_file(fixture).unwrap();
+    }
+
+    #[gpui::test]
+    fn missing_url_variable_tooltip_creates_the_variable(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_environment_fixture("create-var")
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                view.select_request(request_key, cx);
+                view.shell
+                    .select_environment(Some("development".to_owned()));
+                view.edit_request(
+                    request_key,
+                    |request| request.url = Some("https://{{created}}/users".to_owned()),
+                    cx,
+                );
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let variable_point = {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual
+                .debug_bounds("variable-hover-trigger")
+                .expect("missing variable hover trigger should render")
+                .center()
+        };
+        hover_and_wait(cx, window, variable_point);
+        let popup_point = {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(
+                visual
+                    .debug_bounds("variable-tooltip-create-hint")
+                    .is_some(),
+                "missing variable tooltip should invite creating the variable"
+            );
+            visual
+                .debug_bounds("variable-input-tooltip-popup")
+                .expect("create-variable tooltip should render")
+                .center()
+        };
+        hover_and_wait(cx, window, popup_point);
+        let value_point = {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual
+                .debug_bounds("variable-tooltip-value-input")
+                .expect("create-variable value input should render")
+                .center()
+        };
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual.simulate_mouse_move(value_point, None, Modifiers::default());
+            visual.simulate_click(value_point, Modifiers::default());
+            visual.run_until_parked();
+            assert!(
+                visual
+                    .debug_bounds("variable-input-tooltip-popup")
+                    .is_some(),
+                "create-variable tooltip should stay open while focusing its value field"
+            );
+        }
+        cx.simulate_input(window.into(), "createdhost");
+        cx.run_until_parked();
+        let created = window
+            .update(cx, |view, _, _| {
+                let url = view
+                    .active_request()
+                    .and_then(|request| request.url.clone());
+                assert_eq!(url.as_deref(), Some("https://{{created}}/users"));
+                let environment = view.shell.selected_environment()?.to_owned();
+                probe_core::resolve_environment(
+                    view.loaded_workspace.as_ref()?.workspace().environments(),
+                    &environment,
+                )
+                .ok()
+                .and_then(|resolved| resolved.variable("created").map(str::to_owned))
+            })
+            .expect("test window should remain open");
+        assert_eq!(created.as_deref(), Some("createdhost"));
+        cx.run_until_parked();
+        let reloaded =
+            probe_opencollection::load_workspace(&fixture).expect("saved env should load");
+        assert_eq!(
+            probe_core::resolve_environment(reloaded.workspace().environments(), "development")
+                .unwrap()
+                .variable("created"),
+            Some("createdhost")
+        );
+        fs::remove_file(fixture).unwrap();
+    }
+
+    #[gpui::test]
+    fn json_body_variables_show_resolved_tooltips(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_environment_fixture("body-tooltip")
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let request_key = workspace.requests()[0].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                view.select_request(request_key, cx);
+                view.shell
+                    .select_environment(Some("development".to_owned()));
+                view.request_editor.section = EditorSection::Body;
+                view.edit_request(
+                    request_key,
+                    |request| {
+                        request.body = Some(probe_core::RequestBody::Single(
+                            probe_core::Body::Raw(probe_core::RawBody {
+                                kind: probe_core::RawBodyKind::Json,
+                                data: "{\n  \"tenant\": \"{{tenant}}\"\n}".to_owned(),
+                            }),
+                        ));
+                    },
+                    cx,
+                );
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+        // Hits are placed after the editor reports its overlay origin on a later frame.
+        window
+            .update(cx, |_, _, cx| cx.notify())
+            .expect("test window should remain open");
+        cx.run_until_parked();
+
+        let (variable_point, trigger_left) = {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            let editor = visual
+                .debug_bounds("request-body-editor")
+                .expect("JSON body editor should render");
+            let variable = visual
+                .debug_bounds("body-variable-hover-trigger")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "body variable hover trigger should render inside the JSON editor, editor={editor:?}"
+                    )
+                });
+            (variable.center(), variable.left())
+        };
+        hover_and_wait(cx, window, variable_point);
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            let popup = visual
+                .debug_bounds("variable-input-tooltip-popup")
+                .expect("hovered JSON body variable tooltip should render");
+            assert!(
+                (popup.left() - trigger_left).abs() < px(8.0),
+                "tooltip should appear near the body variable, popup={:?} trigger_left={:?}",
+                popup,
+                trigger_left
+            );
+            let value_input = visual
+                .debug_bounds("variable-tooltip-value-input")
+                .expect("tooltip value input should render");
+            assert!(
+                value_input.size.width > px(0.0),
+                "resolved variable value should be visible"
+            );
+        }
         fs::remove_file(fixture).unwrap();
     }
 

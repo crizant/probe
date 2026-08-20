@@ -278,6 +278,21 @@ fn resolves_raw_and_multipart_body_values() {
         panic!("expected raw body");
     };
     assert_eq!(raw.data, "{\"value\":\"resolved\"}");
+    let pretty_request = resolve_request(
+        &HttpRequest {
+            body: Some(RequestBody::Single(Body::Raw(RawBody {
+                kind: RawBodyKind::Json,
+                data: "{\n  \"value\": \"{{value}}\"\n}".to_owned(),
+            }))),
+            ..HttpRequest::default()
+        },
+        &environment,
+    )
+    .unwrap();
+    let Some(RequestBody::Single(Body::Raw(pretty))) = pretty_request.body else {
+        panic!("expected pretty raw body");
+    };
+    assert_eq!(pretty.data, "{\n  \"value\": \"resolved\"\n}");
     let Some(RequestBody::Single(Body::Multipart(parts))) = multipart_request.body else {
         panic!("expected multipart body");
     };

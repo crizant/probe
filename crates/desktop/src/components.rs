@@ -1,6 +1,7 @@
 //! Probe-styled compositions over headless Longbridge gpui-base behavior.
 
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     rc::Rc,
@@ -15,7 +16,7 @@ use gpui::{
     App, AppContext as _, Bounds, BoxShadow, ClickEvent, ContentMask, Context, Element, ElementId,
     Entity, EntityId, FocusHandle, Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla,
     InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton,
-    ParentElement as _, Pixels, Render, RenderOnce, Role, ShapedLine, SharedString,
+    ParentElement as _, Pixels, Point, Render, RenderOnce, Role, ShapedLine, SharedString,
     StatefulInteractiveElement as _, Style, Styled as _, Subscription, Task, TextAlign, TextRun,
     TransformationMatrix, Window, canvas, deferred, div, font, point, prelude::FluentBuilder as _,
     px, relative, size, transparent_black,
@@ -296,16 +297,22 @@ struct VariableHoverState {
     active: Option<(usize, String)>,
     trigger_bounds: Bounds<Pixels>,
     visible_width: Option<Pixels>,
+    overlay_origin: Option<Point<Pixels>>,
     hovering_trigger: bool,
     hovering_content: bool,
     input_focused: bool,
     epoch: usize,
     open_task: Option<Task<()>>,
     close_task: Option<Task<()>>,
+    value_input: Entity<InputState>,
+    on_value_change: RefCell<Option<VariableChangeHandler>>,
+    _input_subscription: Subscription,
 }
 
 impl VariableHoverState {
-    fn new() -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let value_input = cx.new(|cx| InputState::new(window, cx).placeholder("Variable value"));
+        let input_subscription = cx.subscribe_in(&value_input, window, Self::on_input_event);
         Self {
             open: false,
             active: None,
@@ -314,12 +321,40 @@ impl VariableHoverState {
                 size: size(px(0.0), px(0.0)),
             },
             visible_width: None,
+            overlay_origin: None,
             hovering_trigger: false,
             hovering_content: false,
             input_focused: false,
             epoch: 0,
             open_task: None,
             close_task: None,
+            value_input,
+            on_value_change: RefCell::new(None),
+            _input_subscription: input_subscription,
+        }
+    }
+
+    fn on_input_event(
+        this: &mut Self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                let Some((_, name)) = this.active.clone() else {
+                    return;
+                };
+                let Some(on_change) = this.on_value_change.borrow().clone() else {
+                    return;
+                };
+                let value = input.read(cx).value().to_string();
+                on_change(&name, value, window, cx);
+            }
+            InputEvent::Focus => this.set_input_focused(true, cx),
+            InputEvent::Blur => this.set_input_focused(false, cx),
+            InputEvent::PressEnter { .. } => {}
         }
     }
 
@@ -331,6 +366,9 @@ impl VariableHoverState {
         cx: &mut Context<Self>,
     ) {
         if hovering {
+            if self.input_focused {
+                return;
+            }
             self.active = Some((index, name));
             self.hovering_trigger = true;
             cx.notify();
@@ -429,12 +467,11 @@ impl Render for VariableHoverState {
 fn variable_tooltip_popup(
     theme: Theme,
     name: String,
-    value: String,
-    editable: bool,
+    presentation: VariableTooltipPresentation,
     hover: Entity<VariableHoverState>,
-    on_change: Option<VariableChangeHandler>,
+    value_input: Entity<InputState>,
 ) -> impl IntoElement {
-    let hover_for_focus = hover.clone();
+    let hover_for_content = hover;
     div()
         .id("variable-input-tooltip-popup")
         .debug_selector(|| "variable-input-tooltip-popup".into())
@@ -450,9 +487,15 @@ fn variable_tooltip_popup(
         .border_1()
         .border_color(theme.colors.borders.standard)
         .occlude()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_down(MouseButton::Left, {
+            let value_input = value_input.clone();
+            move |_, window, cx| {
+                cx.stop_propagation();
+                value_input.update(cx, |input, cx| input.focus(window, cx));
+            }
+        })
         .on_hover(move |hovered, _, cx| {
-            hover.update(cx, |state, cx| state.on_content_hover(*hovered, cx));
+            hover_for_content.update(cx, |state, cx| state.on_content_hover(*hovered, cx));
         })
         .child(
             truncated_label(format!("{{{{{name}}}}}"))
@@ -461,38 +504,39 @@ fn variable_tooltip_popup(
                 .text_size(px(theme.typography.caption_size))
                 .text_color(theme.colors.syntax.string),
         )
+        .when_some(presentation.hint, |popup, hint| {
+            popup.child(
+                truncated_label(hint)
+                    .id("variable-tooltip-create-hint")
+                    .debug_selector(|| "variable-tooltip-create-hint".into())
+                    .flex_none()
+                    .text_size(px(theme.typography.caption_size))
+                    .text_color(theme.colors.text.muted),
+            )
+        })
         .child(variable_value_input(
             theme,
             format!("variable-tooltip-value-{name}"),
-            value,
-            editable,
-            {
-                let name = name.clone();
-                move |value, window, cx| {
-                    if let Some(on_change) = &on_change {
-                        on_change(&name, value.to_string(), window, cx);
-                    }
-                }
-            },
-            move |focused, cx| {
-                hover_for_focus.update(cx, |state, cx| state.set_input_focused(focused, cx));
-            },
+            value_input,
+            presentation.value,
+            presentation.placeholder,
+            presentation.editable,
         ))
 }
 
 fn variable_value_input(
     theme: Theme,
     id: impl Into<ElementId>,
+    state: Entity<InputState>,
     value: impl Into<SharedString>,
+    placeholder: impl Into<SharedString>,
     editable: bool,
-    on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-    on_focus: impl Fn(bool, &mut App) + 'static,
 ) -> gpui::AnyElement {
     ProbeTextInput {
         theme,
         id: id.into(),
         value: single_line(value),
-        placeholder: SharedString::from("Variable value"),
+        placeholder: placeholder.into(),
         variables: VariableContext::default(),
         highlight_path_variables: false,
         variable_overlay: false,
@@ -501,11 +545,12 @@ fn variable_value_input(
         height: theme.metrics.control_height,
         width: None,
         debug_selector: Some("variable-tooltip-value-input"),
-        on_change: Rc::new(on_value_change),
+        on_change: None,
         on_enter: None,
         autofocus: false,
         readonly: !editable,
-        on_focus: Some(Rc::new(on_focus)),
+        on_focus: None,
+        shared_input: Some(state),
     }
     .into_any_element()
 }
@@ -783,7 +828,7 @@ type FocusChangeHandler = Rc<dyn Fn(bool, &mut App)>;
 
 struct FieldInput {
     state: Entity<InputState>,
-    on_change: InputChangeHandler,
+    on_change: Option<InputChangeHandler>,
     on_enter: Option<InputChangeHandler>,
     on_focus: Option<FocusChangeHandler>,
     autofocused: bool,
@@ -800,8 +845,10 @@ impl FieldInput {
     ) {
         match event {
             InputEvent::Change => {
-                let value = input.read(cx).value();
-                (this.on_change)(value, window, cx);
+                if let Some(on_change) = this.on_change.clone() {
+                    let value = input.read(cx).value();
+                    on_change(value, window, cx);
+                }
             }
             InputEvent::PressEnter { .. } => {
                 if let Some(on_enter) = this.on_enter.clone() {
@@ -837,11 +884,12 @@ struct ProbeTextInput {
     height: f32,
     width: Option<f32>,
     debug_selector: Option<&'static str>,
-    on_change: InputChangeHandler,
+    on_change: Option<InputChangeHandler>,
     on_enter: Option<InputChangeHandler>,
     on_focus: Option<FocusChangeHandler>,
     autofocus: bool,
     readonly: bool,
+    shared_input: Option<Entity<InputState>>,
 }
 
 impl RenderOnce for ProbeTextInput {
@@ -851,43 +899,48 @@ impl RenderOnce for ProbeTextInput {
         let placeholder = self.placeholder.clone();
         let on_change = self.on_change.clone();
         let on_enter = self.on_enter.clone();
-        let field = window.use_keyed_state(self.id.clone(), cx, |window, cx| {
-            let state = cx.new(|cx| {
-                let mut state = InputState::new(window, cx).placeholder(placeholder.clone());
-                state.set_editor_style(editor_paint_style(self.theme));
-                state
-            });
-            let subscription = cx.subscribe_in(&state, window, FieldInput::on_event);
-            FieldInput {
-                state,
-                on_change: on_change.clone(),
-                on_enter: on_enter.clone(),
-                on_focus: None,
-                autofocused: false,
-                _subscription: subscription,
-            }
-        });
-        field.update(cx, |field, cx| {
-            field.on_change = self.on_change.clone();
-            field.on_enter = self.on_enter.clone();
-            field.on_focus = self.on_focus.clone();
-            field.state.update(cx, |input, cx| {
-                input.set_editor_style(editor_paint_style(self.theme));
-                input.set_readonly(self.readonly, cx);
-                if input.value() != self.value {
-                    input.set_value(self.value.clone(), window, cx);
+        let state = if let Some(state) = self.shared_input.clone() {
+            state
+        } else {
+            let field = window.use_keyed_state(self.id.clone(), cx, |window, cx| {
+                let state = cx.new(|cx| {
+                    let mut state = InputState::new(window, cx).placeholder(placeholder.clone());
+                    state.set_editor_style(editor_paint_style(self.theme));
+                    state
+                });
+                let subscription = cx.subscribe_in(&state, window, FieldInput::on_event);
+                FieldInput {
+                    state,
+                    on_change: on_change.clone(),
+                    on_enter: on_enter.clone(),
+                    on_focus: None,
+                    autofocused: false,
+                    _subscription: subscription,
                 }
             });
-        });
-        let state = field.read(cx).state.clone();
-        if self.autofocus && !field.read(cx).autofocused {
-            field.update(cx, |field, _| field.autofocused = true);
-            let focus_state = state.clone();
-            window.defer(cx, move |window, cx| {
-                focus_state.update(cx, |input, cx| input.focus(window, cx));
+            field.update(cx, |field, _| {
+                field.on_change = self.on_change.clone();
+                field.on_enter = self.on_enter.clone();
+                field.on_focus = self.on_focus.clone();
             });
-        }
+            if self.autofocus && !field.read(cx).autofocused {
+                field.update(cx, |field, _| field.autofocused = true);
+                let focus_state = field.read(cx).state.clone();
+                window.defer(cx, move |window, cx| {
+                    focus_state.update(cx, |input, cx| input.focus(window, cx));
+                });
+            }
+            field.read(cx).state.clone()
+        };
         let focused = state.read(cx).focus_handle(cx).is_focused(window);
+        state.update(cx, |input, cx| {
+            input.set_editor_style(editor_paint_style(self.theme));
+            input.set_readonly(self.readonly, cx);
+            input.set_placeholder(placeholder, window, cx);
+            if !focused && input.value() != self.value {
+                input.set_value(self.value.clone(), window, cx);
+            }
+        });
         let tooltip_id = ElementId::NamedChild(
             Arc::new(self.id.clone()),
             SharedString::from("variable-tooltip"),
@@ -971,11 +1024,12 @@ pub(crate) fn variable_text_input(
         height: theme.metrics.control_height,
         width: None,
         debug_selector: None,
-        on_change: Rc::new(on_value_change),
+        on_change: Some(Rc::new(on_value_change)),
         on_enter: None,
         on_focus: None,
         autofocus: false,
         readonly: false,
+        shared_input: None,
     }
     .into_any_element()
 }
@@ -1001,11 +1055,12 @@ pub(crate) fn url_text_input(
         height: theme.metrics.control_height,
         width: None,
         debug_selector: None,
-        on_change: Rc::new(on_value_change),
+        on_change: Some(Rc::new(on_value_change)),
         on_enter: None,
         on_focus: None,
         autofocus: false,
         readonly: false,
+        shared_input: None,
     }
     .into_any_element()
 }
@@ -1032,11 +1087,12 @@ pub(crate) fn dialog_text_input(
         height: theme.metrics.control_height,
         width: None,
         debug_selector: None,
-        on_change: Rc::new(on_value_change),
+        on_change: Some(Rc::new(on_value_change)),
         on_enter: Some(Rc::new(on_enter)),
         on_focus: None,
         autofocus,
         readonly: false,
+        shared_input: None,
     }
     .into_any_element()
 }
@@ -1062,11 +1118,12 @@ pub(crate) fn search_input(
         height: theme.metrics.control_height - 2.0,
         width: Some(180.0),
         debug_selector: Some("response-search"),
-        on_change: Rc::new(on_value_change),
+        on_change: Some(Rc::new(on_value_change)),
         on_enter: Some(Rc::new(on_enter)),
         on_focus: None,
         autofocus: false,
         readonly: false,
+        shared_input: None,
     }
 }
 
@@ -1481,6 +1538,7 @@ pub(crate) fn body_text_input(
     id: impl Into<ElementId>,
     value: impl Into<SharedString>,
     syntax: BodySyntax,
+    variables: VariableContext,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui::AnyElement {
     let value = value.into();
@@ -1506,6 +1564,7 @@ pub(crate) fn body_text_input(
         on_change: Some(Rc::new(on_value_change)),
         on_visible_range: None,
         debug_selector: None,
+        variables: Some(variables),
     }
     .into_any_element()
 }
@@ -1544,6 +1603,7 @@ pub(crate) fn response_body_input(
         on_change: None,
         on_visible_range: Some(Rc::new(on_visible_range)),
         debug_selector: None,
+        variables: None,
     }
     .into_any_element()
 }
@@ -1589,6 +1649,7 @@ pub(crate) fn response_headers_input(
         on_change: None,
         on_visible_range: Some(Rc::new(on_visible_range)),
         debug_selector: None,
+        variables: None,
     }
     .into_any_element()
 }
@@ -1651,6 +1712,7 @@ struct ProbeEditor {
     on_change: Option<InputChangeHandler>,
     on_visible_range: Option<VisibleRangeHandler>,
     debug_selector: Option<&'static str>,
+    variables: Option<VariableContext>,
 }
 
 impl RenderOnce for ProbeEditor {
@@ -1732,7 +1794,8 @@ impl RenderOnce for ProbeEditor {
         }
         let focused = state.read(cx).focus_handle(cx).is_focused(window);
         let theme = self.theme;
-        InputBase::new(self.id)
+        let editor_id = self.id.clone();
+        let editor = InputBase::new(editor_id.clone())
             .size_full()
             .when_some(self.min_height, |editor, height| editor.min_h(px(height)))
             .when(self.padded, |editor| editor.p(px(theme.metrics.spacing_2)))
@@ -1761,7 +1824,20 @@ impl RenderOnce for ProbeEditor {
                     state.update(cx, |editor, cx| editor.focus(window, cx));
                 }
             })
-            .child(div().size_full().child(Editor::new(&state)))
+            .child(div().size_full().child(Editor::new(&state)));
+        let Some(variables) = self.variables else {
+            return editor.into_any_element();
+        };
+        variable_editor_overlay(
+            theme,
+            state,
+            ElementId::NamedChild(Arc::new(editor_id), SharedString::from("variable-tooltip")),
+            editor,
+            self.value,
+            variables,
+            window,
+            cx,
+        )
     }
 }
 
@@ -1839,7 +1915,7 @@ fn variable_input_overlay(
     let hover = window.use_keyed_state(
         ElementId::NamedChild(Arc::new(tooltip_id), SharedString::from("hover")),
         cx,
-        |_, _| VariableHoverState::new(),
+        VariableHoverState::new,
     );
     let visible_width = hover.read(cx).visible_width;
     let current_scroll = state.read(cx).scroll_offset().x;
@@ -1869,52 +1945,24 @@ fn variable_input_overlay(
         }
     });
     for (index, (name, left, width)) in spans.into_iter().enumerate() {
-        let hover_trigger = hover.clone();
-        let trigger_name = name.clone();
         hits = hits.child(
-            div()
-                .id(("variable-hover", index))
-                .absolute()
-                .left(left)
-                .w(width)
-                .top(px(0.0))
-                .bottom(px(0.0))
-                .debug_selector(move || {
-                    if index == 0 {
-                        "variable-hover-trigger".into()
-                    } else {
-                        format!("variable-hover-trigger-{index}")
-                    }
-                })
-                .on_hover({
-                    let hover = hover_trigger.clone();
-                    let name = trigger_name.clone();
-                    move |hovered, _, cx| {
-                        hover.update(cx, |state, cx| {
-                            state.on_trigger_hover(index, name.clone(), *hovered, cx);
-                        });
-                    }
-                })
-                .on_prepaint({
-                    let hover = hover_trigger;
-                    move |bounds, window, cx| {
-                        let changed = hover.update(cx, |state, _| {
-                            if state
-                                .active
-                                .as_ref()
-                                .is_none_or(|(active, _)| *active != index)
-                            {
-                                return false;
-                            }
-                            let changed = state.trigger_bounds != bounds;
-                            state.trigger_bounds = bounds;
-                            changed
-                        });
-                        if changed {
-                            window.request_animation_frame();
-                        }
-                    }
-                }),
+            variable_hover_hit(
+                ("variable-hover", index),
+                index,
+                name,
+                hover.clone(),
+                left,
+                px(0.0),
+                width,
+                None,
+                if index == 0 {
+                    "variable-hover-trigger".into()
+                } else {
+                    format!("variable-hover-trigger-{index}")
+                },
+            )
+            .top(px(0.0))
+            .bottom(px(0.0)),
         );
     }
     wrapper = wrapper.child(
@@ -1933,6 +1981,148 @@ fn variable_input_overlay(
             .child(hits),
     );
 
+    with_variable_tooltip(wrapper, theme, hover, variables, cx)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn variable_editor_overlay(
+    theme: Theme,
+    state: Entity<EditorState>,
+    tooltip_id: ElementId,
+    editor: impl IntoElement,
+    value: SharedString,
+    variables: VariableContext,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let ranges = variable_ranges(&value);
+    let mut wrapper = div()
+        .id(tooltip_id.clone())
+        .relative()
+        .size_full()
+        .min_h(px(0.0))
+        .child(editor);
+    if ranges.is_empty() {
+        return wrapper.into_any_element();
+    }
+
+    let hover = window.use_keyed_state(
+        ElementId::NamedChild(Arc::new(tooltip_id), SharedString::from("hover")),
+        cx,
+        VariableHoverState::new,
+    );
+    let overlay_origin = hover.read(cx).overlay_origin;
+    let mut hits = div()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .overflow_hidden()
+        .on_prepaint({
+            let hover = hover.clone();
+            move |bounds, window, cx| {
+                let origin = bounds.origin;
+                let changed = hover.update(cx, |state, _| {
+                    let changed = state.overlay_origin != Some(origin);
+                    state.overlay_origin = Some(origin);
+                    changed
+                });
+                if changed {
+                    window.request_animation_frame();
+                }
+            }
+        });
+    if let Some(origin) = overlay_origin {
+        let editor = state.read(cx);
+        if editor.visible_row_range().is_none() {
+            window.request_animation_frame();
+        }
+        for (index, (range, name)) in ranges.into_iter().enumerate() {
+            let Some(bounds) = editor.range_to_bounds(&range) else {
+                continue;
+            };
+            hits = hits.child(variable_hover_hit(
+                ("body-variable-hover", index),
+                index,
+                name,
+                hover.clone(),
+                bounds.origin.x - origin.x,
+                bounds.origin.y - origin.y,
+                bounds.size.width.max(px(1.0)),
+                Some(bounds.size.height.max(px(1.0))),
+                if index == 0 {
+                    "body-variable-hover-trigger".into()
+                } else {
+                    format!("body-variable-hover-trigger-{index}")
+                },
+            ));
+        }
+    } else {
+        window.request_animation_frame();
+    }
+    wrapper = wrapper.child(hits);
+    with_variable_tooltip(wrapper, theme, hover, variables, cx)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn variable_hover_hit(
+    id: impl Into<ElementId>,
+    index: usize,
+    name: String,
+    hover: Entity<VariableHoverState>,
+    left: Pixels,
+    top: Pixels,
+    width: Pixels,
+    height: Option<Pixels>,
+    debug_selector: String,
+) -> gpui::Stateful<gpui::Div> {
+    let hover_trigger = hover.clone();
+    div()
+        .id(id)
+        .absolute()
+        .left(left)
+        .top(top)
+        .w(width)
+        .when_some(height, |hit, height| hit.h(height))
+        .debug_selector(move || debug_selector.clone())
+        .on_hover({
+            let hover = hover_trigger.clone();
+            move |hovered, _, cx| {
+                hover.update(cx, |state, cx| {
+                    state.on_trigger_hover(index, name.clone(), *hovered, cx);
+                });
+            }
+        })
+        .on_prepaint({
+            let hover = hover_trigger;
+            move |bounds, window, cx| {
+                let changed = hover.update(cx, |state, _| {
+                    if state
+                        .active
+                        .as_ref()
+                        .is_none_or(|(active, _)| *active != index)
+                    {
+                        return false;
+                    }
+                    let changed = state.trigger_bounds != bounds;
+                    state.trigger_bounds = bounds;
+                    changed
+                });
+                if changed {
+                    window.request_animation_frame();
+                }
+            }
+        })
+}
+
+fn with_variable_tooltip(
+    wrapper: gpui::Stateful<gpui::Div>,
+    theme: Theme,
+    hover: Entity<VariableHoverState>,
+    variables: VariableContext,
+    cx: &App,
+) -> gpui::AnyElement {
     let (open, active, bounds) = {
         let state = hover.read(cx);
         (state.open, state.active.clone(), state.trigger_bounds)
@@ -1946,8 +2136,9 @@ fn variable_input_overlay(
     if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
         return wrapper.into_any_element();
     }
-    let value = variable_tooltip_value(&name, &variables);
-    let editable = variables.on_change.is_some() && !variables.secrets.contains(&name);
+    let presentation = variable_tooltip_presentation(&name, &variables);
+    let value_input = hover.read(cx).value_input.clone();
+    *hover.read(cx).on_value_change.borrow_mut() = variables.on_change.clone();
     wrapper
         .child(
             deferred(
@@ -1959,10 +2150,9 @@ fn variable_input_overlay(
                     .child(variable_tooltip_popup(
                         theme,
                         name,
-                        value,
-                        editable,
+                        presentation,
                         hover,
-                        variables.on_change,
+                        value_input,
                     )),
             )
             .with_priority(POPUP_PRIORITY),
@@ -2267,12 +2457,46 @@ pub(crate) fn single_line(value: impl Into<SharedString>) -> SharedString {
     }
 }
 
-fn variable_tooltip_value(name: &str, variables: &VariableContext) -> String {
-    variables
-        .values
-        .get(name)
-        .cloned()
-        .unwrap_or_else(|| variables.unavailable_message.clone())
+fn variable_tooltip_presentation(
+    name: &str,
+    variables: &VariableContext,
+) -> VariableTooltipPresentation {
+    if variables.secrets.contains(name) {
+        return unavailable_variable_tooltip(&variables.unavailable_message);
+    }
+    if let Some(value) = variables.values.get(name) {
+        return VariableTooltipPresentation {
+            value: value.clone(),
+            placeholder: "Variable value",
+            editable: variables.on_change.is_some(),
+            hint: None,
+        };
+    }
+    if variables.on_change.is_some() {
+        return VariableTooltipPresentation {
+            value: String::new(),
+            placeholder: "Enter a value to create",
+            editable: true,
+            hint: Some("Not defined in this environment"),
+        };
+    }
+    unavailable_variable_tooltip(&variables.unavailable_message)
+}
+
+fn unavailable_variable_tooltip(message: &str) -> VariableTooltipPresentation {
+    VariableTooltipPresentation {
+        value: message.to_owned(),
+        placeholder: "Variable value",
+        editable: false,
+        hint: None,
+    }
+}
+
+struct VariableTooltipPresentation {
+    value: String,
+    placeholder: &'static str,
+    editable: bool,
+    hint: Option<&'static str>,
 }
 
 fn variable_ranges(value: &str) -> Vec<(Range<usize>, String)> {
@@ -2284,7 +2508,7 @@ fn variable_ranges(value: &str) -> Vec<(Range<usize>, String)> {
         let Some(end) = after_start.find("}}") else {
             break;
         };
-        let name = &after_start[..end];
+        let name = after_start[..end].trim();
         if !name.is_empty() && !name.contains("{{") {
             let range_start = offset + start;
             let range_end = range_start + 2 + end + 2;
@@ -2512,7 +2736,8 @@ mod tests {
     use super::{
         VariableContext, VariableHighlightElement, body_text_highlights, dropdown,
         editor_paint_style, input_text_scroll_offset, menu_button, single_line,
-        variable_highlight_runs, variable_ranges, variable_span_layout, variable_tooltip_value,
+        variable_highlight_runs, variable_ranges, variable_span_layout,
+        variable_tooltip_presentation,
     };
     use crate::theme::Theme;
     use probe_core::path_variable_ranges;
@@ -2828,6 +3053,15 @@ mod tests {
     }
 
     #[test]
+    fn variable_ranges_trim_names_and_find_placeholders_in_json() {
+        let value = "{\n  \"tenant\": \"{{ tenant }}\"\n}";
+        let ranges = variable_ranges(value);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&value[ranges[0].0.clone()], "{{ tenant }}");
+        assert_eq!(ranges[0].1, "tenant");
+    }
+
+    #[test]
     fn path_variable_ranges_only_highlight_colon_placeholders_in_the_url_path() {
         let value = "https://api.example.com:8443/users/:userId/posts/:post_id?next=:ignored";
         let ranges = path_variable_ranges(value);
@@ -2839,16 +3073,42 @@ mod tests {
     }
 
     #[test]
-    fn variable_tooltip_value_uses_resolved_or_unavailable_message() {
+    fn variable_tooltip_presentation_creates_missing_writable_variables() {
         let mut values = BTreeMap::new();
         values.insert("host".to_owned(), "api.example".to_owned());
         let variables = VariableContext {
             values,
+            secrets: ["token".to_owned()].into_iter().collect(),
             unavailable_message: "unavailable".to_owned(),
+            on_change: Some(std::rc::Rc::new(|_, _, _, _| {})),
+        };
+        let existing = variable_tooltip_presentation("host", &variables);
+        assert_eq!(existing.value, "api.example");
+        assert!(existing.editable);
+        assert!(existing.hint.is_none());
+
+        let missing = variable_tooltip_presentation("created", &variables);
+        assert_eq!(missing.value, "");
+        assert_eq!(missing.placeholder, "Enter a value to create");
+        assert!(missing.editable);
+        assert_eq!(missing.hint, Some("Not defined in this environment"));
+
+        let secret = variable_tooltip_presentation("token", &variables);
+        assert_eq!(secret.value, "unavailable");
+        assert!(!secret.editable);
+        assert!(secret.hint.is_none());
+    }
+
+    #[test]
+    fn variable_tooltip_presentation_keeps_unavailable_when_not_writable() {
+        let variables = VariableContext {
+            unavailable_message: "Select an environment".to_owned(),
             ..VariableContext::default()
         };
-        assert_eq!(variable_tooltip_value("host", &variables), "api.example");
-        assert_eq!(variable_tooltip_value("missing", &variables), "unavailable");
+        let missing = variable_tooltip_presentation("created", &variables);
+        assert_eq!(missing.value, "Select an environment");
+        assert!(!missing.editable);
+        assert!(missing.hint.is_none());
     }
 
     #[gpui::test]

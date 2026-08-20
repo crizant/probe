@@ -263,14 +263,15 @@ Request editor controls mutate the repository-loaded in-memory `HttpRequest` dir
 through its runtime `RequestKey`; they do not reload or parse collection files. The tab
 is the single request-name label above the editor, so the URL bar is not preceded by a
 duplicate title. Persistence remains a separate repository operation and is not
-implicitly coupled to individual keystrokes. Hovering a `{{variable}}` span in a
-single-line field shows only that variable, aligned to its left edge, with an input
-for copying or updating the value on the selected environment. The popup stays open
-while the pointer moves from the span onto the popup. Those edits update the in-memory
-environment used by Send, then persist through the same OpenCollection repository
-operation used by the CLI: merge the changed variable into the retained YAML, compare
-source bytes, and atomically write. Secrets remain read-only. After a successful save,
-the value survives collection reload.
+implicitly coupled to individual keystrokes. Hovering a `{{variable}}` span in the
+request editor (URL, headers, and body) shows only that variable, aligned to that
+span, with an input for copying or updating the value on the selected environment.
+An undefined name on a selected environment uses the same input to create the
+variable. The popup stays open while the pointer moves from the span onto the popup.
+Those edits update the in-memory environment used by Send, then persist through the
+same OpenCollection repository operation used by the CLI: merge the changed variable
+into the retained YAML, compare source bytes, and atomically write. Secrets remain
+read-only. After a successful save, the value survives collection reload.
 Environment selection lives at the fixed right edge of the request tab bar and is
 workspace-scoped presentation state, so every
 open request shares the same selected environment. The last selection for each
