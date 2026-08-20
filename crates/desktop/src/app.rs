@@ -60,6 +60,9 @@ use crate::{
     theme::Theme,
 };
 
+const APPLICATION_ID: &str = "dev.probe.desktop";
+const APPLICATION_NAME: &str = "Probe";
+
 #[cfg(test)]
 use crate::filesystem::{WATCH_POLL, drain_watch_events};
 
@@ -5730,6 +5733,7 @@ fn render_windows_controls(_: Theme) -> gpui::Div {
 
 pub fn run() {
     gpui_platform::application().run(|cx: &mut App| {
+        cx.set_app_identity(APPLICATION_ID, APPLICATION_NAME);
         Theme::init(cx);
         bind_platform_hotkeys(cx);
 
@@ -5748,7 +5752,7 @@ pub fn run() {
                 }),
                 app_owns_titlebar_drag: cfg!(target_os = "macos"),
                 window_min_size: Some(size(px(760.0), px(560.0))),
-                app_id: Some("dev.probe.desktop".to_owned()),
+                app_id: Some(APPLICATION_ID.to_owned()),
                 ..Default::default()
             },
             |window, cx| {

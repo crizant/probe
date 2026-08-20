@@ -1,9 +1,26 @@
 [package]
 name = "probe-desktop"
+description = "A fast, native, local-first API client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+
+[package.metadata.bundle]
+name = "Probe"
+identifier = "dev.probe.desktop"
+icon = [
+    "crates/desktop/assets/app-icon/macos/Probe.icns",
+    "crates/desktop/assets/app-icon/windows/Probe.ico",
+    "crates/desktop/assets/app-icon/linux/hicolor/32x32/apps/dev.probe.desktop.png",
+    "crates/desktop/assets/app-icon/linux/hicolor/128x128/apps/dev.probe.desktop.png",
+    "crates/desktop/assets/app-icon/linux/hicolor/256x256/apps/dev.probe.desktop.png",
+    "crates/desktop/assets/app-icon/linux/hicolor/512x512/apps/dev.probe.desktop.png",
+]
+category = "Developer Tool"
+short_description = "A fast, native, local-first API client"
+long_description = "Probe is a native API client for working with local OpenCollection workspaces."
+linux_startup_wm_class = "dev.probe.desktop"
 
 [dependencies]
 atomic-write-file = "0.3.1"
@@ -45,3 +62,6 @@ gpui_platform = { version = "0.1.0", git = "https://github.com/zed-industries/ze
 
 [lints]
 workspace = true
+
+[build-dependencies]
+winresource = "0.1.31"
