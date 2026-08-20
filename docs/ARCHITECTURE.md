@@ -250,8 +250,12 @@ the GPUI adapter never parses YAML. Folder expansion, active tabs, and pane size
 presentation state and do not modify the domain workspace.
 
 The window title bar owns workspace-level navigation. Its workspace switcher exposes
-recent collections plus explicit open and close actions, while collection content
-begins directly beneath the title bar without a duplicate application toolbar. The
+recent collections plus explicit new, open, and close actions, while collection content
+begins directly beneath the title bar without a duplicate application toolbar. New
+Collection uses the platform save panel to create an empty bundled OpenCollection YAML
+file through the shared repository, then loads it with the same path used to open an
+existing collection. The empty sidebar offers the same new and open actions before a
+collection is loaded. The
 request editor and response viewer can be stacked vertically or placed side by side;
 the orientation and independent response-pane dimensions are presentation state.
 

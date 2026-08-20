@@ -22,9 +22,9 @@ mod repository;
 mod structure;
 
 pub use repository::{
-    CompletedEnvironmentSave, CompletedRequestSave, LoadError, LoadedWorkspace, LocatedFolder,
-    LocatedRequest, PreparedEnvironmentSave, PreparedRequestSave, SaveError, load_workspace,
-    load_workspace_from_str,
+    CompletedEnvironmentSave, CompletedRequestSave, CreateError, LoadError, LoadedWorkspace,
+    LocatedFolder, LocatedRequest, PreparedEnvironmentSave, PreparedRequestSave, SaveError,
+    create_bundled_workspace, load_workspace, load_workspace_from_str,
 };
 pub use structure::{ItemKind, StructureError, StructureOperation, StructureResult};
 

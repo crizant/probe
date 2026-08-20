@@ -17,7 +17,7 @@ use probe_core::{
     RequestKey, RequestUpdate, Variable, VariableValue, VariableValueSet, VariableValueVariant,
     Workspace, WorkspaceItemRef, validate_environments,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value;
 
 use super::{EnvironmentDocument, ParseError, parse, project_item};
@@ -101,6 +101,15 @@ impl LoadedWorkspace {
     #[must_use]
     pub const fn uses_path_locators(&self) -> bool {
         matches!(self.source, WorkspaceSource::Unbundled(_))
+    }
+
+    /// Returns the filesystem path this workspace was loaded from, if any.
+    #[must_use]
+    pub fn source_path(&self) -> Option<&Path> {
+        match &self.source {
+            WorkspaceSource::Bundled(path) | WorkspaceSource::Unbundled(path) => Some(path),
+            WorkspaceSource::Memory => None,
+        }
     }
 
     /// Mutably looks up a request in the loaded in-memory workspace.
@@ -521,6 +530,151 @@ pub fn load_workspace(path: impl AsRef<Path>) -> Result<LoadedWorkspace, LoadErr
 /// document is loaded from a file.
 pub fn load_workspace_from_str(source: &str) -> Result<LoadedWorkspace, LoadError> {
     load_bundled_source(source, None)
+}
+
+/// Creates an empty bundled OpenCollection YAML file at `path` and loads it.
+///
+/// When `path` has no extension, `.yml` is appended. `name` overrides the collection
+/// title; otherwise the file stem is used. Existing files are left unchanged unless
+/// `replace` is true. Directories are rejected.
+pub fn create_bundled_workspace(
+    path: impl AsRef<Path>,
+    name: Option<&str>,
+    replace: bool,
+) -> Result<LoadedWorkspace, CreateError> {
+    let path = with_yaml_extension(path.as_ref());
+    if path.is_dir() {
+        return Err(CreateError::IsDirectory(path));
+    }
+    if path.exists() && !replace {
+        return Err(CreateError::AlreadyExists(path));
+    }
+    let collection_name = collection_name_from_path(&path, name);
+    let source = bundled_collection_yaml(&collection_name)?;
+    write_collection_file(&path, source.as_bytes())?;
+    load_workspace(&path).map_err(CreateError::Load)
+}
+
+fn with_yaml_extension(path: &Path) -> PathBuf {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some(extension)
+            if extension.eq_ignore_ascii_case("yml") || extension.eq_ignore_ascii_case("yaml") =>
+        {
+            path.to_owned()
+        }
+        Some(_) => path.to_owned(),
+        None => path.with_extension("yml"),
+    }
+}
+
+fn collection_name_from_path(path: &Path, name: Option<&str>) -> String {
+    if let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) {
+        return name.to_owned();
+    }
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::trim)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("Collection")
+        .to_owned()
+}
+
+fn bundled_collection_yaml(name: &str) -> Result<String, CreateError> {
+    let document = NewBundledCollection {
+        opencollection: "1.0.0",
+        info: NewCollectionInfo { name },
+        bundled: true,
+    };
+    let yaml = serde_yaml_ng::to_string(&document).map_err(CreateError::Serialize)?;
+    Ok(yaml
+        .strip_prefix("---\n")
+        .unwrap_or(&yaml)
+        .trim_start()
+        .to_owned())
+}
+
+fn write_collection_file(path: &Path, contents: &[u8]) -> Result<(), CreateError> {
+    let map_io = |source| CreateError::Io {
+        path: path.to_owned(),
+        source,
+    };
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).map_err(map_io)?;
+    }
+    let mut file = AtomicWriteFile::open(path).map_err(map_io)?;
+    file.write_all(contents).map_err(map_io)?;
+    file.sync_all().map_err(map_io)?;
+    file.commit().map_err(map_io)?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct NewBundledCollection<'a> {
+    opencollection: &'a str,
+    info: NewCollectionInfo<'a>,
+    bundled: bool,
+}
+
+#[derive(Serialize)]
+struct NewCollectionInfo<'a> {
+    name: &'a str,
+}
+
+/// An error raised while creating an OpenCollection workspace.
+#[derive(Debug)]
+pub enum CreateError {
+    /// The destination already exists and replacement was not requested.
+    AlreadyExists(PathBuf),
+    /// The destination is a directory.
+    IsDirectory(PathBuf),
+    /// YAML serialization failed.
+    Serialize(serde_yaml_ng::Error),
+    /// A filesystem operation failed.
+    Io { path: PathBuf, source: io::Error },
+    /// The new document could not be loaded after it was written.
+    Load(LoadError),
+}
+
+impl fmt::Display for CreateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyExists(path) => {
+                write!(
+                    formatter,
+                    "refusing to overwrite existing file: {}",
+                    path.display()
+                )
+            }
+            Self::IsDirectory(path) => {
+                write!(
+                    formatter,
+                    "cannot create a collection at directory {}",
+                    path.display()
+                )
+            }
+            Self::Serialize(source) => {
+                write!(formatter, "cannot serialize OpenCollection YAML: {source}")
+            }
+            Self::Io { path, source } => {
+                write!(formatter, "cannot create {}: {source}", path.display())
+            }
+            Self::Load(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl Error for CreateError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Serialize(source) => Some(source),
+            Self::Io { source, .. } => Some(source),
+            Self::Load(error) => Some(error),
+            Self::AlreadyExists(_) | Self::IsDirectory(_) => None,
+        }
+    }
 }
 
 /// An error raised while loading an OpenCollection workspace.

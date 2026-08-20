@@ -9,7 +9,8 @@ use probe_core::{
     FormField, Header, QueryParameter, RequestBody, RequestUpdate, resolve_environment,
 };
 use probe_opencollection::{
-    SaveError, StructureError, StructureOperation, load_workspace, load_workspace_from_str,
+    CreateError, SaveError, StructureError, StructureOperation, create_bundled_workspace,
+    load_workspace, load_workspace_from_str,
 };
 
 fn fixture(path: &str) -> PathBuf {
@@ -1072,4 +1073,98 @@ fn environment_update_rejects_stdin_workspaces() {
         resolved_variable(&loaded, "development", "token").as_deref(),
         Some("rotated")
     );
+}
+
+#[test]
+fn create_bundled_workspace_writes_an_empty_collection() {
+    let directory = temporary_path("created");
+    fs::create_dir(&directory).unwrap();
+    let path = directory.join("pets.yml");
+    let loaded = create_bundled_workspace(&path, None, false).expect("collection should create");
+
+    assert_eq!(loaded.workspace().metadata().name.as_deref(), Some("pets"));
+    assert_eq!(loaded.workspace().request_count(), 0);
+    assert_eq!(loaded.workspace().folder_count(), 0);
+    assert!(loaded.workspace().environments().is_empty());
+    assert!(!loaded.uses_path_locators());
+
+    let reloaded = load_workspace(&path).expect("created collection should reload");
+    assert_eq!(
+        reloaded.workspace().metadata().name.as_deref(),
+        Some("pets")
+    );
+    let source = fs::read_to_string(&path).unwrap();
+    assert!(source.contains("opencollection: 1.0.0"));
+    assert!(source.contains("bundled: true"));
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn create_bundled_workspace_uses_explicit_name_and_adds_yml_extension() {
+    let path = temporary_path("untitled");
+    let created = path.with_extension("yml");
+    let loaded = create_bundled_workspace(&path, Some(" Pet Store "), false)
+        .expect("collection should create");
+
+    assert_eq!(
+        loaded.workspace().metadata().name.as_deref(),
+        Some("Pet Store")
+    );
+    assert!(created.is_file());
+    fs::remove_file(created).unwrap();
+}
+
+#[test]
+fn create_bundled_workspace_quotes_yaml_special_names() {
+    let path = temporary_path("true.yml");
+    let loaded =
+        create_bundled_workspace(&path, Some("true"), false).expect("collection should create");
+
+    assert_eq!(loaded.workspace().metadata().name.as_deref(), Some("true"));
+    let reloaded = load_workspace(&path).expect("quoted name should reload");
+    assert_eq!(
+        reloaded.workspace().metadata().name.as_deref(),
+        Some("true")
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn create_bundled_workspace_creates_missing_parent_directories() {
+    let path = temporary_path("nested").join("api").join("collection.yml");
+    let loaded = create_bundled_workspace(&path, None, false).expect("collection should create");
+
+    assert_eq!(
+        loaded.workspace().metadata().name.as_deref(),
+        Some("collection")
+    );
+    fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+}
+
+#[test]
+fn create_bundled_workspace_refuses_existing_files_unless_replaced() {
+    let path = temporary_path("existing.yml");
+    fs::write(&path, "keep me\n").unwrap();
+
+    let error = create_bundled_workspace(&path, None, false).unwrap_err();
+    assert!(matches!(error, CreateError::AlreadyExists(_)));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "keep me\n");
+
+    let loaded =
+        create_bundled_workspace(&path, Some("Replaced"), true).expect("replace should succeed");
+    assert_eq!(
+        loaded.workspace().metadata().name.as_deref(),
+        Some("Replaced")
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn create_bundled_workspace_refuses_directories() {
+    let path = temporary_path("collection.yml");
+    fs::create_dir(&path).unwrap();
+
+    let error = create_bundled_workspace(&path, None, false).unwrap_err();
+    assert!(matches!(error, CreateError::IsDirectory(_)));
+    fs::remove_dir(path).unwrap();
 }

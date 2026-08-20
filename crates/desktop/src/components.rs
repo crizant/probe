@@ -519,12 +519,13 @@ fn focus_ring_shadow(ring_color: Hsla, gap_color: Hsla) -> Vec<BoxShadow> {
 
 pub(crate) fn primary_button(
     theme: Theme,
-    id: impl Into<ElementId>,
+    id: &'static str,
     label: impl Into<String>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let label = label.into();
     Button::new(id)
+        .debug_selector(|| id.into())
         .h(px(theme.metrics.control_height))
         .px(px(theme.metrics.spacing_3))
         .flex()
@@ -548,6 +549,49 @@ pub(crate) fn primary_button(
                 theme.colors.actions.accent.into(),
                 theme.colors.text.inverse.into(),
             ))
+        })
+        .styles(move |styles| {
+            styles.disabled(move |button| {
+                button
+                    .bg(theme.colors.actions.disabled)
+                    .text_color(theme.colors.actions.disabled_foreground)
+                    .border_color(theme.colors.actions.disabled)
+            })
+        })
+        .on_click(on_click)
+        .child(label)
+}
+
+pub(crate) fn secondary_button(
+    theme: Theme,
+    id: &'static str,
+    label: impl Into<String>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let label = label.into();
+    Button::new(id)
+        .debug_selector(|| id.into())
+        .h(px(theme.metrics.control_height))
+        .px(px(theme.metrics.spacing_3))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.metrics.radius_small))
+        .font_family(theme.typography.interface_family)
+        .text_size(px(theme.typography.body_size))
+        .text_color(theme.colors.text.primary)
+        .bg(theme.colors.surfaces.raised)
+        .border_1()
+        .border_color(theme.colors.borders.standard)
+        .cursor_pointer()
+        .hover(move |button| button.bg(theme.colors.surfaces.window))
+        .focus(move |button| {
+            button
+                .border_color(theme.colors.borders.focused)
+                .shadow(focus_ring_shadow(
+                    theme.colors.borders.focused.into(),
+                    theme.colors.surfaces.raised.into(),
+                ))
         })
         .styles(move |styles| {
             styles.disabled(move |button| {

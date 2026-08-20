@@ -144,6 +144,54 @@ fn validates_unbundled_workspace_as_json() {
 }
 
 #[test]
+fn creates_a_bundled_collection_as_json() {
+    let path = temporary_path("pets.yml");
+    let value = run_json(&[
+        "collection",
+        "create",
+        path.to_str().expect("temp path should be utf-8"),
+        "--name",
+        "Pet Store",
+    ]);
+
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["created"], true);
+    assert_eq!(value["collection"]["name"], "Pet Store");
+    assert_eq!(value["counts"]["requests"], 0);
+    assert_eq!(value["counts"]["folders"], 0);
+    assert_eq!(value["counts"]["environments"], 0);
+    let created = PathBuf::from(value["path"].as_str().expect("path should be a string"));
+    assert!(created.is_file());
+    let loaded = probe()
+        .args(["collection", "validate"])
+        .arg(&created)
+        .arg("--json")
+        .output()
+        .expect("validate should run");
+    assert!(loaded.status.success());
+    fs::remove_file(created).unwrap();
+}
+
+#[test]
+fn create_refuses_to_overwrite_an_existing_file() {
+    let path = temporary_path("existing.yml");
+    fs::write(&path, "keep me\n").unwrap();
+    let output = probe()
+        .args(["collection", "create"])
+        .arg(&path)
+        .arg("--json")
+        .output()
+        .expect("create command should run");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "keep me\n");
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lists_requests_deterministically_as_json() {
     let path = fixture("unbundled");
     let first = probe()

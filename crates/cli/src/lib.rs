@@ -14,8 +14,8 @@ use probe_core::{
 };
 use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpResponse};
 use probe_opencollection::{
-    LoadedWorkspace, SaveError, StructureError, StructureOperation, StructureResult,
-    load_workspace, load_workspace_from_str,
+    CreateError, LoadedWorkspace, SaveError, StructureError, StructureOperation, StructureResult,
+    create_bundled_workspace, load_workspace, load_workspace_from_str,
 };
 use serde_json::json;
 
@@ -91,6 +91,7 @@ pub const fn help() -> &'static str {
         "Usage: probe [OPTIONS] <COMMAND>\n",
         "\n",
         "Commands:\n",
+        "  collection create <path>            Create an empty bundled collection\n",
         "  collection validate <path>          Validate an OpenCollection workspace\n",
         "  request list <path>                 List HTTP requests\n",
         "  request get <path> <selector>       Inspect an HTTP request\n",
@@ -105,7 +106,7 @@ pub const fn help() -> &'static str {
         "Options:\n",
         "      --environment <name>  Environment used to resolve or mutate variables\n",
         "      --output <file>        Write the response body to a file\n",
-        "      --name <name>          Set a request, folder, or variable name\n",
+        "      --name <name>          Set a request, folder, collection, or variable name\n",
         "      --method <method>      Set an HTTP method\n",
         "      --url <url>            Set a request URL\n",
         "      --value <value>        Set an environment variable value\n",
@@ -118,9 +119,15 @@ pub const fn help() -> &'static str {
 }
 
 const COLLECTION_HELP: &str = concat!(
-    "Usage: probe collection validate <path|-> [--json] [--quiet]\n",
+    "Usage: probe collection <COMMAND>\n",
     "\n",
-    "Validate a bundled OpenCollection YAML file, stdin (-), or an unbundled directory.\n",
+    "Commands:\n",
+    "  create <path> [--name <name>]  Create an empty bundled OpenCollection YAML file\n",
+    "  validate <path|->              Validate a bundled file, stdin (-), or unbundled directory\n",
+    "\n",
+    "create writes a new bundled collection and refuses to overwrite an existing path.\n",
+    "When --name is omitted, the collection title is the file stem. A missing .yml\n",
+    "extension is added. validate accepts a bundled YAML file, stdin (-), or an unbundled directory.\n",
 );
 
 const REQUEST_HELP: &str = concat!(
@@ -253,6 +260,10 @@ where
 
 #[derive(Debug)]
 enum Command {
+    CreateCollection {
+        path: PathBuf,
+        name: Option<String>,
+    },
     Validate {
         input: WorkspaceInput,
     },
@@ -446,6 +457,20 @@ impl CliError {
         }
     }
 
+    fn create(error: CreateError) -> Self {
+        match error {
+            CreateError::AlreadyExists(_) | CreateError::IsDirectory(_) => {
+                Self::invalid_arguments(error.to_string())
+            }
+            CreateError::Load(error) => Self::invalid_workspace(error.to_string()),
+            CreateError::Serialize(_) | CreateError::Io { .. } => Self {
+                category: "persistence_error",
+                message: error.to_string(),
+                exit_code: PERSISTENCE_EXIT_CODE,
+            },
+        }
+    }
+
     fn structure(error: StructureError) -> Self {
         let category = error.category();
         let exit_code = match category {
@@ -560,6 +585,22 @@ fn parse_command(
         ));
     }
     match args {
+        [group, action, path]
+            if group == "collection"
+                && action == "create"
+                && path != "-"
+                && environment.is_none()
+                && output.is_none()
+                && parent.is_none()
+                && index.is_none()
+                && update.method.is_none()
+                && update.url.is_none() =>
+        {
+            Ok(Command::CreateCollection {
+                path: PathBuf::from(path),
+                name: update.name,
+            })
+        }
         [group, action, path]
             if group == "collection"
                 && action == "validate"
@@ -830,6 +871,7 @@ fn parse_command(
 
 fn execute(command: Command, stdin: &mut impl Read) -> Result<CommandOutput, CliError> {
     match command {
+        Command::CreateCollection { path, name } => create_collection(path, name),
         Command::Validate { input } => validate(&input, stdin),
         Command::ListRequests { input } => list_requests(&input, stdin),
         Command::ListFolders { input } => list_folders(&input, stdin),
@@ -1047,6 +1089,32 @@ fn response_output(
         human: response_human(request, response, output.map(PathBuf::as_path)),
         json: response_json(request, response, output.map(PathBuf::as_path)),
     }
+}
+
+fn create_collection(path: PathBuf, name: Option<String>) -> Result<CommandOutput, CliError> {
+    let loaded =
+        create_bundled_workspace(&path, name.as_deref(), false).map_err(CliError::create)?;
+    let workspace = loaded.workspace();
+    let collection_name = workspace.metadata().name.as_deref().unwrap_or("<unnamed>");
+    let created_path = loaded.source_path().map(PathBuf::from).unwrap_or(path);
+    Ok(CommandOutput {
+        human: format!(
+            "Created bundled OpenCollection workspace\nName: {collection_name}\nPath: {}\n",
+            created_path.display()
+        ),
+        json: json!({
+            "collection": {
+                "name": workspace.metadata().name,
+            },
+            "counts": {
+                "environments": workspace.environments().len(),
+                "folders": workspace.folder_count(),
+                "requests": workspace.request_count(),
+            },
+            "created": true,
+            "path": created_path,
+        }),
+    })
 }
 
 fn validate(input: &WorkspaceInput, stdin: &mut impl Read) -> Result<CommandOutput, CliError> {

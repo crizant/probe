@@ -360,7 +360,7 @@ implicitly approved by this requirement.
 Implement:
 
 - workspace sidebar
-- title-bar workspace switcher with recent, open, and close actions
+- title-bar workspace switcher with recent, new, open, and close actions
 - folder/request tree
 - tabs
 - request editor area

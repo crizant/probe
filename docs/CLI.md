@@ -6,6 +6,7 @@ diagnostics on stderr. Add `--json` to commands that return data or structured e
 ## Commands
 
 ```text
+probe collection create <path> [--name <name>] [--json]
 probe collection validate <path> [--json]
 probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--json]
@@ -28,6 +29,9 @@ probe environment unset <path> --environment <name> --name <var> [--json]
 
 `<path>` may be a bundled OpenCollection YAML file or an unbundled collection
 directory containing `opencollection.yml` or `opencollection.yaml`.
+`collection create` always writes a new bundled YAML file and refuses to overwrite
+an existing path. A missing `.yml` extension is added. `--name` sets `info.name`;
+otherwise the file stem is used. Stdin (`-`) is not accepted.
 
 For `request get` and `request run`, `--environment <name>` selects an environment,
 applies parent environments from `extends`, and interpolates variables in supported
@@ -115,6 +119,24 @@ identity.
 Every JSON success and error document has top-level `schemaVersion: 1`. Fields may be
 added compatibly within schema version 1, but documented fields will not be removed or
 change type without incrementing the version.
+
+`collection create --json` returns:
+
+```json
+{
+  "schemaVersion": 1,
+  "collection": {
+    "name": "pets"
+  },
+  "counts": {
+    "environments": 0,
+    "folders": 0,
+    "requests": 0
+  },
+  "created": true,
+  "path": "/tmp/pets.yml"
+}
+```
 
 `request list --json` returns a `requests` array. Each entry has nullable `method`,
 `name`, and `url` fields plus a string `selector`.

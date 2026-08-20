@@ -24,7 +24,8 @@ use probe_core::{
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
 use probe_opencollection::{
-    ItemKind, LoadedWorkspace, StructureOperation, StructureResult, load_workspace,
+    ItemKind, LoadedWorkspace, StructureOperation, StructureResult, create_bundled_workspace,
+    load_workspace,
 };
 
 use crate::{
@@ -66,6 +67,7 @@ gpui::actions!(
     probe,
     [
         OpenWorkspace,
+        NewCollection,
         SaveRequest,
         CloseActiveTab,
         QuitApplication,
@@ -96,6 +98,9 @@ enum PendingClose {
     Open {
         path: PathBuf,
         restored_state: Option<SessionState>,
+    },
+    Create {
+        path: PathBuf,
     },
 }
 
@@ -390,6 +395,52 @@ impl ProbeApp {
             .detach();
     }
 
+    fn choose_new_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let directory = self.new_collection_directory();
+        let receiver = cx.prompt_for_new_path(&directory, Some("Untitled.yml"));
+        let view = cx.weak_entity();
+
+        window
+            .spawn(cx, async move |cx| {
+                let path = match receiver.await {
+                    Ok(Ok(Some(path))) => path,
+                    Ok(Ok(None)) => return,
+                    Ok(Err(error)) => {
+                        let _ = view.update_in(cx, |view, _, cx| {
+                            view.message = Some(format!("Could not open the file picker: {error}"));
+                            cx.notify();
+                        });
+                        return;
+                    }
+                    Err(_) => return,
+                };
+                let _ = view.update_in(cx, |view, window, cx| {
+                    view.request_create_workspace(path, window, cx);
+                });
+            })
+            .detach();
+    }
+
+    fn new_collection_directory(&self) -> PathBuf {
+        if let Some(base) = self
+            .workspace_path
+            .as_deref()
+            .and_then(workspace_base_directory)
+            .filter(|path| path.is_dir())
+        {
+            return base;
+        }
+        directories::UserDirs::new()
+            .and_then(|dirs| {
+                dirs.document_dir()
+                    .map(Path::to_owned)
+                    .or_else(|| Some(dirs.home_dir().to_owned()))
+            })
+            .filter(|path| path.is_dir())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
     fn choose_file_path(
         &mut self,
         key: RequestKey,
@@ -550,6 +601,72 @@ impl ProbeApp {
         self.load_workspace_path(path, restored_state, window, cx);
     }
 
+    fn request_create_workspace(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let dirty = self.dirty_keys();
+        if !dirty.is_empty() {
+            self.prompt_unsaved(dirty, PendingClose::Create { path }, window, cx);
+            return;
+        }
+        if self.has_pending_environment_work() {
+            self.pending_close = Some(PendingClose::Create { path });
+            self.start_next_environment_save(window, cx);
+            return;
+        }
+        self.create_workspace_path(path, window, cx);
+    }
+
+    fn create_workspace_path(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.capture_selected_environment();
+        self.loading = true;
+        self.message = None;
+        cx.notify();
+        let view = cx.weak_entity();
+        window
+            .spawn(cx, async move |cx| {
+                let result = cx
+                    .background_spawn(async move {
+                        let workspace = create_bundled_workspace(&path, None, true)
+                            .map_err(|error| error.to_string())?;
+                        let canonical_path = workspace
+                            .source_path()
+                            .ok_or_else(|| {
+                                format!(
+                                    "created collection at {} has no filesystem path",
+                                    path.display()
+                                )
+                            })?
+                            .to_owned();
+                        Ok::<_, String>((canonical_path, workspace))
+                    })
+                    .await;
+                let _ = view.update_in(cx, |view, window, cx| {
+                    view.loading = false;
+                    match result {
+                        Ok((canonical_path, workspace)) => {
+                            view.set_workspace(canonical_path, workspace);
+                            view.start_workspace_watcher(window, cx);
+                            view.persist_session(cx);
+                        }
+                        Err(error) => {
+                            view.message = Some(error);
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
     fn has_pending_environment_work(&self) -> bool {
         self.environment_save_task.is_some() || !self.pending_environment_saves.is_empty()
     }
@@ -577,7 +694,8 @@ impl ProbeApp {
                 PendingClose::Workspace
                 | PendingClose::Window
                 | PendingClose::Quit
-                | PendingClose::Open { .. } => self.dirty_keys(),
+                | PendingClose::Open { .. }
+                | PendingClose::Create { .. } => self.dirty_keys(),
             };
             if dirty.is_empty() {
                 self.finish_pending_close(pending, window, cx);
@@ -1792,6 +1910,7 @@ impl ProbeApp {
                 path,
                 restored_state,
             } => self.load_workspace_path(path, restored_state, window, cx),
+            PendingClose::Create { path } => self.create_workspace_path(path, window, cx),
         }
     }
 
@@ -2508,6 +2627,7 @@ impl ProbeApp {
     fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let new_request_view = cx.weak_entity();
         let new_folder_view = cx.weak_entity();
+        let new_collection_view = cx.weak_entity();
         let open_collection_view = cx.weak_entity();
         let can_edit = self.loaded_workspace.is_some() && self.structure_task.is_none();
         let add_menu_state_view = cx.weak_entity();
@@ -2615,9 +2735,21 @@ impl ProbeApp {
                         .child(
                             div()
                                 .text_color(theme.colors.text.muted)
-                                .child("Open a collection to browse its requests."),
+                                .child("Create or open a collection to browse its requests."),
                         )
-                        .child(components::primary_button(
+                        .child(components::secondary_button(
+                            theme,
+                            "sidebar-new-collection",
+                            "New Collection…",
+                            move |_, window, cx| {
+                                let _ = new_collection_view.update(cx, |view, cx| {
+                                    if !view.loading {
+                                        view.choose_new_workspace(window, cx);
+                                    }
+                                });
+                            },
+                        ))
+                        .child(components::secondary_button(
                             theme,
                             "sidebar-open-collection",
                             "Open Collection…",
@@ -4729,6 +4861,7 @@ impl ProbeApp {
         let switcher_view = cx.weak_entity();
         let sidebar_toggle_view = cx.weak_entity();
         let home_view = cx.weak_entity();
+        let new_view = cx.weak_entity();
         let open_view = cx.weak_entity();
         let layout_view = cx.weak_entity();
         let collection_open = self.loaded_workspace.is_some();
@@ -4788,20 +4921,45 @@ impl ProbeApp {
             );
         }
 
-        popup = popup.child(components::menu_button(
-            theme,
-            "workspace-switcher-open",
-            "Open Collection…",
-            None,
-            move |window, cx| {
-                let _ = open_view.update(cx, |view, cx| {
-                    view.workspace_switcher_open = false;
-                    if !view.loading {
-                        view.choose_workspace(window, cx);
-                    }
-                });
-            },
-        ));
+        popup = popup
+            .child(
+                div()
+                    .w_full()
+                    .debug_selector(|| "workspace-switcher-new".into())
+                    .child(components::menu_button(
+                        theme,
+                        "workspace-switcher-new",
+                        "New Collection…",
+                        None,
+                        move |window, cx| {
+                            let _ = new_view.update(cx, |view, cx| {
+                                view.workspace_switcher_open = false;
+                                if !view.loading {
+                                    view.choose_new_workspace(window, cx);
+                                }
+                            });
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .debug_selector(|| "workspace-switcher-open".into())
+                    .child(components::menu_button(
+                        theme,
+                        "workspace-switcher-open",
+                        "Open Collection…",
+                        None,
+                        move |window, cx| {
+                            let _ = open_view.update(cx, |view, cx| {
+                                view.workspace_switcher_open = false;
+                                if !view.loading {
+                                    view.choose_workspace(window, cx);
+                                }
+                            });
+                        },
+                    )),
+            );
 
         let switcher = Popover::new("workspace-switcher")
             .open(self.workspace_switcher_open)
@@ -5279,6 +5437,11 @@ impl Render for ProbeApp {
             .on_action(cx.listener(|view, _: &OpenWorkspace, window, cx| {
                 view.choose_workspace(window, cx);
             }))
+            .on_action(cx.listener(|view, _: &NewCollection, window, cx| {
+                if !view.loading {
+                    view.choose_new_workspace(window, cx);
+                }
+            }))
             .on_action(cx.listener(|view, _: &CloseActiveTab, window, cx| {
                 if let Some(key) = view.shell.active_tab() {
                     view.request_close_tab(key, window, cx);
@@ -5618,6 +5781,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
     #[cfg(target_os = "macos")]
     cx.bind_keys([
         KeyBinding::new("cmd-o", OpenWorkspace, None),
+        KeyBinding::new("cmd-n", NewCollection, None),
         KeyBinding::new("cmd-s", SaveRequest, None),
         KeyBinding::new("cmd-w", CloseActiveTab, None),
         KeyBinding::new("cmd-q", QuitApplication, None),
@@ -5634,6 +5798,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
     #[cfg(target_os = "windows")]
     cx.bind_keys([
         KeyBinding::new("ctrl-o", OpenWorkspace, None),
+        KeyBinding::new("ctrl-n", NewCollection, None),
         KeyBinding::new("ctrl-s", SaveRequest, None),
         KeyBinding::new("ctrl-w", CloseActiveTab, None),
         KeyBinding::new("alt-f4", QuitApplication, None),
@@ -5642,6 +5807,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
     #[cfg(target_os = "linux")]
     cx.bind_keys([
         KeyBinding::new("ctrl-o", OpenWorkspace, None),
+        KeyBinding::new("ctrl-n", NewCollection, None),
         KeyBinding::new("ctrl-s", SaveRequest, None),
         KeyBinding::new("ctrl-w", CloseActiveTab, None),
         KeyBinding::new("ctrl-q", QuitApplication, None),
@@ -6159,6 +6325,102 @@ mod tests {
             Some(expected.as_path()),
             "loading={loading}, message={message:?}"
         );
+    }
+
+    #[gpui::test]
+    fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let destination_dir = std::env::temp_dir().join(format!(
+            "probe-desktop-new-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&destination_dir).unwrap();
+        let destination = destination_dir.join("pets.yml");
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let button = visual
+            .debug_bounds("sidebar-new-collection")
+            .expect("new collection button should be rendered");
+        visual.simulate_click(button.center(), Modifiers::default());
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        assert!(cx.did_prompt_for_new_path());
+        cx.simulate_new_path_selection({
+            let destination = destination.clone();
+            move |_| Some(destination)
+        });
+        cx.run_until_parked();
+
+        let expected = destination
+            .canonicalize()
+            .expect("created collection should exist");
+        let (actual, name, requests, message) = window
+            .update(cx, |view, _, _| {
+                (
+                    view.workspace_path.clone(),
+                    view.loaded_workspace
+                        .as_ref()
+                        .and_then(|loaded| loaded.workspace().metadata().name.clone()),
+                    view.loaded_workspace
+                        .as_ref()
+                        .map(|loaded| loaded.workspace().request_count()),
+                    view.message.clone(),
+                )
+            })
+            .expect("test window should remain open");
+        assert_eq!(
+            actual.as_deref(),
+            Some(expected.as_path()),
+            "message={message:?}"
+        );
+        assert_eq!(name.as_deref(), Some("pets"));
+        assert_eq!(requests, Some(0));
+        fs::remove_dir_all(destination_dir).unwrap();
+    }
+
+    #[gpui::test]
+    fn workspace_switcher_includes_new_collection(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let trigger = visual
+            .debug_bounds("workspace-switcher-trigger")
+            .expect("workspace switcher trigger should render");
+        visual.simulate_click(trigger.center(), Modifiers::default());
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        visual
+            .debug_bounds("workspace-switcher-new")
+            .expect("workspace switcher should include New Collection");
+        visual
+            .debug_bounds("workspace-switcher-open")
+            .expect("workspace switcher should include Open Collection");
     }
 
     #[gpui::test]
