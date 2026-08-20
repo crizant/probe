@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 
 use probe_core::{
-    Authentication, AuthenticationKind, AuthenticationValue, Body, HttpRequest, RawBody,
-    RawBodyKind, RequestBody, RequestKey,
+    Authentication, AuthenticationKind, AuthenticationValue, Body, HttpRequest, QueryParameter,
+    RawBody, RawBodyKind, RequestBody, RequestKey, synchronize_path_parameters,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum EditorSection {
     #[default]
+    Path,
     Query,
     Headers,
     Body,
@@ -15,16 +16,125 @@ pub(crate) enum EditorSection {
 }
 
 impl EditorSection {
-    pub(crate) const ALL: [Self; 4] =
-        [Self::Query, Self::Headers, Self::Body, Self::Authentication];
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Path,
+        Self::Query,
+        Self::Headers,
+        Self::Body,
+        Self::Authentication,
+    ];
 
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Query => "Query",
+            Self::Path => "Path",
             Self::Headers => "Headers",
             Self::Body => "Body",
             Self::Authentication => "Authentication",
         }
+    }
+}
+
+pub(crate) fn url_bar_value(request: &HttpRequest) -> String {
+    let url = request.url.as_deref().unwrap_or_default();
+    let query = request
+        .query_parameters
+        .iter()
+        .filter(|parameter| !parameter.disabled)
+        .map(|parameter| {
+            format!(
+                "{}={}",
+                encode_query_component(&parameter.name),
+                encode_query_component(&parameter.value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    if query.is_empty() {
+        return url.to_owned();
+    }
+    let (before_fragment, fragment) = url.split_once('#').unwrap_or((url, ""));
+    let separator = if before_fragment.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    let fragment_separator = if fragment.is_empty() { "" } else { "#" };
+    format!("{before_fragment}{separator}{query}{fragment_separator}{fragment}")
+}
+
+pub(crate) fn apply_url_bar_value(request: &mut HttpRequest, value: &str) {
+    let (without_fragment, fragment) = value.split_once('#').unwrap_or((value, ""));
+    let (url, query) = without_fragment
+        .split_once('?')
+        .unwrap_or((without_fragment, ""));
+    request.url = Some(if fragment.is_empty() {
+        url.to_owned()
+    } else {
+        format!("{url}#{fragment}")
+    });
+    let disabled = request
+        .query_parameters
+        .iter()
+        .filter(|parameter| parameter.disabled)
+        .cloned();
+    let enabled = query
+        .split('&')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (name, value) = entry.split_once('=').unwrap_or((entry, ""));
+            QueryParameter {
+                name: decode_query_component(name),
+                value: decode_query_component(value),
+                disabled: false,
+            }
+        });
+    request.query_parameters = enabled.chain(disabled).collect();
+    synchronize_path_parameters(request);
+}
+
+fn encode_query_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'{' | b'}') {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
+
+fn decode_query_component(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2]))
+        {
+            decoded.push(high * 16 + low);
+            index += 3;
+        } else {
+            decoded.push(if bytes[index] == b'+' {
+                b' '
+            } else {
+                bytes[index]
+            });
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+const fn hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -233,11 +343,105 @@ pub(crate) fn auth_value(value: &AuthenticationValue) -> String {
 mod tests {
     use std::collections::BTreeMap;
 
-    use probe_core::{AuthenticationKind, Body, HttpRequest, RawBodyKind, RequestBody};
+    use probe_core::{
+        AuthenticationKind, Body, HttpRequest, QueryParameter, RawBodyKind, RequestBody,
+    };
 
     use super::{
-        BodyEditorKind, RequestEditorState, raw_body_mut, set_auth_property, set_authentication,
+        BodyEditorKind, RequestEditorState, apply_url_bar_value, raw_body_mut, set_auth_property,
+        set_authentication, url_bar_value,
     };
+
+    #[test]
+    fn url_bar_includes_enabled_query_values_before_the_fragment() {
+        let request = HttpRequest {
+            url: Some("https://api.example.com/users/:userId#results".to_owned()),
+            query_parameters: vec![
+                QueryParameter {
+                    name: "search".to_owned(),
+                    value: "hello world".to_owned(),
+                    disabled: false,
+                },
+                QueryParameter {
+                    name: "hidden".to_owned(),
+                    value: "no".to_owned(),
+                    disabled: true,
+                },
+            ],
+            ..HttpRequest::default()
+        };
+
+        assert_eq!(
+            url_bar_value(&request),
+            "https://api.example.com/users/:userId?search=hello%20world#results"
+        );
+    }
+
+    #[test]
+    fn editing_the_url_bar_updates_query_values_without_losing_disabled_rows() {
+        let mut request = HttpRequest {
+            query_parameters: vec![QueryParameter {
+                name: "hidden".to_owned(),
+                value: "no".to_owned(),
+                disabled: true,
+            }],
+            ..HttpRequest::default()
+        };
+
+        apply_url_bar_value(
+            &mut request,
+            "https://api.example.com/users/:userId?search=hello%20world#results",
+        );
+
+        assert_eq!(
+            request.url.as_deref(),
+            Some("https://api.example.com/users/:userId#results")
+        );
+        assert_eq!(request.query_parameters.len(), 2);
+        assert_eq!(request.query_parameters[0].name, "search");
+        assert_eq!(request.query_parameters[0].value, "hello world");
+        assert!(request.query_parameters[1].disabled);
+        assert_eq!(request.path_parameters.len(), 1);
+        assert_eq!(request.path_parameters[0].name, "userId");
+        assert_eq!(request.path_parameters[0].value, "");
+    }
+
+    #[test]
+    fn url_bar_path_variables_reuse_values_deduplicate_and_remove_stale_rows() {
+        let mut request = HttpRequest {
+            path_parameters: vec![
+                QueryParameter {
+                    name: "userId".to_owned(),
+                    value: "42".to_owned(),
+                    disabled: false,
+                },
+                QueryParameter {
+                    name: "stale".to_owned(),
+                    value: "old".to_owned(),
+                    disabled: false,
+                },
+                QueryParameter {
+                    name: "saved".to_owned(),
+                    value: "later".to_owned(),
+                    disabled: true,
+                },
+            ],
+            ..HttpRequest::default()
+        };
+
+        apply_url_bar_value(
+            &mut request,
+            "https://api.example.com/users/:userId/posts/:postId/:userId",
+        );
+
+        assert_eq!(request.path_parameters.len(), 3);
+        assert_eq!(request.path_parameters[0].name, "userId");
+        assert_eq!(request.path_parameters[0].value, "42");
+        assert_eq!(request.path_parameters[1].name, "postId");
+        assert_eq!(request.path_parameters[1].value, "");
+        assert_eq!(request.path_parameters[2].name, "saved");
+        assert!(request.path_parameters[2].disabled);
+    }
 
     #[test]
     fn raw_body_edits_update_the_request_immediately() {

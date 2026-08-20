@@ -123,6 +123,23 @@ pub(super) fn request_human(
         }
     }
 
+    output.push_str("Path parameters:\n");
+    if request.path_parameters.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        for parameter in &request.path_parameters {
+            let state = if parameter.disabled {
+                " [disabled]"
+            } else {
+                ""
+            };
+            output.push_str(&format!(
+                "  :{}={}{state}\n",
+                parameter.name, parameter.value
+            ));
+        }
+    }
+
     output.push_str("Query parameters:\n");
     if request.query_parameters.is_empty() {
         output.push_str("  (none)\n");
@@ -179,6 +196,17 @@ pub(super) fn request_json(
             })
         })
         .collect();
+    let path_parameters: Vec<_> = request
+        .path_parameters
+        .iter()
+        .map(|parameter| {
+            json!({
+                "disabled": parameter.disabled,
+                "name": parameter.name,
+                "value": parameter.value,
+            })
+        })
+        .collect();
     let authentication = request.authentication.as_ref().map(|auth| {
         let properties: Map<_, _> = auth
             .properties
@@ -198,6 +226,7 @@ pub(super) fn request_json(
         "headers": headers,
         "method": request.method,
         "name": request.metadata.name,
+        "pathParameters": path_parameters,
         "queryParameters": query_parameters,
         "selector": selector,
         "url": request.url,

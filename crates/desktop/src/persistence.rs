@@ -89,6 +89,9 @@ impl PersistenceState {
             query_parameters: (baseline.map(|request| &request.query_parameters)
                 != Some(&snapshot.query_parameters))
             .then(|| snapshot.query_parameters.clone()),
+            path_parameters: (baseline.map(|request| &request.path_parameters)
+                != Some(&snapshot.path_parameters))
+            .then(|| snapshot.path_parameters.clone()),
             body: (baseline.and_then(|request| request.body.as_ref()) != snapshot.body.as_ref())
                 .then(|| snapshot.body.clone()),
             authentication: (baseline.and_then(|request| request.authentication.as_ref())

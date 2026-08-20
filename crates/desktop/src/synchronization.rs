@@ -238,6 +238,14 @@ fn merge_request(
         &mut conflicts,
     );
     merge_field(
+        &baseline.path_parameters,
+        &local.path_parameters,
+        &disk.path_parameters,
+        &mut merged.path_parameters,
+        "path parameters",
+        &mut conflicts,
+    );
+    merge_field(
         &baseline.body,
         &local.body,
         &disk.body,
@@ -342,6 +350,35 @@ mod tests {
             .unwrap();
         assert_eq!(request.url.as_deref(), Some("https://local.example"));
         assert_eq!(request.method.as_deref(), Some("PATCH"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn merges_non_overlapping_path_parameter_changes() {
+        let path = fixture_copy();
+        let original = probe_opencollection::load_workspace(&path).unwrap();
+        let mut state = request_state(&original, 0);
+        state.local.path_parameters = vec![probe_core::QueryParameter {
+            name: "ownerId".to_owned(),
+            value: "99".to_owned(),
+            disabled: false,
+        }];
+
+        let mut source = fs::read_to_string(&path).unwrap();
+        source = source.replacen("value: \"25\"", "value: \"50\"", 1);
+        fs::write(&path, source).unwrap();
+        let fresh = probe_opencollection::load_workspace(&path).unwrap();
+        let ReconcileResult::Applied(result) = reconcile(vec![state], fresh, &BTreeMap::new())
+        else {
+            panic!("non-overlapping path parameter changes should merge")
+        };
+        let request = result
+            .workspace
+            .workspace()
+            .request(result.workspace.requests()[0].key())
+            .unwrap();
+        assert_eq!(request.path_parameters[0].value, "99");
+        assert_eq!(request.query_parameters[0].value, "50");
         fs::remove_file(path).unwrap();
     }
 

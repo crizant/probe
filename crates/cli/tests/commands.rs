@@ -230,6 +230,22 @@ fn gets_request_by_repository_selector() {
 }
 
 #[test]
+fn gets_path_parameters_in_json_output() {
+    let output = probe()
+        .args(["request", "get"])
+        .arg(fixture("phase1-bundled.yml"))
+        .arg("items/0/items/0")
+        .arg("--json")
+        .output()
+        .expect("get command should run");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["pathParameters"][0]["name"], "ownerId");
+    assert_eq!(value["pathParameters"][0]["value"], "42");
+}
+
+#[test]
 fn sets_and_persists_request_fields_as_json() {
     let workspace = temporary_path("phase7-workspace.yml");
     fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();

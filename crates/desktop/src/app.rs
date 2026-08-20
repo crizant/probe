@@ -17,7 +17,8 @@ use gpui_base::{Button, POPUP_PRIORITY, Popover, Positioner, Tab, Tabs};
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, FileReference, FormField, Header, HttpRequest,
     MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind, RequestBody,
-    RequestKey, Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
+    RequestKey, Workspace, WorkspaceItemRef, add_path_parameter, ensure_path_parameters_from_url,
+    remove_path_parameter_at, rename_path_parameter_at, resolve_environment, resolve_request,
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
 use probe_opencollection::{
@@ -33,8 +34,8 @@ use crate::{
     filesystem::{WATCH_DEBOUNCE, WorkspaceWatcher, event_affects_workspace, rename_hints},
     persistence::PersistenceState,
     request_editor::{
-        BodyEditorKind, EditorSection, RequestEditorState, auth_label, auth_value, body_kind,
-        raw_body_mut, set_auth_property, set_authentication,
+        BodyEditorKind, EditorSection, RequestEditorState, apply_url_bar_value, auth_label,
+        auth_value, body_kind, raw_body_mut, set_auth_property, set_authentication, url_bar_value,
     },
     response_viewer::{
         PreparedDocument, ResponseViewerState, ResponseViewerTab, prepare_document,
@@ -1000,6 +1001,14 @@ impl ProbeApp {
             self.selected_tree_item = Some(WorkspaceItemRef::Request(key));
             self.shell.open_request(key);
             self.reveal_active_tab();
+            if self
+                .loaded_workspace
+                .as_mut()
+                .and_then(|loaded| loaded.request_mut(key))
+                .is_some_and(ensure_path_parameters_from_url)
+            {
+                self.persistence.edited(key);
+            }
             self.persist_session(cx);
             cx.notify();
         }
@@ -2585,7 +2594,7 @@ impl ProbeApp {
             return div().flex_1();
         };
         let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
-        let url = request.url.clone().unwrap_or_default();
+        let url = url_bar_value(&request);
         let request_dirty = self.persistence.is_dirty(key, &request);
         let mut breadcrumb_labels = self
             .loaded_workspace
@@ -2711,6 +2720,7 @@ impl ProbeApp {
                     section.label(),
                     match section {
                         EditorSection::Query => format!("  {}", request.query_parameters.len()),
+                        EditorSection::Path => format!("  {}", request.path_parameters.len()),
                         EditorSection::Headers => format!("  {}", request.headers.len()),
                         EditorSection::Body | EditorSection::Authentication => String::new(),
                     }
@@ -2729,6 +2739,7 @@ impl ProbeApp {
 
         let section = match self.request_editor.section {
             EditorSection::Query => self.render_query_editor(key, &request, theme, cx),
+            EditorSection::Path => self.render_parameter_editor(key, &request, true, theme, cx),
             EditorSection::Headers => self.render_header_editor(key, &request, theme, cx),
             EditorSection::Body => self.render_body_editor(key, &request, theme, cx),
             EditorSection::Authentication => {
@@ -2784,24 +2795,27 @@ impl ProbeApp {
                                     },
                                 ),
                             ))
-                            .child(div().flex_1().min_w(px(0.0)).child(
-                                components::variable_text_input(
-                                    theme,
-                                    ("request-url", key.slot()),
-                                    url.clone(),
-                                    "https://api.example.com/path",
-                                    self.variable_context(),
-                                    move |value, _, input_cx| {
-                                        let _ = url_view.update(input_cx, |view, cx| {
-                                            view.edit_request(
-                                                key,
-                                                |request| request.url = Some(value.to_string()),
-                                                cx,
-                                            );
-                                        });
-                                    },
-                                ),
-                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .child(components::url_text_input(
+                                        theme,
+                                        ("request-url", key.slot()),
+                                        url.clone(),
+                                        "https://api.example.com/users/:userId",
+                                        self.variable_context(),
+                                        move |value, _, input_cx| {
+                                            let _ = url_view.update(input_cx, |view, cx| {
+                                                view.edit_request(
+                                                    key,
+                                                    |request| apply_url_bar_value(request, &value),
+                                                    cx,
+                                                );
+                                            });
+                                        },
+                                    )),
+                            )
                             .child(div().ml(px(theme.metrics.spacing_2)).flex_none().child(
                                 components::primary_button(
                                     theme,
@@ -2847,8 +2861,24 @@ impl ProbeApp {
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        self.render_parameter_editor(key, request, false, theme, cx)
+    }
+
+    fn render_parameter_editor(
+        &self,
+        key: RequestKey,
+        request: &HttpRequest,
+        path: bool,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
-        for (index, parameter) in request.query_parameters.iter().enumerate() {
+        let parameters = if path {
+            &request.path_parameters
+        } else {
+            &request.query_parameters
+        };
+        for (index, parameter) in parameters.iter().enumerate() {
             let name_view = cx.weak_entity();
             let value_view = cx.weak_entity();
             let enabled_view = cx.weak_entity();
@@ -2862,7 +2892,7 @@ impl ProbeApp {
                         .child(div().flex_1().min_w(px(0.0)).child(
                             components::variable_text_input(
                                 theme,
-                                ("query-name", index),
+                                (if path { "path-name" } else { "query-name" }, index),
                                 parameter.name.clone(),
                                 "Parameter",
                                 self.variable_context(),
@@ -2871,7 +2901,11 @@ impl ProbeApp {
                                         view.edit_request(
                                             key,
                                             |request| {
-                                                if let Some(parameter) =
+                                                if path {
+                                                    rename_path_parameter_at(
+                                                        request, index, &value,
+                                                    );
+                                                } else if let Some(parameter) =
                                                     request.query_parameters.get_mut(index)
                                                 {
                                                     parameter.name = value.to_string();
@@ -2886,7 +2920,7 @@ impl ProbeApp {
                         .child(div().flex_1().min_w(px(0.0)).child(
                             components::variable_text_input(
                                 theme,
-                                ("query-value", index),
+                                (if path { "path-value" } else { "query-value" }, index),
                                 parameter.value.clone(),
                                 "Value",
                                 self.variable_context(),
@@ -2895,9 +2929,11 @@ impl ProbeApp {
                                         view.edit_request(
                                             key,
                                             |request| {
-                                                if let Some(parameter) =
+                                                if let Some(parameter) = if path {
+                                                    request.path_parameters.get_mut(index)
+                                                } else {
                                                     request.query_parameters.get_mut(index)
-                                                {
+                                                } {
                                                     parameter.value = value.to_string();
                                                 }
                                             },
@@ -2909,17 +2945,30 @@ impl ProbeApp {
                         ))
                         .child(components::switch(
                             theme,
-                            ("query-enabled", index),
-                            "Enable query parameter",
+                            (
+                                if path {
+                                    "path-enabled"
+                                } else {
+                                    "query-enabled"
+                                },
+                                index,
+                            ),
+                            if path {
+                                "Enable path parameter"
+                            } else {
+                                "Enable query parameter"
+                            },
                             !parameter.disabled,
                             move |enabled, _, cx| {
                                 let _ = enabled_view.update(cx, |view, cx| {
                                     view.edit_request(
                                         key,
                                         |request| {
-                                            if let Some(parameter) =
+                                            if let Some(parameter) = if path {
+                                                request.path_parameters.get_mut(index)
+                                            } else {
                                                 request.query_parameters.get_mut(index)
-                                            {
+                                            } {
                                                 parameter.disabled = !enabled;
                                             }
                                         },
@@ -2930,14 +2979,20 @@ impl ProbeApp {
                         ))
                         .child(components::remove_row_button(
                             theme,
-                            ("remove-query", index),
-                            "Remove query parameter",
+                            (if path { "remove-path" } else { "remove-query" }, index),
+                            if path {
+                                "Remove path parameter"
+                            } else {
+                                "Remove query parameter"
+                            },
                             move |_, _, cx| {
                                 let _ = remove_view.update(cx, |view, cx| {
                                     view.edit_request(
                                         key,
                                         |request| {
-                                            if index < request.query_parameters.len() {
+                                            if path {
+                                                remove_path_parameter_at(request, index);
+                                            } else if index < request.query_parameters.len() {
                                                 request.query_parameters.remove(index);
                                             }
                                         },
@@ -2951,18 +3006,30 @@ impl ProbeApp {
         let add_view = cx.weak_entity();
         rows.child(components::editor_add_button(
             theme,
-            "add-query-parameter",
-            "Add parameter",
+            if path {
+                "add-path-parameter"
+            } else {
+                "add-query-parameter"
+            },
+            if path {
+                "Add path parameter"
+            } else {
+                "Add query parameter"
+            },
             move |_, _, cx| {
                 let _ = add_view.update(cx, |view, cx| {
                     view.edit_request(
                         key,
                         |request| {
-                            request.query_parameters.push(QueryParameter {
-                                name: String::new(),
-                                value: String::new(),
-                                disabled: false,
-                            })
+                            if path {
+                                add_path_parameter(request);
+                            } else {
+                                request.query_parameters.push(QueryParameter {
+                                    name: String::new(),
+                                    value: String::new(),
+                                    disabled: false,
+                                });
+                            }
                         },
                         cx,
                     );

@@ -29,6 +29,7 @@ use gpui_base::{
         TextDecorationCollection,
     },
 };
+use probe_core::path_variable_ranges;
 
 /// Single-line label that shows an ellipsis when the available width is too small.
 pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
@@ -578,6 +579,7 @@ struct ProbeTextInput {
     value: SharedString,
     placeholder: SharedString,
     variables: VariableContext,
+    highlight_path_variables: bool,
     font_family: &'static str,
     text_size: f32,
     height: f32,
@@ -590,7 +592,8 @@ struct ProbeTextInput {
 
 impl RenderOnce for ProbeTextInput {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let overlay_paints_text = !variable_ranges(&self.value).is_empty();
+        let overlay_paints_text =
+            !input_variable_ranges(&self.value, self.highlight_path_variables).is_empty();
         let placeholder = self.placeholder.clone();
         let on_change = self.on_change.clone();
         let on_enter = self.on_enter.clone();
@@ -680,6 +683,7 @@ impl RenderOnce for ProbeTextInput {
             input,
             self.value,
             self.variables,
+            self.highlight_path_variables,
         )
     }
 }
@@ -698,6 +702,34 @@ pub(crate) fn variable_text_input(
         value: single_line(value),
         placeholder: placeholder.into(),
         variables,
+        highlight_path_variables: false,
+        font_family: theme.typography.monospace_family,
+        text_size: theme.typography.body_size,
+        height: theme.metrics.control_height,
+        width: None,
+        debug_selector: None,
+        on_change: Rc::new(on_value_change),
+        on_enter: None,
+        autofocus: false,
+    }
+    .into_any_element()
+}
+
+pub(crate) fn url_text_input(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    value: impl Into<SharedString>,
+    placeholder: impl Into<SharedString>,
+    variables: VariableContext,
+    on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+) -> gpui::AnyElement {
+    ProbeTextInput {
+        theme,
+        id: id.into(),
+        value: single_line(value),
+        placeholder: placeholder.into(),
+        variables,
+        highlight_path_variables: true,
         font_family: theme.typography.monospace_family,
         text_size: theme.typography.body_size,
         height: theme.metrics.control_height,
@@ -725,6 +757,7 @@ pub(crate) fn dialog_text_input(
         value: single_line(value),
         placeholder: placeholder.into(),
         variables: VariableContext::default(),
+        highlight_path_variables: false,
         font_family: theme.typography.interface_family,
         text_size: theme.typography.body_size,
         height: theme.metrics.control_height,
@@ -751,6 +784,7 @@ pub(crate) fn search_input(
         value: single_line(value),
         placeholder: placeholder.into(),
         variables: VariableContext::default(),
+        highlight_path_variables: false,
         font_family: theme.typography.interface_family,
         text_size: theme.typography.body_size,
         height: theme.metrics.control_height - 2.0,
@@ -1524,11 +1558,12 @@ fn variable_input_overlay(
     input: impl IntoElement,
     value: SharedString,
     variables: VariableContext,
+    highlight_path_variables: bool,
 ) -> gpui::AnyElement {
-    let ranges = variable_ranges(&value);
+    let ranges = input_variable_ranges(&value, highlight_path_variables);
     // Input paints first so it keeps native caret, selection, and scroll.
-    // The overlay sits on top, recolors `{{variable}}` spans, and covers the
-    // native caret while blink is off.
+    // The overlay sits on top, recolors supported variable spans, and covers
+    // the native caret while blink is off.
     let wrapper = div()
         .id(tooltip_id)
         .relative()
@@ -1541,12 +1576,17 @@ fn variable_input_overlay(
             ranges.is_empty(),
             theme.typography.monospace_family,
             theme.typography.body_size,
+            highlight_path_variables,
         ));
     if ranges.is_empty() {
         return wrapper.into_any_element();
     }
 
-    let rows = variable_tooltip_rows(ranges, &variables);
+    let tooltip_ranges = variable_ranges(&value);
+    if tooltip_ranges.is_empty() {
+        return wrapper.into_any_element();
+    }
+    let rows = variable_tooltip_rows(tooltip_ranges, &variables);
     wrapper
         .tooltip(move |_, cx| {
             cx.new(|_| VariableTooltip {
@@ -1565,6 +1605,7 @@ fn variable_highlight_layer(
     ranges_empty: bool,
     font_family: &'static str,
     text_size: f32,
+    highlight_path_variables: bool,
 ) -> impl IntoElement {
     let highlight_color = theme.colors.syntax.string.into();
     let base_color = if ranges_empty {
@@ -1595,6 +1636,7 @@ fn variable_highlight_layer(
             state,
             base_color,
             highlight_color,
+            highlight_path_variables,
         })
 }
 
@@ -1602,6 +1644,7 @@ struct VariableHighlightElement {
     state: Entity<InputState>,
     base_color: Hsla,
     highlight_color: Hsla,
+    highlight_path_variables: bool,
 }
 
 struct VariableHighlightPrepaintState {
@@ -1654,7 +1697,7 @@ impl Element for VariableHighlightElement {
     ) -> Self::PrepaintState {
         let state = self.state.clone();
         let value = single_line(state.read(cx).value());
-        let ranges = variable_ranges(&value)
+        let ranges = input_variable_ranges(&value, self.highlight_path_variables)
             .into_iter()
             .map(|(range, _)| range)
             .collect::<Vec<_>>();
@@ -1850,6 +1893,18 @@ fn variable_ranges(value: &str) -> Vec<(Range<usize>, String)> {
         let consumed = start + 2 + end + 2;
         offset += consumed;
         remaining = &remaining[consumed..];
+    }
+    ranges
+}
+
+fn input_variable_ranges(
+    value: &str,
+    highlight_path_variables: bool,
+) -> Vec<(Range<usize>, String)> {
+    let mut ranges = variable_ranges(value);
+    if highlight_path_variables {
+        ranges.extend(path_variable_ranges(value));
+        ranges.sort_by_key(|(range, _)| range.start);
     }
     ranges
 }
@@ -2060,6 +2115,7 @@ mod tests {
         variable_highlight_runs, variable_ranges, variable_tooltip_rows,
     };
     use crate::theme::Theme;
+    use probe_core::path_variable_ranges;
 
     struct MenuTestView {
         open: bool,
@@ -2372,6 +2428,17 @@ mod tests {
     }
 
     #[test]
+    fn path_variable_ranges_only_highlight_colon_placeholders_in_the_url_path() {
+        let value = "https://api.example.com:8443/users/:userId/posts/:post_id?next=:ignored";
+        let ranges = path_variable_ranges(value);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&value[ranges[0].0.clone()], ":userId");
+        assert_eq!(ranges[0].1, "userId");
+        assert_eq!(&value[ranges[1].0.clone()], ":post_id");
+        assert_eq!(ranges[1].1, "post_id");
+    }
+
+    #[test]
     fn variable_tooltip_rows_deduplicate_repeated_names() {
         let value = "https://{{host}}/api/{{host}}/users/{{id}}";
         let ranges = variable_ranges(value);
@@ -2555,6 +2622,7 @@ mod tests {
                 state: input.clone(),
                 base_color: transparent_black(),
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+                highlight_path_variables: false,
             }
         });
 
@@ -2598,6 +2666,7 @@ mod tests {
                 state: input,
                 base_color: transparent_black(),
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+                highlight_path_variables: false,
             },
         );
 
@@ -2630,6 +2699,7 @@ mod tests {
                 state: input,
                 base_color: transparent_black(),
                 highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+                highlight_path_variables: false,
             },
         );
     }
