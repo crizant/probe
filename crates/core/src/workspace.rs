@@ -343,6 +343,21 @@ impl Workspace {
         &self.environments
     }
 
+    /// Updates a plain variable on the named environment, or adds an override.
+    pub fn set_environment_variable(
+        &mut self,
+        environment_name: &str,
+        variable_name: &str,
+        value: String,
+    ) -> Result<(), crate::EnvironmentResolutionError> {
+        crate::set_environment_variable(
+            &mut self.environments,
+            environment_name,
+            variable_name,
+            value,
+        )
+    }
+
     fn children(&self, parent: WorkspaceParent) -> Result<&[WorkspaceItemRef], WorkspaceEditError> {
         match parent {
             WorkspaceParent::Root => Ok(&self.root_items),

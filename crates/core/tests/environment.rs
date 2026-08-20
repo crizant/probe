@@ -287,3 +287,90 @@ fn resolves_raw_and_multipart_body_values() {
     );
     assert_eq!(parts[0].content_type.as_deref(), Some("text/resolved"));
 }
+
+#[test]
+fn set_environment_variable_updates_overrides_and_rejects_secrets() {
+    let mut environments = vec![
+        environment(
+            "base",
+            None,
+            vec![
+                variable("host", "api.example.com"),
+                EnvironmentVariable::Secret(SecretVariable {
+                    name: Some("inheritedSecret".to_owned()),
+                    value_type: None,
+                    disabled: false,
+                }),
+            ],
+        ),
+        environment(
+            "development",
+            Some("base"),
+            vec![
+                variable("token", "development-token"),
+                EnvironmentVariable::Secret(SecretVariable {
+                    name: Some("secretToken".to_owned()),
+                    value_type: None,
+                    disabled: false,
+                }),
+            ],
+        ),
+    ];
+
+    probe_core::set_environment_variable(
+        &mut environments,
+        "development",
+        "token",
+        "rotated".to_owned(),
+    )
+    .unwrap();
+    probe_core::set_environment_variable(
+        &mut environments,
+        "development",
+        "host",
+        "dev.example.com".to_owned(),
+    )
+    .unwrap();
+
+    let resolved = resolve_environment(&environments, "development").unwrap();
+    assert_eq!(resolved.variable("token"), Some("rotated"));
+    assert_eq!(resolved.variable("host"), Some("dev.example.com"));
+    assert_eq!(
+        resolve_environment(&environments, "base")
+            .unwrap()
+            .variable("host"),
+        Some("api.example.com")
+    );
+
+    assert_eq!(
+        probe_core::set_environment_variable(
+            &mut environments,
+            "development",
+            "secretToken",
+            "nope".to_owned(),
+        )
+        .unwrap_err(),
+        EnvironmentResolutionError::SecretVariableUnavailable("secretToken".to_owned())
+    );
+    assert_eq!(
+        probe_core::set_environment_variable(
+            &mut environments,
+            "development",
+            "inheritedSecret",
+            "nope".to_owned(),
+        )
+        .unwrap_err(),
+        EnvironmentResolutionError::SecretVariableUnavailable("inheritedSecret".to_owned())
+    );
+    assert!(
+        environments[1]
+            .variables
+            .iter()
+            .all(|variable| match variable {
+                EnvironmentVariable::Plain(variable) => {
+                    variable.name.as_deref() != Some("inheritedSecret")
+                }
+                EnvironmentVariable::Secret(_) => true,
+            })
+    );
+}

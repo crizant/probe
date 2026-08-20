@@ -16,13 +16,13 @@ use gpui::{
     Entity, EntityId, FocusHandle, Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla,
     InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton,
     ParentElement as _, Pixels, Render, RenderOnce, Role, ShapedLine, SharedString,
-    StatefulInteractiveElement as _, Style, Styled as _, Subscription, TextAlign, TextRun,
-    TransformationMatrix, Window, canvas, div, point, prelude::FluentBuilder as _, px, relative,
-    transparent_black,
+    StatefulInteractiveElement as _, Style, Styled as _, Subscription, Task, TextAlign, TextRun,
+    TransformationMatrix, Window, canvas, deferred, div, font, point, prelude::FluentBuilder as _,
+    px, relative, size, transparent_black,
 };
 use gpui_base::{
-    Button, Editor, Input, InputBase, Popup, Select, Switch, SwitchThumb, SwitchTrack, Toggle,
-    ToggleGroup,
+    Align, Button, Editor, ElementExt as _, Input, InputBase, POPUP_PRIORITY, Placement, Popup,
+    Positioner, Select, Switch, SwitchThumb, SwitchTrack, Toggle, ToggleGroup,
     actions::{Cancel, Confirm, SelectDown, SelectUp},
     input::{
         EditorState, InputEditorStyle, InputEvent, InputState, TextDecoration,
@@ -267,51 +267,247 @@ pub(crate) fn home_button(
         .on_click(move |_, window, cx| on_click(window, cx))
 }
 
-#[derive(Clone, Debug, Default)]
+type VariableChangeHandler = Rc<dyn Fn(&str, String, &mut Window, &mut App)>;
+
+#[derive(Clone, Default)]
 pub(crate) struct VariableContext {
     pub(crate) values: BTreeMap<String, String>,
+    pub(crate) secrets: BTreeSet<String>,
     pub(crate) unavailable_message: String,
+    pub(crate) on_change: Option<VariableChangeHandler>,
 }
 
-struct VariableTooltip {
-    theme: Theme,
-    rows: Vec<(String, String)>,
-}
-
-impl Render for VariableTooltip {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut content = div()
-            .debug_selector(|| "variable-input-tooltip-popup".into())
-            .max_w(px(360.0))
-            .px(px(self.theme.metrics.spacing_3))
-            .py(px(self.theme.metrics.spacing_2))
-            .flex()
-            .flex_col()
-            .gap(px(self.theme.metrics.spacing_1))
-            .rounded(px(self.theme.metrics.radius_medium))
-            .bg(self.theme.colors.surfaces.overlay)
-            .border_1()
-            .border_color(self.theme.colors.borders.standard)
-            .font_family(self.theme.typography.monospace_family)
-            .text_size(px(self.theme.typography.caption_size))
-            .text_color(self.theme.colors.text.primary);
-        for (name, value) in &self.rows {
-            content = content.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(self.theme.metrics.spacing_2))
-                    .child(
-                        truncated_label(format!("{{{{{name}}}}}"))
-                            .flex_none()
-                            .max_w(px(160.0))
-                            .text_color(self.theme.colors.syntax.string),
-                    )
-                    .child(truncated_label(value.clone()).flex_1()),
-            );
-        }
-        content
+impl std::fmt::Debug for VariableContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VariableContext")
+            .field("values", &self.values)
+            .field("secrets", &self.secrets)
+            .field("unavailable_message", &self.unavailable_message)
+            .finish_non_exhaustive()
     }
+}
+
+const VARIABLE_TOOLTIP_OPEN_DELAY: Duration = Duration::from_millis(200);
+const VARIABLE_TOOLTIP_CLOSE_DELAY: Duration = Duration::from_millis(200);
+
+struct VariableHoverState {
+    open: bool,
+    active: Option<(usize, String)>,
+    trigger_bounds: Bounds<Pixels>,
+    visible_width: Option<Pixels>,
+    hovering_trigger: bool,
+    hovering_content: bool,
+    input_focused: bool,
+    epoch: usize,
+    open_task: Option<Task<()>>,
+    close_task: Option<Task<()>>,
+}
+
+impl VariableHoverState {
+    fn new() -> Self {
+        Self {
+            open: false,
+            active: None,
+            trigger_bounds: Bounds {
+                origin: point(px(0.0), px(0.0)),
+                size: size(px(0.0), px(0.0)),
+            },
+            visible_width: None,
+            hovering_trigger: false,
+            hovering_content: false,
+            input_focused: false,
+            epoch: 0,
+            open_task: None,
+            close_task: None,
+        }
+    }
+
+    fn on_trigger_hover(
+        &mut self,
+        index: usize,
+        name: String,
+        hovering: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if hovering {
+            self.active = Some((index, name));
+            self.hovering_trigger = true;
+            cx.notify();
+            self.schedule_open(cx);
+            return;
+        }
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|(active, _)| *active == index)
+        {
+            self.hovering_trigger = false;
+            if !self.hovering_content && !self.input_focused {
+                self.schedule_close(cx);
+            }
+        }
+    }
+
+    fn on_content_hover(&mut self, hovering: bool, cx: &mut Context<Self>) {
+        self.hovering_content = hovering;
+        if hovering {
+            self.cancel_tasks();
+        } else if !self.hovering_trigger && !self.input_focused {
+            self.schedule_close(cx);
+        }
+    }
+
+    fn set_input_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
+        self.input_focused = focused;
+        if focused {
+            self.cancel_tasks();
+        } else if !self.hovering_trigger && !self.hovering_content {
+            self.schedule_close(cx);
+        }
+    }
+
+    fn schedule_open(&mut self, cx: &mut Context<Self>) {
+        self.cancel_tasks();
+        if self.open {
+            cx.notify();
+            return;
+        }
+        let epoch = self.next_epoch();
+        self.open_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(VARIABLE_TOOLTIP_OPEN_DELAY)
+                .await;
+            let _ = this.update(cx, |state, cx| {
+                if state.epoch == epoch {
+                    state.open = true;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    fn schedule_close(&mut self, cx: &mut Context<Self>) {
+        self.cancel_tasks();
+        let epoch = self.next_epoch();
+        self.close_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(VARIABLE_TOOLTIP_CLOSE_DELAY)
+                .await;
+            let _ = this.update(cx, |state, cx| {
+                if state.epoch == epoch
+                    && !state.hovering_trigger
+                    && !state.hovering_content
+                    && !state.input_focused
+                {
+                    state.open = false;
+                    state.active = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    fn cancel_tasks(&mut self) {
+        self.epoch += 1;
+        self.open_task = None;
+        self.close_task = None;
+    }
+
+    fn next_epoch(&mut self) -> usize {
+        self.epoch += 1;
+        self.epoch
+    }
+}
+
+impl Render for VariableHoverState {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+fn variable_tooltip_popup(
+    theme: Theme,
+    name: String,
+    value: String,
+    editable: bool,
+    hover: Entity<VariableHoverState>,
+    on_change: Option<VariableChangeHandler>,
+) -> impl IntoElement {
+    let hover_for_focus = hover.clone();
+    div()
+        .id("variable-input-tooltip-popup")
+        .debug_selector(|| "variable-input-tooltip-popup".into())
+        .w(px(280.0))
+        .max_w(px(360.0))
+        .px(px(theme.metrics.spacing_3))
+        .py(px(theme.metrics.spacing_2))
+        .flex()
+        .flex_col()
+        .gap(px(theme.metrics.spacing_2))
+        .rounded(px(theme.metrics.radius_medium))
+        .bg(theme.colors.surfaces.overlay)
+        .border_1()
+        .border_color(theme.colors.borders.standard)
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_hover(move |hovered, _, cx| {
+            hover.update(cx, |state, cx| state.on_content_hover(*hovered, cx));
+        })
+        .child(
+            truncated_label(format!("{{{{{name}}}}}"))
+                .flex_none()
+                .font_family(theme.typography.monospace_family)
+                .text_size(px(theme.typography.caption_size))
+                .text_color(theme.colors.syntax.string),
+        )
+        .child(variable_value_input(
+            theme,
+            format!("variable-tooltip-value-{name}"),
+            value,
+            editable,
+            {
+                let name = name.clone();
+                move |value, window, cx| {
+                    if let Some(on_change) = &on_change {
+                        on_change(&name, value.to_string(), window, cx);
+                    }
+                }
+            },
+            move |focused, cx| {
+                hover_for_focus.update(cx, |state, cx| state.set_input_focused(focused, cx));
+            },
+        ))
+}
+
+fn variable_value_input(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    value: impl Into<SharedString>,
+    editable: bool,
+    on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+    on_focus: impl Fn(bool, &mut App) + 'static,
+) -> gpui::AnyElement {
+    ProbeTextInput {
+        theme,
+        id: id.into(),
+        value: single_line(value),
+        placeholder: SharedString::from("Variable value"),
+        variables: VariableContext::default(),
+        highlight_path_variables: false,
+        variable_overlay: false,
+        font_family: theme.typography.monospace_family,
+        text_size: theme.typography.caption_size,
+        height: theme.metrics.control_height,
+        width: None,
+        debug_selector: Some("variable-tooltip-value-input"),
+        on_change: Rc::new(on_value_change),
+        on_enter: None,
+        autofocus: false,
+        readonly: !editable,
+        on_focus: Some(Rc::new(on_focus)),
+    }
+    .into_any_element()
 }
 
 fn focus_ring_shadow(ring_color: Hsla, gap_color: Hsla) -> Vec<BoxShadow> {
@@ -539,11 +735,13 @@ impl<T: Clone + Eq + 'static> RenderOnce for DropdownOption<T> {
 }
 
 type VisibleRangeHandler = Rc<dyn Fn(Range<usize>, &mut App)>;
+type FocusChangeHandler = Rc<dyn Fn(bool, &mut App)>;
 
 struct FieldInput {
     state: Entity<InputState>,
     on_change: InputChangeHandler,
     on_enter: Option<InputChangeHandler>,
+    on_focus: Option<FocusChangeHandler>,
     autofocused: bool,
     _subscription: Subscription,
 }
@@ -567,7 +765,16 @@ impl FieldInput {
                     on_enter(value, window, cx);
                 }
             }
-            _ => {}
+            InputEvent::Focus => {
+                if let Some(on_focus) = &this.on_focus {
+                    on_focus(true, cx);
+                }
+            }
+            InputEvent::Blur => {
+                if let Some(on_focus) = &this.on_focus {
+                    on_focus(false, cx);
+                }
+            }
         }
     }
 }
@@ -580,6 +787,7 @@ struct ProbeTextInput {
     placeholder: SharedString,
     variables: VariableContext,
     highlight_path_variables: bool,
+    variable_overlay: bool,
     font_family: &'static str,
     text_size: f32,
     height: f32,
@@ -587,13 +795,15 @@ struct ProbeTextInput {
     debug_selector: Option<&'static str>,
     on_change: InputChangeHandler,
     on_enter: Option<InputChangeHandler>,
+    on_focus: Option<FocusChangeHandler>,
     autofocus: bool,
+    readonly: bool,
 }
 
 impl RenderOnce for ProbeTextInput {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let overlay_paints_text =
-            !input_variable_ranges(&self.value, self.highlight_path_variables).is_empty();
+        let overlay_paints_text = self.variable_overlay
+            && !input_variable_ranges(&self.value, self.highlight_path_variables).is_empty();
         let placeholder = self.placeholder.clone();
         let on_change = self.on_change.clone();
         let on_enter = self.on_enter.clone();
@@ -608,6 +818,7 @@ impl RenderOnce for ProbeTextInput {
                 state,
                 on_change: on_change.clone(),
                 on_enter: on_enter.clone(),
+                on_focus: None,
                 autofocused: false,
                 _subscription: subscription,
             }
@@ -615,8 +826,10 @@ impl RenderOnce for ProbeTextInput {
         field.update(cx, |field, cx| {
             field.on_change = self.on_change.clone();
             field.on_enter = self.on_enter.clone();
+            field.on_focus = self.on_focus.clone();
             field.state.update(cx, |input, cx| {
                 input.set_editor_style(editor_paint_style(self.theme));
+                input.set_readonly(self.readonly, cx);
                 if input.value() != self.value {
                     input.set_value(self.value.clone(), window, cx);
                 }
@@ -676,6 +889,9 @@ impl RenderOnce for ProbeTextInput {
                 }
             })
             .child(Input::new(&state));
+        if !self.variable_overlay {
+            return input.into_any_element();
+        }
         variable_input_overlay(
             self.theme,
             state,
@@ -684,6 +900,8 @@ impl RenderOnce for ProbeTextInput {
             self.value,
             self.variables,
             self.highlight_path_variables,
+            window,
+            cx,
         )
     }
 }
@@ -703,6 +921,7 @@ pub(crate) fn variable_text_input(
         placeholder: placeholder.into(),
         variables,
         highlight_path_variables: false,
+        variable_overlay: true,
         font_family: theme.typography.monospace_family,
         text_size: theme.typography.body_size,
         height: theme.metrics.control_height,
@@ -710,7 +929,9 @@ pub(crate) fn variable_text_input(
         debug_selector: None,
         on_change: Rc::new(on_value_change),
         on_enter: None,
+        on_focus: None,
         autofocus: false,
+        readonly: false,
     }
     .into_any_element()
 }
@@ -730,6 +951,7 @@ pub(crate) fn url_text_input(
         placeholder: placeholder.into(),
         variables,
         highlight_path_variables: true,
+        variable_overlay: true,
         font_family: theme.typography.monospace_family,
         text_size: theme.typography.body_size,
         height: theme.metrics.control_height,
@@ -737,7 +959,9 @@ pub(crate) fn url_text_input(
         debug_selector: None,
         on_change: Rc::new(on_value_change),
         on_enter: None,
+        on_focus: None,
         autofocus: false,
+        readonly: false,
     }
     .into_any_element()
 }
@@ -758,6 +982,7 @@ pub(crate) fn dialog_text_input(
         placeholder: placeholder.into(),
         variables: VariableContext::default(),
         highlight_path_variables: false,
+        variable_overlay: false,
         font_family: theme.typography.interface_family,
         text_size: theme.typography.body_size,
         height: theme.metrics.control_height,
@@ -765,7 +990,9 @@ pub(crate) fn dialog_text_input(
         debug_selector: None,
         on_change: Rc::new(on_value_change),
         on_enter: Some(Rc::new(on_enter)),
+        on_focus: None,
         autofocus,
+        readonly: false,
     }
     .into_any_element()
 }
@@ -785,6 +1012,7 @@ pub(crate) fn search_input(
         placeholder: placeholder.into(),
         variables: VariableContext::default(),
         highlight_path_variables: false,
+        variable_overlay: false,
         font_family: theme.typography.interface_family,
         text_size: theme.typography.body_size,
         height: theme.metrics.control_height - 2.0,
@@ -792,7 +1020,9 @@ pub(crate) fn search_input(
         debug_selector: Some("response-search"),
         on_change: Rc::new(on_value_change),
         on_enter: Some(Rc::new(on_enter)),
+        on_focus: None,
         autofocus: false,
+        readonly: false,
     }
 }
 
@@ -1206,20 +1436,17 @@ pub(crate) fn body_text_input(
     theme: Theme,
     id: impl Into<ElementId>,
     value: impl Into<SharedString>,
-    variables: VariableContext,
+    _variables: VariableContext,
     syntax: BodySyntax,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui::AnyElement {
-    let id = id.into();
-    let tooltip_id =
-        ElementId::NamedChild(Arc::new(id.clone()), SharedString::from("variable-tooltip"));
     let value = value.into();
     let ranges = variable_ranges(&value);
     let decorations = body_text_highlights(theme, &ranges);
-    let editor = ProbeEditor {
+    ProbeEditor {
         theme,
-        id,
-        value: value.clone(),
+        id: id.into(),
+        value,
         placeholder: SharedString::from("Body content"),
         decorations,
         language: match syntax {
@@ -1236,28 +1463,8 @@ pub(crate) fn body_text_input(
         on_change: Some(Rc::new(on_value_change)),
         on_visible_range: None,
         debug_selector: None,
-    };
-    let wrapper = div()
-        .id(tooltip_id)
-        .relative()
-        .size_full()
-        .debug_selector(|| "variable-input-tooltip-trigger".into())
-        .child(editor);
-    if ranges.is_empty() {
-        return wrapper.into_any_element();
     }
-
-    let rows = variable_tooltip_rows(ranges, &variables);
-    wrapper
-        .tooltip(move |_, cx| {
-            cx.new(|_| VariableTooltip {
-                theme,
-                rows: rows.clone(),
-            })
-            .into()
-        })
-        .tooltip_show_delay(Duration::from_millis(200))
-        .into_any_element()
+    .into_any_element()
 }
 
 pub(crate) fn response_body_input(
@@ -1551,6 +1758,7 @@ fn text_decoration(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn variable_input_overlay(
     theme: Theme,
     state: Entity<InputState>,
@@ -1559,44 +1767,205 @@ fn variable_input_overlay(
     value: SharedString,
     variables: VariableContext,
     highlight_path_variables: bool,
+    window: &mut Window,
+    cx: &mut App,
 ) -> gpui::AnyElement {
     let ranges = input_variable_ranges(&value, highlight_path_variables);
     // Input paints first so it keeps native caret, selection, and scroll.
     // The overlay sits on top, recolors supported variable spans, and covers
     // the native caret while blink is off.
-    let wrapper = div()
-        .id(tooltip_id)
+    let mut wrapper = div()
+        .id(tooltip_id.clone())
         .relative()
         .debug_selector(|| "variable-input-tooltip-trigger".into())
         .w_full()
         .child(input)
         .child(variable_highlight_layer(
             theme,
-            state,
+            state.clone(),
             ranges.is_empty(),
             theme.typography.monospace_family,
             theme.typography.body_size,
             highlight_path_variables,
         ));
-    if ranges.is_empty() {
-        return wrapper.into_any_element();
-    }
-
     let tooltip_ranges = variable_ranges(&value);
     if tooltip_ranges.is_empty() {
         return wrapper.into_any_element();
     }
-    let rows = variable_tooltip_rows(tooltip_ranges, &variables);
+
+    let hover = window.use_keyed_state(
+        ElementId::NamedChild(Arc::new(tooltip_id), SharedString::from("hover")),
+        cx,
+        |_, _| VariableHoverState::new(),
+    );
+    let visible_width = hover.read(cx).visible_width;
+    let current_scroll = state.read(cx).scroll_offset().x;
+    let cursor = state.read(cx).cursor();
+    let spans = variable_span_layout(
+        window,
+        &value,
+        &tooltip_ranges,
+        theme.typography.monospace_family,
+        theme.typography.body_size,
+        current_scroll,
+        cursor,
+        visible_width,
+    );
+    let mut hits = div().relative().w_full().h_full().on_prepaint({
+        let hover = hover.clone();
+        move |bounds, window, cx| {
+            let width = bounds.size.width;
+            let changed = hover.update(cx, |state, _| {
+                let changed = state.visible_width != Some(width);
+                state.visible_width = Some(width);
+                changed
+            });
+            if changed {
+                window.request_animation_frame();
+            }
+        }
+    });
+    for (index, (name, left, width)) in spans.into_iter().enumerate() {
+        let hover_trigger = hover.clone();
+        let trigger_name = name.clone();
+        hits = hits.child(
+            div()
+                .id(("variable-hover", index))
+                .absolute()
+                .left(left)
+                .w(width)
+                .top(px(0.0))
+                .bottom(px(0.0))
+                .debug_selector(move || {
+                    if index == 0 {
+                        "variable-hover-trigger".into()
+                    } else {
+                        format!("variable-hover-trigger-{index}")
+                    }
+                })
+                .on_hover({
+                    let hover = hover_trigger.clone();
+                    let name = trigger_name.clone();
+                    move |hovered, _, cx| {
+                        hover.update(cx, |state, cx| {
+                            state.on_trigger_hover(index, name.clone(), *hovered, cx);
+                        });
+                    }
+                })
+                .on_prepaint({
+                    let hover = hover_trigger;
+                    move |bounds, window, cx| {
+                        let changed = hover.update(cx, |state, _| {
+                            if state
+                                .active
+                                .as_ref()
+                                .is_none_or(|(active, _)| *active != index)
+                            {
+                                return false;
+                            }
+                            let changed = state.trigger_bounds != bounds;
+                            state.trigger_bounds = bounds;
+                            changed
+                        });
+                        if changed {
+                            window.request_animation_frame();
+                        }
+                    }
+                }),
+        );
+    }
+    wrapper = wrapper.child(
+        div()
+            .absolute()
+            .top(px(0.0))
+            .bottom(px(0.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .border_1()
+            .border_color(transparent_black())
+            .px(px(theme.metrics.spacing_2))
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .child(hits),
+    );
+
+    let (open, active, bounds) = {
+        let state = hover.read(cx);
+        (state.open, state.active.clone(), state.trigger_bounds)
+    };
+    if !open {
+        return wrapper.into_any_element();
+    }
+    let Some((_, name)) = active else {
+        return wrapper.into_any_element();
+    };
+    if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
+        return wrapper.into_any_element();
+    }
+    let value = variable_tooltip_value(&name, &variables);
+    let editable = variables.on_change.is_some() && !variables.secrets.contains(&name);
     wrapper
-        .tooltip(move |_, cx| {
-            cx.new(|_| VariableTooltip {
-                theme,
-                rows: rows.clone(),
-            })
-            .into()
-        })
-        .tooltip_show_delay(Duration::from_millis(200))
+        .child(
+            deferred(
+                Positioner::side(bounds)
+                    .placement(Placement::Bottom)
+                    .align(Align::Start)
+                    .offset(px(4.0))
+                    .margin(px(4.0))
+                    .child(variable_tooltip_popup(
+                        theme,
+                        name,
+                        value,
+                        editable,
+                        hover,
+                        variables.on_change,
+                    )),
+            )
+            .with_priority(POPUP_PRIORITY),
+        )
         .into_any_element()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn variable_span_layout(
+    window: &mut Window,
+    value: &str,
+    ranges: &[(Range<usize>, String)],
+    font_family: &'static str,
+    font_size: f32,
+    current_scroll_x: Pixels,
+    cursor: usize,
+    visible_width: Option<Pixels>,
+) -> Vec<(String, Pixels, Pixels)> {
+    let run = TextRun {
+        len: value.len(),
+        font: font(font_family),
+        color: transparent_black(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let line =
+        window
+            .text_system()
+            .shape_line(SharedString::from(value), px(font_size), &[run], None);
+    let scroll_x = visible_width.map_or(current_scroll_x, |width| {
+        input_text_scroll_offset(
+            line.x_for_index(cursor),
+            line.width,
+            width,
+            current_scroll_x,
+        )
+    });
+    ranges
+        .iter()
+        .map(|(range, name)| {
+            let start = line.x_for_index(range.start) + scroll_x;
+            let end = line.x_for_index(range.end) + scroll_x;
+            (name.clone(), start, (end - start).max(px(1.0)))
+        })
+        .collect()
 }
 
 fn variable_highlight_layer(
@@ -1855,24 +2224,12 @@ pub(crate) fn single_line(value: impl Into<SharedString>) -> SharedString {
     }
 }
 
-fn variable_tooltip_rows(
-    ranges: Vec<(Range<usize>, String)>,
-    variables: &VariableContext,
-) -> Vec<(String, String)> {
-    let mut rows = Vec::new();
-    let mut seen = BTreeSet::new();
-    for (_, name) in ranges {
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        let resolved = variables
-            .values
-            .get(&name)
-            .cloned()
-            .unwrap_or_else(|| variables.unavailable_message.clone());
-        rows.push((name, resolved));
-    }
-    rows
+fn variable_tooltip_value(name: &str, variables: &VariableContext) -> String {
+    variables
+        .values
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| variables.unavailable_message.clone())
 }
 
 fn variable_ranges(value: &str) -> Vec<(Range<usize>, String)> {
@@ -2112,7 +2469,7 @@ mod tests {
     use super::{
         VariableContext, VariableHighlightElement, body_text_highlights, dropdown,
         editor_paint_style, input_text_scroll_offset, menu_button, single_line,
-        variable_highlight_runs, variable_ranges, variable_tooltip_rows,
+        variable_highlight_runs, variable_ranges, variable_span_layout, variable_tooltip_value,
     };
     use crate::theme::Theme;
     use probe_core::path_variable_ranges;
@@ -2439,27 +2796,76 @@ mod tests {
     }
 
     #[test]
-    fn variable_tooltip_rows_deduplicate_repeated_names() {
-        let value = "https://{{host}}/api/{{host}}/users/{{id}}";
-        let ranges = variable_ranges(value);
-        assert_eq!(ranges.len(), 3);
+    fn variable_tooltip_value_uses_resolved_or_unavailable_message() {
         let mut values = BTreeMap::new();
         values.insert("host".to_owned(), "api.example".to_owned());
-        values.insert("id".to_owned(), "42".to_owned());
-        let rows = variable_tooltip_rows(
-            ranges,
-            &VariableContext {
-                values,
-                unavailable_message: "unavailable".to_owned(),
-            },
-        );
-        assert_eq!(
-            rows,
-            vec![
-                ("host".to_owned(), "api.example".to_owned()),
-                ("id".to_owned(), "42".to_owned()),
-            ]
-        );
+        let variables = VariableContext {
+            values,
+            unavailable_message: "unavailable".to_owned(),
+            ..VariableContext::default()
+        };
+        assert_eq!(variable_tooltip_value("host", &variables), "api.example");
+        assert_eq!(variable_tooltip_value("missing", &variables), "unavailable");
+    }
+
+    #[gpui::test]
+    fn variable_span_layout_keeps_duplicate_names_and_follows_scroll(cx: &mut TestAppContext) {
+        cx.update(crate::theme::Theme::init);
+        let window = cx.open_window(size(px(240.0), px(48.0)), |window, cx| HighlightHarness {
+            input: cx.new(|cx| InputState::new(window, cx)),
+        });
+        window
+            .update(cx, |_, window, _| {
+                let font_family = Theme::light().typography.monospace_family;
+                let value = "{{host}}/{{host}}";
+                let ranges = variable_ranges(value);
+                let unscrolled = variable_span_layout(
+                    window,
+                    value,
+                    &ranges,
+                    font_family,
+                    14.0,
+                    px(0.0),
+                    0,
+                    None,
+                );
+                assert_eq!(unscrolled.len(), 2);
+                assert_eq!(unscrolled[0].0, "host");
+                assert_eq!(unscrolled[1].0, "host");
+                assert!(
+                    unscrolled[1].1 > unscrolled[0].1,
+                    "duplicate names should keep separate span origins, got {unscrolled:?}"
+                );
+
+                let scrolled = variable_span_layout(
+                    window,
+                    value,
+                    &ranges,
+                    font_family,
+                    14.0,
+                    px(-12.0),
+                    0,
+                    None,
+                );
+                assert_eq!(scrolled[0].1, unscrolled[0].1 - px(12.0));
+                assert_eq!(scrolled[1].1, unscrolled[1].1 - px(12.0));
+
+                let followed = variable_span_layout(
+                    window,
+                    value,
+                    &ranges,
+                    font_family,
+                    14.0,
+                    px(0.0),
+                    value.len(),
+                    Some(px(40.0)),
+                );
+                assert!(
+                    followed[0].1 < px(0.0),
+                    "caret past a narrow field should shift hover spans left, got {followed:?}"
+                );
+            })
+            .expect("span layout test window should remain open");
     }
 
     #[test]

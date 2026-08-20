@@ -100,6 +100,17 @@ impl LoadedWorkspace {
         self.workspace.request_mut(key)
     }
 
+    /// Updates a plain environment variable in the in-memory workspace.
+    pub fn set_environment_variable(
+        &mut self,
+        environment_name: &str,
+        variable_name: &str,
+        value: String,
+    ) -> Result<(), probe_core::EnvironmentResolutionError> {
+        self.workspace
+            .set_environment_variable(environment_name, variable_name, value)
+    }
+
     /// Returns requests in collection traversal order.
     #[must_use]
     pub fn requests(&self) -> &[LocatedRequest] {

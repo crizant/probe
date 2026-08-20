@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     AuthenticationValue, Body, Environment, EnvironmentVariable, HttpRequest, MultipartValue,
-    RequestBody, VariableValue, VariableValueSet,
+    RequestBody, Variable, VariableValue, VariableValueSet,
 };
 
 /// An environment selected and resolved entirely in memory.
@@ -28,6 +28,12 @@ impl ResolvedEnvironment {
     #[must_use]
     pub const fn variables(&self) -> &BTreeMap<String, String> {
         &self.variables
+    }
+
+    /// Returns secret variable names that have no runtime value.
+    #[must_use]
+    pub const fn secrets_without_values(&self) -> &BTreeSet<String> {
+        &self.secrets_without_values
     }
 
     /// Looks up a resolved variable.
@@ -217,11 +223,111 @@ enum RawVariable {
     Secret,
 }
 
+/// Updates a plain variable on the selected environment, or adds an override.
+///
+/// Secret variables cannot be written. A variable defined only on a parent is
+/// added to the selected environment so the parent document is left unchanged.
+pub fn set_environment_variable(
+    environments: &mut [Environment],
+    environment_name: &str,
+    variable_name: &str,
+    value: String,
+) -> Result<(), EnvironmentResolutionError> {
+    if variable_name.is_empty() {
+        return Err(EnvironmentResolutionError::MalformedInterpolation);
+    }
+    let raw = raw_variables(environments, environment_name)?;
+    if matches!(raw.get(variable_name), Some(RawVariable::Secret)) {
+        return Err(EnvironmentResolutionError::SecretVariableUnavailable(
+            variable_name.to_owned(),
+        ));
+    }
+    let Some(position) = environments
+        .iter()
+        .position(|environment| environment.name == environment_name)
+    else {
+        return Err(EnvironmentResolutionError::EnvironmentNotFound(
+            environment_name.to_owned(),
+        ));
+    };
+
+    let environment = &mut environments[position];
+    for variable in &mut environment.variables {
+        let EnvironmentVariable::Plain(variable) = variable else {
+            continue;
+        };
+        if variable.name.as_deref() != Some(variable_name) {
+            continue;
+        }
+        variable.disabled = false;
+        assign_variable_value(&mut variable.value, value);
+        return Ok(());
+    }
+
+    environment
+        .variables
+        .push(EnvironmentVariable::Plain(Variable {
+            name: Some(variable_name.to_owned()),
+            value: Some(VariableValueSet::Single(VariableValue::String(value))),
+            disabled: false,
+        }));
+    Ok(())
+}
+
+fn assign_variable_value(slot: &mut Option<VariableValueSet>, value: String) {
+    match slot {
+        Some(VariableValueSet::Single(VariableValue::String(existing))) => *existing = value,
+        Some(VariableValueSet::Single(VariableValue::Typed { data, .. })) => *data = value,
+        Some(VariableValueSet::Variants(variants)) => {
+            if let Some(selected) = variants.iter_mut().find(|variant| variant.selected) {
+                match &mut selected.value {
+                    VariableValue::String(existing) => *existing = value,
+                    VariableValue::Typed { data, .. } => *data = value,
+                }
+            } else if let Some(first) = variants.first_mut() {
+                first.selected = true;
+                match &mut first.value {
+                    VariableValue::String(existing) => *existing = value,
+                    VariableValue::Typed { data, .. } => *data = value,
+                }
+            } else {
+                *slot = Some(VariableValueSet::Single(VariableValue::String(value)));
+            }
+        }
+        None => *slot = Some(VariableValueSet::Single(VariableValue::String(value))),
+    }
+}
+
 /// Selects an environment, applies its inheritance chain, and resolves variable values.
 pub fn resolve_environment(
     environments: &[Environment],
     selected: &str,
 ) -> Result<ResolvedEnvironment, EnvironmentResolutionError> {
+    let raw = raw_variables(environments, selected)?;
+
+    let mut variables = BTreeMap::new();
+    let mut resolving = Vec::new();
+    for name in raw.keys() {
+        if matches!(raw.get(name), Some(RawVariable::Value(_))) {
+            resolve_variable(name, &raw, &mut variables, &mut resolving)?;
+        }
+    }
+
+    let secrets_without_values = raw
+        .iter()
+        .filter_map(|(name, value)| matches!(value, RawVariable::Secret).then_some(name.clone()))
+        .collect();
+    Ok(ResolvedEnvironment {
+        name: selected.to_owned(),
+        variables,
+        secrets_without_values,
+    })
+}
+
+fn raw_variables(
+    environments: &[Environment],
+    selected: &str,
+) -> Result<BTreeMap<String, RawVariable>, EnvironmentResolutionError> {
     validate_environments(environments)?;
     let mut by_name = BTreeMap::new();
     for environment in environments {
@@ -241,24 +347,7 @@ pub fn resolve_environment(
         &mut BTreeSet::new(),
         &mut raw,
     )?;
-
-    let mut variables = BTreeMap::new();
-    let mut resolving = Vec::new();
-    for name in raw.keys() {
-        if matches!(raw.get(name), Some(RawVariable::Value(_))) {
-            resolve_variable(name, &raw, &mut variables, &mut resolving)?;
-        }
-    }
-
-    let secrets_without_values = raw
-        .iter()
-        .filter_map(|(name, value)| matches!(value, RawVariable::Secret).then_some(name.clone()))
-        .collect();
-    Ok(ResolvedEnvironment {
-        name: selected.to_owned(),
-        variables,
-        secrets_without_values,
-    })
+    Ok(raw)
 }
 
 fn apply_environment<'a>(
