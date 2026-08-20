@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use probe_core::{
-    AuthenticationKind, AuthenticationValue, Body, HttpRequest, MultipartPartKind, MultipartValue,
-    RawBodyKind, RequestBody, VariableValueType,
+    AuthenticationValue, Body, HttpRequest, MultipartPartKind, MultipartValue, RawBodyKind,
+    RequestBody, VariableValueType,
 };
 use probe_http::{HttpResponse, MAX_IN_MEMORY_RESPONSE_BYTES};
 use serde_json::{Map, Value, json};
@@ -163,7 +163,7 @@ pub(super) fn request_human(
         request
             .authentication
             .as_ref()
-            .map(|auth| authentication_kind(&auth.kind))
+            .map(|auth| auth.kind.as_str())
             .unwrap_or("<unset>"),
     ));
     output
@@ -215,7 +215,7 @@ pub(super) fn request_json(
             .collect();
         json!({
             "properties": properties,
-            "type": authentication_kind(&auth.kind),
+            "type": auth.kind.as_str(),
         })
     });
 
@@ -311,29 +311,13 @@ const fn raw_body_kind(kind: &RawBodyKind) -> &'static str {
     }
 }
 
-fn authentication_kind(kind: &AuthenticationKind) -> &str {
-    match kind {
-        AuthenticationKind::Inherit => "inherit",
-        AuthenticationKind::AwsV4 => "awsv4",
-        AuthenticationKind::Basic => "basic",
-        AuthenticationKind::Wsse => "wsse",
-        AuthenticationKind::Bearer => "bearer",
-        AuthenticationKind::Digest => "digest",
-        AuthenticationKind::Ntlm => "ntlm",
-        AuthenticationKind::ApiKey => "apikey",
-        AuthenticationKind::OAuth1 => "oauth1",
-        AuthenticationKind::OAuth2 => "oauth2",
-        AuthenticationKind::Other(kind) => kind,
-    }
-}
-
 fn authentication_value(value: &AuthenticationValue) -> Value {
     match value {
         AuthenticationValue::String(value) => json!(value),
         AuthenticationValue::Boolean(value) => json!(value),
         AuthenticationValue::Number(value) => json!({
             "data": value,
-            "type": variable_value_type(&VariableValueType::Number),
+            "type": VariableValueType::Number.as_str(),
         }),
         AuthenticationValue::Null => Value::Null,
         AuthenticationValue::Sequence(values) => {
@@ -345,15 +329,5 @@ fn authentication_value(value: &AuthenticationValue) -> Value {
                 .map(|(name, value)| (name.clone(), authentication_value(value)))
                 .collect(),
         ),
-    }
-}
-
-const fn variable_value_type(value_type: &VariableValueType) -> &'static str {
-    match value_type {
-        VariableValueType::String => "string",
-        VariableValueType::Number => "number",
-        VariableValueType::Boolean => "boolean",
-        VariableValueType::Null => "null",
-        VariableValueType::Object => "object",
     }
 }

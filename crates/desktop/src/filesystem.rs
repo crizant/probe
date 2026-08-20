@@ -24,6 +24,14 @@ pub(crate) struct WorkspaceWatcher {
     pub(crate) workspace_path: PathBuf,
 }
 
+pub(crate) fn workspace_base_directory(path: &Path) -> Option<PathBuf> {
+    if path.is_dir() {
+        Some(path.to_owned())
+    } else {
+        path.parent().map(Path::to_owned)
+    }
+}
+
 impl WorkspaceWatcher {
     pub(crate) fn start(workspace_path: &Path) -> notify::Result<Self> {
         #[cfg(not(test))]
@@ -35,14 +43,8 @@ impl WorkspaceWatcher {
         let mut watcher = notify::recommended_watcher(move |event| {
             let _ = sender.send(event);
         })?;
-        let watched_path = if workspace_path.is_dir() {
-            workspace_path.to_owned()
-        } else {
-            workspace_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .to_owned()
-        };
+        let watched_path =
+            workspace_base_directory(workspace_path).unwrap_or_else(|| PathBuf::from("."));
         watcher.watch(
             &watched_path,
             if workspace_path.is_dir() {

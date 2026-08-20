@@ -7,7 +7,7 @@
 
 mod app;
 mod caret;
-pub mod components;
+mod components;
 mod execution;
 mod filesystem;
 mod persistence;
@@ -18,6 +18,6 @@ mod shell;
 mod structure_editor;
 mod synchronization;
 mod syntax;
-pub mod theme;
+mod theme;
 
-pub use app::{ProbeApp, run};
+pub use app::run;

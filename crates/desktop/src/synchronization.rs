@@ -293,8 +293,6 @@ fn merge_field<T: Clone + PartialEq>(
 mod tests {
     use std::{collections::BTreeMap, fs, path::PathBuf, time::SystemTime};
 
-    use probe_core::HttpRequest;
-
     use super::{
         LocalRequestState, ReconcileResult, SynchronizationConflict, hinted_selector, reconcile,
     };
@@ -482,7 +480,4 @@ mod tests {
         assert!(!result.selector_remaps.contains_key("items/0"));
         assert_eq!(result.workspace.workspace().request_count(), 1);
     }
-
-    #[allow(dead_code)]
-    fn _assert_http_request_is_clone(_: HttpRequest) {}
 }

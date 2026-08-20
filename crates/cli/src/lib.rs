@@ -231,32 +231,20 @@ where
         return RunOutput::success(help.to_owned());
     }
 
-    let environment = match extract_environment(&mut args) {
-        Ok(environment) => environment,
+    let options = match extract_options(&mut args) {
+        Ok(options) => options,
         Err(error) => return RunOutput::failure(error, json_output),
     };
-    let output = match extract_output(&mut args) {
-        Ok(output) => output,
-        Err(error) => return RunOutput::failure(error, json_output),
-    };
-    let update = match extract_request_update(&mut args) {
-        Ok(update) => update,
-        Err(error) => return RunOutput::failure(error, json_output),
-    };
-    let parent = match extract_string_option(&mut args, "--parent") {
-        Ok(parent) => parent,
-        Err(error) => return RunOutput::failure(error, json_output),
-    };
-    let index = match extract_index(&mut args) {
-        Ok(index) => index,
-        Err(error) => return RunOutput::failure(error, json_output),
-    };
-    let value = match extract_string_option(&mut args, "--value") {
-        Ok(value) => value,
-        Err(error) => return RunOutput::failure(error, json_output),
-    };
-    match parse_command(&args, environment, output, update, parent, index, value)
-        .and_then(|command| execute(command, stdin))
+    match parse_command(
+        &args,
+        options.environment,
+        options.output,
+        options.update,
+        options.parent,
+        options.index,
+        options.value,
+    )
+    .and_then(|command| execute(command, stdin))
     {
         Ok(output) => RunOutput::success(output.render(json_output, quiet)),
         Err(error) => RunOutput::failure(error, json_output),
@@ -483,52 +471,24 @@ impl CliError {
     }
 }
 
-fn extract_environment(args: &mut Vec<String>) -> Result<Option<String>, CliError> {
-    let positions: Vec<_> = args
-        .iter()
-        .enumerate()
-        .filter_map(|(index, argument)| (argument == "--environment").then_some(index))
-        .collect();
-    match positions.as_slice() {
-        [] => Ok(None),
-        [_first, _second, ..] => Err(CliError::invalid_arguments(
-            "--environment may only be specified once",
-        )),
-        [position] => {
-            if *position + 1 >= args.len() || args[*position + 1].starts_with('-') {
-                return Err(CliError::invalid_arguments(
-                    "--environment requires a non-empty name",
-                ));
-            }
-            let value = args.remove(*position + 1);
-            args.remove(*position);
-            Ok(Some(value))
-        }
-    }
+struct ParsedOptions {
+    environment: Option<String>,
+    output: Option<PathBuf>,
+    update: RequestUpdate,
+    parent: Option<String>,
+    index: Option<usize>,
+    value: Option<String>,
 }
 
-fn extract_output(args: &mut Vec<String>) -> Result<Option<PathBuf>, CliError> {
-    let positions: Vec<_> = args
-        .iter()
-        .enumerate()
-        .filter_map(|(index, argument)| (argument == "--output").then_some(index))
-        .collect();
-    match positions.as_slice() {
-        [] => Ok(None),
-        [_first, _second, ..] => Err(CliError::invalid_arguments(
-            "--output may only be specified once",
-        )),
-        [position] => {
-            if *position + 1 >= args.len() || args[*position + 1].starts_with('-') {
-                return Err(CliError::invalid_arguments(
-                    "--output requires a non-empty file path",
-                ));
-            }
-            let value = PathBuf::from(args.remove(*position + 1));
-            args.remove(*position);
-            Ok(Some(value))
-        }
-    }
+fn extract_options(args: &mut Vec<String>) -> Result<ParsedOptions, CliError> {
+    Ok(ParsedOptions {
+        environment: extract_string_option(args, "--environment")?,
+        output: extract_string_option(args, "--output")?.map(PathBuf::from),
+        update: extract_request_update(args)?,
+        parent: extract_string_option(args, "--parent")?,
+        index: extract_index(args)?,
+        value: extract_string_option(args, "--value")?,
+    })
 }
 
 fn extract_request_update(args: &mut Vec<String>) -> Result<RequestUpdate, CliError> {

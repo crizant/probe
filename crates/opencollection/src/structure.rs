@@ -11,6 +11,7 @@ use serde_yaml_ng::{Mapping, Value};
 
 use crate::repository::{
     LoadedWorkspace, SaveError, SaveLock, WorkspaceSource, atomic_write, load_workspace,
+    relative_selector,
 };
 
 /// The kind of collection item affected by a structural operation.
@@ -1641,15 +1642,6 @@ fn unbundled_result(
 
 fn relative_parent(root: &Path, parent: &Path) -> Option<String> {
     (parent != root).then(|| relative_selector(root, parent))
-}
-
-fn relative_selector(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 fn verify_source(path: &Path, expected: &[u8]) -> Result<(), StructureError> {

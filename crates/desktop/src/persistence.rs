@@ -26,13 +26,6 @@ impl PersistenceState {
         self.saved.get(&key)
     }
 
-    pub(crate) fn reset_with_baselines(
-        &mut self,
-        requests: impl IntoIterator<Item = (RequestKey, HttpRequest)>,
-    ) {
-        self.reset(requests);
-    }
-
     pub(crate) fn edited(&mut self, key: RequestKey) {
         *self.revisions.entry(key).or_default() += 1;
     }

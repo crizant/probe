@@ -8,6 +8,9 @@ const MIN_RESPONSE_HEIGHT: f32 = 120.0;
 const MAX_RESPONSE_HEIGHT: f32 = 560.0;
 const MIN_RESPONSE_WIDTH: f32 = 240.0;
 const MAX_RESPONSE_WIDTH: f32 = 760.0;
+pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 260.0;
+pub(crate) const DEFAULT_RESPONSE_HEIGHT: f32 = 220.0;
+pub(crate) const DEFAULT_RESPONSE_WIDTH: f32 = 440.0;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum PaneLayout {
@@ -27,6 +30,7 @@ pub(crate) struct ShellState {
     tabs: Vec<RequestKey>,
     active_tab: Option<RequestKey>,
     collapsed_folders: HashSet<FolderKey>,
+    selected_environment: Option<String>,
     pub(crate) sidebar_width: f32,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) response_height: f32,
@@ -41,10 +45,11 @@ impl Default for ShellState {
             tabs: Vec::new(),
             active_tab: None,
             collapsed_folders: HashSet::new(),
-            sidebar_width: 260.0,
+            selected_environment: None,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             sidebar_collapsed: false,
-            response_height: 220.0,
-            response_width: 440.0,
+            response_height: DEFAULT_RESPONSE_HEIGHT,
+            response_width: DEFAULT_RESPONSE_WIDTH,
             pane_layout: PaneLayout::Vertical,
             resizing: None,
         }
@@ -97,6 +102,14 @@ impl ShellState {
 
     pub(crate) fn collapse_folder(&mut self, key: FolderKey) {
         self.collapsed_folders.insert(key);
+    }
+
+    pub(crate) fn selected_environment(&self) -> Option<&str> {
+        self.selected_environment.as_deref()
+    }
+
+    pub(crate) fn select_environment(&mut self, environment: Option<String>) {
+        self.selected_environment = environment;
     }
 
     pub(crate) fn resize_sidebar(&mut self, position: f32) {
@@ -218,5 +231,10 @@ mod tests {
         assert!(state.sidebar_collapsed);
         state.toggle_sidebar();
         assert!(!state.sidebar_collapsed);
+
+        state.select_environment(Some("development".to_owned()));
+        assert_eq!(state.selected_environment(), Some("development"));
+        state.reset_for_workspace();
+        assert_eq!(state.selected_environment(), Some("development"));
     }
 }

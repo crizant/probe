@@ -517,7 +517,7 @@ fn focus_ring_shadow(ring_color: Hsla, gap_color: Hsla) -> Vec<BoxShadow> {
     ]
 }
 
-pub fn primary_button(
+pub(crate) fn primary_button(
     theme: Theme,
     id: impl Into<ElementId>,
     label: impl Into<String>,
@@ -1436,7 +1436,6 @@ pub(crate) fn body_text_input(
     theme: Theme,
     id: impl Into<ElementId>,
     value: impl Into<SharedString>,
-    _variables: VariableContext,
     syntax: BodySyntax,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui::AnyElement {
@@ -2266,7 +2265,7 @@ fn input_variable_ranges(
     ranges
 }
 
-pub fn menu_button(
+pub(crate) fn menu_button(
     theme: Theme,
     id: impl Into<ElementId>,
     label: impl Into<String>,
@@ -2331,7 +2330,7 @@ pub fn menu_button(
         )
 }
 
-pub fn switch(
+pub(crate) fn switch(
     theme: Theme,
     id: impl Into<ElementId>,
     label: impl Into<String>,

@@ -141,22 +141,12 @@ const fn hex(byte: u8) -> Option<u8> {
 #[derive(Debug, Default)]
 pub(crate) struct RequestEditorState {
     pub(crate) section: EditorSection,
-    selected_environment: Option<String>,
     body_drafts: BTreeMap<(RequestKey, BodyEditorKind), RequestBody>,
 }
 
 impl RequestEditorState {
-    pub(crate) fn selected_environment(&self) -> Option<&str> {
-        self.selected_environment.as_deref()
-    }
-
-    pub(crate) fn select_environment(&mut self, environment: Option<String>) {
-        self.selected_environment = environment;
-    }
-
     pub(crate) fn clear(&mut self) {
         self.section = EditorSection::default();
-        self.selected_environment = None;
         self.body_drafts.clear();
     }
 
@@ -495,15 +485,6 @@ mod tests {
             request.body,
             Some(RequestBody::Single(Body::File(_)))
         ));
-    }
-
-    #[test]
-    fn environment_selection_is_shared_for_the_workspace() {
-        let mut editor = RequestEditorState::default();
-        editor.select_environment(Some("development".to_owned()));
-        assert_eq!(editor.selected_environment(), Some("development"));
-        editor.select_environment(None);
-        assert_eq!(editor.selected_environment(), None);
     }
 
     #[test]

@@ -14,8 +14,8 @@ use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, CollectionItem, Environment,
     EnvironmentResolutionError, EnvironmentVariable, FileReference, FolderKey, FormField, Header,
     MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind, RequestBody,
-    RequestKey, RequestUpdate, Variable, VariableValue, VariableValueSet, VariableValueType,
-    VariableValueVariant, Workspace, WorkspaceItemRef, validate_environments,
+    RequestKey, RequestUpdate, Variable, VariableValue, VariableValueSet, VariableValueVariant,
+    Workspace, WorkspaceItemRef, validate_environments,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -189,20 +189,6 @@ impl LoadedWorkspace {
         self.prepare_environment_mutation(
             environment_name,
             EnvironmentYamlMutation::Set { variable },
-        )
-    }
-
-    /// Captures an environment-variable unset that can be executed away from the UI thread.
-    pub fn prepare_environment_variable_unset(
-        &self,
-        environment_name: &str,
-        variable_name: &str,
-    ) -> Result<PreparedEnvironmentSave, SaveError> {
-        self.prepare_environment_mutation(
-            environment_name,
-            EnvironmentYamlMutation::Unset {
-                name: variable_name.to_owned(),
-            },
         )
     }
 
@@ -1147,7 +1133,7 @@ fn is_yaml_file(path: &Path) -> bool {
     )
 }
 
-fn relative_selector(root: &Path, path: &Path) -> String {
+pub(crate) fn relative_selector(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .components()
@@ -1362,22 +1348,9 @@ fn variable_value_yaml(value: &VariableValue) -> Value {
     match value {
         VariableValue::String(value) => Value::String(value.clone()),
         VariableValue::Typed { kind, data } => map([
-            (
-                "type",
-                Value::String(variable_value_type_name(kind).to_owned()),
-            ),
+            ("type", Value::String(kind.as_str().to_owned())),
             ("data", Value::String(data.clone())),
         ]),
-    }
-}
-
-fn variable_value_type_name(kind: &VariableValueType) -> &'static str {
-    match kind {
-        VariableValueType::String => "string",
-        VariableValueType::Number => "number",
-        VariableValueType::Boolean => "boolean",
-        VariableValueType::Null => "null",
-        VariableValueType::Object => "object",
     }
 }
 
@@ -1456,7 +1429,12 @@ fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<
             http.insert(Value::String("url".to_owned()), Value::String(url.clone()));
         }
         if let Some(headers) = &update.headers {
-            merge_sequence(http, "headers", headers.iter().map(header_value).collect());
+            merge_sequence_preserving(
+                http,
+                "headers",
+                headers.iter().map(header_value).collect(),
+                &[],
+            );
         }
         if update.query_parameters.is_some() || update.path_parameters.is_some() {
             merge_parameters(
@@ -1531,10 +1509,6 @@ fn map(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
             .map(|(key, value)| (string_key(key), value))
             .collect(),
     )
-}
-
-fn merge_sequence(parent: &mut serde_yaml_ng::Mapping, name: &str, replacements: Vec<Value>) {
-    merge_sequence_preserving(parent, name, replacements, &[]);
 }
 
 fn merge_sequence_preserving(
@@ -1762,22 +1736,7 @@ fn authentication_value(authentication: &Authentication) -> Value {
     let mut value = serde_yaml_ng::Mapping::new();
     value.insert(
         string_key("type"),
-        Value::String(
-            match &authentication.kind {
-                AuthenticationKind::Inherit => "inherit",
-                AuthenticationKind::AwsV4 => "awsv4",
-                AuthenticationKind::Basic => "basic",
-                AuthenticationKind::Wsse => "wsse",
-                AuthenticationKind::Bearer => "bearer",
-                AuthenticationKind::Digest => "digest",
-                AuthenticationKind::Ntlm => "ntlm",
-                AuthenticationKind::ApiKey => "apikey",
-                AuthenticationKind::OAuth1 => "oauth1",
-                AuthenticationKind::OAuth2 => "oauth2",
-                AuthenticationKind::Other(value) => value,
-            }
-            .to_owned(),
-        ),
+        Value::String(authentication.kind.as_str().to_owned()),
     );
     value.extend(
         authentication

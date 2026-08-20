@@ -426,12 +426,6 @@ impl Drop for TemporaryResponseFile {
     }
 }
 
-impl Default for HttpEngine {
-    fn default() -> Self {
-        Self::new().expect("default HTTP client configuration must be valid")
-    }
-}
-
 fn build_client(follow_redirects: bool, maximum: usize) -> Result<Client, HttpError> {
     let policy = if follow_redirects {
         Policy::limited(maximum)
@@ -654,7 +648,7 @@ fn apply_authentication(
             Ok(builder.bearer_auth(token))
         }
         kind => Err(HttpError::UnsupportedAuthentication(
-            authentication_kind(kind).to_owned(),
+            kind.as_str().to_owned(),
         )),
     }
 }
@@ -667,22 +661,6 @@ fn authentication_string<'a>(
     match authentication.properties.get(property) {
         Some(AuthenticationValue::String(value)) => Ok(value),
         _ => Err(HttpError::MissingAuthenticationProperty { scheme, property }),
-    }
-}
-
-fn authentication_kind(kind: &AuthenticationKind) -> &str {
-    match kind {
-        AuthenticationKind::Inherit => "inherit",
-        AuthenticationKind::AwsV4 => "awsv4",
-        AuthenticationKind::Basic => "basic",
-        AuthenticationKind::Wsse => "wsse",
-        AuthenticationKind::Bearer => "bearer",
-        AuthenticationKind::Digest => "digest",
-        AuthenticationKind::Ntlm => "ntlm",
-        AuthenticationKind::ApiKey => "apikey",
-        AuthenticationKind::OAuth1 => "oauth1",
-        AuthenticationKind::OAuth2 => "oauth2",
-        AuthenticationKind::Other(kind) => kind,
     }
 }
 

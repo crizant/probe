@@ -31,9 +31,12 @@ use crate::{
     components,
     execution::{
         ExecutionState, ResponseState, body_file_path_for_storage, execute_http_request,
-        format_duration, format_size, workspace_base_directory,
+        format_duration, format_size,
     },
-    filesystem::{WATCH_DEBOUNCE, WorkspaceWatcher, event_affects_workspace, rename_hints},
+    filesystem::{
+        WATCH_DEBOUNCE, WorkspaceWatcher, event_affects_workspace, rename_hints,
+        workspace_base_directory,
+    },
     persistence::PersistenceState,
     request_editor::{
         BodyEditorKind, EditorSection, RequestEditorState, apply_url_bar_value, auth_label,
@@ -112,12 +115,6 @@ struct TreeDrag {
     method: Option<String>,
 }
 
-struct DraggedTreeItem {
-    kind: ItemKind,
-    label: String,
-    method: Option<String>,
-}
-
 struct TreeRowSpec {
     item: WorkspaceItemRef,
     kind: ItemKind,
@@ -127,7 +124,29 @@ struct TreeRowSpec {
     depth: usize,
 }
 
-impl Render for DraggedTreeItem {
+struct ShellSelectors {
+    tab_selectors: Vec<String>,
+    active_selector: Option<String>,
+    folder_selectors: Vec<String>,
+    selected: Option<(ItemKind, String)>,
+}
+
+fn request_key_remaps(
+    old: &LoadedWorkspace,
+    new: &LoadedWorkspace,
+    selector_remaps: &BTreeMap<String, String>,
+) -> BTreeMap<RequestKey, RequestKey> {
+    old.requests()
+        .iter()
+        .filter_map(|located| {
+            let selector = selector_remaps.get(located.selector())?;
+            new.request_key(selector)
+                .map(|new_key| (located.key(), new_key))
+        })
+        .collect()
+}
+
+impl Render for TreeDrag {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_window_appearance(window.appearance());
         let mut preview = div()
@@ -155,7 +174,7 @@ impl Render for DraggedTreeItem {
     }
 }
 
-pub struct ProbeApp {
+pub(crate) struct ProbeApp {
     focus_handle: FocusHandle,
     structure_dialog_focus: FocusHandle,
     loaded_workspace: Option<LoadedWorkspace>,
@@ -582,13 +601,7 @@ impl ProbeApp {
         self.loaded_workspace = Some(workspace);
         self.workspace_path = Some(path);
         self.shell.reset_for_workspace();
-        self.selected_tree_item = None;
-        self.structure_dialog = None;
-        self.structure_add_menu_open = false;
-        self.tree_context_menu = None;
-        self.tree_context_menu_position = None;
-        self.clear_tree_drag();
-        self.request_editor.clear();
+        self.reset_collection_ui();
         self.pending_environment_saves.clear();
         self.environment_save_workspace_path = None;
         self.restore_selected_environment();
@@ -830,6 +843,105 @@ impl ProbeApp {
             .detach();
     }
 
+    fn reset_collection_ui(&mut self) {
+        self.selected_tree_item = None;
+        self.structure_dialog = None;
+        self.structure_add_menu_open = false;
+        self.tree_context_menu = None;
+        self.tree_context_menu_position = None;
+        self.clear_tree_drag();
+        self.request_editor.clear();
+    }
+
+    fn snapshot_shell_selectors(&self, old: &LoadedWorkspace) -> ShellSelectors {
+        ShellSelectors {
+            tab_selectors: self
+                .shell
+                .tabs()
+                .iter()
+                .filter_map(|key| old.request_selector(*key).map(str::to_owned))
+                .collect(),
+            active_selector: self
+                .shell
+                .active_tab()
+                .and_then(|key| old.request_selector(key))
+                .map(str::to_owned),
+            folder_selectors: self
+                .shell
+                .collapsed_folders()
+                .filter_map(|key| old.folder_selector(key).map(str::to_owned))
+                .collect(),
+            selected: self.selected_tree_item.and_then(|item| match item {
+                WorkspaceItemRef::Request(key) => old
+                    .request_selector(key)
+                    .map(|selector| (ItemKind::Request, selector.to_owned())),
+                WorkspaceItemRef::Folder(key) => old
+                    .folder_selector(key)
+                    .map(|selector| (ItemKind::Folder, selector.to_owned())),
+            }),
+        }
+    }
+
+    fn install_reloaded_workspace(
+        &mut self,
+        workspace: LoadedWorkspace,
+        baselines: Vec<(RequestKey, HttpRequest)>,
+        key_remaps: &BTreeMap<RequestKey, RequestKey>,
+    ) {
+        self.persistence.reset(baselines);
+        self.loaded_workspace = Some(workspace);
+        self.shell.reset_for_workspace();
+        self.execution.clear();
+        self.response_viewer.clear();
+        self.request_editor.remap_requests(key_remaps);
+    }
+
+    fn restore_shell_selectors(
+        &mut self,
+        remaps: &BTreeMap<String, String>,
+        selectors: ShellSelectors,
+    ) {
+        let loaded = self
+            .loaded_workspace
+            .as_ref()
+            .expect("workspace was replaced");
+        for selector in selectors.tab_selectors {
+            if let Some(key) = remaps
+                .get(&selector)
+                .and_then(|selector| loaded.request_key(selector))
+            {
+                self.shell.open_request(key);
+            }
+        }
+        if let Some(selector) = selectors.active_selector
+            && let Some(key) = remaps
+                .get(&selector)
+                .and_then(|selector| loaded.request_key(selector))
+        {
+            self.shell.open_request(key);
+        }
+        for selector in selectors.folder_selectors {
+            let selector = remaps
+                .get(&selector)
+                .map_or(selector.as_str(), String::as_str);
+            if let Some(key) = loaded.folder_key(selector) {
+                self.shell.collapse_folder(key);
+            }
+        }
+        self.selected_tree_item = selectors.selected.and_then(|(kind, selector)| match kind {
+            ItemKind::Request => remaps
+                .get(&selector)
+                .and_then(|selector| loaded.request_key(selector))
+                .map(WorkspaceItemRef::Request),
+            ItemKind::Folder => {
+                let selector = remaps
+                    .get(&selector)
+                    .map_or(selector.as_str(), String::as_str);
+                loaded.folder_key(selector).map(WorkspaceItemRef::Folder)
+            }
+        });
+    }
+
     fn apply_reconciled_workspace(
         &mut self,
         mut reconciled: ReconciledWorkspace,
@@ -838,45 +950,9 @@ impl ProbeApp {
         let Some(old) = self.loaded_workspace.as_ref() else {
             return;
         };
-        let tab_selectors: Vec<_> = self
-            .shell
-            .tabs()
-            .iter()
-            .filter_map(|key| old.request_selector(*key).map(str::to_owned))
-            .collect();
-        let active_selector = self
-            .shell
-            .active_tab()
-            .and_then(|key| old.request_selector(key))
-            .map(str::to_owned);
-        let folder_selectors: Vec<_> = self
-            .shell
-            .collapsed_folders()
-            .filter_map(|key| old.folder_selector(key).map(str::to_owned))
-            .collect();
-        let selected = self.selected_tree_item.and_then(|item| match item {
-            WorkspaceItemRef::Request(key) => old
-                .request_selector(key)
-                .map(|selector| (ItemKind::Request, selector.to_owned())),
-            WorkspaceItemRef::Folder(key) => old
-                .folder_selector(key)
-                .map(|selector| (ItemKind::Folder, selector.to_owned())),
-        });
-        let key_remaps: BTreeMap<_, _> = old
-            .requests()
-            .iter()
-            .filter_map(|located| {
-                let selector = reconciled
-                    .selector_remaps
-                    .get(located.selector())
-                    .map(String::as_str)?;
-                reconciled
-                    .workspace
-                    .request_key(selector)
-                    .map(|new_key| (located.key(), new_key))
-            })
-            .collect();
-
+        let selectors = self.snapshot_shell_selectors(old);
+        let key_remaps =
+            request_key_remaps(old, &reconciled.workspace, &reconciled.selector_remaps);
         let baselines = reconciled
             .workspace
             .requests()
@@ -888,65 +964,20 @@ impl ProbeApp {
                     .map(|request| (located.key(), request))
             })
             .collect::<Vec<_>>();
-        self.persistence.reset_with_baselines(baselines);
-        self.loaded_workspace = Some(reconciled.workspace);
-        self.shell.reset_for_workspace();
-        self.execution.clear();
-        self.response_viewer.clear();
-        self.request_editor.remap_requests(&key_remaps);
-        let loaded = self
-            .loaded_workspace
-            .as_ref()
-            .expect("workspace was replaced");
-        for selector in tab_selectors {
-            if let Some(key) = reconciled
-                .selector_remaps
-                .get(&selector)
-                .and_then(|selector| loaded.request_key(selector))
-            {
-                self.shell.open_request(key);
-            }
-        }
-        if let Some(selector) = active_selector
-            && let Some(key) = reconciled
-                .selector_remaps
-                .get(&selector)
-                .and_then(|selector| loaded.request_key(selector))
-        {
-            self.shell.open_request(key);
-        }
-        for selector in folder_selectors {
-            let selector = reconciled
-                .selector_remaps
-                .get(&selector)
-                .map_or(selector.as_str(), String::as_str);
-            if let Some(key) = loaded.folder_key(selector) {
-                self.shell.collapse_folder(key);
-            }
-        }
-        self.selected_tree_item = selected.and_then(|(kind, selector)| {
-            let selector = reconciled
-                .selector_remaps
-                .get(&selector)
-                .map_or(selector.as_str(), String::as_str);
-            match kind {
-                ItemKind::Request => loaded.request_key(selector).map(WorkspaceItemRef::Request),
-                ItemKind::Folder => loaded.folder_key(selector).map(WorkspaceItemRef::Folder),
-            }
-        });
+        self.install_reloaded_workspace(reconciled.workspace, baselines, &key_remaps);
+        self.restore_shell_selectors(&reconciled.selector_remaps, selectors);
         self.structure_dialog = None;
-        if self
-            .request_editor
-            .selected_environment()
-            .is_some_and(|name| {
-                !loaded
-                    .workspace()
-                    .environments()
-                    .iter()
-                    .any(|environment| environment.name == name)
-            })
-        {
-            self.request_editor.select_environment(None);
+        if self.shell.selected_environment().is_some_and(|name| {
+            !self
+                .loaded_workspace
+                .as_ref()
+                .expect("workspace was replaced")
+                .workspace()
+                .environments()
+                .iter()
+                .any(|environment| environment.name == name)
+        }) {
+            self.shell.select_environment(None);
         }
         self.rebuild_visible_tree_rows();
         self.message = None;
@@ -1031,9 +1062,7 @@ impl ProbeApp {
         self.session.collapsed_folders.sort();
         self.session.remember_selected_environment(
             path.clone(),
-            self.request_editor
-                .selected_environment()
-                .map(str::to_owned),
+            self.shell.selected_environment().map(str::to_owned),
         );
     }
 
@@ -1043,31 +1072,27 @@ impl ProbeApp {
         };
         self.session.remember_selected_environment(
             path,
-            self.request_editor
-                .selected_environment()
-                .map(str::to_owned),
+            self.shell.selected_environment().map(str::to_owned),
         );
     }
 
     fn restore_selected_environment(&mut self) {
         let (Some(path), Some(loaded)) = (&self.workspace_path, &self.loaded_workspace) else {
+            self.shell.select_environment(None);
             return;
         };
-        let Some(name) = self
+        let name = self
             .session
             .selected_environment_for(path)
-            .map(str::to_owned)
-        else {
-            return;
-        };
-        if loaded
-            .workspace()
-            .environments()
-            .iter()
-            .any(|environment| environment.name == name)
-        {
-            self.request_editor.select_environment(Some(name));
-        }
+            .filter(|name| {
+                loaded
+                    .workspace()
+                    .environments()
+                    .iter()
+                    .any(|environment| environment.name == *name)
+            })
+            .map(str::to_owned);
+        self.shell.select_environment(name);
     }
 
     fn persist_session(&mut self, cx: &mut Context<Self>) {
@@ -1096,13 +1121,8 @@ impl ProbeApp {
         self.loaded_workspace = None;
         self.workspace_path = None;
         self.shell.reset_for_workspace();
-        self.selected_tree_item = None;
-        self.structure_dialog = None;
-        self.structure_add_menu_open = false;
-        self.tree_context_menu = None;
-        self.tree_context_menu_position = None;
-        self.clear_tree_drag();
-        self.request_editor.clear();
+        self.shell.select_environment(None);
+        self.reset_collection_ui();
         self.persistence.clear();
         self.filesystem_watch_task = None;
         self.filesystem_watcher = None;
@@ -1113,7 +1133,7 @@ impl ProbeApp {
     }
 
     fn select_environment(&mut self, environment: Option<String>, cx: &mut Context<Self>) {
-        self.request_editor.select_environment(environment);
+        self.shell.select_environment(environment);
         self.persist_session(cx);
         cx.notify();
     }
@@ -1421,40 +1441,8 @@ impl ProbeApp {
         let Some(old) = self.loaded_workspace.as_ref() else {
             return;
         };
-        let tab_selectors: Vec<_> = self
-            .shell
-            .tabs()
-            .iter()
-            .filter_map(|key| old.request_selector(*key).map(str::to_owned))
-            .collect();
-        let active_selector = self
-            .shell
-            .active_tab()
-            .and_then(|key| old.request_selector(key))
-            .map(str::to_owned);
-        let folder_selectors: Vec<_> = self
-            .shell
-            .collapsed_folders()
-            .filter_map(|key| old.folder_selector(key).map(str::to_owned))
-            .collect();
-        let selected = self.selected_tree_item.and_then(|item| match item {
-            WorkspaceItemRef::Request(key) => old
-                .request_selector(key)
-                .map(|selector| (ItemKind::Request, selector.to_owned())),
-            WorkspaceItemRef::Folder(key) => old
-                .folder_selector(key)
-                .map(|selector| (ItemKind::Folder, selector.to_owned())),
-        });
-        let key_remaps: BTreeMap<_, _> = old
-            .requests()
-            .iter()
-            .filter_map(|located| {
-                let new_selector = result.selector_remaps.get(located.selector())?;
-                workspace
-                    .request_key(new_selector)
-                    .map(|new_key| (located.key(), new_key))
-            })
-            .collect();
+        let selectors = self.snapshot_shell_selectors(old);
+        let key_remaps = request_key_remaps(old, &workspace, &result.selector_remaps);
         let current_requests = old
             .requests()
             .iter()
@@ -1500,52 +1488,15 @@ impl ProbeApp {
                 Some((located.key(), baseline))
             })
             .collect::<Vec<_>>();
-        self.persistence.reset_with_baselines(baselines);
-        self.loaded_workspace = Some(workspace);
-        self.shell.reset_for_workspace();
-        self.execution.clear();
-        self.response_viewer.clear();
-        self.request_editor.remap_requests(&key_remaps);
-        let loaded = self
-            .loaded_workspace
-            .as_ref()
-            .expect("workspace was replaced after structural edit");
-        for selector in tab_selectors {
-            if let Some(key) = result
-                .selector_remaps
-                .get(&selector)
-                .and_then(|selector| loaded.request_key(selector))
-            {
-                self.shell.open_request(key);
-            }
-        }
-        if let Some(selector) = active_selector
-            && let Some(key) = result
-                .selector_remaps
-                .get(&selector)
-                .and_then(|selector| loaded.request_key(selector))
-        {
-            self.shell.open_request(key);
-        }
-        for selector in folder_selectors {
-            if let Some(key) = result
-                .selector_remaps
-                .get(&selector)
-                .and_then(|selector| loaded.folder_key(selector))
-            {
-                self.shell.collapse_folder(key);
-            }
-        }
-        self.selected_tree_item = selected.and_then(|(kind, selector)| {
-            let selector = result.selector_remaps.get(&selector)?;
-            match kind {
-                ItemKind::Request => loaded.request_key(selector).map(WorkspaceItemRef::Request),
-                ItemKind::Folder => loaded.folder_key(selector).map(WorkspaceItemRef::Folder),
-            }
-        });
+        self.install_reloaded_workspace(workspace, baselines, &key_remaps);
+        self.restore_shell_selectors(&result.selector_remaps, selectors);
         if self.selected_tree_item.is_none()
             && let Some(selector) = result.selector.as_deref()
         {
+            let loaded = self
+                .loaded_workspace
+                .as_ref()
+                .expect("workspace was replaced after structural edit");
             self.selected_tree_item = match result.kind {
                 ItemKind::Request => loaded.request_key(selector).map(WorkspaceItemRef::Request),
                 ItemKind::Folder => loaded.folder_key(selector).map(WorkspaceItemRef::Folder),
@@ -1868,10 +1819,7 @@ impl ProbeApp {
         else {
             return;
         };
-        let selected_environment = self
-            .request_editor
-            .selected_environment()
-            .map(str::to_owned);
+        let selected_environment = self.shell.selected_environment().map(str::to_owned);
         let request = if let Some(environment_name) = selected_environment {
             let Some(loaded) = &self.loaded_workspace else {
                 return;
@@ -2518,11 +2466,7 @@ impl ProbeApp {
                     method,
                 },
                 move |drag, _, _, cx| {
-                    let preview = DraggedTreeItem {
-                        kind: drag.kind,
-                        label: drag.label.clone(),
-                        method: drag.method.clone(),
-                    };
+                    let preview = drag.clone();
                     let item = drag.item;
                     let _ = drag_view.update(cx, |view, cx| {
                         view.tree_drag_source = Some(item);
@@ -2902,11 +2846,7 @@ impl ProbeApp {
             .border_b_1()
             .border_color(theme.colors.borders.subtle)
             .child(tab_strip);
-        let selected = self
-            .request_editor
-            .selected_environment()
-            .unwrap_or("")
-            .to_owned();
+        let selected = self.shell.selected_environment().unwrap_or("").to_owned();
         let mut options = vec![(String::new(), "No environment".to_owned())];
         options.extend(
             loaded
@@ -3610,7 +3550,6 @@ impl ProbeApp {
                             theme,
                             ("request-body", key.slot()),
                             raw.data.clone(),
-                            self.variable_context(cx),
                             match raw.kind {
                                 RawBodyKind::Json => components::BodySyntax::Json,
                                 RawBodyKind::Xml => components::BodySyntax::Xml,
@@ -5168,7 +5107,7 @@ impl ProbeApp {
                 });
             },
         );
-        let Some(selected) = self.request_editor.selected_environment() else {
+        let Some(selected) = self.shell.selected_environment() else {
             return components::VariableContext {
                 values: Default::default(),
                 unavailable_message: "Select an environment to resolve this variable".to_owned(),
@@ -5202,11 +5141,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(environment) = self
-            .request_editor
-            .selected_environment()
-            .map(str::to_owned)
-        else {
+        let Some(environment) = self.shell.selected_environment().map(str::to_owned) else {
             return;
         };
         let Some(loaded) = self.loaded_workspace.as_mut() else {
@@ -6552,13 +6487,10 @@ mod tests {
                 view.session_store = None;
                 view.set_workspace(fixture, workspace);
                 view.select_request(first, cx);
-                view.request_editor
+                view.shell
                     .select_environment(Some("development".to_owned()));
                 view.select_request(second, cx);
-                assert_eq!(
-                    view.request_editor.selected_environment(),
-                    Some("development")
-                );
+                assert_eq!(view.shell.selected_environment(), Some("development"));
             })
             .expect("test window should be open");
     }
@@ -6590,10 +6522,7 @@ mod tests {
         window
             .update(cx, |view, _, _| {
                 view.set_workspace(fixture, workspace);
-                assert_eq!(
-                    view.request_editor.selected_environment(),
-                    Some("development")
-                );
+                assert_eq!(view.shell.selected_environment(), Some("development"));
             })
             .expect("test window should remain open");
     }
@@ -6633,13 +6562,10 @@ mod tests {
         window
             .update(cx, |view, _, _| {
                 view.set_workspace(first_fixture, first_workspace);
-                assert_eq!(
-                    view.request_editor.selected_environment(),
-                    Some("development")
-                );
+                assert_eq!(view.shell.selected_environment(), Some("development"));
                 view.capture_selected_environment();
                 view.set_workspace(second_fixture, second_workspace);
-                assert_eq!(view.request_editor.selected_environment(), Some("local"));
+                assert_eq!(view.shell.selected_environment(), Some("local"));
             })
             .expect("test window should remain open");
     }
@@ -6663,7 +6589,7 @@ mod tests {
                     Some("missing-environment".to_owned()),
                 );
                 view.set_workspace(fixture, workspace);
-                assert_eq!(view.request_editor.selected_environment(), None);
+                assert_eq!(view.shell.selected_environment(), None);
                 cx.notify();
             })
             .expect("test window should be open");
@@ -6686,7 +6612,7 @@ mod tests {
                 view.session_store = None;
                 view.set_workspace(fixture.clone(), workspace);
                 view.select_request(request_key, cx);
-                view.request_editor
+                view.shell
                     .select_environment(Some("development".to_owned()));
                 cx.notify();
             })
@@ -6774,7 +6700,7 @@ mod tests {
         cx.run_until_parked();
         let updated = window
             .update(cx, |view, _, _| {
-                let environment = view.request_editor.selected_environment()?.to_owned();
+                let environment = view.shell.selected_environment()?.to_owned();
                 probe_core::resolve_environment(
                     view.loaded_workspace.as_ref()?.workspace().environments(),
                     &environment,

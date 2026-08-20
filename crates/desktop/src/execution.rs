@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
+use crate::filesystem::workspace_base_directory;
 use probe_core::{HttpRequest, RequestKey};
 use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpResponse};
 use tokio::sync::oneshot;
@@ -98,14 +99,6 @@ impl ExecutionState {
 
     pub(crate) fn response(&self, key: RequestKey) -> Option<&ResponseState> {
         self.responses.get(&key)
-    }
-}
-
-pub(crate) fn workspace_base_directory(path: &Path) -> Option<std::path::PathBuf> {
-    if path.is_dir() {
-        Some(path.to_owned())
-    } else {
-        path.parent().map(Path::to_owned)
     }
 }
 

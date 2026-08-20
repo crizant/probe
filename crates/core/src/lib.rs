@@ -17,7 +17,7 @@ pub use environment::{
 };
 pub use path_parameters::{
     add_path_parameter, apply_path_parameters, ensure_path_parameters_from_url,
-    path_variable_names, path_variable_ranges, remove_path_parameter_at, rename_path_parameter_at,
+    path_variable_ranges, remove_path_parameter_at, rename_path_parameter_at,
     synchronize_path_parameters,
 };
 pub use workspace::{
@@ -357,6 +357,26 @@ pub enum AuthenticationKind {
     Other(String),
 }
 
+impl AuthenticationKind {
+    /// OpenCollection scheme name used by YAML, CLI JSON, and HTTP diagnostics.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Inherit => "inherit",
+            Self::AwsV4 => "awsv4",
+            Self::Basic => "basic",
+            Self::Wsse => "wsse",
+            Self::Bearer => "bearer",
+            Self::Digest => "digest",
+            Self::Ntlm => "ntlm",
+            Self::ApiKey => "apikey",
+            Self::OAuth1 => "oauth1",
+            Self::OAuth2 => "oauth2",
+            Self::Other(kind) => kind,
+        }
+    }
+}
+
 /// A serialization-independent authentication property value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthenticationValue {
@@ -467,4 +487,18 @@ pub enum VariableValueType {
     Null,
     /// Object data.
     Object,
+}
+
+impl VariableValueType {
+    /// OpenCollection type name used by YAML and CLI JSON.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::String => "string",
+            Self::Number => "number",
+            Self::Boolean => "boolean",
+            Self::Null => "null",
+            Self::Object => "object",
+        }
+    }
 }

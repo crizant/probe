@@ -10,6 +10,8 @@ use atomic_write_file::AtomicWriteFile;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::shell::{DEFAULT_RESPONSE_HEIGHT, DEFAULT_RESPONSE_WIDTH, DEFAULT_SIDEBAR_WIDTH};
+
 const SCHEMA_VERSION: u32 = 1;
 const RECENT_COLLECTION_LIMIT: usize = 10;
 
@@ -40,10 +42,10 @@ impl Default for SessionState {
             open_tabs: Vec::new(),
             active_tab: None,
             collapsed_folders: Vec::new(),
-            sidebar_width: 260.0,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             sidebar_collapsed: false,
-            response_height: 220.0,
-            response_width: 440.0,
+            response_height: DEFAULT_RESPONSE_HEIGHT,
+            response_width: DEFAULT_RESPONSE_WIDTH,
             horizontal_panes: false,
             selected_environments: BTreeMap::new(),
         }

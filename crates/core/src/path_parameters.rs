@@ -10,7 +10,7 @@ enum PathSegmentAction {
 }
 
 /// Ordered, deduplicated `:variableName` placeholders parsed from the URL path.
-pub fn path_variable_names(url: &str) -> Vec<String> {
+pub(crate) fn path_variable_names(url: &str) -> Vec<String> {
     path_variable_ranges(url)
         .into_iter()
         .map(|(_, name)| name)
