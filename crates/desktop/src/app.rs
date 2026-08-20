@@ -5578,14 +5578,20 @@ fn tree_delete_shortcut_label() -> &'static str {
     }
 }
 
+fn tree_level_indent(theme: Theme, depth: usize) -> f32 {
+    if depth == 0 {
+        theme.metrics.spacing_2
+    } else {
+        tree_folder_indent(theme, depth - 1) + theme.metrics.icon_standard + theme.metrics.spacing_2
+    }
+}
+
 fn tree_folder_indent(theme: Theme, depth: usize) -> f32 {
-    theme.metrics.spacing_2 + depth as f32 * theme.metrics.spacing_2
+    tree_level_indent(theme, depth)
 }
 
 fn tree_request_indent(theme: Theme, depth: usize) -> f32 {
-    tree_folder_indent(theme, depth.saturating_sub(1))
-        + theme.metrics.icon_standard
-        + theme.metrics.spacing_2
+    tree_level_indent(theme, depth)
 }
 
 fn flatten_visible_tree_rows(
@@ -5832,7 +5838,7 @@ mod tests {
     use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px, size};
     use probe_http::{HttpResponse, ResponseHeader};
 
-    use super::{ProbeApp, bind_platform_hotkeys};
+    use super::{ProbeApp, bind_platform_hotkeys, tree_folder_indent, tree_request_indent};
     use crate::{
         request_editor::{BodyEditorKind, EditorSection},
         response_viewer::ResponseViewerTab,
@@ -5847,6 +5853,19 @@ mod tests {
     fn large_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/opencollection/phase2-large-workspace.yml")
+    }
+
+    #[test]
+    fn nested_folder_rows_align_with_same_level_requests() {
+        let theme = Theme::light();
+        assert_eq!(tree_folder_indent(theme, 0), theme.metrics.spacing_2);
+        assert_eq!(tree_request_indent(theme, 0), tree_folder_indent(theme, 0));
+        assert_eq!(tree_folder_indent(theme, 1), tree_request_indent(theme, 1));
+        assert_eq!(tree_folder_indent(theme, 2), tree_request_indent(theme, 2));
+        assert_eq!(
+            tree_request_indent(theme, 1),
+            tree_folder_indent(theme, 0) + theme.metrics.icon_standard + theme.metrics.spacing_2
+        );
     }
 
     fn environment_fixture() -> PathBuf {
