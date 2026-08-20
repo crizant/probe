@@ -7,6 +7,8 @@ A fast, native, local-first API client for macOS, Windows, and Linux.
 Built with Rust, GPUI, and Longbridge gpui-base, with OpenCollection YAML as the
 primary workspace format.
 
+![Probe screenshot](docs/assets/screenshot.png)
+
 The project provides two first-class interfaces:
 
 - CLI — for developers, automation, CI, and AI agents
