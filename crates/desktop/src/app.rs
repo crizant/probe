@@ -7,14 +7,15 @@ use std::{
 };
 
 use gpui::{
-    Anchor, App, AppContext as _, Bounds, Context, CursorStyle, FocusHandle, FontWeight,
-    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
-    ParentElement as _, PathPromptOptions, Pixels, Point, PromptLevel, Render, ScrollHandle,
-    ScrollStrategy, StatefulInteractiveElement as _, Styled as _, Task, TitlebarOptions,
-    UniformListScrollHandle, Window, WindowBounds, WindowControlArea, WindowOptions, deferred, div,
-    point, prelude::FluentBuilder as _, px, relative, size, uniform_list,
+    Anchor, App, AppContext as _, Bounds, Context, CursorStyle, DragMoveEvent, FocusHandle,
+    FontWeight, InteractiveElement as _, IntoElement, KeyBinding, MouseButton, MouseDownEvent,
+    MouseMoveEvent, ParentElement as _, PathPromptOptions, Pixels, Point, PromptLevel, Render,
+    ScrollHandle, ScrollStrategy, StatefulInteractiveElement as _, Styled as _, Task,
+    TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowControlArea,
+    WindowOptions, deferred, div, point, prelude::FluentBuilder as _, px, relative, size,
+    uniform_list,
 };
-use gpui_base::{Button, POPUP_PRIORITY, Popover, Positioner, Tab, Tabs};
+use gpui_base::{AutoScroll, Button, POPUP_PRIORITY, Popover, Positioner, Tab, Tabs};
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, FileReference, FormField, Header, HttpRequest,
     MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind, RequestBody,
@@ -44,7 +45,11 @@ use crate::{
     },
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
-    structure_editor::{ROOT_PARENT, StructureDialog, descendant_requests, item_position},
+    structure_editor::{
+        DropIndicator, DropReject, ROOT_PARENT, StructureDialog, TreeDropIntent,
+        descendant_requests, drop_intent, drop_zone, hovered_row_index, item_position,
+        structure_operation_for_drop, validate_tree_drop, would_duplicate_path,
+    },
     synchronization::{
         LocalRequestState, ReconcileResult, ReconciledWorkspace, SynchronizationConflict, reconcile,
     },
@@ -91,10 +96,63 @@ enum PendingClose {
     },
 }
 
+const TREE_LIST_PADDING_Y: f32 = 2.0;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TreeRow {
     item: WorkspaceItemRef,
     depth: usize,
+}
+
+#[derive(Clone, Debug)]
+struct TreeDrag {
+    item: WorkspaceItemRef,
+    kind: ItemKind,
+    label: String,
+    method: Option<String>,
+}
+
+struct DraggedTreeItem {
+    kind: ItemKind,
+    label: String,
+    method: Option<String>,
+}
+
+struct TreeRowSpec {
+    item: WorkspaceItemRef,
+    kind: ItemKind,
+    selector: String,
+    label: String,
+    method: Option<String>,
+    depth: usize,
+}
+
+impl Render for DraggedTreeItem {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::for_window_appearance(window.appearance());
+        let mut preview = div()
+            .px(px(theme.metrics.spacing_2))
+            .py(px(theme.metrics.spacing_1))
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1))
+            .rounded(px(theme.metrics.radius_small))
+            .bg(theme.colors.surfaces.overlay)
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .text_size(px(theme.typography.caption_size));
+        if let Some(method) = &self.method {
+            preview = preview.child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.method_color(method))
+                    .child(method.clone()),
+            );
+        } else if self.kind == ItemKind::Folder {
+            preview = preview.child(components::tree_folder_icon(theme, false, false));
+        }
+        preview.child(self.label.clone())
+    }
 }
 
 pub struct ProbeApp {
@@ -123,6 +181,11 @@ pub struct ProbeApp {
     tree_context_menu_position: Option<Point<Pixels>>,
     visible_tree_rows: Vec<TreeRow>,
     selected_tree_item: Option<WorkspaceItemRef>,
+    tree_drag_source: Option<WorkspaceItemRef>,
+    tree_drop_target: Option<TreeDropIntent>,
+    tree_list_bounds: Option<Bounds<Pixels>>,
+    tree_row_height: f32,
+    tree_auto_scroll: AutoScroll,
     structure_dialog: Option<StructureDialog>,
     request_editor: RequestEditorState,
     execution: ExecutionState,
@@ -198,6 +261,11 @@ impl ProbeApp {
             tree_context_menu_position: None,
             visible_tree_rows: Vec::new(),
             selected_tree_item: None,
+            tree_drag_source: None,
+            tree_drop_target: None,
+            tree_list_bounds: None,
+            tree_row_height: 28.0,
+            tree_auto_scroll: AutoScroll::default(),
             structure_dialog: None,
             request_editor: RequestEditorState::default(),
             execution: ExecutionState::default(),
@@ -519,6 +587,7 @@ impl ProbeApp {
         self.structure_add_menu_open = false;
         self.tree_context_menu = None;
         self.tree_context_menu_position = None;
+        self.clear_tree_drag();
         self.request_editor.clear();
         self.pending_environment_saves.clear();
         self.environment_save_workspace_path = None;
@@ -1032,6 +1101,7 @@ impl ProbeApp {
         self.structure_add_menu_open = false;
         self.tree_context_menu = None;
         self.tree_context_menu_position = None;
+        self.clear_tree_drag();
         self.request_editor.clear();
         self.persistence.clear();
         self.filesystem_watch_task = None;
@@ -1941,6 +2011,194 @@ impl ProbeApp {
         self.visible_tree_rows = rows;
     }
 
+    fn clear_tree_drag(&mut self) {
+        self.tree_drag_source = None;
+        self.tree_drop_target = None;
+        self.tree_list_bounds = None;
+        self.tree_auto_scroll.stop();
+    }
+
+    fn scroll_tree_by(&mut self, delta: Pixels) {
+        let handle = self.tree_scroll.0.borrow().base_handle.clone();
+        let mut offset = handle.offset();
+        let max = handle.max_offset();
+        offset.y = (offset.y - delta).max(-max.y).min(px(0.0));
+        handle.set_offset(offset);
+    }
+
+    fn on_tree_drag_move(
+        &mut self,
+        event: &DragMoveEvent<TreeDrag>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let source = event.drag(cx).item;
+        self.tree_drag_source = Some(source);
+        self.tree_list_bounds = Some(event.bounds);
+        self.tree_auto_scroll.last_drag_position = Some(event.event.position);
+        self.tree_row_height = Theme::for_window_appearance(window.appearance())
+            .metrics
+            .tree_row_height;
+        let in_x = event.event.position.x >= event.bounds.left()
+            && event.event.position.x <= event.bounds.right();
+        let delta = in_x
+            .then(|| AutoScroll::compute_delta(event.event.position.y, event.bounds))
+            .flatten();
+        self.tree_auto_scroll.set(delta, cx, |delta, view, cx| {
+            view.scroll_tree_by(delta);
+            view.recompute_tree_drop_from_stored_pointer(None, cx);
+            cx.notify();
+        });
+        if in_x || event.bounds.contains(&event.event.position) {
+            self.recompute_tree_drop(source, event.event.position, event.bounds, Some(window), cx);
+        } else if delta.is_none() {
+            self.tree_drop_target = None;
+            cx.set_active_drag_cursor_style(CursorStyle::OperationNotAllowed, window);
+            cx.notify();
+        }
+    }
+
+    fn recompute_tree_drop_from_stored_pointer(
+        &mut self,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(source), Some(pointer), Some(bounds)) = (
+            self.tree_drag_source,
+            self.tree_auto_scroll.last_drag_position,
+            self.tree_list_bounds,
+        ) else {
+            return;
+        };
+        self.recompute_tree_drop(source, pointer, bounds, window, cx);
+    }
+
+    fn recompute_tree_drop(
+        &mut self,
+        source: WorkspaceItemRef,
+        pointer: Point<Pixels>,
+        bounds: Bounds<Pixels>,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(loaded) = &self.loaded_workspace else {
+            return;
+        };
+        let Some((hovered_index, relative_y)) = hovered_row_index(
+            pointer.y.into(),
+            bounds.top().into(),
+            TREE_LIST_PADDING_Y,
+            self.tree_scroll.0.borrow().base_handle.offset().y.into(),
+            self.tree_row_height,
+            self.visible_tree_rows.len(),
+        ) else {
+            self.tree_drop_target = None;
+            return;
+        };
+        let hovered = self.visible_tree_rows[hovered_index];
+        let folder_expanded = match hovered.item {
+            WorkspaceItemRef::Folder(key) => self.shell.folder_is_expanded(key),
+            WorkspaceItemRef::Request(_) => false,
+        };
+        let zone = drop_zone(
+            matches!(hovered.item, WorkspaceItemRef::Folder(_)),
+            relative_y,
+        );
+        let Some(intent) = drop_intent(loaded.workspace(), hovered.item, zone, folder_expanded)
+        else {
+            self.tree_drop_target = None;
+            return;
+        };
+        let Some((source_parent, source_index)) = item_position(loaded.workspace(), source) else {
+            self.tree_drop_target = None;
+            return;
+        };
+        let source_selector = match source {
+            WorkspaceItemRef::Request(key) => loaded.request_selector(key).map(str::to_owned),
+            WorkspaceItemRef::Folder(key) => loaded.folder_selector(key).map(str::to_owned),
+        };
+        let Some(source_selector) = source_selector else {
+            self.tree_drop_target = None;
+            return;
+        };
+        let dest_parent_selector = intent
+            .parent
+            .and_then(|key| loaded.folder_selector(key).map(str::to_owned));
+        let duplicate_path = would_duplicate_path(
+            loaded.uses_path_locators(),
+            &source_selector,
+            dest_parent_selector.as_deref(),
+            |selector| {
+                loaded.request_key(selector).is_some() || loaded.folder_key(selector).is_some()
+            },
+        );
+        let cursor = match validate_tree_drop(
+            loaded.workspace(),
+            source,
+            source_parent,
+            source_index,
+            intent,
+            duplicate_path,
+        ) {
+            Ok(intent) => {
+                self.tree_drop_target = Some(intent);
+                CursorStyle::ClosedHand
+            }
+            Err(DropReject::NoOp) => {
+                self.tree_drop_target = None;
+                CursorStyle::ClosedHand
+            }
+            Err(_) => {
+                self.tree_drop_target = None;
+                CursorStyle::OperationNotAllowed
+            }
+        };
+        if let Some(window) = window {
+            cx.set_active_drag_cursor_style(cursor, window);
+        }
+        cx.notify();
+    }
+
+    fn drop_tree_item(&mut self, drag: &TreeDrag, window: &mut Window, cx: &mut Context<Self>) {
+        let intent = self.tree_drop_target.take();
+        self.clear_tree_drag();
+        let Some(intent) = intent else {
+            return;
+        };
+        if self.structure_task.is_some() {
+            return;
+        }
+        let Some(loaded) = &self.loaded_workspace else {
+            return;
+        };
+        let Some(selector) = (match drag.item {
+            WorkspaceItemRef::Request(key) => loaded.request_selector(key),
+            WorkspaceItemRef::Folder(key) => loaded.folder_selector(key),
+        })
+        .map(str::to_owned) else {
+            return;
+        };
+        let Some((source_parent, source_index)) = item_position(loaded.workspace(), drag.item)
+        else {
+            return;
+        };
+        let dest_parent_selector = intent
+            .parent
+            .and_then(|key| loaded.folder_selector(key).map(str::to_owned));
+        let Some(operation) = structure_operation_for_drop(
+            drag.kind,
+            selector,
+            source_parent,
+            source_index,
+            intent.parent,
+            dest_parent_selector,
+            intent.index,
+        ) else {
+            return;
+        };
+        self.apply_structure(operation, window, cx);
+    }
+
     fn open_tree_context_menu(
         &mut self,
         item: WorkspaceItemRef,
@@ -2115,7 +2373,7 @@ impl ProbeApp {
                             } else {
                                 theme.method_color(&method)
                             })
-                            .child(method),
+                            .child(method.clone()),
                     )
                     .child(
                         components::truncated_label(label.to_owned())
@@ -2124,7 +2382,20 @@ impl ProbeApp {
                                 label.debug_selector(|| "request-tree-label".into())
                             }),
                     );
-                button.into_any_element()
+                self.wrap_tree_row(
+                    TreeRowSpec {
+                        item,
+                        kind: ItemKind::Request,
+                        selector: loaded.request_selector(key).unwrap_or_default().to_owned(),
+                        label: label.to_owned(),
+                        method: Some(method),
+                        depth,
+                    },
+                    can_edit,
+                    button,
+                    theme,
+                    cx,
+                )
             }
             WorkspaceItemRef::Folder(key) => {
                 let Some(folder) = loaded.workspace().folder(key) else {
@@ -2187,20 +2458,114 @@ impl ProbeApp {
                             })
                             .font_weight(FontWeight::SEMIBOLD),
                     );
-                button.into_any_element()
+                self.wrap_tree_row(
+                    TreeRowSpec {
+                        item,
+                        kind: ItemKind::Folder,
+                        selector: loaded.folder_selector(key).unwrap_or_default().to_owned(),
+                        label: label.to_owned(),
+                        method: None,
+                        depth,
+                    },
+                    can_edit,
+                    button,
+                    theme,
+                    cx,
+                )
             }
         }
+    }
+
+    fn wrap_tree_row(
+        &self,
+        spec: TreeRowSpec,
+        can_edit: bool,
+        button: Button,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let TreeRowSpec {
+            item,
+            kind,
+            selector,
+            label,
+            method,
+            depth,
+        } = spec;
+        let indicator = self.tree_drop_target.map(|intent| intent.indicator);
+        let show_before =
+            matches!(indicator, Some(DropIndicator::Before(target)) if target == item);
+        let show_after = matches!(indicator, Some(DropIndicator::After(target)) if target == item);
+        let drop_into = matches!(
+            indicator,
+            Some(DropIndicator::IntoFolder(folder)) if item == WorkspaceItemRef::Folder(folder)
+        );
+        let indent = match kind {
+            ItemKind::Folder => tree_folder_indent(theme, depth),
+            ItemKind::Request => tree_request_indent(theme, depth),
+        };
+        let drag_view = cx.weak_entity();
+        let row_id = match item {
+            WorkspaceItemRef::Request(key) => ("tree-drop-request", key.slot()),
+            WorkspaceItemRef::Folder(key) => ("tree-drop-folder", key.slot()),
+        };
+        let button = if can_edit {
+            button.on_drag(
+                TreeDrag {
+                    item,
+                    kind,
+                    label,
+                    method,
+                },
+                move |drag, _, _, cx| {
+                    let preview = DraggedTreeItem {
+                        kind: drag.kind,
+                        label: drag.label.clone(),
+                        method: drag.method.clone(),
+                    };
+                    let item = drag.item;
+                    let _ = drag_view.update(cx, |view, cx| {
+                        view.tree_drag_source = Some(item);
+                        view.select_tree_item(item, cx);
+                    });
+                    cx.new(|_| preview)
+                },
+            )
+        } else {
+            button
+        };
+        let line = |top: bool| {
+            div()
+                .absolute()
+                .when(top, |line| line.top(px(0.0)))
+                .when(!top, |line| line.bottom(px(0.0)))
+                .left(px(indent))
+                .right(px(theme.metrics.spacing_1))
+                .h(px(2.0))
+                .rounded(px(1.0))
+                .bg(theme.colors.actions.accent)
+        };
+        div()
+            .id(row_id)
+            .relative()
+            .w_full()
+            .h(px(theme.metrics.tree_row_height))
+            .debug_selector(move || format!("tree-row-{selector}"))
+            .when(drop_into, |row| {
+                row.rounded(px(theme.metrics.radius_small))
+                    .bg(theme.colors.selection.inactive_background)
+            })
+            .child(button)
+            .when(show_before, |row| row.child(line(true)))
+            .when(show_after, |row| row.child(line(false)))
+            .into_any_element()
     }
 
     fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let new_request_view = cx.weak_entity();
         let new_folder_view = cx.weak_entity();
-        let move_view = cx.weak_entity();
-        let move_up_view = cx.weak_entity();
-        let move_down_view = cx.weak_entity();
         let open_collection_view = cx.weak_entity();
         let can_edit = self.loaded_workspace.is_some() && self.structure_task.is_none();
-        let has_selection = can_edit && self.selected_tree_item.is_some();
         let add_menu_state_view = cx.weak_entity();
         let add_popup = div()
             .w(px(180.0))
@@ -2255,6 +2620,8 @@ impl ProbeApp {
         };
         let tree = if self.loaded_workspace.is_some() {
             let row_count = self.visible_tree_rows.len();
+            let drag_view = cx.weak_entity();
+            let drop_view = cx.weak_entity();
             uniform_list("request-tree", row_count, {
                 cx.processor(move |view, range: std::ops::Range<usize>, _, cx| {
                     #[cfg(test)]
@@ -2271,7 +2638,18 @@ impl ProbeApp {
             .min_h(px(0.0))
             .track_scroll(&self.tree_scroll)
             .px(px(theme.metrics.spacing_1))
-            .py(px(2.0))
+            .py(px(TREE_LIST_PADDING_Y))
+            .on_drag_move(move |event: &DragMoveEvent<TreeDrag>, window, cx| {
+                let _ = drag_view.update(cx, |view, cx| {
+                    view.on_tree_drag_move(event, window, cx);
+                });
+            })
+            .on_drop(move |drag: &TreeDrag, window, cx| {
+                let _ = drop_view.update(cx, |view, cx| {
+                    view.drop_tree_item(drag, window, cx);
+                });
+            })
+            .can_drop(|value, _, _| value.downcast_ref::<TreeDrag>().is_some())
             .into_any_element()
         } else {
             let mut tree = div()
@@ -2392,46 +2770,6 @@ impl ProbeApp {
                                     .child(self.request_count_label())
                                     .child(add_menu),
                             ),
-                    )
-                    .child(
-                        div()
-                            .px(px(theme.metrics.spacing_2))
-                            .pb(px(theme.metrics.spacing_2))
-                            .flex()
-                            .gap(px(theme.metrics.spacing_1))
-                            .child(tree_toolbar_button(
-                                theme,
-                                "tree-move",
-                                "Move…",
-                                has_selection,
-                                move |window, cx| {
-                                    let _ = move_view.update(cx, |view, cx| {
-                                        view.open_move_dialog(window, cx);
-                                    });
-                                },
-                            ))
-                            .child(tree_toolbar_button(
-                                theme,
-                                "tree-move-up",
-                                "↑",
-                                has_selection,
-                                move |window, cx| {
-                                    let _ = move_up_view.update(cx, |view, cx| {
-                                        view.reorder_selected(-1, window, cx);
-                                    });
-                                },
-                            ))
-                            .child(tree_toolbar_button(
-                                theme,
-                                "tree-move-down",
-                                "↓",
-                                has_selection,
-                                move |window, cx| {
-                                    let _ = move_down_view.update(cx, |view, cx| {
-                                        view.reorder_selected(1, window, cx);
-                                    });
-                                },
-                            )),
                     ),
             )
             .child(tree)
@@ -4969,6 +5307,11 @@ impl ProbeApp {
 
 impl Render for ProbeApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !cx.has_active_drag()
+            && (self.tree_drop_target.is_some() || self.tree_drag_source.is_some())
+        {
+            self.clear_tree_drag();
+        }
         if self.pending_tab_reveal {
             self.pending_tab_reveal = false;
             cx.on_next_frame(window, |this, _, cx| {
@@ -5378,7 +5721,7 @@ mod tests {
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
-    use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size};
+    use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px, size};
     use probe_http::{HttpResponse, ResponseHeader};
 
     use super::{ProbeApp, bind_platform_hotkeys};
@@ -5511,6 +5854,198 @@ mod tests {
             Some("https://local.example/dirty"),
             "structural moves must not silently save an unrelated dirty draft"
         );
+        fs::remove_file(fixture).unwrap();
+    }
+
+    fn simulate_tree_drag(
+        visual: &mut VisualTestContext,
+        from: gpui::Bounds<gpui::Pixels>,
+        to: gpui::Point<gpui::Pixels>,
+    ) {
+        visual.simulate_mouse_down(from.center(), MouseButton::Left, Modifiers::default());
+        visual.simulate_mouse_move(
+            point(from.center().x + px(8.0), from.center().y + px(8.0)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        visual.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::default());
+        visual.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
+    }
+
+    #[gpui::test]
+    fn tree_drag_moves_a_request_into_a_folder(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_structure_fixture("tree-drag-move");
+        let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let source = visual
+            .debug_bounds("tree-row-items/0")
+            .expect("request row should render");
+        let folder = visual
+            .debug_bounds("tree-row-items/1")
+            .expect("folder row should render");
+        simulate_tree_drag(&mut visual, source, folder.center());
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.structure_task.is_none(), "{:?}", view.message);
+                let loaded = view.loaded_workspace.as_ref().unwrap();
+                assert!(loaded.request_key("items/0/items/1").is_some());
+                assert!(loaded.folder_key("items/0").is_some());
+                assert!(loaded.request_key("items/0").is_none());
+            })
+            .unwrap();
+
+        let disk = probe_opencollection::load_workspace(&fixture).unwrap();
+        assert!(disk.request_key("items/0/items/1").is_some());
+        assert!(disk.folder_key("items/0").is_some());
+        fs::remove_file(fixture).unwrap();
+    }
+
+    #[gpui::test]
+    fn tree_drag_reorders_a_folder_before_its_sibling(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_structure_fixture("tree-drag-reorder");
+        let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let folder = visual
+            .debug_bounds("tree-row-items/1")
+            .expect("folder row should render");
+        let request = visual
+            .debug_bounds("tree-row-items/0")
+            .expect("request row should render");
+        simulate_tree_drag(
+            &mut visual,
+            folder,
+            point(request.center().x, request.top() + px(2.0)),
+        );
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.structure_task.is_none(), "{:?}", view.message);
+                let loaded = view.loaded_workspace.as_ref().unwrap();
+                let root = loaded.workspace().root_items();
+                assert!(matches!(root[0], probe_core::WorkspaceItemRef::Folder(_)));
+                assert!(matches!(root[1], probe_core::WorkspaceItemRef::Request(_)));
+            })
+            .unwrap();
+
+        let disk = probe_opencollection::load_workspace(&fixture).unwrap();
+        assert!(disk.folder_key("items/0").is_some());
+        assert!(disk.request_key("items/1").is_some());
+        fs::remove_file(fixture).unwrap();
+    }
+
+    #[gpui::test]
+    fn tree_drag_rejects_dropping_a_folder_into_itself(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_structure_fixture("tree-drag-invalid");
+        let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let folder = visual
+            .debug_bounds("tree-row-items/1")
+            .expect("folder row should render");
+        simulate_tree_drag(&mut visual, folder, folder.center());
+        visual.run_until_parked();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.structure_task.is_none(), "{:?}", view.message);
+                let loaded = view.loaded_workspace.as_ref().unwrap();
+                assert!(loaded.request_key("items/0").is_some());
+                assert!(loaded.folder_key("items/1").is_some());
+                assert!(view.message.is_none());
+            })
+            .unwrap();
+        fs::remove_file(fixture).unwrap();
+    }
+
+    #[gpui::test]
+    fn failed_structure_edit_keeps_the_previous_workspace(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = writable_structure_fixture("tree-drag-conflict");
+        let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture.clone(), workspace);
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        fs::write(
+            &fixture,
+            "opencollection: 1.0.0\ninfo:\n  name: changed\nbundled: true\nitems: []\n",
+        )
+        .unwrap();
+
+        window
+            .update(cx, |view, window, cx| {
+                view.apply_structure(
+                    probe_opencollection::StructureOperation::ReorderFolder {
+                        selector: "items/1".to_owned(),
+                        index: 0,
+                    },
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.structure_task.is_none());
+                assert!(view.message.is_some());
+                let loaded = view.loaded_workspace.as_ref().unwrap();
+                assert!(loaded.request_key("items/0").is_some());
+                assert!(loaded.folder_key("items/1").is_some());
+            })
+            .unwrap();
         fs::remove_file(fixture).unwrap();
     }
 

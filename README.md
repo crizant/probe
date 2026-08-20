@@ -136,7 +136,9 @@ Open collections are watched for filesystem changes; valid external edits, addit
 deletions, and identifiable renames are reconciled in the background while conflicting
 local drafts remain protected until the user chooses which version to keep.
 The desktop collection tree also exposes keyboard-accessible controls for creating,
-renaming, deleting, moving, and reordering requests and folders. Structural writes run
+renaming, deleting, moving, and reordering requests and folders, and the same move and
+reorder operations can be performed by dragging tree rows onto folder or sibling
+targets. Structural writes run
 in the background through the shared repository, while open tabs, collapsed folders,
 session selectors, and unsaved request drafts follow persisted selector remaps.
 

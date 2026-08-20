@@ -296,6 +296,12 @@ expansion rebuilds this in-memory visible-row index without filesystem access.
 
 Tree rows are focusable collection items with directional navigation and explicit
 create, rename, delete, move, and reorder controls, so drag and drop is never required.
+The same repository-owned `StructureOperation` values are used when a tree row is
+dragged onto a valid folder or sibling insertion target. The desktop rejects drops onto
+the dragged item, its descendants, duplicate unbundled paths, and other invalid
+destinations, and shows an insertion line or folder highlight only for accepted
+targets. Large virtualized trees autoscroll while a drag is near the viewport edge.
+Failed persistence or conflict checks leave the previous valid workspace visible.
 The desktop converts these interactions into repository-owned `StructureOperation`
 values and executes them on GPUI's background executor. A successful operation returns
 a complete old-to-new selector map and a refreshed repository workspace. The desktop

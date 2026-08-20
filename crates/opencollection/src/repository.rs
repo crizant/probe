@@ -94,6 +94,15 @@ impl LoadedWorkspace {
         &self.workspace
     }
 
+    /// Returns whether repository locators are workspace-relative filesystem paths.
+    ///
+    /// Unbundled collections use paths. Bundled and in-memory documents use structural
+    /// item selectors, which do not collide by file name.
+    #[must_use]
+    pub const fn uses_path_locators(&self) -> bool {
+        matches!(self.source, WorkspaceSource::Unbundled(_))
+    }
+
     /// Mutably looks up a request in the loaded in-memory workspace.
     ///
     /// Desktop editors use this fast path to apply draft changes immediately. Saving
