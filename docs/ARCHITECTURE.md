@@ -361,7 +361,7 @@ inheritance, cyclic interpolation, missing variables, and invalid variant select
 produce typed errors.
 
 The resolver returns a cloned, resolved request and leaves the canonical parsed model
-unchanged. It currently interpolates method, URL, headers, query parameters, supported
+unchanged. It currently interpolates method, URL, headers, query and path parameters, supported
 body fields, file references, and authentication string/number values. OpenCollection
 secret declarations contain no value, so references fail until a separate secure
 runtime value provider is introduced. Loading `dotEnvFilePath` is also outside Phase 4;
@@ -370,7 +370,8 @@ the domain resolver remains independent of filesystem APIs.
 ## HTTP Execution
 
 `probe-http` owns the single asynchronous HTTP implementation. It converts resolved
-domain requests into network requests, applies enabled headers and query parameters,
+domain requests into network requests, substitutes enabled `:variableName` path parameters,
+applies enabled headers and query parameters,
 selects body/file variants, implements Basic and Bearer authentication, and enforces
 OpenCollection timeout and redirect settings. Neither CLI nor desktop constructs HTTP
 requests independently.

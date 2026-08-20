@@ -114,8 +114,8 @@ bundled and unbundled filesystem loading, an indexed in-memory workspace, shared
 environment resolution, asynchronous HTTP execution, a versioned automation-safe CLI
 contract, and a native GPUI desktop shell with semantic light/dark themes,
 OpenCollection-backed browsing, request tabs, resizable editor/response panes, and
-a title-bar workspace switcher. The request editor updates method, URL, query
-parameters, headers, body, authentication, and environment selection in memory as
+a title-bar workspace switcher. The request editor updates method, URL, query and
+`:variableName` path parameters, headers, body, authentication, and environment selection in memory as
 the user works. Desktop Send and Cancel actions use the same asynchronous HTTP engine
 as the CLI, and completed responses expose status, duration, size, headers, and body
 in a Pretty/Raw/Headers viewer with search. Large bodies are virtualized so navigation

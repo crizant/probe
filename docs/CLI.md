@@ -112,9 +112,10 @@ change type without incrementing the version.
 Each entry has nullable `name` and `parent` fields plus a string `selector`.
 
 `request get --json` returns `authentication`, `body`, `environment`, `headers`,
-`method`, `name`, `queryParameters`, `selector`, and `url`. `environment` is the
+`method`, `name`, `pathParameters`, `queryParameters`, `selector`, and `url`. `environment` is the
 selected name or JSON `null`. Missing optional values are JSON `null`. Headers and
-query parameters contain stable `disabled`, `name`, and `value` fields.
+query and path parameters contain stable `disabled`, `name`, and `value` fields. Path
+parameters are referenced from URLs with `:variableName` segments.
 
 `request set --json` returns the same request shape after the persisted update,
 with `environment` set to JSON `null`.
