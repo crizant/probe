@@ -1,5 +1,7 @@
 # Probe
 
+<img src="docs/assets/probe-app-icon.png" alt="Probe app icon" width="128" height="128" />
+
 A fast, native, local-first API client for macOS, Windows, and Linux.
 
 Built with Rust, GPUI, and Longbridge gpui-base, with OpenCollection YAML as the
