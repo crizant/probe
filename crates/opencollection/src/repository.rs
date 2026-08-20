@@ -936,6 +936,7 @@ fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<
         || update.url.is_some()
         || update.headers.is_some()
         || update.query_parameters.is_some()
+        || update.path_parameters.is_some()
         || update.body.is_some()
         || update.authentication.is_some()
     {
@@ -952,12 +953,11 @@ fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<
         if let Some(headers) = &update.headers {
             merge_sequence(http, "headers", headers.iter().map(header_value).collect());
         }
-        if let Some(parameters) = &update.query_parameters {
-            merge_sequence_preserving(
+        if update.query_parameters.is_some() || update.path_parameters.is_some() {
+            merge_parameters(
                 http,
-                "params",
-                parameters.iter().map(query_parameter_value).collect(),
-                &["type"],
+                update.query_parameters.as_deref(),
+                update.path_parameters.as_deref(),
             );
         }
         if let Some(body) = &update.body {
@@ -1079,12 +1079,63 @@ fn header_value(header: &Header) -> Value {
 }
 
 fn query_parameter_value(parameter: &QueryParameter) -> Value {
+    parameter_value(parameter, "query")
+}
+
+fn path_parameter_value(parameter: &QueryParameter) -> Value {
+    parameter_value(parameter, "path")
+}
+
+fn parameter_value(parameter: &QueryParameter, parameter_type: &str) -> Value {
     map([
         ("name", Value::String(parameter.name.clone())),
         ("value", Value::String(parameter.value.clone())),
-        ("type", Value::String("query".to_owned())),
+        ("type", Value::String(parameter_type.to_owned())),
         ("disabled", Value::Bool(parameter.disabled)),
     ])
+}
+
+fn merge_parameters(
+    parent: &mut serde_yaml_ng::Mapping,
+    query: Option<&[QueryParameter]>,
+    path: Option<&[QueryParameter]>,
+) {
+    let key = string_key("params");
+    let existing = parent
+        .get(&key)
+        .and_then(Value::as_sequence)
+        .cloned()
+        .unwrap_or_default();
+    let mut query = query.map(|values| values.iter().map(query_parameter_value));
+    let mut path = path.map(|values| values.iter().map(path_parameter_value));
+    let mut merged = Vec::new();
+
+    for old in existing {
+        let parameter_type = old
+            .as_mapping()
+            .and_then(|mapping| mapping.get(string_key("type")))
+            .and_then(Value::as_str);
+        let replacement = match parameter_type {
+            Some("query") => query.as_mut().map(Iterator::next),
+            Some("path") => path.as_mut().map(Iterator::next),
+            _ => None,
+        };
+        match replacement {
+            Some(Some(mut replacement)) => {
+                merge_yaml(&mut replacement, old);
+                merged.push(replacement);
+            }
+            Some(None) => {}
+            None => merged.push(old),
+        }
+    }
+    if let Some(values) = query {
+        merged.extend(values);
+    }
+    if let Some(values) = path {
+        merged.extend(values);
+    }
+    parent.insert(key, Value::Sequence(merged));
 }
 
 fn request_body_value(body: &RequestBody) -> Value {

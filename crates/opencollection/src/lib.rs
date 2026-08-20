@@ -789,6 +789,15 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
             let http = item.http.unwrap_or_default();
             let body = http.body.map(project_request_body).transpose()?.flatten();
             let authentication = http.auth.map(project_authentication).transpose()?;
+            let mut query_parameters = Vec::new();
+            let mut path_parameters = Vec::new();
+            for parameter in http.params {
+                match parameter.parameter_type.as_str() {
+                    "query" => query_parameters.push(parameter.into_domain()),
+                    "path" => path_parameters.push(parameter.into_domain()),
+                    _ => {}
+                }
+            }
             Ok(Some(CollectionItem::HttpRequest(HttpRequest {
                 metadata: item.info.into_domain(),
                 method: http.method,
@@ -798,12 +807,8 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
                     .into_iter()
                     .map(HeaderDocument::into_domain)
                     .collect(),
-                query_parameters: http
-                    .params
-                    .into_iter()
-                    .filter(|parameter| parameter.parameter_type == "query")
-                    .map(ParameterDocument::into_domain)
-                    .collect(),
+                query_parameters,
+                path_parameters,
                 body,
                 authentication,
                 settings,

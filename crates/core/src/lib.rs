@@ -8,11 +8,17 @@
 use std::{collections::BTreeMap, time::Duration};
 
 mod environment;
+mod path_parameters;
 mod workspace;
 
 pub use environment::{
     EnvironmentResolutionError, ResolvedEnvironment, resolve_environment, resolve_request,
     validate_environments,
+};
+pub use path_parameters::{
+    add_path_parameter, apply_path_parameters, ensure_path_parameters_from_url,
+    path_variable_names, path_variable_ranges, remove_path_parameter_at, rename_path_parameter_at,
+    synchronize_path_parameters,
 };
 pub use workspace::{
     FolderKey, RequestKey, Workspace, WorkspaceEditError, WorkspaceFolder, WorkspaceItemRef,
@@ -55,6 +61,7 @@ pub struct Author {
 }
 
 /// An item supported by the current domain reader.
+#[allow(clippy::large_enum_variant)] // Keep workspace items simply owned and allocation-free.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CollectionItem {
     /// A folder containing more collection items.
@@ -92,8 +99,10 @@ pub struct HttpRequest {
     pub url: Option<String>,
     /// HTTP request headers.
     pub headers: Vec<Header>,
-    /// Query parameters. Path parameters are outside the current phase.
+    /// Query parameters appended to the request URL.
     pub query_parameters: Vec<QueryParameter>,
+    /// Path parameters referenced in the URL as `:variableName`.
+    pub path_parameters: Vec<QueryParameter>,
     /// Request body definition, including selectable variants when present.
     pub body: Option<RequestBody>,
     /// Request authentication configuration.
@@ -118,6 +127,8 @@ pub struct RequestUpdate {
     pub headers: Option<Vec<Header>>,
     /// Replacement query parameters.
     pub query_parameters: Option<Vec<QueryParameter>>,
+    /// Replacement path parameters.
+    pub path_parameters: Option<Vec<QueryParameter>>,
     /// Replacement body. The inner `None` removes the body.
     pub body: Option<Option<RequestBody>>,
     /// Replacement authentication. The inner `None` removes authentication.
@@ -133,6 +144,7 @@ impl RequestUpdate {
             && self.url.is_none()
             && self.headers.is_none()
             && self.query_parameters.is_none()
+            && self.path_parameters.is_none()
             && self.body.is_none()
             && self.authentication.is_none()
     }
@@ -153,6 +165,9 @@ impl RequestUpdate {
         }
         if let Some(query_parameters) = &self.query_parameters {
             request.query_parameters.clone_from(query_parameters);
+        }
+        if let Some(path_parameters) = &self.path_parameters {
+            request.path_parameters.clone_from(path_parameters);
         }
         if let Some(body) = &self.body {
             request.body.clone_from(body);
@@ -185,7 +200,7 @@ pub struct Header {
     pub disabled: bool,
 }
 
-/// An HTTP query parameter.
+/// An HTTP query or path parameter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueryParameter {
     /// Parameter name.

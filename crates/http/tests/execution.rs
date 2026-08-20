@@ -175,7 +175,7 @@ async fn executes_json_with_headers_query_bearer_auth_and_response_metadata() {
     )
     .await
     .unwrap();
-    let mut request = request("POST", format!("{base_url}/users?existing=yes"));
+    let mut request = request("POST", format!("{base_url}/users/:userId?existing=yes"));
     request.headers = vec![
         Header {
             name: "X-Probe".to_owned(),
@@ -191,6 +191,11 @@ async fn executes_json_with_headers_query_bearer_auth_and_response_metadata() {
     request.query_parameters = vec![QueryParameter {
         name: "search".to_owned(),
         value: "hello world".to_owned(),
+        disabled: false,
+    }];
+    request.path_parameters = vec![QueryParameter {
+        name: "userId".to_owned(),
+        value: "probe/user".to_owned(),
         disabled: false,
     }];
     request.body = Some(RequestBody::Single(Body::Raw(RawBody {
@@ -214,7 +219,7 @@ async fn executes_json_with_headers_query_bearer_auth_and_response_metadata() {
 
     assert_eq!(
         captured.request_line,
-        "POST /users?existing=yes&search=hello+world HTTP/1.1"
+        "POST /users/probe%2Fuser?existing=yes&search=hello+world HTTP/1.1"
     );
     assert_eq!(captured.header("x-probe"), Some("enabled"));
     assert_eq!(captured.header("x-skipped"), None);

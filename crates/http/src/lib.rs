@@ -451,6 +451,7 @@ async fn build_request(
 ) -> Result<RequestBuilder, HttpError> {
     let method = supported_method(request.method.as_deref())?;
     let url = request.url.as_deref().ok_or(HttpError::MissingUrl)?;
+    let url = probe_core::apply_path_parameters(url, &request.path_parameters);
     let headers = request_headers(request)?;
     let has_content_type = headers.contains_key(CONTENT_TYPE);
     let mut builder = client.request(method, url).headers(headers);

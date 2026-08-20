@@ -435,6 +435,10 @@ pub fn resolve_request(
         parameter.name = environment.interpolate(&parameter.name)?;
         parameter.value = environment.interpolate(&parameter.value)?;
     }
+    for parameter in &mut request.path_parameters {
+        parameter.name = environment.interpolate(&parameter.name)?;
+        parameter.value = environment.interpolate(&parameter.value)?;
+    }
     if let Some(body) = &mut request.body {
         resolve_body(body, environment)?;
     }

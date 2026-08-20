@@ -52,6 +52,9 @@ fn parses_collection_folders_and_http_requests() {
     assert_eq!(request.query_parameters.len(), 1);
     assert_eq!(request.query_parameters[0].name, "limit");
     assert_eq!(request.query_parameters[0].value, "25");
+    assert_eq!(request.path_parameters.len(), 1);
+    assert_eq!(request.path_parameters[0].name, "ownerId");
+    assert_eq!(request.path_parameters[0].value, "42");
     assert_eq!(
         request.settings.timeout,
         Some(Duration::from_micros(2_500_500))

@@ -98,6 +98,11 @@ fn resolves_supported_request_fields_without_mutating_the_source() {
             value: "{{tenant}}".to_owned(),
             disabled: false,
         }],
+        path_parameters: vec![QueryParameter {
+            name: "tenant".to_owned(),
+            value: "{{tenant}}".to_owned(),
+            disabled: false,
+        }],
         body: Some(RequestBody::Variants(vec![probe_core::BodyVariant {
             title: "form".to_owned(),
             selected: true,
@@ -142,6 +147,7 @@ fn resolves_supported_request_fields_without_mutating_the_source() {
     assert_eq!(request_with_values.headers[0].name, "X-probe");
     assert_eq!(request_with_values.headers[0].value, "Bearer test-token");
     assert_eq!(request_with_values.query_parameters[0].value, "probe");
+    assert_eq!(request_with_values.path_parameters[0].value, "probe");
     let Some(RequestBody::Variants(variants)) = &request_with_values.body else {
         panic!("expected body variants");
     };

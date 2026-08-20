@@ -211,6 +211,11 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
             value: "true".to_owned(),
             disabled: false,
         }]),
+        path_parameters: Some(vec![QueryParameter {
+            name: "petId".to_owned(),
+            value: "42".to_owned(),
+            disabled: false,
+        }]),
         body: Some(Some(RequestBody::Single(Body::FormUrlEncoded(vec![
             FormField {
                 name: "name".to_owned(),
@@ -240,6 +245,8 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
     assert_eq!(request.headers[0].name, "X-Probe");
     assert!(request.headers[0].disabled);
     assert_eq!(request.query_parameters[0].name, "preview");
+    assert_eq!(request.path_parameters[0].name, "petId");
+    assert_eq!(request.path_parameters[0].value, "42");
     assert!(matches!(
         request.body,
         Some(RequestBody::Single(Body::FormUrlEncoded(_)))
@@ -277,6 +284,7 @@ fn every_supported_body_and_authentication_shape_survives_desktop_style_saves() 
             url: request.url.clone(),
             headers: Some(request.headers.clone()),
             query_parameters: Some(request.query_parameters.clone()),
+            path_parameters: Some(request.path_parameters.clone()),
             body: Some(request.body.clone()),
             authentication: Some(request.authentication.clone()),
             ..RequestUpdate::default()
