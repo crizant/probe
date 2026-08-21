@@ -328,12 +328,9 @@ fn inspect_sync_directory(path: &Path) -> Result<YaakImportPreview, YaakImportEr
             "websocket_request" => resources
                 .websocket_requests
                 .push(from_value(value, &entry.path())?),
-            other => {
-                return Err(YaakImportError::Invalid(format!(
-                    "unsupported Yaak sync model '{other}' in {}",
-                    entry.path().display()
-                )));
-            }
+            _ => resources
+                .unsupported_resources
+                .push(from_value(value, &entry.path())?),
         }
     }
     migrate_resources(&mut resources);
@@ -477,6 +474,20 @@ fn convert_preview(
                 Some(&resource.id),
                 None,
                 "WebSocket requests are not supported by the current Probe domain",
+            ));
+        }
+    }
+    for resource in &preview.resources.unsupported_resources {
+        if resource.workspace_id.as_deref() == Some(workspace.id.as_str()) {
+            diagnostics.push(lossy(
+                "unsupported_resource",
+                &resource.model,
+                Some(&resource.id),
+                None,
+                &format!(
+                    "Yaak resource model '{}' is not supported by the current Probe domain",
+                    resource.model
+                ),
             ));
         }
     }
@@ -1379,6 +1390,7 @@ struct Resources {
     requests: Vec<YaakHttpRequest>,
     grpc_requests: Vec<UnsupportedRequest>,
     websocket_requests: Vec<UnsupportedRequest>,
+    unsupported_resources: Vec<UnsupportedResource>,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
 }
@@ -1412,6 +1424,11 @@ impl Resources {
                 self.websocket_requests
                     .iter()
                     .map(|value| ("websocket_request", value.id.as_str())),
+            )
+            .chain(
+                self.unsupported_resources
+                    .iter()
+                    .map(|value| ("unsupported_resource", value.id.as_str())),
             )
             .collect()
     }
@@ -1577,6 +1594,14 @@ struct UnsupportedRequest {
     workspace_id: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct UnsupportedResource {
+    model: String,
+    id: String,
+    workspace_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct InheritedSetting<T: Default> {
@@ -1720,6 +1745,36 @@ mod tests {
             preview.convert(None, false),
             Err(YaakImportError::Invalid(_))
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sync_directory_allows_partial_import_with_unsupported_resources() {
+        let root = temporary_path("sync-partial");
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("yaak.wk_1.yaml"),
+            "model: workspace\nid: wk_1\nname: Sync\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("yaak.sse_1.yaml"),
+            "model: sse_request\nid: sse_1\nworkspaceId: wk_1\nname: Events\n",
+        )
+        .unwrap();
+
+        let preview = inspect_yaak_source(&root).unwrap();
+        assert!(matches!(
+            preview.convert(None, false),
+            Err(YaakImportError::Unsupported(_))
+        ));
+        let imported = preview.convert(None, true).unwrap();
+        assert!(imported.partial);
+        assert!(imported.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "unsupported_resource"
+                && diagnostic.resource_type == "sse_request"
+                && diagnostic.resource_id.as_deref() == Some("sse_1")
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 }
