@@ -2426,7 +2426,7 @@ impl ProbeApp {
                     .accessibility_label(format!("Request {label}"))
                     .w_full()
                     .h(px(theme.metrics.tree_row_height))
-                    .pl(px(tree_request_indent(theme, depth)))
+                    .pl(px(tree_level_indent(theme, depth)))
                     .pr(px(theme.metrics.spacing_1))
                     .flex()
                     .items_center()
@@ -2516,7 +2516,7 @@ impl ProbeApp {
                     .accessibility_label(format!("Folder {label}"))
                     .w_full()
                     .h(px(theme.metrics.tree_row_height))
-                    .pl(px(tree_folder_indent(theme, depth)))
+                    .pl(px(tree_level_indent(theme, depth)))
                     .pr(px(theme.metrics.spacing_1))
                     .flex()
                     .items_center()
@@ -2605,8 +2605,7 @@ impl ProbeApp {
             Some(DropIndicator::IntoFolder(folder)) if item == WorkspaceItemRef::Folder(folder)
         );
         let indent = match kind {
-            ItemKind::Folder => tree_folder_indent(theme, depth),
-            ItemKind::Request => tree_request_indent(theme, depth),
+            ItemKind::Folder | ItemKind::Request => tree_level_indent(theme, depth),
         };
         let drag_view = cx.weak_entity();
         let row_id = match item {
@@ -5647,19 +5646,7 @@ fn tree_delete_shortcut_label() -> &'static str {
 }
 
 fn tree_level_indent(theme: Theme, depth: usize) -> f32 {
-    if depth == 0 {
-        theme.metrics.spacing_2
-    } else {
-        tree_folder_indent(theme, depth - 1) + theme.metrics.icon_standard + theme.metrics.spacing_2
-    }
-}
-
-fn tree_folder_indent(theme: Theme, depth: usize) -> f32 {
-    tree_level_indent(theme, depth)
-}
-
-fn tree_request_indent(theme: Theme, depth: usize) -> f32 {
-    tree_level_indent(theme, depth)
+    theme.metrics.spacing_2 + depth as f32 * theme.metrics.icon_standard
 }
 
 fn tree_method_font_size(theme: Theme, method: &str) -> f32 {
