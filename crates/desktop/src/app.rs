@@ -1145,6 +1145,7 @@ impl ProbeApp {
         }
         if let Some(key) = active_tab {
             self.shell.open_request(key);
+            self.selected_tree_item = Some(WorkspaceItemRef::Request(key));
         }
         for key in collapsed_folders {
             self.shell.collapse_folder(key);
@@ -5890,6 +5891,7 @@ mod tests {
     };
 
     use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px, size};
+    use probe_core::WorkspaceItemRef;
     use probe_http::{HttpResponse, ResponseHeader};
 
     use super::{ProbeApp, bind_platform_hotkeys, tree_folder_indent, tree_request_indent};
@@ -6602,6 +6604,56 @@ mod tests {
             rendered_rows < total_rows,
             "virtualized sidebar rendered all {total_rows} rows"
         );
+    }
+
+    #[gpui::test]
+    fn restored_active_tab_highlights_matching_sidebar_request(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let first = workspace.requests()[0].key();
+        let second = workspace.requests()[1].key();
+        let first_selector = workspace
+            .request_selector(first)
+            .expect("first request should have a selector")
+            .to_owned();
+        let second_selector = workspace
+            .request_selector(second)
+            .expect("second request should have a selector")
+            .to_owned();
+
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.session.open_tabs = vec![first_selector, second_selector.clone()];
+                view.session.active_tab = Some(second_selector);
+                view.restore_shell_state();
+                cx.notify();
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(view.shell.active_tab(), Some(second));
+                assert_eq!(
+                    view.selected_tree_item,
+                    Some(WorkspaceItemRef::Request(second))
+                );
+            })
+            .expect("test window should remain open");
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual
+            .debug_bounds("request-tree-label")
+            .expect("active sidebar request label should render");
     }
 
     #[gpui::test]
