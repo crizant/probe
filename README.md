@@ -45,8 +45,9 @@ Probe uses Longbridge `gpui-base` (`crates/base` in
 for interaction, focus, accessibility, and default chrome tokens. That crate
 is not `gpui-component` (Longbridge's pre-styled façade).
 
-Desktop chrome uses Catppuccin Latte (light) and Mocha (dark) through Probe's
-semantic theme. Domain colors (HTTP methods, status, syntax) stay distinct.
+Desktop chrome uses Probe's Porcelain Honey light theme and Graphite Honey dark
+theme through Probe's semantic theme. Domain colors (HTTP methods, status,
+syntax) stay distinct.
 
 ## Interfaces
 

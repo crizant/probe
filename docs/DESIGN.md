@@ -95,14 +95,14 @@ API.
 ## Component Architecture
 
 Longbridge `gpui-base` provides reusable behavior, accessibility, and default
-chrome tokens where an appropriate primitive exists. Probe maps Catppuccin
-Latte (light) and Mocha (dark) onto the semantic theme model and composes
+chrome tokens where an appropriate primitive exists. Probe maps Porcelain Honey
+(light) and Graphite Honey (dark) onto the semantic theme model and composes
 feature views. Do not use Longbridge `gpui-component`.
 
 ```text
 Longbridge gpui-base primitives
         ↓
-Probe semantic tokens (Catppuccin Latte / Mocha)
+Probe semantic tokens (Porcelain Honey / Graphite Honey)
         ↓
 Probe styled component
         ↓
@@ -135,11 +135,11 @@ focused, selected, inactive, and disabled behavior where relevant.
 
 ## Built-In Themes
 
-The desktop foundation ships with Catppuccin [Latte](https://github.com/catppuccin/catppuccin)
-(light) and [Mocha](https://github.com/catppuccin/catppuccin) (dark) as complete
-semantic theme models, and follows system appearance changes. Built-in themes
-provide fallback values for every token. HTTP method, status, and syntax colors
-use Catppuccin accent hues and remain distinct from chrome.
+The desktop foundation ships with Porcelain Honey (light), based on Probe's
+creamy app icon background, and Graphite Honey (dark), a graphite companion theme
+with the same golden-orange accent system, as complete semantic theme models.
+Built-in themes follow system appearance changes and provide fallback values for
+every token. HTTP method, status, and syntax colors remain distinct from chrome.
 
 Theme changes must not alter application semantics, hide required state, move commands
 unexpectedly, or replace platform-standard interaction behavior. Selection, focus,
