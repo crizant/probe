@@ -327,10 +327,10 @@ fn porcelain_honey() -> Colors {
     Colors {
         surfaces: SurfaceColors {
             window: rgba(0xf5f4f1ff),  // porcelain cream
-            sidebar: rgba(0xedece7ff), // quiet shell
-            editor: rgba(0xfbfaf7ff),  // paper
-            raised: rgba(0xe3dfd8ff),  // porcelain shadow
-            overlay: rgba(0xfffefbff), // porcelain glaze
+            sidebar: rgba(0xedece7e6), // quiet shell
+            editor: rgba(0xfbfaf7f2),  // paper
+            raised: rgba(0xe3dfd8cc),  // porcelain shadow
+            overlay: rgba(0xfffefbe6), // porcelain glaze
             scrim: rgba(0x00000059),   // black @ ~35%
         },
         text: TextColors {
@@ -341,22 +341,22 @@ fn porcelain_honey() -> Colors {
             inverse: rgba(0xffffffff),     // on-accent
         },
         borders: BorderColors {
-            subtle: rgba(0xd7d3ccff),   // porcelain edge
-            standard: rgba(0xc5c0b8ff), // light warm divider
-            strong: rgba(0xa49d93ff),   // grounded divider
+            subtle: rgba(0xd7d3ccbf),   // porcelain edge
+            standard: rgba(0xc5c0b8d9), // light warm divider
+            strong: rgba(0xa49d93e6),   // grounded divider
             focused: rgba(0xe3871eff),  // golden orange
         },
         actions: ActionColors {
             accent: rgba(0xc87518ff),              // filled golden orange
             hover: rgba(0xb86d18ff),               // burnished orange
             pressed: rgba(0x965714ff),             // deep golden orange
-            disabled: rgba(0xd7d3ccff),            // porcelain edge
+            disabled: rgba(0xd7d3ccbf),            // porcelain edge
             disabled_foreground: rgba(0x989187ff), // stone
         },
         selection: SelectionColors {
             active_background: rgba(0xc87518ff),   // filled golden orange
             active_foreground: rgba(0xffffffff),   // on-accent
-            inactive_background: rgba(0xe0ddd6ff), // porcelain edge
+            inactive_background: rgba(0xe0ddd6bf), // porcelain edge
             inactive_foreground: rgba(0x2f2f30ff), // icon graphite
         },
         status: StatusColors {
@@ -397,10 +397,10 @@ fn graphite_honey() -> Colors {
     Colors {
         surfaces: SurfaceColors {
             window: rgba(0x18191bff),  // graphite
-            sidebar: rgba(0x111214ff), // deep graphite
-            editor: rgba(0x1f2022ff),  // soft graphite
-            raised: rgba(0x282a2eff),  // lifted graphite
-            overlay: rgba(0x2f3035ff), // graphite overlay
+            sidebar: rgba(0x111214e6), // deep graphite
+            editor: rgba(0x1f2022f2),  // soft graphite
+            raised: rgba(0x282a2ecc),  // lifted graphite
+            overlay: rgba(0x2f3035e6), // graphite overlay
             scrim: rgba(0x00000070),   // black @ ~44%
         },
         text: TextColors {
@@ -411,22 +411,22 @@ fn graphite_honey() -> Colors {
             inverse: rgba(0x18191bff),     // on-accent
         },
         borders: BorderColors {
-            subtle: rgba(0x35373cff),   // graphite edge
-            standard: rgba(0x47494fff), // graphite divider
-            strong: rgba(0x62646bff),   // grounded divider
+            subtle: rgba(0x35373cbf),   // graphite edge
+            standard: rgba(0x47494fd9), // graphite divider
+            strong: rgba(0x62646be6),   // grounded divider
             focused: rgba(0xf0a338ff),  // golden orange
         },
         actions: ActionColors {
             accent: rgba(0xd98e26ff),              // filled golden orange
             hover: rgba(0xf0a338ff),               // bright golden orange
             pressed: rgba(0xb97620ff),             // deep golden orange
-            disabled: rgba(0x35373cff),            // graphite edge
+            disabled: rgba(0x35373cbf),            // graphite edge
             disabled_foreground: rgba(0x85817bff), // stone
         },
         selection: SelectionColors {
             active_background: rgba(0xd98e26ff),   // filled golden orange
             active_foreground: rgba(0x18191bff),   // graphite
-            inactive_background: rgba(0x35373cff), // graphite edge
+            inactive_background: rgba(0x35373cbf), // graphite edge
             inactive_foreground: rgba(0xece9e3ff), // porcelain text
         },
         status: StatusColors {
