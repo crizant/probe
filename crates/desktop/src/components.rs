@@ -2543,7 +2543,7 @@ pub(crate) fn menu_button(
     theme: Theme,
     id: impl Into<ElementId>,
     label: impl Into<String>,
-    shortcut: Option<&'static str>,
+    shortcut: Option<String>,
     on_activate: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     menu_button_with_padding(
@@ -2560,7 +2560,7 @@ pub(crate) fn compact_menu_button(
     theme: Theme,
     id: impl Into<ElementId>,
     label: impl Into<String>,
-    shortcut: Option<&'static str>,
+    shortcut: Option<String>,
     on_activate: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     menu_button_with_padding(
@@ -2577,7 +2577,7 @@ fn menu_button_with_padding(
     theme: Theme,
     id: impl Into<ElementId>,
     label: impl Into<String>,
-    shortcut: Option<&'static str>,
+    shortcut: Option<String>,
     padding_x: f32,
     on_activate: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {

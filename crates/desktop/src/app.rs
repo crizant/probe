@@ -2393,7 +2393,12 @@ impl ProbeApp {
         cx.notify();
     }
 
-    fn render_tab_context_menu(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_tab_context_menu(
+        &self,
+        theme: Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let Some(key) = self.tab_context_menu else {
             return div().into_any_element();
         };
@@ -2433,7 +2438,7 @@ impl ProbeApp {
                 theme,
                 "tab-context-close",
                 "Close Tab",
-                Some(close_tab_shortcut_label()),
+                shortcut_label_for_action(window, &CloseActiveTab),
                 move |window, cx| {
                     let _ = close_view.update(cx, |view, cx| {
                         view.request_close_tab(key, window, cx);
@@ -2460,7 +2465,12 @@ impl ProbeApp {
         .into_any_element()
     }
 
-    fn render_tree_context_menu(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_tree_context_menu(
+        &self,
+        theme: Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let Some(item) = self.tree_context_menu else {
             return div().into_any_element();
         };
@@ -2504,7 +2514,7 @@ impl ProbeApp {
                 theme,
                 rename_id,
                 "Rename",
-                Some(tree_rename_shortcut_label()),
+                shortcut_label_for_action_in_context(window, &RenameTreeItem, "RequestTree"),
                 move |window, cx| {
                     let _ = rename_view.update(cx, |view, cx| {
                         view.tree_context_menu = None;
@@ -2518,7 +2528,7 @@ impl ProbeApp {
                 theme,
                 delete_id,
                 "Delete",
-                Some(tree_delete_shortcut_label()),
+                shortcut_label_for_action_in_context(window, &DeleteTreeItem, "RequestTree"),
                 move |window, cx| {
                     let _ = delete_view.update(cx, |view, cx| {
                         view.tree_context_menu = None;
@@ -5775,33 +5785,35 @@ impl Render for ProbeApp {
                     ),
             )
             .child(self.render_structure_dialog(theme, cx))
-            .child(self.render_tab_context_menu(theme, cx))
-            .child(self.render_tree_context_menu(theme, cx))
+            .child(self.render_tab_context_menu(theme, window, cx))
+            .child(self.render_tree_context_menu(theme, window, cx))
     }
 }
 
-fn close_tab_shortcut_label() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "⌘W"
-    } else {
-        "Ctrl+W"
-    }
+fn shortcut_label_for_action(window: &Window, action: &dyn gpui::Action) -> Option<String> {
+    window
+        .highest_precedence_binding_for_action(action)
+        .map(|binding| shortcut_label_for_binding(&binding))
 }
 
-fn tree_rename_shortcut_label() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "⌘E"
-    } else {
-        "F2"
-    }
+fn shortcut_label_for_action_in_context(
+    window: &Window,
+    action: &dyn gpui::Action,
+    context: &str,
+) -> Option<String> {
+    let context = gpui::KeyContext::parse(context).ok()?;
+    window
+        .highest_precedence_binding_for_action_in_context(action, context)
+        .map(|binding| shortcut_label_for_binding(&binding))
 }
 
-fn tree_delete_shortcut_label() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "⌫"
-    } else {
-        "Del"
-    }
+fn shortcut_label_for_binding(binding: &KeyBinding) -> String {
+    binding
+        .keystrokes()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn tree_level_indent(theme: Theme, depth: usize) -> f32 {
