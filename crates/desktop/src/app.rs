@@ -130,6 +130,7 @@ struct TreeRowSpec {
     label: String,
     method: Option<String>,
     depth: usize,
+    selected: bool,
 }
 
 struct ShellSelectors {
@@ -2482,6 +2483,7 @@ impl ProbeApp {
                         label: label.to_owned(),
                         method: Some(method),
                         depth,
+                        selected,
                     },
                     can_edit,
                     button,
@@ -2558,6 +2560,7 @@ impl ProbeApp {
                         label: label.to_owned(),
                         method: None,
                         depth,
+                        selected,
                     },
                     can_edit,
                     button,
@@ -2583,6 +2586,7 @@ impl ProbeApp {
             label,
             method,
             depth,
+            selected,
         } = spec;
         let indicator = self.tree_drop_target.map(|intent| intent.indicator);
         let show_before =
@@ -2644,6 +2648,7 @@ impl ProbeApp {
                     .bg(theme.colors.selection.inactive_background)
             })
             .child(button)
+            .child(tree_hierarchy_guides(theme, depth, selected))
             .when(show_before, |row| row.child(line(true)))
             .when(show_after, |row| row.child(line(false)))
             .into_any_element()
@@ -5647,6 +5652,29 @@ fn tree_folder_indent(theme: Theme, depth: usize) -> f32 {
 
 fn tree_request_indent(theme: Theme, depth: usize) -> f32 {
     tree_level_indent(theme, depth)
+}
+
+fn tree_hierarchy_guides(theme: Theme, depth: usize, selected: bool) -> gpui::Div {
+    let mut guides = div().absolute().top(px(0.0)).bottom(px(0.0)).left(px(0.0));
+    let color = if selected {
+        theme.colors.selection.active_foreground.opacity(0.22)
+    } else {
+        theme.colors.borders.standard
+    };
+    for level in 0..depth {
+        guides = guides.child(
+            div()
+                .absolute()
+                .top(px(0.0))
+                .bottom(px(0.0))
+                .left(px(
+                    tree_level_indent(theme, level) + theme.metrics.icon_standard / 2.0
+                ))
+                .w(px(1.0))
+                .bg(color),
+        );
+    }
+    guides
 }
 
 fn flatten_visible_tree_rows(
