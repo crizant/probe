@@ -1076,7 +1076,7 @@ fn environment_update_rejects_stdin_workspaces() {
 }
 
 #[test]
-fn create_bundled_workspace_writes_an_empty_collection() {
+fn create_bundled_workspace_handles_successful_creation_variants() {
     let directory = temporary_path("created");
     fs::create_dir(&directory).unwrap();
     let path = directory.join("pets.yml");
@@ -1097,10 +1097,7 @@ fn create_bundled_workspace_writes_an_empty_collection() {
     assert!(source.contains("opencollection: 1.0.0"));
     assert!(source.contains("bundled: true"));
     fs::remove_dir_all(directory).unwrap();
-}
 
-#[test]
-fn create_bundled_workspace_uses_explicit_name_and_adds_yml_extension() {
     let path = temporary_path("untitled");
     let created = path.with_extension("yml");
     let loaded = create_bundled_workspace(&path, Some(" Pet Store "), false)
@@ -1112,10 +1109,7 @@ fn create_bundled_workspace_uses_explicit_name_and_adds_yml_extension() {
     );
     assert!(created.is_file());
     fs::remove_file(created).unwrap();
-}
 
-#[test]
-fn create_bundled_workspace_quotes_yaml_special_names() {
     let path = temporary_path("true.yml");
     let loaded =
         create_bundled_workspace(&path, Some("true"), false).expect("collection should create");
@@ -1127,10 +1121,7 @@ fn create_bundled_workspace_quotes_yaml_special_names() {
         Some("true")
     );
     fs::remove_file(path).unwrap();
-}
 
-#[test]
-fn create_bundled_workspace_creates_missing_parent_directories() {
     let path = temporary_path("nested").join("api").join("collection.yml");
     let loaded = create_bundled_workspace(&path, None, false).expect("collection should create");
 
@@ -1142,7 +1133,7 @@ fn create_bundled_workspace_creates_missing_parent_directories() {
 }
 
 #[test]
-fn create_bundled_workspace_refuses_existing_files_unless_replaced() {
+fn create_bundled_workspace_handles_existing_paths() {
     let path = temporary_path("existing.yml");
     fs::write(&path, "keep me\n").unwrap();
 
@@ -1157,10 +1148,7 @@ fn create_bundled_workspace_refuses_existing_files_unless_replaced() {
         Some("Replaced")
     );
     fs::remove_file(path).unwrap();
-}
 
-#[test]
-fn create_bundled_workspace_refuses_directories() {
     let path = temporary_path("collection.yml");
     fs::create_dir(&path).unwrap();
 

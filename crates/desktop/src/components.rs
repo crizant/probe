@@ -3255,15 +3255,6 @@ mod tests {
     }
 
     #[test]
-    fn input_text_scroll_offset_does_not_reset_scroll_when_absolute_position_is_short() {
-        assert_eq!(
-            input_text_scroll_offset(px(150.0), px(700.0), px(200.0), px(-500.0)),
-            px(-140.0),
-            "absolute cursor position alone must not snap scroll back to zero"
-        );
-    }
-
-    #[test]
     fn input_text_scroll_offset_scrolls_back_when_caret_moves_left_offscreen() {
         assert_eq!(
             input_text_scroll_offset(px(150.0), px(700.0), px(200.0), px(-500.0)),

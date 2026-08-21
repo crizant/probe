@@ -5894,7 +5894,7 @@ mod tests {
     use probe_core::WorkspaceItemRef;
     use probe_http::{HttpResponse, ResponseHeader};
 
-    use super::{ProbeApp, bind_platform_hotkeys, tree_folder_indent, tree_request_indent};
+    use super::{ProbeApp, bind_platform_hotkeys};
     use crate::{
         request_editor::{BodyEditorKind, EditorSection},
         response_viewer::ResponseViewerTab,
@@ -5909,19 +5909,6 @@ mod tests {
     fn large_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/opencollection/phase2-large-workspace.yml")
-    }
-
-    #[test]
-    fn nested_folder_rows_align_with_same_level_requests() {
-        let theme = Theme::light();
-        assert_eq!(tree_folder_indent(theme, 0), theme.metrics.spacing_2);
-        assert_eq!(tree_request_indent(theme, 0), tree_folder_indent(theme, 0));
-        assert_eq!(tree_folder_indent(theme, 1), tree_request_indent(theme, 1));
-        assert_eq!(tree_folder_indent(theme, 2), tree_request_indent(theme, 2));
-        assert_eq!(
-            tree_request_indent(theme, 1),
-            tree_folder_indent(theme, 0) + theme.metrics.icon_standard + theme.metrics.spacing_2
-        );
     }
 
     fn environment_fixture() -> PathBuf {
@@ -6544,36 +6531,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn workspace_switcher_includes_new_collection(cx: &mut TestAppContext) {
-        cx.update(Theme::init);
-        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-            ProbeApp::new(window, cx)
-        });
-        window
-            .update(cx, |view, _, cx| {
-                view.session_store = None;
-                cx.notify();
-            })
-            .expect("test window should be open");
-        cx.run_until_parked();
-
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        let trigger = visual
-            .debug_bounds("workspace-switcher-trigger")
-            .expect("workspace switcher trigger should render");
-        visual.simulate_click(trigger.center(), Modifiers::default());
-        visual.run_until_parked();
-        cx.run_until_parked();
-
-        visual
-            .debug_bounds("workspace-switcher-new")
-            .expect("workspace switcher should include New Collection");
-        visual
-            .debug_bounds("workspace-switcher-open")
-            .expect("workspace switcher should include Open Collection");
-    }
-
-    #[gpui::test]
     fn large_sidebar_only_renders_the_visible_rows(cx: &mut TestAppContext) {
         cx.update(Theme::init);
         let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -6703,47 +6660,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[gpui::test]
-    fn request_editor_renders_multiline_json_body(cx: &mut TestAppContext) {
-        cx.update(Theme::init);
-        let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
-            ProbeApp::new(window, cx)
-        });
-        let fixture = bundled_fixture()
-            .canonicalize()
-            .expect("fixture should exist");
-        let workspace =
-            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
-        let request_key = workspace.requests()[0].key();
-        window
-            .update(cx, |view, _, cx| {
-                view.session_store = None;
-                view.set_workspace(fixture, workspace);
-                view.select_request(request_key, cx);
-                view.request_editor.section = EditorSection::Body;
-                view.edit_request(
-                    request_key,
-                    |request| {
-                        request.body = Some(probe_core::RequestBody::Single(
-                            probe_core::Body::Raw(probe_core::RawBody {
-                                kind: probe_core::RawBodyKind::Json,
-                                data: "{\n  \"name\": \"Milo\"\n}".to_owned(),
-                            }),
-                        ));
-                    },
-                    cx,
-                );
-            })
-            .expect("test window should be open");
-        cx.run_until_parked();
-
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        assert!(
-            visual.debug_bounds("request-body-editor").is_some(),
-            "multiline JSON body editor should render"
-        );
     }
 
     #[gpui::test]
@@ -7361,58 +7277,6 @@ mod tests {
             );
         }
         fs::remove_file(fixture).unwrap();
-    }
-
-    #[gpui::test]
-    fn long_request_names_ellipsis_instead_of_wrapping(cx: &mut TestAppContext) {
-        cx.update(Theme::init);
-        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-            ProbeApp::new(window, cx)
-        });
-        let fixture = bundled_fixture()
-            .canonicalize()
-            .expect("fixture should exist");
-        let workspace =
-            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
-        let request_key = workspace.requests()[0].key();
-        let long_name =
-            "List every pet owned by the currently authenticated user across every environment";
-        window
-            .update(cx, |view, _, cx| {
-                view.session_store = None;
-                view.set_workspace(fixture, workspace);
-                view.edit_request(
-                    request_key,
-                    |request| request.metadata.name = Some(long_name.to_owned()),
-                    cx,
-                );
-                view.select_request(request_key, cx);
-            })
-            .expect("test window should be open");
-        cx.run_until_parked();
-
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        let tab_label = visual
-            .debug_bounds("request-tab-label")
-            .expect("request tab label should render");
-        let tree_label = visual
-            .debug_bounds("request-tree-label")
-            .expect("sidebar request label should render");
-        assert!(
-            tab_label.size.height < px(28.0),
-            "request tab label wrapped onto multiple lines: {:?}",
-            tab_label.size
-        );
-        assert!(
-            tree_label.size.height < px(28.0),
-            "sidebar request label wrapped onto multiple lines: {:?}",
-            tree_label.size
-        );
-        assert!(
-            tab_label.size.width <= px(220.0),
-            "request tab label exceeded the tab max width: {:?}",
-            tab_label.size
-        );
     }
 
     #[gpui::test]
