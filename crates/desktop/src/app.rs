@@ -5269,12 +5269,11 @@ impl ProbeApp {
                 .flex()
                 .justify_end()
                 .gap(px(theme.metrics.spacing_2))
-                .child(tree_toolbar_button(
+                .child(components::secondary_button(
                     theme,
                     "structure-cancel",
                     "Cancel",
-                    true,
-                    move |window, cx| {
+                    move |_, window, cx| {
                         let _ = cancel_view.update(cx, |view, cx| {
                             view.structure_dialog = None;
                             view.focus_handle.focus(window, cx);
@@ -5719,39 +5718,6 @@ fn placeholder_message(theme: Theme, message: &str) -> gpui::AnyElement {
         .text_color(theme.colors.text.muted)
         .child(message.to_owned())
         .into_any_element()
-}
-
-fn tree_toolbar_button(
-    theme: Theme,
-    id: &'static str,
-    label: &'static str,
-    enabled: bool,
-    on_click: impl Fn(&mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    Button::new(id)
-        .disabled(!enabled)
-        .h(px(theme.metrics.control_height - 4.0))
-        .px(px(theme.metrics.spacing_2))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(theme.metrics.radius_small))
-        .border_1()
-        .border_color(theme.colors.borders.standard)
-        .bg(theme.colors.surfaces.raised)
-        .text_size(px(theme.typography.caption_size))
-        .hover(move |button| button.bg(theme.colors.selection.inactive_background))
-        .focus(move |button| button.border_color(theme.colors.borders.focused))
-        .styles(move |styles| {
-            styles.disabled(move |button| {
-                button
-                    .bg(theme.colors.actions.disabled)
-                    .text_color(theme.colors.actions.disabled_foreground)
-                    .border_color(theme.colors.actions.disabled)
-            })
-        })
-        .on_click(move |_, window, cx| on_click(window, cx))
-        .child(label)
 }
 
 fn request_method_options(
