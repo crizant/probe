@@ -1148,18 +1148,22 @@ fn editor_button_base(
             theme.colors.text.secondary
         })
         .bg(if selected {
-            theme.colors.selection.active_background
+            theme.colors.selection.active_background.into()
         } else {
-            theme.colors.surfaces.window
+            transparent_black()
         })
         .border_1()
-        .border_color(theme.colors.borders.standard)
+        .border_color(if selected {
+            theme.colors.selection.active_background.into()
+        } else {
+            transparent_black()
+        })
         .cursor_pointer()
         .hover(move |button| {
             if selected {
                 button
             } else {
-                button.bg(theme.colors.surfaces.raised)
+                button.bg(theme.colors.selection.inactive_background)
             }
         })
         .focus(move |button| button.border_color(theme.colors.borders.focused))
@@ -1245,9 +1249,9 @@ pub(crate) fn remove_row_button(
         .items_center()
         .justify_center()
         .rounded(px(theme.metrics.radius_small))
-        .bg(theme.colors.surfaces.raised)
+        .bg(transparent_black())
         .border_1()
-        .border_color(theme.colors.borders.standard)
+        .border_color(transparent_black())
         .cursor_pointer()
         .hover(move |button| button.bg(theme.colors.selection.inactive_background))
         .focus(move |button| button.border_color(theme.colors.borders.focused))
@@ -1270,9 +1274,9 @@ pub(crate) fn browse_file_button(
         .items_center()
         .justify_center()
         .rounded(px(theme.metrics.radius_small))
-        .bg(theme.colors.surfaces.raised)
+        .bg(transparent_black())
         .border_1()
-        .border_color(theme.colors.borders.standard)
+        .border_color(transparent_black())
         .cursor_pointer()
         .hover(move |button| button.bg(theme.colors.selection.inactive_background))
         .focus(move |button| button.border_color(theme.colors.borders.focused))

@@ -201,7 +201,7 @@ impl Theme {
     pub fn editor_selection(self) -> Hsla {
         match self.appearance {
             ThemeAppearance::Light => hsla(0.092, 0.767, 0.500, 0.25),
-            ThemeAppearance::Dark => hsla(0.603, 0.919, 0.759, 0.30),
+            ThemeAppearance::Dark => hsla(0.098, 0.858, 0.580, 0.24),
         }
     }
 
@@ -326,11 +326,11 @@ impl Theme {
 fn porcelain_honey() -> Colors {
     Colors {
         surfaces: SurfaceColors {
-            window: rgba(0xf5f4f1ff),  // porcelain cream
-            sidebar: rgba(0xedece7e6), // quiet shell
-            editor: rgba(0xfbfaf7f2),  // paper
-            raised: rgba(0xe3dfd8cc),  // porcelain shadow
-            overlay: rgba(0xfffefbe6), // porcelain glaze
+            window: rgba(0xf3f0eaff),  // sunlit alabaster
+            sidebar: rgba(0xebedeacc), // cool stone navigation
+            editor: rgba(0xf0e7d7e8),  // warm ivory paper
+            raised: rgba(0xfffcf4b8),  // bright raised control
+            overlay: rgba(0xfffcf6de), // ivory overlay
             scrim: rgba(0x00000059),   // black @ ~35%
         },
         text: TextColors {
@@ -341,34 +341,34 @@ fn porcelain_honey() -> Colors {
             inverse: rgba(0xffffffff),     // on-accent
         },
         borders: BorderColors {
-            subtle: rgba(0xd7d3ccbf),   // porcelain edge
-            standard: rgba(0xc5c0b8d9), // light warm divider
-            strong: rgba(0xa49d93e6),   // grounded divider
-            focused: rgba(0xe3871eff),  // golden orange
+            subtle: rgba(0xd6d2c9a0),   // alabaster edge
+            standard: rgba(0xc3beb4b8), // light stone divider
+            strong: rgba(0xa39a8fd0),   // grounded divider
+            focused: rgba(0xc8751880),  // quiet orange focus
         },
         actions: ActionColors {
             accent: rgba(0xc87518ff),              // filled golden orange
             hover: rgba(0xb86d18ff),               // burnished orange
             pressed: rgba(0x965714ff),             // deep golden orange
-            disabled: rgba(0xd7d3ccbf),            // porcelain edge
+            disabled: rgba(0xd6d2c9a0),            // alabaster edge
             disabled_foreground: rgba(0x989187ff), // stone
         },
         selection: SelectionColors {
             active_background: rgba(0xc87518ff),   // filled golden orange
             active_foreground: rgba(0xffffffff),   // on-accent
-            inactive_background: rgba(0xe0ddd6bf), // porcelain edge
+            inactive_background: rgba(0xe7e1d7a6), // parchment wash
             inactive_foreground: rgba(0x2f2f30ff), // icon graphite
         },
         status: StatusColors {
             success: rgba(0x2d8a5bff),       // jade
-            warning: rgba(0xe3871eff),       // golden orange
+            warning: rgba(0xd9821cff),       // burnt amber
             error: rgba(0xc43d3dff),         // red
             informational: rgba(0x227c8fff), // blue teal
         },
         methods: MethodColors {
             get: rgba(0x1f8a70ff),    // teal
-            post: rgba(0xe3871eff),   // golden orange
-            put: rgba(0xb88725ff),    // light brown
+            post: rgba(0xd9821cff),   // burnt amber
+            put: rgba(0xaa7d24ff),    // light brown
             patch: rgba(0x7c5bbdff),  // violet
             delete: rgba(0xc43d3dff), // red
             other: rgba(0x7a7469ff),  // warm gray
@@ -376,15 +376,15 @@ fn porcelain_honey() -> Colors {
         responses: ResponseColors {
             informational: rgba(0x227c8fff), // blue teal
             success: rgba(0x2d8a5bff),       // jade
-            redirect: rgba(0xb88725ff),      // light brown
-            client_error: rgba(0xe3871eff),  // golden orange
+            redirect: rgba(0xaa7d24ff),      // light brown
+            client_error: rgba(0xd9821cff),  // burnt amber
             server_error: rgba(0xc43d3dff),  // red
         },
         syntax: SyntaxColors {
             plain: rgba(0x2f2f30ff),       // icon graphite
             property: rgba(0x227c8fff),    // blue teal
             string: rgba(0x2d8a5bff),      // jade
-            number: rgba(0xe3871eff),      // golden orange
+            number: rgba(0xd9821cff),      // burnt amber
             boolean: rgba(0x7c5bbdff),     // violet
             null: rgba(0x7a7469ff),        // warm gray
             punctuation: rgba(0x989187ff), // stone
@@ -396,49 +396,49 @@ fn porcelain_honey() -> Colors {
 fn graphite_honey() -> Colors {
     Colors {
         surfaces: SurfaceColors {
-            window: rgba(0x18191bff),  // graphite
-            sidebar: rgba(0x111214e6), // deep graphite
-            editor: rgba(0x1f2022f2),  // soft graphite
-            raised: rgba(0x282a2ecc),  // lifted graphite
-            overlay: rgba(0x2f3035e6), // graphite overlay
+            window: rgba(0x151618ff),  // deep carbon
+            sidebar: rgba(0x101113cc), // charcoal navigation
+            editor: rgba(0x1d1d1ee8),  // graphite editor
+            raised: rgba(0x27282db8),  // lifted graphite
+            overlay: rgba(0x2b2c31de), // dark metal overlay
             scrim: rgba(0x00000070),   // black @ ~44%
         },
         text: TextColors {
-            primary: rgba(0xece9e3ff),     // porcelain text
-            secondary: rgba(0xd0cbc3ff),   // soft text
-            muted: rgba(0xada8a1ff),       // muted porcelain
-            placeholder: rgba(0x85817bff), // stone
-            inverse: rgba(0x18191bff),     // on-accent
+            primary: rgba(0xe9e6e0ff),     // soft off-white
+            secondary: rgba(0xcac5bdff),   // muted text
+            muted: rgba(0xa7a19aff),       // graphite text
+            placeholder: rgba(0x807c76ff), // stone
+            inverse: rgba(0x151618ff),     // on-accent
         },
         borders: BorderColors {
-            subtle: rgba(0x35373cbf),   // graphite edge
-            standard: rgba(0x47494fd9), // graphite divider
-            strong: rgba(0x62646be6),   // grounded divider
-            focused: rgba(0xf0a338ff),  // golden orange
+            subtle: rgba(0x33353aa6),   // graphite edge
+            standard: rgba(0x45474dc2), // graphite divider
+            strong: rgba(0x606268d9),   // grounded divider
+            focused: rgba(0xd98e2699),  // quiet orange focus
         },
         actions: ActionColors {
             accent: rgba(0xd98e26ff),              // filled golden orange
             hover: rgba(0xf0a338ff),               // bright golden orange
             pressed: rgba(0xb97620ff),             // deep golden orange
-            disabled: rgba(0x35373cbf),            // graphite edge
-            disabled_foreground: rgba(0x85817bff), // stone
+            disabled: rgba(0x33353aa6),            // graphite edge
+            disabled_foreground: rgba(0x807c76ff), // stone
         },
         selection: SelectionColors {
             active_background: rgba(0xd98e26ff),   // filled golden orange
-            active_foreground: rgba(0x18191bff),   // graphite
-            inactive_background: rgba(0x35373cbf), // graphite edge
-            inactive_foreground: rgba(0xece9e3ff), // porcelain text
+            active_foreground: rgba(0x151618ff),   // carbon
+            inactive_background: rgba(0x33353aa6), // graphite edge
+            inactive_foreground: rgba(0xe9e6e0ff), // soft off-white
         },
         status: StatusColors {
             success: rgba(0x79d19aff),       // jade
-            warning: rgba(0xf0a338ff),       // golden orange
+            warning: rgba(0xe39a32ff),       // burnt amber
             error: rgba(0xff7f7fff),         // red
             informational: rgba(0x75c6d4ff), // blue teal
         },
         methods: MethodColors {
             get: rgba(0x72d6c2ff),    // teal
-            post: rgba(0xf0a338ff),   // golden orange
-            put: rgba(0xd8b15cff),    // light brown
+            post: rgba(0xe39a32ff),   // burnt amber
+            put: rgba(0xcaa95fff),    // light brown
             patch: rgba(0xb89af7ff),  // violet
             delete: rgba(0xff7f7fff), // red
             other: rgba(0xa6a39eff),  // warm gray
@@ -446,15 +446,15 @@ fn graphite_honey() -> Colors {
         responses: ResponseColors {
             informational: rgba(0x75c6d4ff), // blue teal
             success: rgba(0x79d19aff),       // jade
-            redirect: rgba(0xd8b15cff),      // light brown
-            client_error: rgba(0xf0a338ff),  // golden orange
+            redirect: rgba(0xcaa95fff),      // light brown
+            client_error: rgba(0xe39a32ff),  // burnt amber
             server_error: rgba(0xff7f7fff),  // red
         },
         syntax: SyntaxColors {
-            plain: rgba(0xece9e3ff),       // porcelain text
+            plain: rgba(0xe9e6e0ff),       // soft off-white
             property: rgba(0x75c6d4ff),    // blue teal
             string: rgba(0x79d19aff),      // jade
-            number: rgba(0xf0a338ff),      // golden orange
+            number: rgba(0xe39a32ff),      // burnt amber
             boolean: rgba(0xb89af7ff),     // violet
             null: rgba(0xa6a39eff),        // warm gray
             punctuation: rgba(0x85817bff), // stone
