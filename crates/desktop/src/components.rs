@@ -2572,11 +2572,9 @@ pub(crate) fn menu_button(
                 .font_family(theme.typography.interface_family)
                 .text_size(px(theme.typography.body_size))
                 .text_color(theme.colors.text.primary)
-                .border_1()
-                .border_color(theme.colors.surfaces.overlay)
                 .cursor_pointer()
                 .hover(move |button| button.bg(theme.colors.surfaces.sidebar))
-                .focus(move |button| button.border_color(theme.colors.borders.focused))
+                .focus(move |button| button.border_1().border_color(theme.colors.borders.focused))
                 .on_click(move |event, window, cx| {
                     if !matches!(event, ClickEvent::Mouse(_)) {
                         keyboard_activate(window, cx);
