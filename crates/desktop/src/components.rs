@@ -2546,6 +2546,41 @@ pub(crate) fn menu_button(
     shortcut: Option<&'static str>,
     on_activate: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    menu_button_with_padding(
+        theme,
+        id,
+        label,
+        shortcut,
+        theme.metrics.spacing_3,
+        on_activate,
+    )
+}
+
+pub(crate) fn compact_menu_button(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<String>,
+    shortcut: Option<&'static str>,
+    on_activate: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    menu_button_with_padding(
+        theme,
+        id,
+        label,
+        shortcut,
+        theme.metrics.spacing_2,
+        on_activate,
+    )
+}
+
+fn menu_button_with_padding(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<String>,
+    shortcut: Option<&'static str>,
+    padding_x: f32,
+    on_activate: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let label = label.into();
     let on_activate = Rc::new(on_activate);
     let pointer_activate = on_activate.clone();
@@ -2565,7 +2600,7 @@ pub(crate) fn menu_button(
             Button::new(id)
                 .w_full()
                 .h(px(theme.metrics.control_height + 4.0))
-                .px(px(theme.metrics.spacing_3))
+                .px(px(padding_x))
                 .flex()
                 .items_center()
                 .justify_start()

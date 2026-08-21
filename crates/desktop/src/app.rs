@@ -95,6 +95,9 @@ gpui::actions!(
 #[derive(Clone, Debug)]
 enum PendingClose {
     Tab(RequestKey),
+    OtherTabs {
+        keep: RequestKey,
+    },
     Workspace,
     Window,
     Quit,
@@ -207,6 +210,8 @@ pub(crate) struct ProbeApp {
     structure_add_menu_open: bool,
     tree_context_menu: Option<WorkspaceItemRef>,
     tree_context_menu_position: Option<Point<Pixels>>,
+    tab_context_menu: Option<RequestKey>,
+    tab_context_menu_position: Option<Point<Pixels>>,
     visible_tree_rows: Vec<TreeRow>,
     selected_tree_item: Option<WorkspaceItemRef>,
     tree_drag_source: Option<WorkspaceItemRef>,
@@ -287,6 +292,8 @@ impl ProbeApp {
             structure_add_menu_open: false,
             tree_context_menu: None,
             tree_context_menu_position: None,
+            tab_context_menu: None,
+            tab_context_menu_position: None,
             visible_tree_rows: Vec::new(),
             selected_tree_item: None,
             tree_drag_source: None,
@@ -689,12 +696,10 @@ impl ProbeApp {
         if let Some(pending) = self.pending_close.take() {
             let dirty = match &pending {
                 PendingClose::Tab(key) => self
-                    .loaded_workspace
-                    .as_ref()
-                    .and_then(|loaded| loaded.workspace().request(*key))
-                    .filter(|request| self.persistence.is_dirty(*key, request))
-                    .map(|_| vec![*key])
+                    .request_is_dirty(*key)
+                    .then_some(vec![*key])
                     .unwrap_or_default(),
+                PendingClose::OtherTabs { keep } => self.other_dirty_tab_keys(*keep),
                 PendingClose::Workspace
                 | PendingClose::Window
                 | PendingClose::Quit
@@ -971,6 +976,8 @@ impl ProbeApp {
         self.structure_add_menu_open = false;
         self.tree_context_menu = None;
         self.tree_context_menu_position = None;
+        self.tab_context_menu = None;
+        self.tab_context_menu_position = None;
         self.clear_tree_drag();
         self.request_editor.clear();
     }
@@ -1717,6 +1724,22 @@ impl ProbeApp {
         cx.notify();
     }
 
+    fn close_other_tabs_now(&mut self, keep: RequestKey, cx: &mut Context<Self>) {
+        let open_tabs = self.shell.tabs().to_vec();
+        if !open_tabs.contains(&keep) {
+            return;
+        }
+        for key in open_tabs {
+            if key != keep {
+                self.shell.close_tab(key);
+            }
+        }
+        self.shell.open_request(keep);
+        self.reveal_active_tab();
+        self.persist_session(cx);
+        cx.notify();
+    }
+
     fn dirty_keys(&self) -> Vec<RequestKey> {
         let Some(loaded) = &self.loaded_workspace else {
             return Vec::new();
@@ -1730,16 +1753,47 @@ impl ProbeApp {
             }))
     }
 
-    fn request_close_tab(&mut self, key: RequestKey, window: &mut Window, cx: &mut Context<Self>) {
-        let dirty = self
-            .loaded_workspace
+    fn request_is_dirty(&self, key: RequestKey) -> bool {
+        self.loaded_workspace
             .as_ref()
             .and_then(|loaded| loaded.workspace().request(key))
-            .is_some_and(|request| self.persistence.is_dirty(key, request));
-        if dirty {
+            .is_some_and(|request| self.persistence.is_dirty(key, request))
+    }
+
+    fn request_close_tab(&mut self, key: RequestKey, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_tab_context_menu(cx);
+        if self.request_is_dirty(key) {
             self.prompt_unsaved(vec![key], PendingClose::Tab(key), window, cx);
         } else {
             self.close_tab_now(key, cx);
+        }
+    }
+
+    fn other_dirty_tab_keys(&self, keep: RequestKey) -> Vec<RequestKey> {
+        self.shell
+            .tabs()
+            .iter()
+            .copied()
+            .filter(|key| *key != keep)
+            .filter(|key| self.request_is_dirty(*key))
+            .collect()
+    }
+
+    fn request_close_other_tabs(
+        &mut self,
+        keep: RequestKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_tab_context_menu(cx);
+        if !self.shell.tabs().contains(&keep) {
+            return;
+        }
+        let dirty = self.other_dirty_tab_keys(keep);
+        if dirty.is_empty() {
+            self.close_other_tabs_now(keep, cx);
+        } else {
+            self.prompt_unsaved(dirty, PendingClose::OtherTabs { keep }, window, cx);
         }
     }
 
@@ -1908,6 +1962,7 @@ impl ProbeApp {
         self.pending_close = None;
         match pending {
             PendingClose::Tab(key) => self.close_tab_now(key, cx),
+            PendingClose::OtherTabs { keep } => self.close_other_tabs_now(keep, cx),
             PendingClose::Workspace => self.close_workspace_now(cx),
             PendingClose::Window => window.remove_window(),
             PendingClose::Quit => cx.quit(),
@@ -2315,6 +2370,96 @@ impl ProbeApp {
         cx.notify();
     }
 
+    fn open_tab_context_menu(
+        &mut self,
+        key: RequestKey,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.shell.tabs().contains(&key) {
+            return;
+        }
+        self.tab_context_menu = Some(key);
+        self.tab_context_menu_position = Some(position);
+        cx.notify();
+    }
+
+    fn close_tab_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.tab_context_menu.is_none() {
+            return;
+        }
+        self.tab_context_menu = None;
+        self.tab_context_menu_position = None;
+        cx.notify();
+    }
+
+    fn render_tab_context_menu(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(key) = self.tab_context_menu else {
+            return div().into_any_element();
+        };
+        let Some(position) = self.tab_context_menu_position else {
+            return div().into_any_element();
+        };
+        if !self.shell.tabs().contains(&key) {
+            return div().into_any_element();
+        }
+
+        let close_view = cx.weak_entity();
+        let close_other_view = cx.weak_entity();
+        let dismiss_view = cx.weak_entity();
+        let menu = div()
+            .id("tab-context-menu")
+            .w(px(220.0))
+            .p(px(theme.metrics.spacing_1))
+            .flex()
+            .flex_col()
+            .gap(px(theme.metrics.spacing_1))
+            .rounded(px(theme.metrics.radius_medium))
+            .bg(theme.colors.surfaces.overlay)
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down_out({
+                let dismiss_view = dismiss_view.clone();
+                move |_, _, cx| {
+                    let _ = dismiss_view.update(cx, |view, cx| {
+                        view.close_tab_context_menu(cx);
+                    });
+                }
+            })
+            .child(components::compact_menu_button(
+                theme,
+                "tab-context-close",
+                "Close Tab",
+                Some(close_tab_shortcut_label()),
+                move |window, cx| {
+                    let _ = close_view.update(cx, |view, cx| {
+                        view.request_close_tab(key, window, cx);
+                    });
+                },
+            ))
+            .child(components::compact_menu_button(
+                theme,
+                "tab-context-close-other",
+                "Close Other Tabs",
+                None,
+                move |window, cx| {
+                    let _ = close_other_view.update(cx, |view, cx| {
+                        view.request_close_other_tabs(key, window, cx);
+                    });
+                },
+            ));
+        deferred(
+            Positioner::corner(Anchor::TopLeft, position)
+                .margin(px(8.0))
+                .child(menu),
+        )
+        .with_priority(POPUP_PRIORITY)
+        .into_any_element()
+    }
+
     fn render_tree_context_menu(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(item) = self.tree_context_menu else {
             return div().into_any_element();
@@ -2355,7 +2500,7 @@ impl ProbeApp {
                     });
                 }
             })
-            .child(components::menu_button(
+            .child(components::compact_menu_button(
                 theme,
                 rename_id,
                 "Rename",
@@ -2369,7 +2514,7 @@ impl ProbeApp {
                     });
                 },
             ))
-            .child(components::menu_button(
+            .child(components::compact_menu_button(
                 theme,
                 delete_id,
                 "Delete",
@@ -2703,7 +2848,7 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.overlay)
             .border_1()
             .border_color(theme.colors.borders.standard)
-            .child(components::menu_button(
+            .child(components::compact_menu_button(
                 theme,
                 "tree-new-request",
                 "Add Request",
@@ -2715,7 +2860,7 @@ impl ProbeApp {
                     });
                 },
             ))
-            .child(components::menu_button(
+            .child(components::compact_menu_button(
                 theme,
                 "tree-new-folder",
                 "Add Folder",
@@ -2955,6 +3100,7 @@ impl ProbeApp {
                 .unwrap_or("Untitled request");
             let select_view = cx.weak_entity();
             let close_view = cx.weak_entity();
+            let context_menu_view = cx.weak_entity();
             let middle_close_view = close_view.clone();
             let tab_key = *key;
             let tab_index = self
@@ -2989,13 +3135,18 @@ impl ProbeApp {
                         let _ = select_view.update(cx, |view, cx| view.select_request(tab_key, cx));
                     })
                     .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
-                    .on_aux_click(move |event, window, cx| {
-                        if !event.is_middle_click() {
-                            return;
-                        }
+                    .on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        let _ = middle_close_view
-                            .update(cx, |view, cx| view.request_close_tab(tab_key, window, cx));
+                        let _ = context_menu_view.update(cx, |view, cx| {
+                            view.open_tab_context_menu(tab_key, event.position, cx);
+                        });
+                    })
+                    .on_aux_click(move |event, window, cx| {
+                        if event.is_middle_click() {
+                            cx.stop_propagation();
+                            let _ = middle_close_view
+                                .update(cx, |view, cx| view.request_close_tab(tab_key, window, cx));
+                        }
                     })
                     .child(
                         components::truncated_label(label.to_owned())
@@ -5624,7 +5775,16 @@ impl Render for ProbeApp {
                     ),
             )
             .child(self.render_structure_dialog(theme, cx))
+            .child(self.render_tab_context_menu(theme, cx))
             .child(self.render_tree_context_menu(theme, cx))
+    }
+}
+
+fn close_tab_shortcut_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌘W"
+    } else {
+        "Ctrl+W"
     }
 }
 
@@ -7326,6 +7486,60 @@ mod tests {
             .expect("test window should remain open");
         assert_eq!(tabs, vec![first]);
         assert_eq!(active, Some(first));
+    }
+
+    #[gpui::test]
+    fn request_tab_context_menu_closes_other_tabs(cx: &mut TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let fixture = bundled_fixture()
+            .canonicalize()
+            .expect("fixture should exist");
+        let workspace =
+            probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+        let first = workspace.requests()[0].key();
+        let second = workspace.requests()[1].key();
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(fixture, workspace);
+                view.select_request(first, cx);
+                view.select_request(second, cx);
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let tab = visual
+            .debug_bounds("request-tab-label")
+            .expect("active request tab should render");
+        window
+            .update(cx, |view, _, cx| {
+                view.open_tab_context_menu(second, tab.center(), cx);
+            })
+            .expect("test window should remain open");
+        cx.run_until_parked();
+        let menu_target = window
+            .update(cx, |view, _, _| view.tab_context_menu)
+            .expect("test window should remain open");
+        assert_eq!(menu_target, Some(second));
+
+        window
+            .update(cx, |view, window, cx| {
+                view.request_close_other_tabs(second, window, cx);
+            })
+            .expect("test window should remain open");
+        cx.run_until_parked();
+
+        let (tabs, active) = window
+            .update(cx, |view, _, _| {
+                (view.shell.tabs().to_vec(), view.shell.active_tab())
+            })
+            .expect("test window should remain open");
+        assert_eq!(tabs, vec![second]);
+        assert_eq!(active, Some(second));
     }
 
     #[gpui::test]
