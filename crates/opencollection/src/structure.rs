@@ -1466,7 +1466,7 @@ fn parse_selector(selector: &str) -> Result<Vec<usize>, StructureError> {
         )));
     }
     let mut path = Vec::with_capacity(parts.len() / 2);
-    for pair in parts.chunks_exact(2) {
+    for pair in parts.as_chunks::<2>().0 {
         if pair[0] != "items" {
             return Err(StructureError::InvalidDestination(format!(
                 "invalid bundled selector: {selector}"
