@@ -2414,6 +2414,7 @@ impl ProbeApp {
                     .as_deref()
                     .unwrap_or("Untitled request");
                 let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
+                let method_label = tree_method_label(&method).to_owned();
                 let selected = self.selected_tree_item == Some(WorkspaceItemRef::Request(key));
                 let view = cx.weak_entity();
                 let context_menu_view = cx.weak_entity();
@@ -2456,21 +2457,28 @@ impl ProbeApp {
                     })
                     .child(
                         div()
-                            .w(px(48.0))
+                            .w(px(26.0))
+                            .h_full()
                             .flex_none()
+                            .flex()
+                            .items_center()
                             .truncate()
-                            .text_size(px(theme.typography.caption_size))
+                            .font_family(theme.typography.monospace_family)
+                            .text_size(px(tree_method_font_size(theme, &method_label)))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(if selected {
                                 theme.colors.selection.active_foreground
                             } else {
                                 theme.method_color(&method)
                             })
-                            .child(method.clone()),
+                            .child(method_label.clone()),
                     )
                     .child(
                         components::truncated_label(label.to_owned())
                             .flex_1()
+                            .h_full()
+                            .flex()
+                            .items_center()
                             .when(selected, |label| {
                                 label.debug_selector(|| "request-tree-label".into())
                             }),
@@ -2481,7 +2489,7 @@ impl ProbeApp {
                         kind: ItemKind::Request,
                         selector: loaded.request_selector(key).unwrap_or_default().to_owned(),
                         label: label.to_owned(),
-                        method: Some(method),
+                        method: Some(method_label),
                         depth,
                         selected,
                     },
@@ -2512,7 +2520,7 @@ impl ProbeApp {
                     .pr(px(theme.metrics.spacing_1))
                     .flex()
                     .items_center()
-                    .gap(px(theme.metrics.spacing_2))
+                    .gap(px(theme.metrics.spacing_1))
                     .overflow_hidden()
                     .rounded(px(theme.metrics.radius_small))
                     .when(selected, |row| {
@@ -5652,6 +5660,25 @@ fn tree_folder_indent(theme: Theme, depth: usize) -> f32 {
 
 fn tree_request_indent(theme: Theme, depth: usize) -> f32 {
     tree_level_indent(theme, depth)
+}
+
+fn tree_method_font_size(theme: Theme, method: &str) -> f32 {
+    if method.len() > 3 {
+        theme.typography.caption_size - 2.0
+    } else {
+        theme.typography.caption_size - 1.0
+    }
+}
+
+fn tree_method_label(method: &str) -> &str {
+    match method {
+        "DELETE" => "DEL",
+        "OPTION" | "OPTIONS" => "OPT",
+        "PATCH" => "PAT",
+        "CONNECT" => "CON",
+        method if method.len() <= 4 => method,
+        _ => "HTTP",
+    }
 }
 
 fn tree_hierarchy_guides(theme: Theme, depth: usize, selected: bool) -> gpui::Div {
