@@ -12,8 +12,8 @@ mod path_parameters;
 mod workspace;
 
 pub use environment::{
-    EnvironmentResolutionError, ResolvedEnvironment, create_environment, resolve_environment,
-    resolve_request, revert_created_environment, set_environment_variable,
+    EnvironmentResolutionError, ResolvedEnvironment, VariableStatus, create_environment,
+    resolve_environment, resolve_request, revert_created_environment, set_environment_variable,
     unset_environment_variable, validate_environments,
 };
 pub use path_parameters::{

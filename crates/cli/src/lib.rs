@@ -1464,14 +1464,16 @@ fn import_yaak(
         .unwrap_or(destination);
     let workspace = loaded.workspace();
     let warning_count = imported.diagnostics.len();
+    let environment = imported.default_environment.clone();
     Ok(CommandOutput {
         human: format!(
-            "Imported Yaak workspace\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nWarnings: {warning_count}\n",
+            "Imported Yaak workspace\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nDefault environment: {}\nWarnings: {warning_count}\n",
             imported.workspace.name,
             path.display(),
             workspace.request_count(),
             workspace.folder_count(),
             workspace.environments().len(),
+            environment.as_deref().unwrap_or("none"),
         ),
         json: json!({
             "imported": true,
@@ -1481,6 +1483,7 @@ fn import_yaak(
                 "id": imported.workspace.id,
                 "name": imported.workspace.name,
             },
+            "defaultEnvironment": environment,
             "path": path,
             "counts": {
                 "environments": workspace.environments().len(),

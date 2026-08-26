@@ -11,13 +11,13 @@ use gpui_base::{
 };
 
 use super::{
-    EditorInsets, ProbeEditor, VariableContext, VariableHighlightElement, body_text_highlights,
-    clipboard_has_pasteable_text, dropdown, editor_paint_style, input_text_scroll_offset,
-    menu_button, single_line, variable_highlight_runs, variable_ranges, variable_span_layout,
-    variable_tooltip_presentation,
+    EditorInsets, ProbeEditor, ReferenceKind, VariableContext, VariableHighlightElement,
+    VariablePalette, body_text_highlights, clipboard_has_pasteable_text, dropdown,
+    editor_paint_style, input_text_scroll_offset, menu_button, single_line,
+    variable_highlight_runs, variable_ranges, variable_span_layout, variable_tooltip_presentation,
 };
 use crate::theme::Theme;
-use probe_core::path_variable_ranges;
+use probe_core::{VariableStatus, path_variable_ranges};
 
 struct MenuTestView {
     open: bool,
@@ -526,10 +526,10 @@ fn variable_ranges_find_mustache_placeholders() {
     let value = "{{host}}/users/{{id}}";
     let ranges = variable_ranges(value);
     assert_eq!(ranges.len(), 2);
-    assert_eq!(&value[ranges[0].0.clone()], "{{host}}");
-    assert_eq!(ranges[0].1, "host");
-    assert_eq!(&value[ranges[1].0.clone()], "{{id}}");
-    assert_eq!(ranges[1].1, "id");
+    assert_eq!(&value[ranges[0].range.clone()], "{{host}}");
+    assert_eq!(ranges[0].name(value), "host");
+    assert_eq!(&value[ranges[1].range.clone()], "{{id}}");
+    assert_eq!(ranges[1].name(value), "id");
 }
 
 #[test]
@@ -537,8 +537,9 @@ fn variable_ranges_trim_names_and_find_placeholders_in_json() {
     let value = "{\n  \"tenant\": \"{{ tenant }}\"\n}";
     let ranges = variable_ranges(value);
     assert_eq!(ranges.len(), 1);
-    assert_eq!(&value[ranges[0].0.clone()], "{{ tenant }}");
-    assert_eq!(ranges[0].1, "tenant");
+    assert_eq!(&value[ranges[0].range.clone()], "{{ tenant }}");
+    // The lookup span skips the padding inside the delimiters.
+    assert_eq!(ranges[0].name(value), "tenant");
 }
 
 #[test]
@@ -552,16 +553,21 @@ fn path_variable_ranges_only_highlight_colon_placeholders_in_the_url_path() {
     assert_eq!(ranges[1].1, "post_id");
 }
 
-#[test]
-fn variable_tooltip_presentation_creates_missing_writable_variables() {
+/// A writable context holding `host` and a valueless `token` secret.
+fn test_variables() -> VariableContext {
     let mut values = BTreeMap::new();
     values.insert("host".to_owned(), "api.example".to_owned());
-    let variables = VariableContext {
+    VariableContext::resolved(
         values,
-        secrets: ["token".to_owned()].into_iter().collect(),
-        unavailable_message: "unavailable".to_owned(),
-        on_change: Some(std::rc::Rc::new(|_, _, _, _| {})),
-    };
+        ["token".to_owned()].into_iter().collect(),
+        "unavailable",
+        Some(std::rc::Rc::new(|_, _, _, _| {})),
+    )
+}
+
+#[test]
+fn variable_tooltip_presentation_creates_missing_writable_variables() {
+    let variables = test_variables();
     let existing = variable_tooltip_presentation("host", &variables);
     assert_eq!(existing.value, "api.example");
     assert!(existing.editable);
@@ -576,19 +582,59 @@ fn variable_tooltip_presentation_creates_missing_writable_variables() {
     let secret = variable_tooltip_presentation("token", &variables);
     assert_eq!(secret.value, "unavailable");
     assert!(!secret.editable);
-    assert!(secret.hint.is_none());
+    assert_eq!(secret.hint, Some("Secret has no value in this environment"));
 }
 
 #[test]
 fn variable_tooltip_presentation_keeps_unavailable_when_not_writable() {
-    let variables = VariableContext {
-        unavailable_message: "Select an environment".to_owned(),
-        ..VariableContext::default()
-    };
+    let variables = VariableContext::unavailable("Select an environment");
     let missing = variable_tooltip_presentation("created", &variables);
     assert_eq!(missing.value, "Select an environment");
     assert!(!missing.editable);
     assert!(missing.hint.is_none());
+}
+
+#[test]
+fn variable_context_classifies_environment_references() {
+    let variables = test_variables();
+    assert_eq!(variables.status("host"), VariableStatus::Resolved);
+    assert_eq!(
+        variables.status("token"),
+        VariableStatus::SecretWithoutValue
+    );
+    assert_eq!(variables.status("absent"), VariableStatus::Missing);
+
+    // With no environment selected nothing resolves.
+    let none_selected = VariableContext::unavailable("Select an environment");
+    assert_eq!(none_selected.status("host"), VariableStatus::Missing);
+}
+
+#[test]
+fn variable_context_classifies_path_references_against_path_values() {
+    // `host` resolves as an environment variable but must not resolve as a path
+    // parameter: the two namespaces are independent.
+    let variables = test_variables().with_path_values(std::rc::Rc::new(
+        ["userId".to_owned()].into_iter().collect(),
+    ));
+
+    assert_eq!(
+        variables.reference_status(ReferenceKind::Path, "userId"),
+        VariableStatus::Resolved
+    );
+    assert_eq!(
+        variables.reference_status(ReferenceKind::Path, "host"),
+        VariableStatus::Missing
+    );
+    assert_eq!(
+        variables.reference_status(ReferenceKind::Environment, "userId"),
+        VariableStatus::Missing
+    );
+
+    // An input with no path values known treats every path reference as unset.
+    assert_eq!(
+        test_variables().reference_status(ReferenceKind::Path, "userId"),
+        VariableStatus::Missing
+    );
 }
 
 #[gpui::test]
@@ -643,35 +689,83 @@ fn variable_span_layout_keeps_duplicate_names_and_follows_scroll(cx: &mut TestAp
         .expect("span layout test window should remain open");
 }
 
+/// Distinguishable stand-ins so tests assert which role was chosen rather than
+/// a palette value, which `docs/DESIGN.md` excludes from automated tests.
+const RESOLVED: gpui::Hsla = gpui::Hsla {
+    h: 0.33,
+    s: 0.6,
+    l: 0.5,
+    a: 1.0,
+};
+const UNRESOLVED: gpui::Hsla = gpui::Hsla {
+    h: 0.0,
+    s: 0.8,
+    l: 0.5,
+    a: 1.0,
+};
+
+/// Built directly rather than from a theme so the assertions below name a role
+/// instead of a palette value.
+fn test_palette() -> VariablePalette {
+    VariablePalette {
+        resolved: RESOLVED,
+        unresolved: UNRESOLVED,
+    }
+}
+
+fn base_run(value: &str, color: gpui::Hsla) -> gpui::TextRun {
+    gpui::TextRun {
+        len: value.len(),
+        font: gpui::Font::default(),
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    }
+}
+
 #[test]
 fn body_text_highlights_overlay_mustache_variables() {
     let theme = Theme::light();
     let value = "{\"host\":\"{{host}}\"}";
     let ranges = variable_ranges(value);
-    let highlights = body_text_highlights(theme, &ranges);
+    let highlights = body_text_highlights(theme, value, &ranges, &test_variables());
     assert_eq!(highlights.len(), 1);
     assert_eq!(&value[highlights[0].range.clone()], "{{host}}");
 }
 
 #[test]
+fn body_text_highlights_mark_unresolved_variables() {
+    let theme = Theme::light();
+    let palette = VariablePalette::new(theme);
+    let value = "{\"host\":\"{{host}}\",\"other\":\"{{absent}}\"}";
+    let ranges = variable_ranges(value);
+    let highlights = body_text_highlights(theme, value, &ranges, &test_variables());
+
+    assert_eq!(highlights.len(), 2);
+    assert_eq!(
+        highlights[0].style.color,
+        Some(palette.color(VariableStatus::Resolved))
+    );
+    assert!(highlights[0].style.underline.is_none());
+    assert_eq!(
+        highlights[1].style.color,
+        Some(palette.color(VariableStatus::Missing))
+    );
+    // Unresolved spans must also be marked without relying on colour.
+    assert!(highlights[1].style.underline.is_some());
+}
+
+#[test]
 fn variable_highlight_runs_color_only_mustache_spans() {
     let value = "{{host}}/users";
-    let ranges = variable_ranges(value)
-        .into_iter()
-        .map(|(range, _)| range)
-        .collect::<Vec<_>>();
-    let highlight = hsla(0.33, 0.6, 0.5, 1.0);
-    let base = gpui::TextRun {
-        len: value.len(),
-        font: gpui::Font::default(),
-        color: transparent_black(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let runs = variable_highlight_runs(value, &ranges, &base, highlight);
+    let ranges = variable_ranges(value);
+    let base = base_run(value, transparent_black());
+
+    let runs = variable_highlight_runs(value, &ranges, &base, test_palette(), &test_variables());
+
     assert_eq!(runs.len(), 2);
-    assert_eq!(runs[0].color, highlight);
+    assert_eq!(runs[0].color, RESOLVED);
     assert_eq!(runs[0].len, "{{host}}".len());
     assert_eq!(runs[1].color, transparent_black());
     assert_eq!(runs[1].len, "/users".len());
@@ -680,27 +774,80 @@ fn variable_highlight_runs_color_only_mustache_spans() {
 #[test]
 fn variable_highlight_runs_paint_non_variable_text_with_the_base_color() {
     let value = "https://{{host}}/users";
-    let ranges = variable_ranges(value)
-        .into_iter()
-        .map(|(range, _)| range)
-        .collect::<Vec<_>>();
+    let ranges = variable_ranges(value);
     let base_color = hsla(0.0, 0.0, 0.25, 1.0);
-    let highlight = hsla(0.33, 0.6, 0.5, 1.0);
-    let base = gpui::TextRun {
-        len: value.len(),
-        font: gpui::Font::default(),
-        color: base_color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
+    let base = base_run(value, base_color);
 
-    let runs = variable_highlight_runs(value, &ranges, &base, highlight);
+    let runs = variable_highlight_runs(value, &ranges, &base, test_palette(), &test_variables());
 
     assert_eq!(runs.len(), 3);
     assert_eq!(runs[0].color, base_color);
-    assert_eq!(runs[1].color, highlight);
+    assert_eq!(runs[1].color, RESOLVED);
     assert_eq!(runs[2].color, base_color);
+}
+
+#[test]
+fn variable_highlight_runs_mark_unresolved_variables() {
+    // `host` resolves, `absent` is undefined, and `token` is a secret with no
+    // value — the last two both read as unresolved.
+    let value = "{{host}}/{{absent}}/{{token}}";
+    let ranges = variable_ranges(value);
+    let base = base_run(value, transparent_black());
+
+    let runs = variable_highlight_runs(value, &ranges, &base, test_palette(), &test_variables());
+
+    let colored = runs
+        .iter()
+        .filter(|run| run.color != transparent_black())
+        .collect::<Vec<_>>();
+    assert_eq!(colored.len(), 3);
+    assert_eq!(colored[0].color, RESOLVED);
+    assert!(colored[0].underline.is_none());
+    assert_eq!(colored[1].color, UNRESOLVED);
+    assert!(colored[1].underline.is_some());
+    assert_eq!(colored[2].color, UNRESOLVED);
+    assert!(colored[2].underline.is_some());
+}
+
+#[test]
+fn variable_highlight_runs_classify_path_placeholders_separately() {
+    // `:userId` has a value, `:missing` does not, and neither consults the
+    // environment even though `host` is defined there.
+    let value = "https://{{host}}/users/:userId/posts/:missing";
+    let ranges = super::input_variable_ranges(value, true);
+    let variables = test_variables().with_path_values(std::rc::Rc::new(
+        ["userId".to_owned()].into_iter().collect(),
+    ));
+    let base = base_run(value, transparent_black());
+
+    let runs = variable_highlight_runs(value, &ranges, &base, test_palette(), &variables);
+
+    let colored = runs
+        .iter()
+        .filter(|run| run.color != transparent_black())
+        .collect::<Vec<_>>();
+    assert_eq!(colored.len(), 3);
+    assert_eq!(colored[0].color, RESOLVED, "{{{{host}}}} is defined");
+    assert_eq!(colored[1].color, RESOLVED, ":userId has a value");
+    assert_eq!(colored[2].color, UNRESOLVED, ":missing has no value");
+}
+
+#[test]
+fn input_variable_ranges_tag_each_placeholder_with_its_source() {
+    let value = "https://{{host}}/users/:userId";
+    let ranges = super::input_variable_ranges(value, true);
+
+    assert_eq!(ranges.len(), 2);
+    assert_eq!(ranges[0].kind, ReferenceKind::Environment);
+    assert_eq!(ranges[0].name(value), "host");
+    assert_eq!(ranges[1].kind, ReferenceKind::Path);
+    assert_eq!(ranges[1].name(value), "userId");
+    assert_eq!(&value[ranges[1].range.clone()], ":userId");
+
+    // Path placeholders are ignored where they are not meaningful.
+    let without_paths = super::input_variable_ranges(value, false);
+    assert_eq!(without_paths.len(), 1);
+    assert_eq!(without_paths[0].kind, ReferenceKind::Environment);
 }
 
 #[test]
@@ -874,8 +1021,9 @@ fn variable_highlight_scrolls_with_caret_at_end_of_long_url(cx: &mut TestAppCont
         VariableHighlightElement {
             state: input.clone(),
             base_color: transparent_black(),
-            highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+            palette: test_palette(),
             highlight_path_variables: false,
+            variables: test_variables(),
         }
     });
 
@@ -918,8 +1066,9 @@ fn variable_highlight_stays_at_origin_when_caret_is_at_start(cx: &mut TestAppCon
         |_, _| VariableHighlightElement {
             state: input,
             base_color: transparent_black(),
-            highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+            palette: test_palette(),
             highlight_path_variables: false,
+            variables: test_variables(),
         },
     );
 
@@ -951,8 +1100,9 @@ fn variable_highlight_shapes_multiline_value_without_panicking(cx: &mut TestAppC
         |_, _| VariableHighlightElement {
             state: input,
             base_color: transparent_black(),
-            highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+            palette: test_palette(),
             highlight_path_variables: false,
+            variables: test_variables(),
         },
     );
 }

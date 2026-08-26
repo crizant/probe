@@ -4,8 +4,8 @@ use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, Environment,
     EnvironmentResolutionError, EnvironmentVariable, FormField, Header, HttpRequest, MultipartPart,
     MultipartPartKind, MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody,
-    SecretVariable, Variable, VariableValue, VariableValueSet, VariableValueVariant,
-    resolve_environment, resolve_request,
+    SecretVariable, Variable, VariableStatus, VariableValue, VariableValueSet,
+    VariableValueVariant, resolve_environment, resolve_request,
 };
 
 fn variable(name: &str, value: &str) -> EnvironmentVariable {
@@ -194,6 +194,66 @@ fn reports_missing_disabled_and_secret_variables() {
         resolved.interpolate("{{token}}").unwrap_err(),
         EnvironmentResolutionError::SecretVariableUnavailable("token".to_owned())
     );
+}
+
+#[test]
+fn variable_status_matches_interpolation_outcome() {
+    let disabled = EnvironmentVariable::Plain(Variable {
+        name: Some("disabled".to_owned()),
+        value: Some(VariableValueSet::Single(VariableValue::String(
+            "hidden".to_owned(),
+        ))),
+        disabled: true,
+    });
+    let secret = EnvironmentVariable::Secret(SecretVariable {
+        name: Some("token".to_owned()),
+        value_type: None,
+        disabled: false,
+    });
+    let environments = [
+        environment("base", None, vec![variable("host", "api.example.com")]),
+        environment(
+            "development",
+            Some("base"),
+            vec![
+                variable("baseUrl", "https://{{host}}"),
+                variable("empty", ""),
+                disabled,
+                secret,
+            ],
+        ),
+    ];
+    let resolved = resolve_environment(&environments, "development").unwrap();
+
+    // Inherited, locally defined, and explicitly empty values all resolve.
+    assert_eq!(resolved.variable_status("host"), VariableStatus::Resolved);
+    assert_eq!(
+        resolved.variable_status("baseUrl"),
+        VariableStatus::Resolved
+    );
+    assert_eq!(resolved.variable_status("empty"), VariableStatus::Resolved);
+    assert!(resolved.variable_status("host").is_resolved());
+
+    assert_eq!(
+        resolved.variable_status("token"),
+        VariableStatus::SecretWithoutValue
+    );
+    assert_eq!(
+        resolved.variable_status("disabled"),
+        VariableStatus::Missing
+    );
+    assert_eq!(resolved.variable_status("absent"), VariableStatus::Missing);
+    assert!(!resolved.variable_status("token").is_resolved());
+    assert!(!resolved.variable_status("absent").is_resolved());
+
+    // The status must agree with what interpolation actually does.
+    for name in ["host", "baseUrl", "empty", "token", "disabled", "absent"] {
+        assert_eq!(
+            resolved.interpolate(&format!("{{{{{name}}}}}")).is_ok(),
+            resolved.variable_status(name).is_resolved(),
+            "status disagreed with interpolation for {name}"
+        );
+    }
 }
 
 #[test]

@@ -105,6 +105,12 @@ pub struct ImportedYaakWorkspace {
     pub diagnostics: Vec<ImportDiagnostic>,
     /// Whether lossy conversion was explicitly enabled and required.
     pub partial: bool,
+    /// Environment an interface should select after importing, when the
+    /// workspace defines one.
+    ///
+    /// This is the workspace-scoped global environment that other environments
+    /// extend, so selecting it resolves the variables shared by every request.
+    pub default_environment: Option<String>,
 }
 
 /// Failure to inspect or convert a Yaak source.
@@ -402,13 +408,15 @@ fn convert_preview(
         .collect();
     validate_folder_graph(workspace, &folders, &preview.resources)?;
 
+    let environments = convert_environments(workspace, &preview.resources, &mut diagnostics)?;
+    let default_environment = environments.default_environment;
     let mut collection = Collection {
         metadata: CollectionMetadata {
             name: Some(workspace.name.clone()),
             summary: nonempty(&workspace.description),
             ..CollectionMetadata::default()
         },
-        environments: convert_environments(workspace, &preview.resources, &mut diagnostics)?,
+        environments: environments.environments,
         ..Collection::default()
     };
     collection.items = convert_items(
@@ -467,6 +475,7 @@ fn convert_preview(
         collection,
         diagnostics,
         partial: requires_partial,
+        default_environment,
     })
 }
 
@@ -1053,11 +1062,17 @@ fn body_forms(request: &YaakHttpRequest) -> Vec<YaakFormField> {
         .unwrap_or_default()
 }
 
+/// Converted environments plus the one an interface should select by default.
+struct ConvertedEnvironments {
+    environments: Vec<Environment>,
+    default_environment: Option<String>,
+}
+
 fn convert_environments(
     workspace: &YaakWorkspace,
     resources: &Resources,
     diagnostics: &mut Vec<ImportDiagnostic>,
-) -> Result<Vec<Environment>, YaakImportError> {
+) -> Result<ConvertedEnvironments, YaakImportError> {
     let selected = resources
         .environments
         .iter()
@@ -1155,7 +1170,20 @@ fn convert_environments(
             variables,
         });
     }
-    Ok(converted)
+    // Prefer the global environment other environments extend; otherwise fall
+    // back to the first converted one so an import is never left unresolved
+    // when the workspace does define environments.
+    let default_environment = base_environment
+        .map(|environment| environment.name.clone())
+        .or_else(|| {
+            converted
+                .first()
+                .map(|environment: &Environment| environment.name.clone())
+        });
+    Ok(ConvertedEnvironments {
+        environments: converted,
+        default_environment,
+    })
 }
 
 fn diagnose_workspace(workspace: &YaakWorkspace, diagnostics: &mut Vec<ImportDiagnostic>) {

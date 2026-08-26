@@ -9,10 +9,10 @@ use gpui::{
     KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, TestAppContext, VisualTestContext,
     point, px, size,
 };
-use probe_core::{HttpRequest, QueryParameter, WorkspaceItemRef};
+use probe_core::{HttpRequest, QueryParameter, VariableStatus, WorkspaceItemRef};
 use probe_http::{HttpResponse, ResponseHeader};
 use probe_postman::{COLLECTION_VARIABLES_ENVIRONMENT, inspect_postman_source};
-use probe_yaak::{ImportDiagnostic, ImportDiagnosticSeverity};
+use probe_yaak::{ImportDiagnostic, ImportDiagnosticSeverity, inspect_yaak_source};
 use tokio::sync::oneshot;
 
 use super::{
@@ -49,6 +49,12 @@ fn nested_fixture() -> PathBuf {
 fn postman_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/postman")
+        .join(name)
+}
+
+fn yaak_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/yaak")
         .join(name)
 }
 
@@ -442,6 +448,52 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
                 view.workspace_path.as_deref(),
                 Some(destination.canonicalize().unwrap().as_path())
             );
+        })
+        .unwrap();
+    fs::remove_file(destination).unwrap();
+}
+
+#[gpui::test]
+fn successful_yaak_import_selects_the_default_environment(cx: &mut TestAppContext) {
+    // Mirrors the Postman import: an imported workspace that ships environments
+    // must not land with none selected, which would show every variable as
+    // unresolved.
+    cx.update(Theme::init);
+    let imported = inspect_yaak_source(yaak_fixture("export-v4.json"))
+        .unwrap()
+        .convert(None, false)
+        .unwrap();
+    assert_eq!(
+        imported.default_environment.as_deref(),
+        Some("Global Variables")
+    );
+    let destination = std::env::temp_dir().join(format!(
+        "probe-desktop-yaak-{}-{}.yml",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.choose_yaak_import_destination(imported, window, cx);
+        })
+        .unwrap();
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection({
+        let destination = destination.clone();
+        move |_| Some(destination)
+    });
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.shell.selected_environment(), Some("Global Variables"));
         })
         .unwrap();
     fs::remove_file(destination).unwrap();
@@ -2255,6 +2307,170 @@ fn large_response_body_only_renders_visible_rows(cx: &mut TestAppContext) {
         rendered_rows < total_rows,
         "virtualized response viewer rendered all {total_rows} rows"
     );
+}
+
+#[gpui::test]
+fn environment_is_resolved_once_per_frame(cx: &mut TestAppContext) {
+    // Resolving costs time proportional to the environment's variable count, and
+    // the request editor asks for a variable context once per input — dozens of
+    // times for a request with many headers. Guards the render-time memo.
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let request_key = workspace.requests()[0].key();
+    const HEADERS: usize = 15;
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            view.shell
+                .select_environment(Some("development".to_owned()));
+            // A realistic request: each header contributes a name and a value
+            // input, and every one of them asks for a variable context.
+            view.edit_request(
+                request_key,
+                |request| {
+                    request.headers = (0..HEADERS)
+                        .map(|index| probe_core::Header {
+                            name: format!("X-Header-{index}"),
+                            value: "Bearer {{token}}".to_owned(),
+                            disabled: false,
+                        })
+                        .collect();
+                },
+                cx,
+            );
+            view.request_editor.section = EditorSection::Headers;
+            cx.notify();
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    // Reset, then force exactly one more frame.
+    window
+        .update(cx, |view, _, cx| {
+            view.environment_resolutions.set(0);
+            cx.notify();
+        })
+        .expect("test window should be open");
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    // Drawing the request editor touches every variable-bearing input.
+    assert!(visual.debug_bounds("request-url-bar").is_some());
+    let resolutions = window
+        .update(cx, |view, _, _| view.environment_resolutions.get())
+        .expect("test window should be open");
+
+    assert_eq!(
+        resolutions,
+        1,
+        "the environment must be resolved once per frame, not once per input \
+         (this request renders {} variable-bearing inputs)",
+        HEADERS * 2 + 1
+    );
+}
+
+#[gpui::test]
+fn switching_environments_reclassifies_variables(cx: &mut TestAppContext) {
+    // The highlight colour is derived from this classification, so this covers
+    // the switch-environment flow end to end without inspecting painted pixels.
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            cx.notify();
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, cx| {
+            // With an environment selected, defined variables resolve and
+            // undefined ones do not.
+            view.select_environment(Some("development".to_owned()), cx);
+            let variables = view.build_variable_context(cx);
+            assert_eq!(variables.status("host"), VariableStatus::Resolved);
+            assert_eq!(variables.status("baseUrl"), VariableStatus::Resolved);
+            assert_eq!(
+                variables.status("secretToken"),
+                VariableStatus::SecretWithoutValue
+            );
+            assert_eq!(variables.status("disabledValue"), VariableStatus::Missing);
+            assert_eq!(variables.status("absent"), VariableStatus::Missing);
+
+            // Switching to "No environment" makes everything unresolved, which
+            // is what an import without environments looks like.
+            view.select_environment(None, cx);
+            let variables = view.build_variable_context(cx);
+            assert_eq!(variables.status("host"), VariableStatus::Missing);
+            assert_eq!(variables.status("baseUrl"), VariableStatus::Missing);
+        })
+        .expect("test window should be open");
+}
+
+#[gpui::test]
+fn reload_clears_a_selected_environment_that_disappeared(cx: &mut TestAppContext) {
+    // An environment renamed or deleted on disk must not leave the switcher
+    // pointing at a name it no longer offers.
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_environment_fixture("reload-missing-environment")
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_environment(Some("development".to_owned()), cx);
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    // Rewrite the collection on disk without the selected environment.
+    let source = fs::read_to_string(&fixture).unwrap();
+    let rewritten = source.replace("name: development", "name: renamed-development");
+    assert_ne!(source, rewritten, "fixture should contain the environment");
+    fs::write(&fixture, rewritten).unwrap();
+    let reloaded = probe_opencollection::load_workspace(&fixture).expect("fixture should reload");
+
+    window
+        .update(cx, |view, _, cx| {
+            view.install_reloaded_workspace(reloaded, Vec::new(), &BTreeMap::new());
+            assert_eq!(
+                view.shell.selected_environment(),
+                None,
+                "a selection that no longer exists should be cleared"
+            );
+
+            // A still-present environment survives the same reload path.
+            view.select_environment(Some("renamed-development".to_owned()), cx);
+            let workspace =
+                probe_opencollection::load_workspace(&fixture).expect("fixture should reload");
+            view.install_reloaded_workspace(workspace, Vec::new(), &BTreeMap::new());
+            assert_eq!(
+                view.shell.selected_environment(),
+                Some("renamed-development")
+            );
+        })
+        .expect("test window should be open");
+
+    fs::remove_file(fixture).unwrap();
 }
 
 #[gpui::test]
