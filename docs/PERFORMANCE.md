@@ -22,6 +22,12 @@ The benchmark groups measure separate boundaries:
   timed.
 - `request_lookup`: in-memory lookup through a session-only `RequestKey`, cycling
   across the loaded workspace.
+- `environment_resolution`: selecting an environment, applying its inheritance
+  chain, and resolving every variable value, across environments of 10, 100, and
+  500 variables arranged in a three-level `extends` chain.
+- `environment_variable_status`: `ResolvedEnvironment::variable_status` over an
+  already resolved environment. The desktop calls this once per rendered
+  placeholder, so it is measured separately from the resolution it reads.
 - `cli_startup/help`: operating-system process creation and Probe startup through
   rendering `probe --help`.
 
@@ -89,4 +95,28 @@ release build were:
 
 `probe --help` process startup measured 2.58 ms. Loading and validating the generated
 10,000-request fixture peaked at 222,199,808 bytes resident memory (about 212 MiB).
+These values are a local reference, not regression thresholds.
+
+## Environment resolution reference run
+
+The `environment_resolution` group was added on 2026-08-26 on an Apple M2 Pro,
+macOS 26.2, rustc 1.95.0, from a release build:
+
+| Environment size | Resolve | Variable status (3 lookups) |
+| --- | ---: | ---: |
+| 10 variables | 3.85 µs | 27 ns |
+| 100 variables | 40.84 µs | 44 ns |
+| 500 variables | 257.75 µs | 44 ns |
+
+Resolution is proportional to the variable count; status lookup is effectively
+constant and is not worth caching.
+
+These numbers motivated the desktop render-time memo. The request editor asks for
+a variable context once per variable-bearing input, so before the memo an open
+request with 15 headers resolved the environment 32 times per frame — about
+1.3 ms at 100 variables and 8.3 ms at 500, on every keystroke, against a 16.7 ms
+frame budget. It now resolves once per frame regardless of row count;
+`environment_is_resolved_once_per_frame` in `crates/desktop/src/app/tests.rs`
+guards that.
+
 These values are a local reference, not regression thresholds.

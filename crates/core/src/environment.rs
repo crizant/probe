@@ -9,6 +9,28 @@ use crate::{
     RequestBody, Variable, VariableValue, VariableValueSet,
 };
 
+/// Whether a `{{variable}}` reference can be resolved in the selected environment.
+///
+/// Interfaces use this to report configuration state before a request runs, so the
+/// rule stays here rather than being re-derived by each frontend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VariableStatus {
+    /// Resolved to a value, either directly or through the inheritance chain.
+    Resolved,
+    /// Declared as a secret that has no runtime value.
+    SecretWithoutValue,
+    /// Absent, disabled, or otherwise without a usable value.
+    Missing,
+}
+
+impl VariableStatus {
+    /// Returns whether interpolation would succeed for this variable.
+    #[must_use]
+    pub const fn is_resolved(self) -> bool {
+        matches!(self, Self::Resolved)
+    }
+}
+
 /// An environment selected and resolved entirely in memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedEnvironment {
@@ -40,6 +62,22 @@ impl ResolvedEnvironment {
     #[must_use]
     pub fn variable(&self, name: &str) -> Option<&str> {
         self.variables.get(name).map(String::as_str)
+    }
+
+    /// Reports whether interpolating this variable would succeed.
+    ///
+    /// Mirrors the branching in [`Self::interpolate`] so callers that only need the
+    /// outcome do not have to build an error. Performs ordered-map lookups and does
+    /// not allocate, so it is safe to call once per rendered reference.
+    #[must_use]
+    pub fn variable_status(&self, name: &str) -> VariableStatus {
+        if self.secrets_without_values.contains(name) {
+            VariableStatus::SecretWithoutValue
+        } else if self.variables.contains_key(name) {
+            VariableStatus::Resolved
+        } else {
+            VariableStatus::Missing
+        }
     }
 
     /// Interpolates `{{variable}}` references in a string.

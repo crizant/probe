@@ -235,6 +235,17 @@ pub(crate) struct ProbeApp {
     pretty_reveal: Cell<Option<PrettyRevealState>>,
     tab_bar_scroll: ScrollHandle,
     pending_tab_reveal: bool,
+    /// Environment resolution memo for the frame being rendered.
+    ///
+    /// Resolving costs time proportional to the environment's variable count
+    /// (about 40 µs at 100 variables), and the request editor asks for a
+    /// variable context once per input — dozens of times per frame. Resolving
+    /// once in `Render::render` and cloning the `Rc` keeps that off the hot path.
+    frame_variable_context: Option<components::VariableContext>,
+    /// Counts `build_variable_context` calls so tests can assert the
+    /// environment is resolved once per frame rather than once per input.
+    #[cfg(test)]
+    environment_resolutions: std::cell::Cell<usize>,
     #[cfg(test)]
     rendered_sidebar_rows: usize,
     #[cfg(test)]
@@ -345,6 +356,9 @@ impl ProbeApp {
             pretty_reveal: Cell::new(None),
             tab_bar_scroll: ScrollHandle::new(),
             pending_tab_reveal: false,
+            frame_variable_context: None,
+            #[cfg(test)]
+            environment_resolutions: std::cell::Cell::new(0),
             #[cfg(test)]
             rendered_sidebar_rows: 0,
             #[cfg(test)]
@@ -854,6 +868,7 @@ impl ProbeApp {
                     }
                 };
                 let warning_count = imported.diagnostics.len();
+                let selected_environment = imported.default_environment.clone();
                 let result = cx
                     .background_spawn(async move {
                         let workspace = create_bundled_workspace_from_collection(
@@ -878,6 +893,13 @@ impl ProbeApp {
                     match result {
                         Ok((path, workspace)) => {
                             view.set_workspace(path, workspace);
+                            // Matches the Postman import: leaving an imported
+                            // workspace with no environment selected would show
+                            // every variable as unresolved.
+                            if let Some(environment) = selected_environment {
+                                view.shell.select_environment(Some(environment));
+                                view.capture_selected_environment();
+                            }
                             view.start_workspace_watcher(window, cx);
                             view.persist_session(cx);
                             if warning_count > 0 {
@@ -1634,9 +1656,34 @@ impl ProbeApp {
         self.persistence.reset(baselines);
         self.loaded_workspace = Some(workspace);
         self.shell.reset_for_workspace();
+        self.revalidate_selected_environment();
         self.execution.remap_requests(key_remaps);
         self.response_viewer.remap_requests(key_remaps);
         self.request_editor.remap_requests(key_remaps);
+    }
+
+    /// Clears the selected environment if the reloaded workspace no longer has it.
+    ///
+    /// An environment renamed or deleted on disk would otherwise leave the
+    /// switcher showing a name absent from its own options, with every variable
+    /// failing to resolve. Unlike [`Self::restore_selected_environment`] this
+    /// keeps the user's current choice rather than reverting to the session
+    /// snapshot, which can be older than a switch made since the last capture.
+    fn revalidate_selected_environment(&mut self) {
+        let Some(selected) = self.shell.selected_environment() else {
+            return;
+        };
+        let still_exists = self.loaded_workspace.as_ref().is_some_and(|loaded| {
+            loaded
+                .workspace()
+                .environments()
+                .iter()
+                .any(|environment| environment.name == selected)
+        });
+        if !still_exists {
+            self.shell.select_environment(None);
+            self.capture_selected_environment();
+        }
     }
 
     fn remap_structure_dialog(&mut self, remaps: &BTreeMap<String, String>) {

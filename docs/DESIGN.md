@@ -146,6 +146,30 @@ unexpectedly, or replace platform-standard interaction behavior. Selection, focu
 errors, disabled controls, and request/response status must remain distinguishable
 without relying on color alone.
 
+## Variable Placeholders
+
+Request fields highlight two kinds of placeholder: `{{name}}`, resolved from the
+selected environment, and `:name` in the URL path, resolved from the request's own
+path parameters. Both are shown in every field that accepts them — URL, headers,
+query and path parameters, authentication, form fields, and the body editor.
+
+A placeholder is rendered according to whether it would resolve if the request ran
+now:
+
+- resolved — the syntax string role;
+- unresolved — the status error role, plus an underline, so the state survives
+  monochrome rendering and color-vision differences as the section above requires.
+
+Unresolved covers a variable that is absent or disabled, a secret with no runtime
+value, a path parameter whose row is still blank, and every placeholder when no
+environment is selected. An environment variable explicitly set to an empty string
+is resolved; a blank path parameter is not, because those rows are created empty as
+soon as `:name` is typed.
+
+The classification itself is domain logic, not presentation:
+`probe_core::VariableStatus` decides, and the hover tooltip reads the same value as
+the highlight so the two cannot disagree.
+
 ## Future Plain-Text Themes
 
 User-defined themes will be stored in versioned, human-editable plain-text files. The

@@ -1179,7 +1179,11 @@ impl ProbeApp {
                                         ("request-url", key.slot()),
                                         url.clone(),
                                         "https://api.example.com/users/:userId",
-                                        self.variable_context(cx),
+                                        // The URL bar is the only input that also
+                                        // highlights `:name` placeholders, so it is
+                                        // the only one that needs path values.
+                                        self.variable_context(cx)
+                                            .with_path_values(Self::path_values(&request)),
                                         move |value, _, input_cx| {
                                             let _ = url_view.update(input_cx, |view, cx| {
                                                 view.edit_request(
@@ -3086,14 +3090,33 @@ impl ProbeApp {
         self.loaded_workspace.as_ref()?.workspace().request(key)
     }
 
-    fn variable_context(&self, cx: &mut Context<Self>) -> components::VariableContext {
+    /// Returns this frame's variable context.
+    ///
+    /// Reads the memo `Render::render` populates so the environment is resolved
+    /// once per frame rather than once per input. Falls back to resolving
+    /// directly when called outside a full render pass.
+    pub(super) fn variable_context(&self, cx: &mut Context<Self>) -> components::VariableContext {
+        match &self.frame_variable_context {
+            Some(context) => context.clone(),
+            None => self.build_variable_context(cx),
+        }
+    }
+
+    /// Resolves the selected environment into a variable context.
+    ///
+    /// Cost is proportional to the environment's variable count, so this should
+    /// run once per frame — see [`Self::variable_context`].
+    pub(super) fn build_variable_context(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> components::VariableContext {
+        #[cfg(test)]
+        self.environment_resolutions
+            .set(self.environment_resolutions.get() + 1);
         let Some(selected) = self.shell.selected_environment() else {
-            return components::VariableContext {
-                values: Default::default(),
-                unavailable_message: "Select an environment to resolve this variable".to_owned(),
-                on_change: None,
-                ..components::VariableContext::default()
-            };
+            return components::VariableContext::unavailable(
+                "Select an environment to resolve this variable",
+            );
         };
         let Some(loaded) = &self.loaded_workspace else {
             return components::VariableContext::default();
@@ -3101,11 +3124,11 @@ impl ProbeApp {
         match resolve_environment(loaded.workspace().environments(), selected) {
             Ok(environment) => {
                 let view = cx.weak_entity();
-                components::VariableContext {
-                    values: environment.variables().clone(),
-                    secrets: environment.secrets_without_values().clone(),
-                    unavailable_message: "Variable value is unavailable".to_owned(),
-                    on_change: Some(Rc::new(move |name, value, window, cx| {
+                components::VariableContext::resolved(
+                    environment.variables().clone(),
+                    environment.secrets_without_values().clone(),
+                    "Variable value is unavailable",
+                    Some(Rc::new(move |name, value, window, cx| {
                         let name = name.to_owned();
                         let view = view.clone();
                         window.defer(cx, move |window, cx| {
@@ -3114,15 +3137,25 @@ impl ProbeApp {
                             });
                         });
                     })),
-                }
+                )
             }
-            Err(error) => components::VariableContext {
-                values: Default::default(),
-                unavailable_message: error.to_string(),
-                on_change: None,
-                ..components::VariableContext::default()
-            },
+            Err(error) => components::VariableContext::unavailable(error.to_string()),
         }
+    }
+
+    /// Path-parameter names of a request that currently have a usable value.
+    ///
+    /// Rows are created empty as soon as `:name` is typed into the URL, so a
+    /// blank value means "not filled in yet" and must read as unresolved.
+    pub(super) fn path_values(request: &HttpRequest) -> Rc<BTreeSet<String>> {
+        Rc::new(
+            request
+                .path_parameters
+                .iter()
+                .filter(|parameter| !parameter.disabled && !parameter.value.is_empty())
+                .map(|parameter| parameter.name.clone())
+                .collect(),
+        )
     }
 }
 
@@ -3140,6 +3173,9 @@ impl Render for ProbeApp {
                 cx.notify();
             });
         }
+        // Resolve the environment once for the whole frame. Every variable-bearing
+        // input clones this instead of resolving for itself.
+        self.frame_variable_context = Some(self.build_variable_context(cx));
         let theme = Theme::for_window_appearance(window.appearance());
         let sidebar_view = cx.weak_entity();
         let status_message = self.message.clone();

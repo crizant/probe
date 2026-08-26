@@ -18,8 +18,8 @@ use gpui::{
     HighlightStyle, Hsla, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
     MouseButton, ParentElement as _, Pixels, Point, Render, RenderOnce, Role, ShapedLine,
     SharedString, StatefulInteractiveElement as _, Style, Styled as _, Subscription, Task,
-    TextAlign, TextRun, TransformationMatrix, Window, canvas, deferred, div, fill, font, point,
-    prelude::FluentBuilder as _, px, relative, size, transparent_black,
+    TextAlign, TextRun, TransformationMatrix, UnderlineStyle, Window, canvas, deferred, div, fill,
+    font, point, prelude::FluentBuilder as _, px, relative, size, transparent_black,
 };
 use gpui_base::{
     Align, Button, Editor, ElementExt as _, FocusTrapElement as _, Input, InputBase,
@@ -31,7 +31,7 @@ use gpui_base::{
         InputState, Paste, Search, SelectAll, TextDecoration, TextDecorationCollection,
     },
 };
-use probe_core::path_variable_ranges;
+use probe_core::{VariableStatus, path_variable_ranges};
 
 mod buttons;
 mod icons;
@@ -401,22 +401,117 @@ pub(crate) fn dialog_layer(
 
 type VariableChangeHandler = Rc<dyn Fn(&str, String, &mut Window, &mut App)>;
 
+/// Environment data every variable-bearing input in a frame shares.
+///
+/// Resolving an environment is proportional to its variable count, so this is
+/// resolved once per frame and handed to inputs behind an [`Rc`]. See
+/// [`crate::app::ProbeApp::variable_context`].
+#[derive(Debug, Default)]
+pub(crate) struct EnvironmentVariables {
+    values: BTreeMap<String, String>,
+    secrets: BTreeSet<String>,
+    unavailable_message: SharedString,
+}
+
+/// Everything an input needs to classify and describe its placeholders.
+///
+/// Cloning is a refcount bump: this is cloned once per input per frame.
 #[derive(Clone, Default)]
 pub(crate) struct VariableContext {
-    pub(crate) values: BTreeMap<String, String>,
-    pub(crate) secrets: BTreeSet<String>,
-    pub(crate) unavailable_message: String,
-    pub(crate) on_change: Option<VariableChangeHandler>,
+    environment: Rc<EnvironmentVariables>,
+    /// Path-parameter names of the active request that have a usable value.
+    /// Only the URL bar sets this; `None` means no path parameters are known.
+    path_values: Option<Rc<BTreeSet<String>>>,
+    on_change: Option<VariableChangeHandler>,
 }
 
 impl std::fmt::Debug for VariableContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("VariableContext")
-            .field("values", &self.values)
-            .field("secrets", &self.secrets)
-            .field("unavailable_message", &self.unavailable_message)
+            .field("environment", &self.environment)
+            .field("path_values", &self.path_values)
             .finish_non_exhaustive()
+    }
+}
+
+impl VariableContext {
+    /// Builds a context from a successfully resolved environment.
+    pub(crate) fn resolved(
+        values: BTreeMap<String, String>,
+        secrets: BTreeSet<String>,
+        unavailable_message: impl Into<SharedString>,
+        on_change: Option<VariableChangeHandler>,
+    ) -> Self {
+        Self {
+            environment: Rc::new(EnvironmentVariables {
+                values,
+                secrets,
+                unavailable_message: unavailable_message.into(),
+            }),
+            path_values: None,
+            on_change,
+        }
+    }
+
+    /// Builds a context for which no variable can resolve, explaining why.
+    ///
+    /// Used when no environment is selected or when resolution failed.
+    pub(crate) fn unavailable(message: impl Into<SharedString>) -> Self {
+        Self::resolved(BTreeMap::new(), BTreeSet::new(), message, None)
+    }
+
+    /// Attaches the active request's usable path-parameter names.
+    ///
+    /// Shares the environment data rather than copying it.
+    pub(crate) fn with_path_values(mut self, path_values: Rc<BTreeSet<String>>) -> Self {
+        self.path_values = Some(path_values);
+        self
+    }
+
+    /// Classifies an `{{environment}}` reference.
+    ///
+    /// Ordered-map lookups only; safe to call once per rendered placeholder.
+    pub(crate) fn status(&self, name: &str) -> VariableStatus {
+        if self.environment.secrets.contains(name) {
+            VariableStatus::SecretWithoutValue
+        } else if self.environment.values.contains_key(name) {
+            VariableStatus::Resolved
+        } else {
+            VariableStatus::Missing
+        }
+    }
+
+    /// Classifies a `:path` reference against the request's own path parameters.
+    ///
+    /// Path placeholders never read the environment: they are filled from the
+    /// request's Path Parameters. A row that exists but is blank counts as
+    /// missing, because those rows are created empty as soon as `:name` is typed.
+    pub(crate) fn path_status(&self, name: &str) -> VariableStatus {
+        match &self.path_values {
+            Some(values) if values.contains(name) => VariableStatus::Resolved,
+            _ => VariableStatus::Missing,
+        }
+    }
+
+    /// Classifies a reference according to where it resolves from.
+    pub(crate) fn reference_status(&self, kind: ReferenceKind, name: &str) -> VariableStatus {
+        match kind {
+            ReferenceKind::Environment => self.status(name),
+            ReferenceKind::Path => self.path_status(name),
+        }
+    }
+
+    fn value(&self, name: &str) -> Option<&str> {
+        self.environment.values.get(name).map(String::as_str)
+    }
+
+    fn unavailable_message(&self) -> &str {
+        &self.environment.unavailable_message
+    }
+
+    fn is_writable(&self) -> bool {
+        self.on_change.is_some()
     }
 }
 
@@ -1089,8 +1184,14 @@ impl RenderOnce for ProbeTextInput {
             cx,
             |_, _| TextContextMenuState::default(),
         );
-        let overlay_paints_text = self.variable_overlay
-            && !input_variable_ranges(&self.value, self.highlight_path_variables).is_empty();
+        // Scanned once per render and reused by both the overlay decision and
+        // the overlay itself.
+        let references = if self.variable_overlay {
+            input_variable_ranges(&self.value, self.highlight_path_variables)
+        } else {
+            Vec::new()
+        };
+        let overlay_paints_text = self.variable_overlay && !references.is_empty();
         let placeholder = self.placeholder.clone();
         let on_change = self.on_change.clone();
         let on_enter = self.on_enter.clone();
@@ -1233,6 +1334,7 @@ impl RenderOnce for ProbeTextInput {
                 self.value,
                 self.variables,
                 self.highlight_path_variables,
+                &references,
                 window,
                 cx,
             )
@@ -1907,7 +2009,7 @@ pub(crate) fn body_text_input(
 ) -> gpui::AnyElement {
     let value = value.into();
     let ranges = variable_ranges(&value);
-    let decorations = body_text_highlights(theme, &ranges);
+    let decorations = body_text_highlights(theme, &value, &ranges, &variables);
     ProbeEditor {
         theme,
         id: id.into(),
@@ -2879,11 +2981,27 @@ fn push_merged_highlight_bounds(bounds: &mut Vec<Bounds<Pixels>>, next: Bounds<P
     }
 }
 
-fn body_text_highlights(theme: Theme, variables: &[(Range<usize>, String)]) -> Vec<TextDecoration> {
-    variables
+fn body_text_highlights(
+    theme: Theme,
+    value: &str,
+    references: &[VariableReference],
+    variables: &VariableContext,
+) -> Vec<TextDecoration> {
+    let palette = VariablePalette::new(theme);
+    references
         .iter()
-        .map(|(range, _)| {
-            text_decoration(range.clone(), Some(theme.colors.syntax.string.into()), None)
+        .map(|reference| {
+            // Body placeholders are always environment references; `:name` is
+            // only meaningful in the URL path.
+            let status = variables.status(reference.name(value));
+            TextDecoration::new(
+                reference.range.clone(),
+                HighlightStyle {
+                    color: Some(palette.color(status)),
+                    underline: palette.underline(status),
+                    ..Default::default()
+                },
+            )
         })
         .collect()
 }
@@ -2924,10 +3042,10 @@ fn variable_input_overlay(
     value: SharedString,
     variables: VariableContext,
     highlight_path_variables: bool,
+    references: &[VariableReference],
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
-    let ranges = input_variable_ranges(&value, highlight_path_variables);
     // Input paints first so it keeps native caret, selection, and scroll.
     // The overlay sits on top, recolors supported variable spans, and covers
     // the native caret while blink is off.
@@ -2940,12 +3058,20 @@ fn variable_input_overlay(
         .child(variable_highlight_layer(
             theme,
             state.clone(),
-            ranges.is_empty(),
+            references.is_empty(),
             theme.typography.monospace_family,
             theme.typography.body_size,
             highlight_path_variables,
+            variables.clone(),
         ));
-    let tooltip_ranges = variable_ranges(&value);
+    // Only environment references get a hover tooltip; path parameters are
+    // edited in their own tab. Filtered from the scan the caller already ran
+    // rather than re-scanning the value.
+    let tooltip_ranges = references
+        .iter()
+        .filter(|reference| reference.kind == ReferenceKind::Environment)
+        .cloned()
+        .collect::<Vec<_>>();
     if tooltip_ranges.is_empty() {
         return wrapper.into_any_element();
     }
@@ -3076,14 +3202,14 @@ fn variable_editor_overlay(
         if editor.visible_row_range().is_none() {
             window.request_animation_frame();
         }
-        for (index, (range, name)) in ranges.into_iter().enumerate() {
-            let Some(bounds) = editor.range_to_bounds(&range) else {
+        for (index, reference) in ranges.into_iter().enumerate() {
+            let Some(bounds) = editor.range_to_bounds(&reference.range) else {
                 continue;
             };
             hits = hits.child(variable_hover_hit(
                 ("body-variable-hover", index),
                 index,
-                name,
+                reference.name(&value).to_owned(),
                 hover.clone(),
                 bounds.origin.x - origin.x,
                 bounds.origin.y - origin.y,
@@ -3202,7 +3328,7 @@ fn with_variable_tooltip(
 fn variable_span_layout(
     window: &mut Window,
     value: &str,
-    ranges: &[(Range<usize>, String)],
+    ranges: &[VariableReference],
     font_family: &'static str,
     font_size: f32,
     current_scroll_x: Pixels,
@@ -3231,10 +3357,16 @@ fn variable_span_layout(
     });
     ranges
         .iter()
-        .map(|(range, name)| {
-            let start = line.x_for_index(range.start) + scroll_x;
-            let end = line.x_for_index(range.end) + scroll_x;
-            (name.clone(), start, (end - start).max(px(1.0)))
+        .map(|reference| {
+            let start = line.x_for_index(reference.range.start) + scroll_x;
+            let end = line.x_for_index(reference.range.end) + scroll_x;
+            // Hover targets outlive this frame's borrow of `value`, so the name
+            // is owned here. There are only a handful of spans per input.
+            (
+                reference.name(value).to_owned(),
+                start,
+                (end - start).max(px(1.0)),
+            )
         })
         .collect()
 }
@@ -3246,8 +3378,8 @@ fn variable_highlight_layer(
     font_family: &'static str,
     text_size: f32,
     highlight_path_variables: bool,
+    variables: VariableContext,
 ) -> impl IntoElement {
-    let highlight_color = theme.colors.syntax.string.into();
     let base_color = if ranges_empty {
         transparent_black()
     } else {
@@ -3275,16 +3407,53 @@ fn variable_highlight_layer(
         .child(VariableHighlightElement {
             state,
             base_color,
-            highlight_color,
+            palette: VariablePalette::new(theme),
             highlight_path_variables,
+            variables,
         })
+}
+
+/// Colours a placeholder takes depending on whether it resolves.
+///
+/// Unresolved spans also carry an underline, because `docs/DESIGN.md` requires
+/// state to stay distinguishable without relying on colour alone.
+#[derive(Clone, Copy)]
+pub(crate) struct VariablePalette {
+    resolved: Hsla,
+    unresolved: Hsla,
+}
+
+impl VariablePalette {
+    pub(crate) fn new(theme: Theme) -> Self {
+        Self {
+            resolved: theme.colors.syntax.string.into(),
+            unresolved: theme.colors.status.error.into(),
+        }
+    }
+
+    pub(crate) const fn color(&self, status: VariableStatus) -> Hsla {
+        if status.is_resolved() {
+            self.resolved
+        } else {
+            self.unresolved
+        }
+    }
+
+    pub(crate) fn underline(&self, status: VariableStatus) -> Option<UnderlineStyle> {
+        (!status.is_resolved()).then(|| UnderlineStyle {
+            thickness: px(1.0),
+            color: Some(self.unresolved),
+            wavy: false,
+        })
+    }
 }
 
 struct VariableHighlightElement {
     state: Entity<InputState>,
     base_color: Hsla,
-    highlight_color: Hsla,
+    palette: VariablePalette,
     highlight_path_variables: bool,
+    variables: VariableContext,
 }
 
 struct VariableHighlightPrepaintState {
@@ -3336,11 +3505,10 @@ impl Element for VariableHighlightElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let state = self.state.clone();
+        // Re-scanned here rather than reused from render because this reads the
+        // live input value, which may have changed since the element was built.
         let value = single_line(state.read(cx).value());
-        let ranges = input_variable_ranges(&value, self.highlight_path_variables)
-            .into_iter()
-            .map(|(range, _)| range)
-            .collect::<Vec<_>>();
+        let ranges = input_variable_ranges(&value, self.highlight_path_variables);
         let cursor = state.read(cx).cursor();
         let style = window.text_style();
         let run = TextRun {
@@ -3351,7 +3519,7 @@ impl Element for VariableHighlightElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = variable_highlight_runs(&value, &ranges, &run, self.highlight_color);
+        let runs = variable_highlight_runs(&value, &ranges, &run, self.palette, &self.variables);
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window
             .text_system()
@@ -3416,15 +3584,16 @@ impl Element for VariableHighlightElement {
 /// when the caret would otherwise sit past the visible width.
 fn variable_highlight_runs(
     value: &str,
-    ranges: &[Range<usize>],
+    ranges: &[VariableReference],
     base: &TextRun,
-    highlight_color: Hsla,
+    palette: VariablePalette,
+    variables: &VariableContext,
 ) -> Vec<TextRun> {
     let mut runs = Vec::new();
     let mut ix = 0;
-    for range in ranges {
-        let start = range.start.min(value.len());
-        let end = range.end.min(value.len());
+    for reference in ranges {
+        let start = reference.range.start.min(value.len());
+        let end = reference.range.end.min(value.len());
         if ix < start {
             runs.push(TextRun {
                 len: start - ix,
@@ -3433,9 +3602,11 @@ fn variable_highlight_runs(
             });
         }
         if end > start {
+            let status = variables.reference_status(reference.kind, reference.name(value));
             runs.push(TextRun {
                 len: end - start,
-                color: highlight_color,
+                color: palette.color(status),
+                underline: palette.underline(status),
                 ..base.clone()
             });
         }
@@ -3499,26 +3670,27 @@ fn variable_tooltip_presentation(
     name: &str,
     variables: &VariableContext,
 ) -> VariableTooltipPresentation {
-    if variables.secrets.contains(name) {
-        return unavailable_variable_tooltip(&variables.unavailable_message);
-    }
-    if let Some(value) = variables.values.get(name) {
-        return VariableTooltipPresentation {
-            value: value.clone(),
+    // Shares `VariableContext::status` with the highlight, so the colour and the
+    // tooltip can never disagree about whether a variable resolves.
+    match variables.status(name) {
+        VariableStatus::SecretWithoutValue => VariableTooltipPresentation {
+            hint: Some("Secret has no value in this environment"),
+            ..unavailable_variable_tooltip(variables.unavailable_message())
+        },
+        VariableStatus::Resolved => VariableTooltipPresentation {
+            value: variables.value(name).unwrap_or_default().to_owned(),
             placeholder: "Variable value",
-            editable: variables.on_change.is_some(),
+            editable: variables.is_writable(),
             hint: None,
-        };
-    }
-    if variables.on_change.is_some() {
-        return VariableTooltipPresentation {
+        },
+        VariableStatus::Missing if variables.is_writable() => VariableTooltipPresentation {
             value: String::new(),
             placeholder: "Enter a value to create",
             editable: true,
             hint: Some("Not defined in this environment"),
-        };
+        },
+        VariableStatus::Missing => unavailable_variable_tooltip(variables.unavailable_message()),
     }
-    unavailable_variable_tooltip(&variables.unavailable_message)
 }
 
 fn unavailable_variable_tooltip(message: &str) -> VariableTooltipPresentation {
@@ -3537,7 +3709,39 @@ struct VariableTooltipPresentation {
     hint: Option<&'static str>,
 }
 
-fn variable_ranges(value: &str) -> Vec<(Range<usize>, String)> {
+/// Where a placeholder gets its value from.
+///
+/// `{{name}}` reads the selected environment; `:name` reads the request's own
+/// path parameters. They are highlighted together but must never be classified
+/// against the same source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReferenceKind {
+    Environment,
+    Path,
+}
+
+/// One placeholder found in an input value.
+///
+/// Both fields are spans into the scanned value rather than owned strings, so
+/// scanning allocates only the `Vec`. This runs on every frame for every
+/// variable-bearing input, so per-placeholder allocation is not affordable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VariableReference {
+    /// The whole placeholder including delimiters — the span that gets coloured.
+    pub(crate) range: Range<usize>,
+    /// Just the name, already trimmed — the span used for lookups.
+    pub(crate) name: Range<usize>,
+    pub(crate) kind: ReferenceKind,
+}
+
+impl VariableReference {
+    /// Borrows the name out of the value this reference was scanned from.
+    pub(crate) fn name<'a>(&self, value: &'a str) -> &'a str {
+        &value[self.name.clone()]
+    }
+}
+
+fn variable_ranges(value: &str) -> Vec<VariableReference> {
     let mut ranges = Vec::new();
     let mut offset = 0;
     let mut remaining = value;
@@ -3546,11 +3750,20 @@ fn variable_ranges(value: &str) -> Vec<(Range<usize>, String)> {
         let Some(end) = after_start.find("}}") else {
             break;
         };
-        let name = after_start[..end].trim();
+        let raw = &after_start[..end];
+        let name = raw.trim();
         if !name.is_empty() && !name.contains("{{") {
             let range_start = offset + start;
             let range_end = range_start + 2 + end + 2;
-            ranges.push((range_start..range_end, name.to_owned()));
+            // Offset of the trimmed name inside the delimiters, so the lookup
+            // span skips the padding in `{{ name }}`.
+            let leading = raw.len() - raw.trim_start().len();
+            let name_start = range_start + 2 + leading;
+            ranges.push(VariableReference {
+                range: range_start..range_end,
+                name: name_start..name_start + name.len(),
+                kind: ReferenceKind::Environment,
+            });
         }
         let consumed = start + 2 + end + 2;
         offset += consumed;
@@ -3559,14 +3772,24 @@ fn variable_ranges(value: &str) -> Vec<(Range<usize>, String)> {
     ranges
 }
 
-fn input_variable_ranges(
-    value: &str,
-    highlight_path_variables: bool,
-) -> Vec<(Range<usize>, String)> {
+fn input_variable_ranges(value: &str, highlight_path_variables: bool) -> Vec<VariableReference> {
     let mut ranges = variable_ranges(value);
     if highlight_path_variables {
-        ranges.extend(path_variable_ranges(value));
-        ranges.sort_by_key(|(range, _)| range.start);
+        ranges.extend(
+            path_variable_ranges(value)
+                .into_iter()
+                .map(|(range, name)| {
+                    // `path_variable_ranges` spans include the leading ':'; the name is
+                    // everything after it.
+                    let name_start = range.end - name.len();
+                    VariableReference {
+                        range,
+                        name: name_start..name_start + name.len(),
+                        kind: ReferenceKind::Path,
+                    }
+                }),
+        );
+        ranges.sort_by_key(|reference| reference.range.start);
     }
     ranges
 }
