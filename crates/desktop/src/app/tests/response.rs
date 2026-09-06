@@ -283,7 +283,7 @@ fn image_response_replaces_pretty_with_scrollable_preview(cx: &mut TestAppContex
                     size: body.len(),
                     headers: vec![ResponseHeader {
                         name: "content-type".to_owned(),
-                        value: "Image/BMP; charset=binary".to_owned(),
+                        value: "Application/Octet-Stream; charset=binary".to_owned(),
                     }],
                     body,
                     body_complete: true,

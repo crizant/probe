@@ -144,6 +144,12 @@ pub(crate) enum ResponseImagePreview {
     Unavailable(String),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DetectedImage {
+    Supported(ImageFormat),
+    UnsupportedMediaType(String),
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ResponseViewerState {
     tab: ResponseViewerTab,
@@ -516,18 +522,23 @@ pub(crate) fn prepare_document(
     response: &HttpResponse,
     generation: u64,
 ) -> (PreparedDocument, bool, bool) {
-    if let Some(media_type) = response_image_media_type(response) {
+    if let Some(detected) = detect_response_image(response) {
         let mut document = document_from_response(response, generation);
         document.image_preview = Some(if !response.body_complete {
             ResponseImagePreview::Unavailable(
                 "The complete image response is unavailable for preview.".to_owned(),
             )
-        } else if let Some(format) = ImageFormat::from_mime_type(&media_type) {
-            ResponseImagePreview::Ready(Arc::new(Image::from_bytes(format, response.body.clone())))
         } else {
-            ResponseImagePreview::Unavailable(format!(
-                "The {media_type} image format cannot be previewed."
-            ))
+            match detected {
+                DetectedImage::Supported(format) => ResponseImagePreview::Ready(Arc::new(
+                    Image::from_bytes(format, response.body.clone()),
+                )),
+                DetectedImage::UnsupportedMediaType(media_type) => {
+                    ResponseImagePreview::Unavailable(format!(
+                        "The {media_type} image format cannot be previewed."
+                    ))
+                }
+            }
         });
         document.binary = body_is_binary(&response.body, document.file_backed);
         if document.binary {
@@ -802,14 +813,50 @@ fn content_type(response: &HttpResponse) -> Option<&str> {
         .map(|header| header.value.as_str())
 }
 
-fn response_image_media_type(response: &HttpResponse) -> Option<String> {
+fn detect_response_image(response: &HttpResponse) -> Option<DetectedImage> {
     let media_type = content_type(response)?
         .split(';')
         .next()
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    media_type.starts_with("image/").then_some(media_type)
+    if media_type.starts_with("image/") {
+        return Some(ImageFormat::from_mime_type(&media_type).map_or_else(
+            || DetectedImage::UnsupportedMediaType(media_type),
+            DetectedImage::Supported,
+        ));
+    }
+    if media_type == "application/octet-stream" {
+        sniff_image_format(&response.body).map(DetectedImage::Supported)
+    } else {
+        None
+    }
+}
+
+fn sniff_image_format(body: &[u8]) -> Option<ImageFormat> {
+    if body.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(ImageFormat::Png)
+    } else if body.starts_with(b"\xff\xd8\xff") {
+        Some(ImageFormat::Jpeg)
+    } else if body.len() >= 12 && body.starts_with(b"RIFF") && &body[8..12] == b"WEBP" {
+        Some(ImageFormat::Webp)
+    } else if body.starts_with(b"GIF87a") || body.starts_with(b"GIF89a") {
+        Some(ImageFormat::Gif)
+    } else if body.starts_with(b"BM") {
+        Some(ImageFormat::Bmp)
+    } else if body.starts_with(b"II*\0") || body.starts_with(b"MM\0*") {
+        Some(ImageFormat::Tiff)
+    } else if body.starts_with(b"\0\0\x01\0") {
+        Some(ImageFormat::Ico)
+    } else if body.len() >= 3
+        && body[0] == b'P'
+        && matches!(body[1], b'1'..=b'7')
+        && body[2].is_ascii_whitespace()
+    {
+        Some(ImageFormat::Pnm)
+    } else {
+        None
+    }
 }
 
 fn trim_ascii_start(bytes: &[u8]) -> &[u8] {
@@ -1124,6 +1171,41 @@ mod tests {
             Some(ResponseImagePreview::Unavailable(ref message))
                 if message == "The image/avif image format cannot be previewed."
         ));
+    }
+
+    #[test]
+    fn generic_binary_content_type_sniffs_supported_image_signatures() {
+        let cases: &[(&[u8], ImageFormat)] = &[
+            (b"\x89PNG\r\n\x1a\nrest", ImageFormat::Png),
+            (b"\xff\xd8\xffrest", ImageFormat::Jpeg),
+            (b"RIFF\x04\0\0\0WEBPrest", ImageFormat::Webp),
+            (b"GIF87arest", ImageFormat::Gif),
+            (b"GIF89arest", ImageFormat::Gif),
+            (b"BMrest", ImageFormat::Bmp),
+            (b"II*\0rest", ImageFormat::Tiff),
+            (b"MM\0*rest", ImageFormat::Tiff),
+            (b"\0\0\x01\0rest", ImageFormat::Ico),
+            (b"P6\nrest", ImageFormat::Pnm),
+        ];
+
+        for (body, expected) in cases {
+            let response = response(body, "Application/Octet-Stream; charset=binary");
+            let (document, pretty_pending, inspection_pending) = prepare_document(&response, 5);
+            assert!(!pretty_pending);
+            assert!(!inspection_pending);
+            assert!(matches!(
+                document.image_preview,
+                Some(ResponseImagePreview::Ready(ref image)) if image.format() == *expected
+            ));
+        }
+    }
+
+    #[test]
+    fn magic_bytes_do_not_override_an_explicit_non_image_content_type() {
+        let response = response(b"\x89PNG\r\n\x1a\nrest", "text/plain");
+        let (document, _, _) = prepare_document(&response, 6);
+
+        assert!(!document.is_image());
     }
 
     #[test]
