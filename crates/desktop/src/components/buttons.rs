@@ -108,7 +108,8 @@ impl RenderOnce for DropdownButton {
                 .child(self.label),
             theme,
             false,
-        );
+        )
+        .border_r_0();
         let trigger = style_primary_split_segment(
             Button::new(self.trigger_id)
                 .debug_selector(|| self.trigger_id.into())
@@ -122,14 +123,36 @@ impl RenderOnce for DropdownButton {
                 .child(chevron_icon(theme, self.open).text_color(theme.colors.text.inverse)),
             theme,
             self.open,
-        );
-        div().flex().items_center().flex_none().child(action).child(
-            Popover::new(self.menu_id)
-                .open(self.open)
-                .on_open_change(move |open, window, cx| on_open_change(open, window, cx))
-                .trigger(trigger)
-                .content(move |_, _, _| self.menu.unwrap_or_else(|| div().into_any_element())),
         )
+        .border_l_0();
+        let mut divider: Hsla = theme.colors.text.inverse.into();
+        divider.a = 0.36;
+        div()
+            .flex()
+            .items_center()
+            .flex_none()
+            .child(action)
+            .child(
+                div()
+                    .w(px(1.0))
+                    .h(px(theme.metrics.control_height))
+                    .flex()
+                    .items_center()
+                    .bg(theme.colors.actions.accent)
+                    .child(
+                        div()
+                            .w(px(1.0))
+                            .h(px(theme.metrics.control_height - theme.metrics.spacing_3))
+                            .bg(divider),
+                    ),
+            )
+            .child(
+                Popover::new(self.menu_id)
+                    .open(self.open)
+                    .on_open_change(move |open, window, cx| on_open_change(open, window, cx))
+                    .trigger(trigger)
+                    .content(move |_, _, _| self.menu.unwrap_or_else(|| div().into_any_element())),
+            )
     }
 }
 
