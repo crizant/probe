@@ -5,6 +5,59 @@ impl ProbeApp {
         let active_key = self.shell.active_tab();
         let state = active_key.and_then(|key| self.execution.response(key));
         let (header_leading, header_trailing, content) = match state {
+            Some(
+                state @ ResponseState::Running {
+                    progress: Some(progress),
+                    ..
+                },
+            ) => {
+                let status = format!("{} {}", progress.status, progress.reason);
+                let transfer =
+                    format_transfer_progress(progress.received_bytes, progress.content_length);
+                (
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Receiving…")
+                        .into_any_element(),
+                    div()
+                        .min_w(px(0.0))
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap(px(theme.metrics.spacing_1))
+                        .child(
+                            components::truncated_label(status.trim_end().to_owned())
+                                .id("response-status-code")
+                                .debug_selector(|| "response-status-code".into())
+                                .flex_none()
+                                .max_w(px(220.0))
+                                .text_color(response_status_color(theme, progress.status)),
+                        )
+                        .child(
+                            components::truncated_label(format!(
+                                "• {} • {}",
+                                transfer,
+                                format_duration(state.elapsed().unwrap_or_default())
+                            ))
+                            .id("response-metadata")
+                            .debug_selector(|| "response-metadata".into())
+                            .flex_none()
+                            .font_family(theme.typography.monospace_family)
+                            .text_color(theme.colors.text.muted),
+                        )
+                        .into_any_element(),
+                    div()
+                        .id("response-receiving-body")
+                        .debug_selector(|| "response-receiving-body".into())
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme.colors.text.muted)
+                        .child("Receiving the response body…")
+                        .into_any_element(),
+                )
+            }
             Some(state @ ResponseState::Running { .. }) => (
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -83,7 +136,7 @@ impl ProbeApp {
                 let metadata = format!(
                     "• {} • {}",
                     format_duration(response.duration),
-                    format_size(response.size),
+                    format_size(response.size as u64),
                 );
                 let document = active_key.and_then(|key| self.response_viewer.document(key));
                 (

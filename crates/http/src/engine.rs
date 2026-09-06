@@ -11,6 +11,25 @@ use crate::{
 
 const DEFAULT_MAX_REDIRECTS: usize = 10;
 
+/// Progress reported while an HTTP response is being received.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HttpProgress {
+    /// Response headers have arrived and the body is about to be read.
+    ResponseStarted {
+        /// Numeric HTTP status code.
+        status: u16,
+        /// Canonical reason phrase when one is defined.
+        reason: String,
+        /// Expected response-body size when supplied by the server.
+        content_length: Option<u64>,
+    },
+    /// The decoded response-body byte count received so far.
+    BodyReceived {
+        /// Total decoded bytes received so far.
+        bytes: u64,
+    },
+}
+
 /// Reusable asynchronous HTTP engine shared by every interface.
 #[derive(Clone, Debug)]
 pub struct HttpEngine {
@@ -60,7 +79,23 @@ impl HttpEngine {
     where
         C: Future + Send,
     {
-        self.execute_with_cancellation(request, options, None, cancellation)
+        self.execute_with_cancellation(request, options, None, cancellation, |_| {})
+            .await
+    }
+
+    /// Executes a cancellable request and reports response-header and body progress.
+    pub async fn execute_cancellable_with_progress<C, P>(
+        &self,
+        request: &HttpRequest,
+        options: &ExecutionOptions,
+        cancellation: C,
+        progress: P,
+    ) -> Result<HttpResponse, HttpError>
+    where
+        C: Future + Send,
+        P: FnMut(HttpProgress) + Send,
+    {
+        self.execute_with_cancellation(request, options, None, cancellation, progress)
             .await
     }
 
@@ -75,34 +110,40 @@ impl HttpEngine {
     where
         C: Future + Send,
     {
-        self.execute_with_cancellation(request, options, Some(output), cancellation)
+        self.execute_with_cancellation(request, options, Some(output), cancellation, |_| {})
             .await
     }
 
-    async fn execute_with_cancellation<C>(
+    async fn execute_with_cancellation<C, P>(
         &self,
         request: &HttpRequest,
         options: &ExecutionOptions,
         output: Option<&Path>,
         cancellation: C,
+        mut progress: P,
     ) -> Result<HttpResponse, HttpError>
     where
         C: Future + Send,
+        P: FnMut(HttpProgress) + Send,
     {
         tokio::pin!(cancellation);
         tokio::select! {
             biased;
             _ = &mut cancellation => Err(HttpError::Cancelled),
-            response = self.execute_inner(request, options, output) => response,
+            response = self.execute_inner(request, options, output, &mut progress) => response,
         }
     }
 
-    async fn execute_inner(
+    async fn execute_inner<P>(
         &self,
         request: &HttpRequest,
         options: &ExecutionOptions,
         output: Option<&Path>,
-    ) -> Result<HttpResponse, HttpError> {
+        progress: &mut P,
+    ) -> Result<HttpResponse, HttpError>
+    where
+        P: FnMut(HttpProgress),
+    {
         let client = self.client_for(&request.settings)?;
         let builder = build_request(&client, request, options).await?;
         let started = Instant::now();
@@ -111,10 +152,18 @@ impl HttpEngine {
         let status = response.status();
         let url = response.url().to_string();
         let headers = response_headers(response.headers());
+        progress(HttpProgress::ResponseStarted {
+            status: status.as_u16(),
+            reason: status.canonical_reason().unwrap_or_default().to_owned(),
+            content_length: expected_size,
+        });
         let body = match output {
             Some(output) => CollectedBody {
                 preview: Vec::new(),
-                size: stream_to_file(&mut response, output).await?,
+                size: stream_to_file(&mut response, output, |bytes| {
+                    progress(HttpProgress::BodyReceived { bytes });
+                })
+                .await?,
                 complete: false,
                 file: None,
                 retention_error: None,
@@ -124,6 +173,7 @@ impl HttpEngine {
                     &mut response,
                     options.response_cache.as_ref(),
                     expected_size,
+                    |bytes| progress(HttpProgress::BodyReceived { bytes }),
                 )
                 .await?
             }

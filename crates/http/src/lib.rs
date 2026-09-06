@@ -9,7 +9,7 @@ mod request;
 mod response;
 
 pub use cache::{ResponseBodyFile, ResponseCache};
-pub use engine::HttpEngine;
+pub use engine::{HttpEngine, HttpProgress};
 pub use error::HttpError;
 pub use response::{HttpResponse, ResponseHeader};
 

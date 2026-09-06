@@ -38,11 +38,19 @@ impl ProbeApp {
         };
         let (cancellation_sender, cancellation_receiver) = tokio::sync::oneshot::channel();
         let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
+        let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
         let generation = self.execution.begin(key, cancellation_sender);
         let spawn_result = thread::Builder::new()
             .name("probe-http-request".to_owned())
             .spawn(move || {
-                let result = execute_http_request(request, options, cancellation_receiver);
+                let result = execute_http_request(
+                    request,
+                    options,
+                    cancellation_receiver,
+                    move |progress| {
+                        let _ = progress_sender.send(progress);
+                    },
+                );
                 let _ = result_sender.send(result);
             });
         if let Err(error) = spawn_result {
@@ -54,6 +62,15 @@ impl ProbeApp {
         }
 
         cx.spawn(async move |view, cx| {
+            while let Some(progress) = progress_receiver.recv().await {
+                let _ = view.update(cx, |view, cx| {
+                    view.execution.report_progress(key, generation, progress);
+                    while let Ok(progress) = progress_receiver.try_recv() {
+                        view.execution.report_progress(key, generation, progress);
+                    }
+                    cx.notify();
+                });
+            }
             let result = result_receiver.await.unwrap_or_else(|_| {
                 Err(HttpError::Transport(
                     "HTTP execution ended without a result".to_owned(),

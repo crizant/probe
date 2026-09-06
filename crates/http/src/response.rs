@@ -59,11 +59,15 @@ pub(crate) struct CollectedBody {
     pub(crate) retention_error: Option<String>,
 }
 
-pub(crate) async fn collect_bounded(
+pub(crate) async fn collect_bounded<P>(
     response: &mut Response,
     cache: Option<&ResponseCache>,
     expected_size: Option<u64>,
-) -> Result<CollectedBody, HttpError> {
+    mut progress: P,
+) -> Result<CollectedBody, HttpError>
+where
+    P: FnMut(u64),
+{
     let mut preview = Vec::new();
     let mut size = 0_usize;
     let mut spool: Option<ActiveSpool> = None;
@@ -72,6 +76,7 @@ pub(crate) async fn collect_bounded(
 
     while let Some(chunk) = response.chunk().await.map_err(map_reqwest_error)? {
         size = checked_response_size(size, chunk.len())?;
+        progress(size as u64);
 
         if let Some(active) = &mut spool {
             let next_size = active.written.saturating_add(chunk.len() as u64);
@@ -217,14 +222,19 @@ fn quota_message(quota_bytes: u64) -> String {
     )
 }
 
-pub(crate) async fn stream_to_file(
+pub(crate) async fn stream_to_file<P>(
     response: &mut Response,
     output: &Path,
-) -> Result<usize, HttpError> {
+    mut progress: P,
+) -> Result<usize, HttpError>
+where
+    P: FnMut(u64),
+{
     let (mut file, mut temporary) = create_temporary_output(output).await?;
     let mut size = 0_usize;
     while let Some(chunk) = response.chunk().await.map_err(map_reqwest_error)? {
         size = checked_response_size(size, chunk.len())?;
+        progress(size as u64);
         file.write_all(&chunk)
             .await
             .map_err(|error| output_error(output, error))?;

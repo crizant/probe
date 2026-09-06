@@ -9,16 +9,28 @@ use crate::filesystem::workspace_base_directory;
 use directories::ProjectDirs;
 use probe_core::{HttpRequest, RequestKey};
 use probe_http::{
-    ExecutionOptions, HttpEngine, HttpError, HttpResponse, ResponseBodyFile, ResponseCache,
+    ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse, ResponseBodyFile,
+    ResponseCache,
 };
 use tokio::sync::oneshot;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResponseState {
-    Running { started_at: Instant },
+    Running {
+        started_at: Instant,
+        progress: Option<ResponseProgress>,
+    },
     Complete(HttpResponse),
     Failed(String),
     Cancelled,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResponseProgress {
+    pub(crate) status: u16,
+    pub(crate) reason: String,
+    pub(crate) received_bytes: u64,
+    pub(crate) content_length: Option<u64>,
 }
 
 impl ResponseState {
@@ -28,7 +40,7 @@ impl ResponseState {
 
     pub(crate) fn elapsed(&self) -> Option<Duration> {
         match self {
-            Self::Running { started_at } => Some(started_at.elapsed()),
+            Self::Running { started_at, .. } => Some(started_at.elapsed()),
             Self::Complete(response) => Some(response.duration),
             Self::Failed(_) | Self::Cancelled => None,
         }
@@ -64,6 +76,7 @@ impl ExecutionState {
             key,
             ResponseState::Running {
                 started_at: Instant::now(),
+                progress: None,
             },
         );
         generation
@@ -91,6 +104,44 @@ impl ExecutionState {
             Err(error) => ResponseState::Failed(error.to_string()),
         };
         self.responses.insert(key, response);
+    }
+
+    pub(crate) fn report_progress(
+        &mut self,
+        key: RequestKey,
+        generation: u64,
+        update: HttpProgress,
+    ) {
+        let key = self.resolve_key(key);
+        if self
+            .active
+            .get(&key)
+            .is_none_or(|active| active.generation != generation)
+        {
+            return;
+        }
+        let Some(ResponseState::Running { progress, .. }) = self.responses.get_mut(&key) else {
+            return;
+        };
+        match update {
+            HttpProgress::ResponseStarted {
+                status,
+                reason,
+                content_length,
+            } => {
+                *progress = Some(ResponseProgress {
+                    status,
+                    reason,
+                    received_bytes: 0,
+                    content_length,
+                });
+            }
+            HttpProgress::BodyReceived { bytes } => {
+                if let Some(progress) = progress {
+                    progress.received_bytes = bytes;
+                }
+            }
+        }
     }
 
     pub(crate) fn fail(&mut self, key: RequestKey, message: String) {
@@ -203,11 +254,15 @@ pub(crate) fn body_file_path_for_storage(selected: &Path, workspace_path: Option
     selected.display().to_string()
 }
 
-pub(crate) fn execute_http_request(
+pub(crate) fn execute_http_request<P>(
     request: HttpRequest,
     options: ExecutionOptions,
     cancellation: oneshot::Receiver<()>,
-) -> Result<HttpResponse, HttpError> {
+    progress: P,
+) -> Result<HttpResponse, HttpError>
+where
+    P: FnMut(HttpProgress) + Send,
+{
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -215,9 +270,14 @@ pub(crate) fn execute_http_request(
     runtime.block_on(async move {
         let engine = HttpEngine::new()?;
         engine
-            .execute_cancellable(&request, &options, async move {
-                let _ = cancellation.await;
-            })
+            .execute_cancellable_with_progress(
+                &request,
+                &options,
+                async move {
+                    let _ = cancellation.await;
+                },
+                progress,
+            )
             .await
     })
 }
@@ -255,7 +315,7 @@ pub(crate) fn format_duration(duration: Duration) -> String {
     }
 }
 
-pub(crate) fn format_size(size: usize) -> String {
+pub(crate) fn format_size(size: u64) -> String {
     if size >= 1024 * 1024 {
         format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
     } else if size >= 1024 {
@@ -265,18 +325,26 @@ pub(crate) fn format_size(size: usize) -> String {
     }
 }
 
+pub(crate) fn format_transfer_progress(received: u64, total: Option<u64>) -> String {
+    let received = format_size(received);
+    total.map_or_else(
+        || format!("{received} received"),
+        |total| format!("{received} of {}", format_size(total)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, time::Duration};
 
     use probe_core::HttpRequest;
     use probe_http::ExecutionOptions;
-    use probe_http::{HttpError, HttpResponse};
+    use probe_http::{HttpError, HttpProgress, HttpResponse};
     use tokio::sync::oneshot;
 
     use super::{
         ExecutionState, ResponseState, body_file_path_for_storage, execute_http_request,
-        format_duration, format_size,
+        format_duration, format_size, format_transfer_progress,
     };
 
     fn key() -> probe_core::RequestKey {
@@ -327,6 +395,52 @@ mod tests {
         assert!(matches!(
             state.response(key),
             Some(ResponseState::Complete(response)) if response.status == 204
+        ));
+    }
+
+    #[test]
+    fn response_progress_updates_only_the_matching_execution() {
+        let key = key();
+        let mut state = ExecutionState::default();
+        let (first, _) = oneshot::channel();
+        let first_generation = state.begin(key, first);
+        state.report_progress(
+            key,
+            first_generation,
+            HttpProgress::ResponseStarted {
+                status: 200,
+                reason: "OK".to_owned(),
+                content_length: Some(120 * 1024 * 1024),
+            },
+        );
+        state.report_progress(
+            key,
+            first_generation,
+            HttpProgress::BodyReceived {
+                bytes: 38 * 1024 * 1024,
+            },
+        );
+
+        assert!(matches!(
+            state.response(key),
+            Some(ResponseState::Running {
+                progress: Some(progress),
+                ..
+            }) if progress.status == 200
+                && progress.received_bytes == 38 * 1024 * 1024
+                && progress.content_length == Some(120 * 1024 * 1024)
+        ));
+
+        let (second, _) = oneshot::channel();
+        state.begin(key, second);
+        state.report_progress(
+            key,
+            first_generation,
+            HttpProgress::BodyReceived { bytes: 1 },
+        );
+        assert!(matches!(
+            state.response(key),
+            Some(ResponseState::Running { progress: None, .. })
         ));
     }
 
@@ -393,6 +507,11 @@ mod tests {
         assert_eq!(format_duration(Duration::from_millis(1250)), "1.25 s");
         assert_eq!(format_size(812), "812 B");
         assert_eq!(format_size(2048), "2.0 KB");
+        assert_eq!(
+            format_transfer_progress(40_265_318, Some(120 * 1024 * 1024)),
+            "38.4 MB of 120.0 MB"
+        );
+        assert_eq!(format_transfer_progress(2048, None), "2.0 KB received");
     }
 
     #[test]
@@ -407,6 +526,7 @@ mod tests {
             },
             ExecutionOptions::default(),
             cancellation,
+            |_| {},
         );
         assert_eq!(result, Err(HttpError::Cancelled));
     }

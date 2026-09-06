@@ -78,7 +78,7 @@ use crate::{
     components,
     execution::{
         ExecutionState, ResponseState, body_file_path_for_storage, execute_http_request,
-        format_duration, format_size, read_response_page, response_cache,
+        format_duration, format_size, format_transfer_progress, read_response_page, response_cache,
     },
     filesystem::{
         WATCH_DEBOUNCE, WorkspaceWatcher, event_affects_workspace, rename_hints,

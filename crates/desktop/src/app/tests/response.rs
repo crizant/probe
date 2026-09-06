@@ -49,6 +49,51 @@ fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn response_progress_renders_after_headers_arrive(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let request_key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            let (cancellation, _) = tokio::sync::oneshot::channel();
+            let generation = view.execution.begin(request_key, cancellation);
+            view.execution.report_progress(
+                request_key,
+                generation,
+                probe_http::HttpProgress::ResponseStarted {
+                    status: 200,
+                    reason: "OK".to_owned(),
+                    content_length: Some(120 * 1024 * 1024),
+                },
+            );
+            view.execution.report_progress(
+                request_key,
+                generation,
+                probe_http::HttpProgress::BodyReceived {
+                    bytes: 38 * 1024 * 1024,
+                },
+            );
+            cx.notify();
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(visual.debug_bounds("response-status-code").is_some());
+    assert!(visual.debug_bounds("response-metadata").is_some());
+    assert!(visual.debug_bounds("response-receiving-body").is_some());
+}
+
+#[gpui::test]
 fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {

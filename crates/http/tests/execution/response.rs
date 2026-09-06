@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use probe_core::RequestSettings;
 use probe_http::{
-    ExecutionOptions, HttpEngine, HttpError, MAX_IN_MEMORY_RESPONSE_BYTES, ResponseCache,
+    ExecutionOptions, HttpEngine, HttpError, HttpProgress, MAX_IN_MEMORY_RESPONSE_BYTES,
+    ResponseCache,
 };
 
 use super::support::{delayed_server, request, serve_once, temporary_path};
@@ -35,6 +36,40 @@ async fn reports_timeout_and_cancellation_separately() {
         .unwrap_err();
     assert_eq!(error, HttpError::Cancelled);
     cancel_server.abort();
+}
+
+#[tokio::test]
+async fn reports_headers_and_received_body_bytes_before_completion() {
+    let body = b"response progress";
+    let (base_url, captured) = serve_once("206 Partial Content", &[], body).await.unwrap();
+    let mut progress = Vec::new();
+    let response = HttpEngine::new()
+        .unwrap()
+        .execute_cancellable_with_progress(
+            &request("GET", format!("{base_url}/progress")),
+            &ExecutionOptions::default(),
+            std::future::pending::<()>(),
+            |update| progress.push(update),
+        )
+        .await
+        .unwrap();
+    captured.await.unwrap().unwrap();
+
+    assert_eq!(
+        progress.first(),
+        Some(&HttpProgress::ResponseStarted {
+            status: 206,
+            reason: "Partial Content".to_owned(),
+            content_length: Some(body.len() as u64),
+        })
+    );
+    assert_eq!(
+        progress.last(),
+        Some(&HttpProgress::BodyReceived {
+            bytes: body.len() as u64
+        })
+    );
+    assert_eq!(response.size, body.len());
 }
 
 #[tokio::test]
