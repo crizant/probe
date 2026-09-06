@@ -126,6 +126,16 @@ impl ExecutionState {
         self.key_aliases.clear();
     }
 
+    pub(crate) fn remove(&mut self, key: RequestKey) {
+        let key = self.resolve_key(key);
+        if let Some(active) = self.active.remove(&key) {
+            let _ = active.cancellation.send(());
+        }
+        self.responses.remove(&key);
+        self.key_aliases
+            .retain(|alias, target| *alias != key && *target != key);
+    }
+
     pub(crate) fn response(&self, key: RequestKey) -> Option<&ResponseState> {
         self.responses.get(&self.resolve_key(key))
     }
@@ -331,6 +341,22 @@ mod tests {
         assert_eq!(state.response(key), Some(&ResponseState::Cancelled));
         state.finish(key, generation, Err(HttpError::Cancelled));
         assert_eq!(state.response(key), Some(&ResponseState::Cancelled));
+    }
+
+    #[test]
+    fn removing_an_execution_cancels_it_without_retaining_a_response() {
+        let key = key();
+        let mut state = ExecutionState::default();
+        let (sender, mut receiver) = oneshot::channel();
+        let generation = state.begin(key, sender);
+
+        state.remove(key);
+
+        assert!(receiver.try_recv().is_ok());
+        assert!(state.response(key).is_none());
+
+        state.finish(key, generation, Ok(response(200)));
+        assert!(state.response(key).is_none());
     }
 
     #[test]

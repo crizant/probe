@@ -188,6 +188,8 @@ impl ProbeApp {
             if let Some(request) = loaded.request_mut(*key) {
                 *request = saved;
             }
+            self.execution.remove(*key);
+            self.response_viewer.remove(*key);
         }
     }
 

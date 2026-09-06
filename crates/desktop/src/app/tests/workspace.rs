@@ -750,9 +750,31 @@ fn discarding_a_dirty_tab_restores_the_workspace_request(cx: &mut TestAppContext
                 cx,
             );
             assert_eq!(view.dirty_keys(), vec![key]);
+            let (cancellation, _) = oneshot::channel();
+            let generation = view.execution.begin(key, cancellation);
+            view.complete_execution(
+                key,
+                generation,
+                Ok(HttpResponse {
+                    status: 200,
+                    reason: "OK".to_owned(),
+                    url: "https://discarded.example".to_owned(),
+                    duration: Duration::from_millis(12),
+                    size: 2,
+                    headers: Vec::new(),
+                    body: b"ok".to_vec(),
+                    body_complete: true,
+                    body_file: None,
+                    body_retention_error: None,
+                }),
+                cx,
+            );
+            assert!(view.execution.response(key).is_some());
+            assert!(view.response_viewer.document(key).is_some());
 
             view.discard_dirty_requests(&[key]);
             view.close_tab_now(key, cx);
+            view.select_request(key, cx);
 
             let request = view
                 .loaded_workspace
@@ -763,6 +785,8 @@ fn discarding_a_dirty_tab_restores_the_workspace_request(cx: &mut TestAppContext
                 .unwrap();
             assert_eq!(request.url, original_url);
             assert!(view.dirty_keys().is_empty());
+            assert!(view.execution.response(key).is_none());
+            assert!(view.response_viewer.document(key).is_none());
         })
         .unwrap();
 }
