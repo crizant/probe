@@ -287,46 +287,26 @@ impl ProbeApp {
                                             },
                                         ),
                                     );
-                                    let trigger = components::icon_button(
+                                    components::DropdownButton::new(
                                         theme,
-                                        "request-execution-menu-trigger",
-                                        "Send options",
-                                        components::chevron_icon(
-                                            theme,
-                                            self.transient.request_execution_menu_open,
-                                        ),
-                                        |_, _, _| {},
-                                    );
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(theme.metrics.spacing_1))
-                                        .child(components::primary_button(
-                                            theme,
-                                            "request-execution",
-                                            "Send",
-                                            move |_, _, cx| {
-                                                let _ = send_view.update(cx, |view, cx| {
-                                                    view.send_request(key, cx);
-                                                });
-                                            },
-                                        ))
-                                        .child(
-                                            Popover::new("request-execution-menu")
-                                                .open(self.transient.request_execution_menu_open)
-                                                .on_open_change(move |open, _, cx| {
-                                                    let _ =
-                                                        menu_state_view.update(cx, |view, cx| {
-                                                            view.transient
-                                                                .request_execution_menu_open =
-                                                                *open;
-                                                            cx.notify();
-                                                        });
-                                                })
-                                                .trigger(trigger)
-                                                .content(move |_, _, _| popup),
-                                        )
-                                        .into_any_element()
+                                        "request-execution",
+                                        "Send",
+                                        move |_, _, cx| {
+                                            let _ = send_view.update(cx, |view, cx| {
+                                                view.send_request(key, cx);
+                                            });
+                                        },
+                                    )
+                                    .menu_trigger("request-execution-menu-trigger", "Send options")
+                                    .open(self.transient.request_execution_menu_open)
+                                    .on_open_change(move |open, _, cx| {
+                                        let _ = menu_state_view.update(cx, |view, cx| {
+                                            view.transient.request_execution_menu_open = *open;
+                                            cx.notify();
+                                        });
+                                    })
+                                    .menu("request-execution-menu", popup)
+                                    .into_any_element()
                                 },
                             )),
                     )

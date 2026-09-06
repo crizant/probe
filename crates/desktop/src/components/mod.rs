@@ -13,18 +13,19 @@ use crate::response_viewer::{SearchMatch, join_header_lines};
 use crate::shell::PaneLayout;
 use crate::theme::Theme;
 use gpui::{
-    Anchor, Animation, AnimationExt as _, App, AppContext as _, Bounds, BoxShadow, ClickEvent,
-    ContentMask, Context, Edges, Element, ElementId, Entity, EntityId, FocusHandle, Focusable,
-    FontWeight, GlobalElementId, HighlightStyle, Hsla, InspectorElementId, InteractiveElement as _,
-    IntoElement, LayoutId, MouseButton, ParentElement as _, Pixels, Point, Render, RenderOnce,
-    Role, ShapedLine, SharedString, StatefulInteractiveElement as _, Style, Styled as _,
-    Subscription, Task, TextAlign, TextRun, TransformationMatrix, Window, canvas, deferred, div,
-    fill, font, point, prelude::FluentBuilder as _, px, relative, size, transparent_black,
+    Anchor, Animation, AnimationExt as _, AnyElement, App, AppContext as _, Bounds, BoxShadow,
+    ClickEvent, ContentMask, Context, Edges, Element, ElementId, Entity, EntityId, FocusHandle,
+    Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla, InspectorElementId,
+    InteractiveElement as _, IntoElement, LayoutId, MouseButton, ParentElement as _, Pixels, Point,
+    Render, RenderOnce, Role, ShapedLine, SharedString, StatefulInteractiveElement as _, Style,
+    Styled as _, Subscription, Task, TextAlign, TextRun, TransformationMatrix, Window, canvas,
+    deferred, div, fill, font, point, prelude::FluentBuilder as _, px, relative, size,
+    transparent_black,
 };
 use gpui_base::{
     Align, Button, Editor, ElementExt as _, FocusTrapElement as _, Input, InputBase,
-    POPUP_PRIORITY, Placement, Popup, Positioner, Select, Switch, SwitchThumb, SwitchTrack, Toggle,
-    ToggleGroup,
+    POPUP_PRIORITY, Placement, Popover, Popup, Positioner, Select, Switch, SwitchThumb,
+    SwitchTrack, Toggle, ToggleGroup,
     actions::{Cancel, Confirm, SelectDown, SelectUp},
     input::{
         Copy, Cut, EditorState, Escape, InputContextMenuCapabilities, InputEditorStyle, InputEvent,
@@ -71,7 +72,7 @@ pub(crate) use surfaces::{
 };
 
 pub(crate) use buttons::{
-    DialogActionStyle, dialog_action_button, dialog_choice_button, primary_button,
+    DialogActionStyle, DropdownButton, dialog_action_button, dialog_choice_button, primary_button,
     secondary_button, secondary_menu_trigger, text_button,
 };
 use icons::{CHECK_SVG, CHEVRON_RIGHT_SVG, SEARCH_SVG, folder_open_icon, library_icon};

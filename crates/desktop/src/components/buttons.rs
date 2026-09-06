@@ -24,6 +24,149 @@ pub(crate) fn primary_button(
     )
 }
 
+type DropdownButtonClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type DropdownButtonOpenHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
+
+/// A primary action with an attached menu trigger, presented as one control.
+#[derive(IntoElement)]
+pub(crate) struct DropdownButton {
+    theme: Theme,
+    id: &'static str,
+    label: String,
+    on_click: DropdownButtonClickHandler,
+    trigger_id: &'static str,
+    trigger_label: SharedString,
+    menu_id: ElementId,
+    open: bool,
+    on_open_change: DropdownButtonOpenHandler,
+    menu: Option<AnyElement>,
+}
+
+impl DropdownButton {
+    pub(crate) fn new(
+        theme: Theme,
+        id: &'static str,
+        label: impl Into<String>,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            theme,
+            id,
+            label: label.into(),
+            on_click: Rc::new(on_click),
+            trigger_id: "",
+            trigger_label: SharedString::from(""),
+            menu_id: ElementId::from("dropdown-button-menu"),
+            open: false,
+            on_open_change: Rc::new(|_, _, _| {}),
+            menu: None,
+        }
+    }
+
+    pub(crate) fn menu_trigger(mut self, id: &'static str, label: impl Into<SharedString>) -> Self {
+        self.trigger_id = id;
+        self.trigger_label = label.into();
+        self
+    }
+
+    pub(crate) fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    pub(crate) fn on_open_change(
+        mut self,
+        callback: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open_change = Rc::new(callback);
+        self
+    }
+
+    pub(crate) fn menu(mut self, id: impl Into<ElementId>, menu: impl IntoElement) -> Self {
+        self.menu_id = id.into();
+        self.menu = Some(menu.into_any_element());
+        self
+    }
+}
+
+impl RenderOnce for DropdownButton {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let theme = self.theme;
+        let radius = theme.metrics.radius_small;
+        let on_click = self.on_click;
+        let on_open_change = self.on_open_change;
+        let action = style_primary_split_segment(
+            Button::new(self.id)
+                .debug_selector(|| self.id.into())
+                .min_w(px(COMPACT_ACTION_BUTTON_WIDTH))
+                .px(px(theme.metrics.spacing_3))
+                .rounded_tl(px(radius))
+                .rounded_bl(px(radius))
+                .rounded_tr(px(0.0))
+                .rounded_br(px(0.0))
+                .on_click(move |event, window, cx| on_click(event, window, cx))
+                .child(self.label),
+            theme,
+            false,
+        );
+        let trigger = style_primary_split_segment(
+            Button::new(self.trigger_id)
+                .debug_selector(|| self.trigger_id.into())
+                .accessibility_label(self.trigger_label)
+                .w(px(theme.metrics.control_height))
+                .rounded_tl(px(0.0))
+                .rounded_bl(px(0.0))
+                .rounded_tr(px(radius))
+                .rounded_br(px(radius))
+                .on_click(|_, _, _| {})
+                .child(chevron_icon(theme, self.open).text_color(theme.colors.text.inverse)),
+            theme,
+            self.open,
+        );
+        div().flex().items_center().flex_none().child(action).child(
+            Popover::new(self.menu_id)
+                .open(self.open)
+                .on_open_change(move |open, window, cx| on_open_change(open, window, cx))
+                .trigger(trigger)
+                .content(move |_, _, _| self.menu.unwrap_or_else(|| div().into_any_element())),
+        )
+    }
+}
+
+fn style_primary_split_segment(button: Button, theme: Theme, selected: bool) -> Button {
+    button
+        .selected(selected)
+        .h(px(theme.metrics.control_height))
+        .flex()
+        .items_center()
+        .justify_center()
+        .font_family(theme.typography.interface_family)
+        .text_size(px(theme.typography.body_size))
+        .text_color(theme.colors.text.inverse)
+        .bg(theme.colors.actions.accent)
+        .border_1()
+        .border_color(theme.colors.actions.accent)
+        .cursor_pointer()
+        .hover(move |button| {
+            button
+                .bg(theme.colors.actions.hover)
+                .border_color(theme.colors.actions.hover)
+        })
+        .focus_visible(move |button| {
+            button.shadow(focus_ring_shadow(
+                theme.colors.actions.accent.into(),
+                theme.colors.text.inverse.into(),
+            ))
+        })
+        .styles(move |styles| {
+            styles.selected(move |button| {
+                button
+                    .bg(theme.colors.actions.pressed)
+                    .border_color(theme.colors.actions.pressed)
+            })
+        })
+}
+
 pub(crate) fn secondary_button(
     theme: Theme,
     id: &'static str,

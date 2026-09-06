@@ -11,8 +11,8 @@ use gpui_base::{
 };
 
 use super::{
-    EditorInsets, ProbeEditor, VariableContext, clipboard_has_pasteable_text, dropdown,
-    editor_value_needs_refresh, menu_button, pane_splitter,
+    DropdownButton, EditorInsets, ProbeEditor, VariableContext, clipboard_has_pasteable_text,
+    dropdown, editor_value_needs_refresh, menu_button, pane_splitter,
 };
 use crate::theme::Theme;
 
@@ -602,4 +602,119 @@ fn pane_splitter_without_idle_line_still_exposes_a_hit_target(cx: &mut TestAppCo
     assert!(handle.size.height > px(10.0));
     assert_eq!(handle.center().x, pane.right());
     assert_eq!(presses.get(), 1);
+}
+
+struct DropdownButtonHarness {
+    open: bool,
+    primary_clicks: usize,
+    menu_activations: usize,
+}
+
+impl Render for DropdownButtonHarness {
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let primary_view = cx.weak_entity();
+        let menu_state_view = cx.weak_entity();
+        let activate_view = cx.weak_entity();
+        let theme = Theme::light();
+
+        div().size_full().p(px(20.0)).child(
+            DropdownButton::new(theme, "dropdown-button-action", "Send", move |_, _, cx| {
+                let _ = primary_view.update(cx, |view, cx| {
+                    view.primary_clicks += 1;
+                    cx.notify();
+                });
+            })
+            .menu_trigger("dropdown-button-trigger", "Send options")
+            .open(self.open)
+            .on_open_change(move |open, _, cx| {
+                let _ = menu_state_view.update(cx, |view, cx| {
+                    view.open = *open;
+                    cx.notify();
+                });
+            })
+            .menu(
+                "dropdown-button-menu",
+                div()
+                    .id("dropdown-button-popup")
+                    .w(px(180.0))
+                    .debug_selector(|| "dropdown-button-popup".into())
+                    .child(menu_button(
+                        theme,
+                        "dropdown-button-item",
+                        "Send and Save Body…",
+                        None,
+                        move |_, cx| {
+                            let _ = activate_view.update(cx, |view, cx| {
+                                view.menu_activations += 1;
+                                view.open = false;
+                                cx.notify();
+                            });
+                        },
+                    )),
+            ),
+        )
+    }
+}
+
+#[gpui::test]
+fn dropdown_button_primary_action_does_not_open_the_menu(cx: &mut TestAppContext) {
+    cx.update(crate::theme::Theme::init);
+    let window = cx.open_window(size(px(320.0), px(180.0)), |_, _| DropdownButtonHarness {
+        open: false,
+        primary_clicks: 0,
+        menu_activations: 0,
+    });
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let action = visual
+        .debug_bounds("dropdown-button-action")
+        .expect("primary action should render");
+    visual.simulate_click(action.center(), Modifiers::default());
+    visual.run_until_parked();
+    cx.run_until_parked();
+
+    let (open, primary_clicks) = window
+        .update(cx, |view, _, _| (view.open, view.primary_clicks))
+        .expect("test window should remain open");
+    assert!(!open);
+    assert_eq!(primary_clicks, 1);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(visual.debug_bounds("dropdown-button-popup").is_none());
+}
+
+#[gpui::test]
+fn dropdown_button_menu_trigger_opens_and_activates_an_item(cx: &mut TestAppContext) {
+    cx.update(crate::theme::Theme::init);
+    let window = cx.open_window(size(px(320.0), px(180.0)), |_, _| DropdownButtonHarness {
+        open: false,
+        primary_clicks: 0,
+        menu_activations: 0,
+    });
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let trigger = visual
+        .debug_bounds("dropdown-button-trigger")
+        .expect("menu trigger should render");
+    visual.simulate_click(trigger.center(), Modifiers::default());
+    visual.run_until_parked();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let item = visual
+        .debug_bounds("dropdown-button-item")
+        .expect("menu item should render");
+    visual.simulate_click(item.center(), Modifiers::default());
+    visual.run_until_parked();
+    cx.run_until_parked();
+
+    let (open, primary_clicks, menu_activations) = window
+        .update(cx, |view, _, _| {
+            (view.open, view.primary_clicks, view.menu_activations)
+        })
+        .expect("test window should remain open");
+    assert!(!open);
+    assert_eq!(primary_clicks, 0);
+    assert_eq!(menu_activations, 1);
 }
