@@ -48,10 +48,15 @@ the same surface and the new assertion is a follow-on interaction.
 Before completing a code change, run:
 
 ```bash
+unset CARGO_TARGET_DIR
 cargo fmt --check
 cargo clippy --all-targets --all-features
 cargo test
 ```
+
+Run those cargo commands outside the Cursor sandbox (`required_permissions: ["all"]`)
+and do not inherit the sandbox `CARGO_TARGET_DIR`. That cache cannot compile
+`gpui_macos` (Metal toolchain) or `aws-lc-sys`. Use the project `target/` directory.
 
 Do not report completion while any required check fails.
 
