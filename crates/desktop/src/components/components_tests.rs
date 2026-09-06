@@ -38,6 +38,10 @@ fn changing_editor_language_refreshes_unchanged_text() {
     let xml: SharedString = r#"<root id="1"/>"#.into();
     assert!(editor_value_needs_refresh(true, &xml, &xml));
     assert!(!editor_value_needs_refresh(false, &xml, &xml));
+    let same_ptr = xml.clone();
+    assert!(!editor_value_needs_refresh(false, &xml, &same_ptr));
+    let same_text: SharedString = r#"<root id="1"/>"#.into();
+    assert!(!editor_value_needs_refresh(false, &xml, &same_text));
 }
 
 impl Render for TextContextMenuHarness {

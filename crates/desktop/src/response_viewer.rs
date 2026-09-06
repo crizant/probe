@@ -7,7 +7,7 @@
 
 use std::{ops::Range, sync::Arc};
 
-use gpui::{Image, ImageFormat, ScrollHandle};
+use gpui::{Image, ImageFormat, ScrollHandle, SharedString};
 use quick_xml::{Reader, events::Event, writer::Writer};
 
 use crate::response_inspector::{
@@ -95,7 +95,7 @@ pub(crate) struct SearchMatch {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PreparedDocument {
     pub generation: u64,
-    pub raw_text: String,
+    pub raw_text: SharedString,
     pub pretty_text: String,
     pub pretty_pending: bool,
     pub pretty_notice: Option<String>,
@@ -374,9 +374,9 @@ impl ResponseViewerState {
         document.page_len = body.len();
         if document.binary {
             document.page_body = body;
-            document.raw_text.clear();
+            document.raw_text = SharedString::default();
         } else {
-            document.raw_text = String::from_utf8_lossy(&body).into_owned();
+            document.raw_text = String::from_utf8_lossy(&body).into_owned().into();
             document.page_body.clear();
         }
         document.base64_text.clear();
@@ -450,17 +450,17 @@ impl ResponseViewerState {
         Some(selection)
     }
 
-    pub(crate) fn visible_text(&self, key: probe_core::RequestKey) -> &str {
+    pub(crate) fn visible_text(&self, key: probe_core::RequestKey) -> SharedString {
         let Some(document) = self.documents.get(&key) else {
-            return "";
+            return SharedString::default();
         };
         match self.tab {
-            ResponseViewerTab::Pretty => &document.pretty_text,
+            ResponseViewerTab::Pretty => SharedString::from(document.pretty_text.as_str()),
             ResponseViewerTab::Raw => match self.raw_view {
-                RawBodyView::Text => &document.raw_text,
-                RawBodyView::Base64 => &document.base64_text,
+                RawBodyView::Text => document.raw_text.clone(),
+                RawBodyView::Base64 => SharedString::from(document.base64_text.as_str()),
             },
-            ResponseViewerTab::Headers | ResponseViewerTab::Inspect => "",
+            ResponseViewerTab::Headers | ResponseViewerTab::Inspect => SharedString::default(),
         }
     }
 
@@ -493,7 +493,7 @@ pub(crate) struct PrettyBody {
 fn document_from_response(response: &HttpResponse, generation: u64) -> PreparedDocument {
     PreparedDocument {
         generation,
-        raw_text: String::new(),
+        raw_text: SharedString::default(),
         pretty_text: String::new(),
         pretty_pending: false,
         pretty_notice: None,
@@ -549,7 +549,7 @@ pub(crate) fn prepare_document(
                 document.page_body = response.body.clone();
             }
         } else {
-            document.raw_text = String::from_utf8_lossy(&response.body).into_owned();
+            document.raw_text = String::from_utf8_lossy(&response.body).into_owned().into();
         }
         return (document, false, false);
     }
@@ -620,7 +620,7 @@ pub(crate) fn prepare_document(
     let inspection_selection = first_inspection_selection(&inspection);
 
     let mut document = document_from_response(response, generation);
-    document.raw_text = raw_text;
+    document.raw_text = raw_text.into();
     document.pretty_text = pretty_text;
     document.pretty_pending = pretty_pending;
     document.pretty_notice = pretty_notice;
@@ -1062,7 +1062,7 @@ mod tests {
         let (document, pending, inspection_pending) = prepare_document(&response, 1);
         assert!(!pending);
         assert!(!inspection_pending);
-        assert_eq!(document.raw_text, line);
+        assert_eq!(document.raw_text.as_ref(), line);
     }
 
     #[test]
@@ -1351,7 +1351,7 @@ mod tests {
         let (document, pending, inspection_pending) = prepare_document(&response, 1);
         assert!(!pending);
         assert!(inspection_pending);
-        assert_eq!(document.raw_text, source);
+        assert_eq!(document.raw_text.as_ref(), source);
     }
 
     #[test]
@@ -1377,7 +1377,7 @@ mod tests {
 
         let document = viewer.document(key).unwrap();
         assert_eq!(document.page_offset, RESPONSE_PAGE_BYTES);
-        assert_eq!(document.raw_text, "last");
+        assert_eq!(document.raw_text.as_ref(), "last");
         assert!(document.pretty_text.is_empty());
         assert!(document.can_load_previous_page());
         assert!(!document.can_load_next_page());

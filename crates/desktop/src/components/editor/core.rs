@@ -4,6 +4,7 @@ struct EditorField {
     state: Entity<EditorState>,
     decorations: TextDecorationCollection,
     last_decorations: Vec<TextDecoration>,
+    last_value: SharedString,
     on_change: Option<InputChangeHandler>,
     last_scroll_range: Option<Range<usize>>,
     language: SharedString,
@@ -16,7 +17,11 @@ pub(in crate::components) fn editor_value_needs_refresh(
     current_value: &SharedString,
     next_value: &SharedString,
 ) -> bool {
-    language_changed || current_value != next_value
+    language_changed
+        || (!std::ptr::eq(
+            current_value.as_ref() as *const str,
+            next_value.as_ref() as *const str,
+        ) && current_value != next_value)
 }
 
 impl EditorField {
@@ -119,6 +124,7 @@ impl RenderOnce for ProbeEditor {
                 state,
                 decorations,
                 last_decorations: Vec::new(),
+                last_value: self.value.clone(),
                 on_change: on_change.clone(),
                 last_scroll_range: None,
                 language: language.clone(),
@@ -139,6 +145,11 @@ impl RenderOnce for ProbeEditor {
             let context_focus = field.state.read(cx).focus_handle(cx);
             let open_context_menu = context_menu.clone();
             let context_editor = field.state.clone();
+            let value_changed =
+                editor_value_needs_refresh(language_changed, &field.last_value, &self.value);
+            if value_changed {
+                field.last_value = self.value.clone();
+            }
             field.state.update(cx, |editor, cx| {
                 editor.set_editor_style(editor_paint_style(self.theme));
                 editor.set_editor_paddings(self.padding.edges());
@@ -163,7 +174,7 @@ impl RenderOnce for ProbeEditor {
                 // rebuilds it on the next text update. Pretty and Raw XML are
                 // often byte-identical, so force that update when only the
                 // language changed as well.
-                if editor_value_needs_refresh(language_changed, &editor.value(), &self.value) {
+                if value_changed {
                     editor.set_value(self.value.clone(), window, cx);
                 }
                 if editor.search_session().open {

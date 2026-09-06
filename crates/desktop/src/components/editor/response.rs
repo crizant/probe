@@ -49,7 +49,7 @@ pub(crate) fn body_text_input(
 pub(crate) fn response_body_input(
     theme: Theme,
     id: impl Into<ElementId>,
-    text: &str,
+    text: SharedString,
     options: ResponseBodyInputOptions<'_>,
 ) -> gpui::AnyElement {
     let inspection_reveal = options.inspection_reveal;
@@ -68,7 +68,7 @@ pub(crate) fn response_body_input(
         theme,
         id,
         ResponseEditorPresentation {
-            value: text.into(),
+            value: text,
             decorations,
             language: options.language,
             soft_wrap: options.soft_wrap,
