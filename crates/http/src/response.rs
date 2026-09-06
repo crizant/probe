@@ -6,6 +6,7 @@ use std::{
 };
 
 use reqwest::Response;
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
@@ -57,6 +58,7 @@ pub(crate) struct CollectedBody {
     pub(crate) complete: bool,
     pub(crate) file: Option<ResponseBodyFile>,
     pub(crate) retention_error: Option<String>,
+    pub(crate) sha256: Option<[u8; 32]>,
 }
 
 pub(crate) async fn collect_bounded<P>(
@@ -145,6 +147,7 @@ where
         complete: !exceeded_limit,
         file,
         retention_error,
+        sha256: None,
     })
 }
 
@@ -226,15 +229,20 @@ pub(crate) async fn stream_to_file<P>(
     response: &mut Response,
     output: &Path,
     mut progress: P,
-) -> Result<usize, HttpError>
+) -> Result<CollectedBody, HttpError>
 where
     P: FnMut(u64),
 {
     let (mut file, mut temporary) = create_temporary_output(output).await?;
+    let mut digest = Sha256::new();
+    let mut preview = Vec::new();
     let mut size = 0_usize;
     while let Some(chunk) = response.chunk().await.map_err(map_reqwest_error)? {
         size = checked_response_size(size, chunk.len())?;
         progress(size as u64);
+        let preview_length = (MAX_IN_MEMORY_RESPONSE_BYTES - preview.len()).min(chunk.len());
+        preview.extend_from_slice(&chunk[..preview_length]);
+        digest.update(&chunk);
         file.write_all(&chunk)
             .await
             .map_err(|error| output_error(output, error))?;
@@ -248,7 +256,14 @@ where
     drop(file);
     replace_output(&temporary.path, output).await?;
     temporary.committed = true;
-    Ok(size)
+    Ok(CollectedBody {
+        preview,
+        size,
+        complete: size <= MAX_IN_MEMORY_RESPONSE_BYTES,
+        file: None,
+        retention_error: None,
+        sha256: Some(digest.finalize().into()),
+    })
 }
 
 async fn create_temporary_output(

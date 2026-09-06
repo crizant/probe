@@ -348,10 +348,10 @@ fn tab_and_shift_tab_move_focus_between_controls(cx: &mut TestAppContext) {
 
     let input_point = {
         let mut visual = VisualTestContext::from_window(window.into(), cx);
-        let url_bar = visual
-            .debug_bounds("request-url-bar")
+        let url_input = visual
+            .debug_bounds("request-url-input")
             .expect("request URL input should render");
-        gpui::point(url_bar.right() - px(110.0), url_bar.center().y)
+        url_input.center()
     };
     {
         let mut visual = VisualTestContext::from_window(window.into(), cx);

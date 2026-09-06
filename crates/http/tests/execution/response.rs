@@ -5,6 +5,7 @@ use probe_http::{
     ExecutionOptions, HttpEngine, HttpError, HttpProgress, MAX_IN_MEMORY_RESPONSE_BYTES,
     ResponseCache,
 };
+use sha2::{Digest, Sha256};
 
 use super::support::{delayed_server, request, serve_once, temporary_path};
 
@@ -131,22 +132,34 @@ async fn bounds_in_memory_responses_and_streams_file_output() {
 
     let output = temporary_path("streamed-response.bin");
     let (base_url, captured) = serve_once("200 OK", &[], &body).await.unwrap();
-    let response = HttpEngine::new()
+    let mut progress = Vec::new();
+    let streamed = HttpEngine::new()
         .unwrap()
-        .execute_to_file(
+        .execute_cancellable_to_file_with_progress(
             &request("GET", format!("{base_url}/file")),
             &ExecutionOptions::default(),
             &output,
+            std::future::pending::<()>(),
+            |update| progress.push(update),
         )
         .await
         .unwrap();
+    let response = streamed.response;
     captured.await.unwrap().unwrap();
     assert_eq!(response.size, body.len());
-    assert!(response.body.is_empty());
+    assert_eq!(response.body, body[..MAX_IN_MEMORY_RESPONSE_BYTES]);
     assert!(!response.body_complete);
     assert!(response.body_file.is_none());
     assert!(response.body_retention_error.is_none());
     assert_eq!(std::fs::read(&output).unwrap(), body);
+    let expected_digest: [u8; 32] = Sha256::digest(&body).into();
+    assert_eq!(streamed.body_sha256, expected_digest);
+    assert_eq!(
+        progress.last(),
+        Some(&HttpProgress::BodyReceived {
+            bytes: body.len() as u64
+        })
+    );
     std::fs::remove_file(output).unwrap();
 }
 

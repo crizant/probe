@@ -1,6 +1,22 @@
 use super::*;
 
 #[gpui::test]
+fn dismissing_transient_surfaces_closes_the_request_execution_menu(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+
+    window
+        .update(cx, |view, _, _| {
+            view.transient.request_execution_menu_open = true;
+            view.dismiss_transient_surfaces();
+            assert!(!view.transient.request_execution_menu_open);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn structural_rename_keeps_open_tab_and_dirty_draft(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -767,6 +783,7 @@ fn discarding_a_dirty_tab_restores_the_workspace_request(cx: &mut TestAppContext
                     body_file: None,
                     body_retention_error: None,
                 }),
+                None,
                 cx,
             );
             assert!(view.execution.response(key).is_some());

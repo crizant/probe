@@ -131,7 +131,7 @@ impl ProbeApp {
                     .child(error.clone())
                     .into_any_element(),
             ),
-            Some(ResponseState::Complete(response)) => {
+            Some(ResponseState::Complete { response, saved_to }) => {
                 let status = format!("{} {}", response.status, response.reason);
                 let metadata = format!(
                     "• {} • {}",
@@ -139,6 +139,11 @@ impl ProbeApp {
                     format_size(response.size as u64),
                 );
                 let document = active_key.and_then(|key| self.response_viewer.document(key));
+                let can_save = response.size > 0
+                    && (response.body_complete
+                        || response.body_file.is_some()
+                        || saved_to.is_some());
+                let save_view = cx.weak_entity();
                 (
                     document.map_or_else(
                         || {
@@ -171,6 +176,21 @@ impl ProbeApp {
                                 .text_color(theme.colors.text.muted)
                                 .child(metadata),
                         )
+                        .when(can_save, |header| {
+                            header.child(components::icon_button(
+                                theme,
+                                "response-save-body",
+                                "Save response body",
+                                components::download_icon(theme),
+                                move |_, window, cx| {
+                                    if let Some(key) = active_key {
+                                        let _ = save_view.update(cx, |view, cx| {
+                                            view.choose_response_save(key, window, cx);
+                                        });
+                                    }
+                                },
+                            ))
+                        })
                         .into_any_element(),
                     self.render_response_document(theme, document, cx),
                 )

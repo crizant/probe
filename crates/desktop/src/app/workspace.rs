@@ -463,6 +463,7 @@ impl ProbeApp {
         self.transient.workspace_import_submenu_open = false;
         self.transient.sidebar_import_menu_open = false;
         self.transient.structure_add_menu_open = false;
+        self.transient.request_execution_menu_open = false;
         self.transient.tree_context_menu = None;
         self.transient.tab_context_menu = None;
         self.transient.environment_manager_context_menu = None;

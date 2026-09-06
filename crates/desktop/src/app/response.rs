@@ -2,6 +2,11 @@ use super::*;
 
 impl ProbeApp {
     pub(super) fn send_request(&mut self, key: RequestKey, cx: &mut Context<Self>) {
+        self.start_request(key, None, cx);
+    }
+
+    fn start_request(&mut self, key: RequestKey, output: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.transient.request_execution_menu_open = false;
         let Some(request) = self
             .loaded_workspace
             .as_ref()
@@ -46,6 +51,7 @@ impl ProbeApp {
                 let result = execute_http_request(
                     request,
                     options,
+                    output,
                     cancellation_receiver,
                     move |progress| {
                         let _ = progress_sender.send(progress);
@@ -71,13 +77,18 @@ impl ProbeApp {
                     cx.notify();
                 });
             }
-            let result = result_receiver.await.unwrap_or_else(|_| {
-                Err(HttpError::Transport(
-                    "HTTP execution ended without a result".to_owned(),
-                ))
-            });
+            let (result, saved_to) = match result_receiver.await {
+                Ok(Ok((response, saved_to))) => (Ok(response), saved_to),
+                Ok(Err(error)) => (Err(error), None),
+                Err(_) => (
+                    Err(HttpError::Transport(
+                        "HTTP execution ended without a result".to_owned(),
+                    )),
+                    None,
+                ),
+            };
             let _ = view.update(cx, |view, cx| {
-                view.complete_execution(key, generation, result, cx);
+                view.complete_execution(key, generation, result, saved_to, cx);
                 cx.notify();
             });
         })
@@ -90,19 +101,41 @@ impl ProbeApp {
         key: RequestKey,
         generation: u64,
         result: Result<HttpResponse, HttpError>,
+        saved_to: Option<SavedResponseBody>,
         cx: &mut Context<Self>,
     ) {
-        self.execution.finish(key, generation, result);
+        let completed = result.is_ok();
+        self.execution
+            .finish(key, generation, result, saved_to.clone());
         self.refresh_response_document(key, cx);
+        if completed && let Some(path) = saved_to {
+            self.show_toast(
+                ToastIntent::Success,
+                format!("Response body saved to {}.", path.path().display()),
+                cx,
+            );
+        }
     }
 
     pub(super) fn refresh_response_document(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let Some(ResponseState::Complete(response)) = self.execution.response(key) else {
+        let Some(ResponseState::Complete { response, saved_to }) = self.execution.response(key)
+        else {
             self.response_viewer.remove(key);
             return;
         };
         let generation = self.response_viewer.allocate_generation();
-        let (document, pretty_pending, inspection_pending) = prepare_document(response, generation);
+        let (mut document, pretty_pending, inspection_pending) =
+            prepare_document(response, generation);
+        if document.truncated
+            && let Some(path) = saved_to
+        {
+            document.retention_notice = Some(format!(
+                "Showing the first {} of {}. The complete response was saved to {}.",
+                format_size(document.page_len as u64),
+                format_size(document.total_size as u64),
+                path.path().display()
+            ));
+        }
         let pretty_job = pretty_pending.then(|| (response.body.clone(), document.syntax));
         let inspection_source = inspection_pending.then(|| {
             response.body_file.clone().map_or_else(
@@ -187,7 +220,7 @@ impl ProbeApp {
         direction: PageDirection,
         cx: &mut Context<Self>,
     ) {
-        let Some(ResponseState::Complete(response)) = self.execution.response(key) else {
+        let Some(ResponseState::Complete { response, .. }) = self.execution.response(key) else {
             return;
         };
         let Some(file) = response.body_file.clone() else {
@@ -228,5 +261,99 @@ impl ProbeApp {
         self.execution.cancel(key);
         self.response_viewer.remove(key);
         cx.notify();
+    }
+
+    pub(super) fn choose_send_and_save(
+        &mut self,
+        key: RequestKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(request) = self
+            .loaded_workspace
+            .as_ref()
+            .and_then(|loaded| loaded.workspace().request(key))
+        else {
+            return;
+        };
+        self.transient.request_execution_menu_open = false;
+        cx.notify();
+        let filename = suggested_request_filename(request);
+        let receiver = cx.prompt_for_new_path(&download_directory(), Some(&filename));
+        let view = cx.weak_entity();
+        window
+            .spawn(cx, async move |cx| {
+                let destination = match receiver.await {
+                    Ok(Ok(Some(path))) => path,
+                    Ok(Ok(None)) | Err(_) => return,
+                    Ok(Err(error)) => {
+                        let _ = view.update_in(cx, |view, _, cx| {
+                            view.show_toast(
+                                ToastIntent::Error,
+                                format!("Could not open the download destination picker: {error}"),
+                                cx,
+                            );
+                        });
+                        return;
+                    }
+                };
+                let _ = view.update_in(cx, |view, _, cx| {
+                    view.start_request(key, Some(destination), cx);
+                });
+            })
+            .detach();
+    }
+
+    pub(super) fn choose_response_save(
+        &mut self,
+        key: RequestKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ResponseState::Complete { response, saved_to }) = self.execution.response(key)
+        else {
+            return;
+        };
+        let response = response.clone();
+        let saved_to = saved_to.clone();
+        let filename = suggested_response_filename(&response);
+        let receiver = cx.prompt_for_new_path(&download_directory(), Some(&filename));
+        let view = cx.weak_entity();
+        window
+            .spawn(cx, async move |cx| {
+                let destination = match receiver.await {
+                    Ok(Ok(Some(path))) => path,
+                    Ok(Ok(None)) | Err(_) => return,
+                    Ok(Err(error)) => {
+                        let _ = view.update_in(cx, |view, _, cx| {
+                            view.show_toast(
+                                ToastIntent::Error,
+                                format!("Could not open the save destination picker: {error}"),
+                                cx,
+                            );
+                        });
+                        return;
+                    }
+                };
+                let saved_destination = destination.clone();
+                let result = cx
+                    .background_spawn(async move {
+                        save_response_body(&response, saved_to.as_ref(), &destination)
+                    })
+                    .await;
+                let _ = view.update_in(cx, |view, _, cx| match result {
+                    Ok(()) => view.show_toast(
+                        ToastIntent::Success,
+                        format!("Response body saved to {}.", saved_destination.display()),
+                        cx,
+                    ),
+                    Err(error) => view.show_toast(
+                        ToastIntent::Error,
+                        format!("Could not save the response body: {error}"),
+                        cx,
+                    ),
+                });
+            })
+            .detach();
     }
 }

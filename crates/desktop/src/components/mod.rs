@@ -76,8 +76,8 @@ pub(crate) use buttons::{
 };
 use icons::{CHECK_SVG, CHEVRON_RIGHT_SVG, SEARCH_SVG, folder_open_icon, library_icon};
 pub(crate) use icons::{
-    add_menu_button, chevron_icon, close_icon, home_button, hover_fill, locate_icon, plus_icon,
-    save_icon, sidebar_toggle, trash_icon, tree_folder_icon,
+    add_menu_button, chevron_icon, close_icon, download_icon, home_button, hover_fill, locate_icon,
+    plus_icon, save_icon, sidebar_toggle, trash_icon, tree_folder_icon,
 };
 use menus::{MenuButtonStyle, context_menu_separator, menu_button_with_style};
 pub(crate) use menus::{

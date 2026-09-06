@@ -77,8 +77,10 @@ use tree::{
 use crate::{
     components,
     execution::{
-        ExecutionState, ResponseState, body_file_path_for_storage, execute_http_request,
-        format_duration, format_size, format_transfer_progress, read_response_page, response_cache,
+        ExecutionState, ResponseState, SavedResponseBody, body_file_path_for_storage,
+        download_directory, execute_http_request, format_duration, format_size,
+        format_transfer_progress, read_response_page, response_cache, save_response_body,
+        suggested_request_filename, suggested_response_filename,
     },
     filesystem::{
         WATCH_DEBOUNCE, WorkspaceWatcher, event_affects_workspace, rename_hints,

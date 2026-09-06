@@ -253,24 +253,81 @@ impl ProbeApp {
                                     )),
                             )
                             .child(div().ml(px(theme.metrics.spacing_1)).flex_none().child(
-                                components::primary_button(
-                                    theme,
-                                    "request-execution",
-                                    if request_running { "Cancel" } else { "Send" },
-                                    move |_, _, cx| {
-                                        let _ = execution_view.update(cx, |view, cx| {
-                                            if view
-                                                .execution
-                                                .response(key)
-                                                .is_some_and(ResponseState::is_running)
-                                            {
+                                if request_running {
+                                    components::primary_button(
+                                        theme,
+                                        "request-execution",
+                                        "Cancel",
+                                        move |_, _, cx| {
+                                            let _ = execution_view.update(cx, |view, cx| {
                                                 view.cancel_request(key, cx);
-                                            } else {
-                                                view.send_request(key, cx);
-                                            }
-                                        });
-                                    },
-                                ),
+                                            });
+                                        },
+                                    )
+                                    .into_any_element()
+                                } else {
+                                    let send_view = execution_view.clone();
+                                    let menu_state_view = cx.weak_entity();
+                                    let download_view = cx.weak_entity();
+                                    let popup = components::popup_surface(
+                                        theme,
+                                        "request-execution-menu-popup",
+                                        180.0,
+                                    )
+                                    .child(
+                                        components::menu_button(
+                                            theme,
+                                            "request-send-and-save",
+                                            "Send and Save Body…",
+                                            None,
+                                            move |window, cx| {
+                                                let _ = download_view.update(cx, |view, cx| {
+                                                    view.choose_send_and_save(key, window, cx);
+                                                });
+                                            },
+                                        ),
+                                    );
+                                    let trigger = components::icon_button(
+                                        theme,
+                                        "request-execution-menu-trigger",
+                                        "Send options",
+                                        components::chevron_icon(
+                                            theme,
+                                            self.transient.request_execution_menu_open,
+                                        ),
+                                        |_, _, _| {},
+                                    );
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(theme.metrics.spacing_1))
+                                        .child(components::primary_button(
+                                            theme,
+                                            "request-execution",
+                                            "Send",
+                                            move |_, _, cx| {
+                                                let _ = send_view.update(cx, |view, cx| {
+                                                    view.send_request(key, cx);
+                                                });
+                                            },
+                                        ))
+                                        .child(
+                                            Popover::new("request-execution-menu")
+                                                .open(self.transient.request_execution_menu_open)
+                                                .on_open_change(move |open, _, cx| {
+                                                    let _ =
+                                                        menu_state_view.update(cx, |view, cx| {
+                                                            view.transient
+                                                                .request_execution_menu_open =
+                                                                *open;
+                                                            cx.notify();
+                                                        });
+                                                })
+                                                .trigger(trigger)
+                                                .content(move |_, _, _| popup),
+                                        )
+                                        .into_any_element()
+                                },
                             )),
                     )
                     .child(section_tabs),

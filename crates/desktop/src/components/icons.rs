@@ -14,6 +14,7 @@ static PLUS_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::L
 pub(super) static SEARCH_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuSearch));
 static SAVE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuSave));
+static DOWNLOAD_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuDownload));
 static CLOSE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuX));
 static TRASH_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuTrash2));
 static LOCATE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLocateFixed));
@@ -148,6 +149,15 @@ pub(crate) fn add_menu_button(theme: Theme, open: bool, enabled: bool) -> Button
 pub(crate) fn save_icon(theme: Theme) -> gpui::Div {
     library_icon("lucide-save", &SAVE_SVG, theme.metrics.icon_standard)
         .text_color(theme.colors.text.primary)
+}
+
+pub(crate) fn download_icon(theme: Theme) -> gpui::Div {
+    library_icon(
+        "lucide-download",
+        &DOWNLOAD_SVG,
+        theme.metrics.icon_standard,
+    )
+    .text_color(theme.colors.text.primary)
 }
 
 pub(crate) fn close_icon(theme: Theme) -> gpui::Div {

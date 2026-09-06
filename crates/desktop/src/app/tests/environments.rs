@@ -1519,14 +1519,10 @@ fn request_variables_render_inline_and_show_resolved_tooltips(cx: &mut TestAppCo
         let variable = visual
             .debug_bounds("variable-hover-trigger")
             .expect("variable hover trigger should render");
-        let url_bar = visual
-            .debug_bounds("request-url-bar")
-            .expect("request URL bar should render");
-        (
-            variable.center(),
-            gpui::point(url_bar.right() - px(110.0), url_bar.center().y),
-            variable.left(),
-        )
+        let url_input = visual
+            .debug_bounds("request-url-input")
+            .expect("request URL input should render");
+        (variable.center(), url_input.center(), variable.left())
     };
     hover_and_wait(cx, window, variable_point);
     let popup_point = {

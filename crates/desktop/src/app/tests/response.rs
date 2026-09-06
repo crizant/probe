@@ -49,6 +49,43 @@ fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let request_key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let trigger = visual
+        .debug_bounds("request-execution-menu-trigger")
+        .expect("send options should render");
+    visual.simulate_click(trigger.center(), Modifiers::default());
+    visual.run_until_parked();
+    let menu_item = visual
+        .debug_bounds("request-send-and-save")
+        .expect("send and save action should render");
+    visual.simulate_click(menu_item.center(), Modifiers::default());
+    visual.run_until_parked();
+
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+}
+
+#[gpui::test]
 fn response_progress_renders_after_headers_arrive(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -130,6 +167,7 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
                     body_file: None,
                     body_retention_error: None,
                 }),
+                None,
                 cx,
             );
             cx.notify();
@@ -142,6 +180,7 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         assert!(visual.debug_bounds("response-status").is_some());
         assert!(visual.debug_bounds("response-status-code").is_some());
         assert!(visual.debug_bounds("response-metadata").is_some());
+        assert!(visual.debug_bounds("response-save-body").is_some());
         assert!(visual.debug_bounds("response-tab-pretty").is_some());
         assert!(visual.debug_bounds("response-tab-raw").is_some());
         assert!(visual.debug_bounds("response-tab-headers").is_some());
@@ -154,6 +193,18 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         assert!(visual.debug_bounds("response-body").is_some());
         assert!(visual.debug_bounds("response-headers").is_none());
     }
+
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let save = visual
+            .debug_bounds("response-save-body")
+            .expect("completed response should offer saving its body");
+        visual.simulate_click(save.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
 
     {
         let mut visual = VisualTestContext::from_window(window.into(), cx);
@@ -335,6 +386,7 @@ fn image_response_replaces_pretty_with_scrollable_preview(cx: &mut TestAppContex
                     body_file: None,
                     body_retention_error: None,
                 }),
+                None,
                 cx,
             );
             cx.notify();
@@ -433,6 +485,7 @@ fn xml_response_inspects_values_and_keeps_syntax_after_visiting_raw(cx: &mut Tes
                     body_file: None,
                     body_retention_error: None,
                 }),
+                None,
                 cx,
             );
             cx.notify();
@@ -534,6 +587,7 @@ fn large_response_body_only_renders_visible_rows(cx: &mut TestAppContext) {
                     body_file: None,
                     body_retention_error: None,
                 }),
+                None,
                 cx,
             );
             view.response_viewer.set_tab(ResponseViewerTab::Raw);

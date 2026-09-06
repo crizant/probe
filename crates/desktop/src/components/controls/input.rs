@@ -398,6 +398,7 @@ pub(crate) fn url_text_input(
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui::AnyElement {
     let mut input = text_input_base(theme, id, value, placeholder);
+    input.debug_selector = Some("request-url-input");
     input.variables = variables;
     input.highlight_path_variables = true;
     input.variable_overlay = true;

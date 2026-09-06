@@ -1,18 +1,33 @@
 use std::{
     collections::BTreeMap,
-    io::{Read, Seek, SeekFrom},
-    path::Path,
+    fs::File,
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 use crate::filesystem::workspace_base_directory;
-use directories::ProjectDirs;
+use atomic_write_file::AtomicWriteFile;
+use directories::{ProjectDirs, UserDirs};
 use probe_core::{HttpRequest, RequestKey};
 use probe_http::{
     ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse, ResponseBodyFile,
     ResponseCache,
 };
+use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SavedResponseBody {
+    path: PathBuf,
+    sha256: [u8; 32],
+}
+
+impl SavedResponseBody {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResponseState {
@@ -20,7 +35,10 @@ pub(crate) enum ResponseState {
         started_at: Instant,
         progress: Option<ResponseProgress>,
     },
-    Complete(HttpResponse),
+    Complete {
+        response: HttpResponse,
+        saved_to: Option<SavedResponseBody>,
+    },
     Failed(String),
     Cancelled,
 }
@@ -41,7 +59,7 @@ impl ResponseState {
     pub(crate) fn elapsed(&self) -> Option<Duration> {
         match self {
             Self::Running { started_at, .. } => Some(started_at.elapsed()),
-            Self::Complete(response) => Some(response.duration),
+            Self::Complete { response, .. } => Some(response.duration),
             Self::Failed(_) | Self::Cancelled => None,
         }
     }
@@ -87,6 +105,7 @@ impl ExecutionState {
         key: RequestKey,
         generation: u64,
         result: Result<HttpResponse, HttpError>,
+        saved_to: Option<SavedResponseBody>,
     ) {
         let key = self.resolve_key(key);
         if self
@@ -99,7 +118,7 @@ impl ExecutionState {
         self.active.remove(&key);
         self.key_aliases.retain(|_, target| *target != key);
         let response = match result {
-            Ok(response) => ResponseState::Complete(response),
+            Ok(response) => ResponseState::Complete { response, saved_to },
             Err(HttpError::Cancelled) => ResponseState::Cancelled,
             Err(error) => ResponseState::Failed(error.to_string()),
         };
@@ -257,9 +276,10 @@ pub(crate) fn body_file_path_for_storage(selected: &Path, workspace_path: Option
 pub(crate) fn execute_http_request<P>(
     request: HttpRequest,
     options: ExecutionOptions,
+    output: Option<PathBuf>,
     cancellation: oneshot::Receiver<()>,
     progress: P,
-) -> Result<HttpResponse, HttpError>
+) -> Result<(HttpResponse, Option<SavedResponseBody>), HttpError>
 where
     P: FnMut(HttpProgress) + Send,
 {
@@ -269,17 +289,231 @@ where
         .map_err(|error| HttpError::ClientConfiguration(error.to_string()))?;
     runtime.block_on(async move {
         let engine = HttpEngine::new()?;
-        engine
-            .execute_cancellable_with_progress(
-                &request,
-                &options,
-                async move {
-                    let _ = cancellation.await;
-                },
-                progress,
-            )
-            .await
+        let cancellation = async move {
+            let _ = cancellation.await;
+        };
+        match output {
+            Some(output) => {
+                let streamed = engine
+                    .execute_cancellable_to_file_with_progress(
+                        &request,
+                        &options,
+                        &output,
+                        cancellation,
+                        progress,
+                    )
+                    .await?;
+                Ok((
+                    streamed.response,
+                    Some(SavedResponseBody {
+                        path: output,
+                        sha256: streamed.body_sha256,
+                    }),
+                ))
+            }
+            None => {
+                let response = engine
+                    .execute_cancellable_with_progress(&request, &options, cancellation, progress)
+                    .await?;
+                Ok((response, None))
+            }
+        }
     })
+}
+
+pub(crate) fn save_response_body(
+    response: &HttpResponse,
+    saved_to: Option<&SavedResponseBody>,
+    destination: &Path,
+) -> Result<(), String> {
+    let mut output = AtomicWriteFile::open(destination).map_err(|error| error.to_string())?;
+    if response.body_complete {
+        output
+            .write_all(&response.body)
+            .map_err(|error| error.to_string())?;
+    } else if let Some(body_file) = &response.body_file {
+        copy_file(body_file.path(), &mut output)?;
+    } else if let Some(saved_to) = saved_to {
+        copy_verified_file(saved_to, &mut output)?;
+    } else {
+        return Err("The complete response body is no longer available.".to_owned());
+    }
+    output.sync_all().map_err(|error| error.to_string())?;
+    output.commit().map_err(|error| error.to_string())
+}
+
+fn copy_verified_file(
+    source: &SavedResponseBody,
+    destination: &mut AtomicWriteFile,
+) -> Result<(), String> {
+    let mut source_file = File::open(&source.path).map_err(|error| error.to_string())?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = source_file
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        destination
+            .write_all(&buffer[..read])
+            .map_err(|error| error.to_string())?;
+    }
+    let actual: [u8; 32] = digest.finalize().into();
+    if actual != source.sha256 {
+        return Err(
+            "The saved response body has changed since this response completed.".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn copy_file(source: &Path, destination: &mut AtomicWriteFile) -> Result<(), String> {
+    let mut source = File::open(source).map_err(|error| error.to_string())?;
+    std::io::copy(&mut source, destination)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn download_directory() -> PathBuf {
+    UserDirs::new()
+        .and_then(|directories| directories.download_dir().map(Path::to_owned))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+pub(crate) fn suggested_request_filename(request: &HttpRequest) -> String {
+    suggested_filename(request.url.as_deref(), None, None)
+}
+
+pub(crate) fn suggested_response_filename(response: &HttpResponse) -> String {
+    let disposition = header_value(response, "content-disposition");
+    let content_type = header_value(response, "content-type");
+    suggested_filename(Some(&response.url), disposition, content_type)
+}
+
+fn suggested_filename(
+    url: Option<&str>,
+    content_disposition: Option<&str>,
+    content_type: Option<&str>,
+) -> String {
+    let disposition_name = content_disposition.and_then(|value| {
+        disposition_parameter(value, "filename*")
+            .and_then(|value| {
+                value
+                    .split_once("''")
+                    .map(|(_, encoded)| encoded)
+                    .or(Some(value))
+            })
+            .map(percent_decode)
+            .or_else(|| disposition_parameter(value, "filename").map(percent_decode))
+    });
+    let url_name = url.and_then(|url| {
+        let path = url.split(['?', '#']).next().unwrap_or(url);
+        let path = path
+            .split_once("://")
+            .map_or(Some(path), |(_, remainder)| {
+                remainder.find('/').map(|index| &remainder[index..])
+            })?;
+        path.rsplit('/')
+            .next()
+            .filter(|segment| !segment.is_empty())
+            .map(percent_decode)
+    });
+    let fallback = content_type.and_then(content_type_extension).map_or_else(
+        || "response.bin".to_owned(),
+        |extension| format!("response.{extension}"),
+    );
+    sanitize_filename(
+        disposition_name
+            .or(url_name)
+            .as_deref()
+            .unwrap_or(&fallback),
+    )
+}
+
+fn disposition_parameter<'a>(value: &'a str, name: &str) -> Option<&'a str> {
+    value.split(';').skip(1).find_map(|parameter| {
+        let (candidate, value) = parameter.trim().split_once('=')?;
+        candidate
+            .trim()
+            .eq_ignore_ascii_case(name)
+            .then(|| value.trim().trim_matches('"'))
+    })
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let Some(value) = bytes
+                .get(index + 1..index + 3)
+                .and_then(|value| std::str::from_utf8(value).ok())
+                .and_then(|value| u8::from_str_radix(value, 16).ok())
+        {
+            decoded.push(value);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn sanitize_filename(value: &str) -> String {
+    let leaf = value.rsplit(['/', '\\']).next().unwrap_or_default();
+    let sanitized: String = leaf
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*')
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect();
+    let sanitized = sanitized.trim_matches([' ', '.']);
+    if sanitized.is_empty() {
+        "response.bin".to_owned()
+    } else {
+        sanitized.to_owned()
+    }
+}
+
+fn content_type_extension(value: &str) -> Option<&'static str> {
+    match value
+        .split(';')
+        .next()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "application/json" => Some("json"),
+        "application/pdf" => Some("pdf"),
+        "application/zip" => Some("zip"),
+        "image/gif" => Some("gif"),
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/webp" => Some("webp"),
+        "text/csv" => Some("csv"),
+        "text/html" => Some("html"),
+        "text/plain" => Some("txt"),
+        _ => None,
+    }
+}
+
+fn header_value<'a>(response: &'a HttpResponse, name: &str) -> Option<&'a str> {
+    response
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case(name))
+        .map(|header| header.value.as_str())
 }
 
 pub(crate) const RESPONSE_CACHE_QUOTA_BYTES: u64 = 512 * 1024 * 1024;
@@ -335,16 +569,22 @@ pub(crate) fn format_transfer_progress(received: u64, total: Option<u64>) -> Str
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, time::Duration};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
     use probe_core::HttpRequest;
     use probe_http::ExecutionOptions;
-    use probe_http::{HttpError, HttpProgress, HttpResponse};
+    use probe_http::{HttpError, HttpProgress, HttpResponse, ResponseHeader};
+    use sha2::{Digest, Sha256};
     use tokio::sync::oneshot;
 
     use super::{
-        ExecutionState, ResponseState, body_file_path_for_storage, execute_http_request,
-        format_duration, format_size, format_transfer_progress,
+        ExecutionState, ResponseState, SavedResponseBody, body_file_path_for_storage,
+        execute_http_request, format_duration, format_size, format_transfer_progress,
+        save_response_body, suggested_request_filename, suggested_response_filename,
     };
 
     fn key() -> probe_core::RequestKey {
@@ -386,15 +626,15 @@ mod tests {
         let (second, _) = oneshot::channel();
         let second_generation = state.begin(key, second);
 
-        state.finish(key, first_generation, Ok(response(201)));
+        state.finish(key, first_generation, Ok(response(201)), None);
         assert!(matches!(
             state.response(key),
             Some(ResponseState::Running { .. })
         ));
-        state.finish(key, second_generation, Ok(response(204)));
+        state.finish(key, second_generation, Ok(response(204)), None);
         assert!(matches!(
             state.response(key),
-            Some(ResponseState::Complete(response)) if response.status == 204
+            Some(ResponseState::Complete { response, .. }) if response.status == 204
         ));
     }
 
@@ -453,7 +693,7 @@ mod tests {
         state.cancel(key);
         assert!(receiver.try_recv().is_ok());
         assert_eq!(state.response(key), Some(&ResponseState::Cancelled));
-        state.finish(key, generation, Err(HttpError::Cancelled));
+        state.finish(key, generation, Err(HttpError::Cancelled), None);
         assert_eq!(state.response(key), Some(&ResponseState::Cancelled));
     }
 
@@ -469,7 +709,7 @@ mod tests {
         assert!(receiver.try_recv().is_ok());
         assert!(state.response(key).is_none());
 
-        state.finish(key, generation, Ok(response(200)));
+        state.finish(key, generation, Ok(response(200)), None);
         assert!(state.response(key).is_none());
     }
 
@@ -492,11 +732,11 @@ mod tests {
             Some(ResponseState::Running { .. })
         ));
 
-        state.finish(old_key, generation, Ok(response(202)));
+        state.finish(old_key, generation, Ok(response(202)), None);
 
         assert!(matches!(
             state.response(new_key),
-            Some(ResponseState::Complete(response)) if response.status == 202
+            Some(ResponseState::Complete { response, .. }) if response.status == 202
         ));
         assert!(state.response(old_key).is_none());
     }
@@ -515,6 +755,85 @@ mod tests {
     }
 
     #[test]
+    fn download_filenames_prefer_headers_then_url_and_are_sanitized() {
+        let request = HttpRequest {
+            url: Some("https://example.test/files/monthly%20report.csv?token=secret".to_owned()),
+            ..HttpRequest::default()
+        };
+        assert_eq!(suggested_request_filename(&request), "monthly report.csv");
+        assert_eq!(
+            suggested_request_filename(&HttpRequest {
+                url: Some("https://example.test".to_owned()),
+                ..HttpRequest::default()
+            }),
+            "response.bin"
+        );
+
+        let mut response = response(200);
+        response.url = "https://example.test/fallback.json".to_owned();
+        response.headers = vec![ResponseHeader {
+            name: "Content-Disposition".to_owned(),
+            value: "attachment; filename*=UTF-8''..%2Funsafe%3Fname.pdf".to_owned(),
+        }];
+        assert_eq!(suggested_response_filename(&response), "unsafe_name.pdf");
+
+        response.url = "https://example.test/".to_owned();
+        response.headers = vec![ResponseHeader {
+            name: "content-type".to_owned(),
+            value: "application/zip; charset=binary".to_owned(),
+        }];
+        assert_eq!(suggested_response_filename(&response), "response.zip");
+    }
+
+    #[test]
+    fn response_body_can_be_saved_from_memory_or_an_existing_download() {
+        let directory = std::env::temp_dir().join(format!(
+            "probe-response-save-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should follow the Unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).expect("temporary directory should be created");
+
+        let mut inline = response(200);
+        inline.body = b"inline response".to_vec();
+        inline.size = inline.body.len();
+        let inline_destination = directory.join("inline.bin");
+        save_response_body(&inline, None, &inline_destination)
+            .expect("inline response should save");
+        assert_eq!(fs::read(&inline_destination).unwrap(), inline.body);
+
+        let existing = directory.join("existing.bin");
+        fs::write(&existing, b"complete downloaded response").unwrap();
+        let saved = SavedResponseBody {
+            path: existing.clone(),
+            sha256: Sha256::digest(b"complete downloaded response").into(),
+        };
+        let mut preview = response(200);
+        preview.body = b"preview".to_vec();
+        preview.size = b"complete downloaded response".len();
+        preview.body_complete = false;
+        let copied_destination = directory.join("copied.bin");
+        save_response_body(&preview, Some(&saved), &copied_destination)
+            .expect("existing download should be copied");
+        assert_eq!(
+            fs::read(&copied_destination).unwrap(),
+            b"complete downloaded response"
+        );
+
+        fs::write(&existing, b"altered! downloaded response").unwrap();
+        let rejected_destination = directory.join("rejected.bin");
+        let error = save_response_body(&preview, Some(&saved), &rejected_destination)
+            .expect_err("a changed download must not be exported as the old response");
+        assert!(error.contains("changed since this response completed"));
+        assert!(!rejected_destination.exists());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn desktop_adapter_forwards_cancellation_to_the_shared_http_engine() {
         let (cancel, cancellation) = oneshot::channel();
         cancel.send(()).expect("cancellation should be delivered");
@@ -525,6 +844,7 @@ mod tests {
                 ..HttpRequest::default()
             },
             ExecutionOptions::default(),
+            None,
             cancellation,
             |_| {},
         );

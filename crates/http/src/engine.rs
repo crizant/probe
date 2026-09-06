@@ -6,7 +6,7 @@ use reqwest::{Client, header::HeaderMap, redirect::Policy};
 use crate::{
     ExecutionOptions, HttpError, HttpResponse, ResponseHeader,
     request::build_request,
-    response::{CollectedBody, collect_bounded, map_reqwest_error, stream_to_file},
+    response::{collect_bounded, map_reqwest_error, stream_to_file},
 };
 
 const DEFAULT_MAX_REDIRECTS: usize = 10;
@@ -34,6 +34,15 @@ pub enum HttpProgress {
 #[derive(Clone, Debug)]
 pub struct HttpEngine {
     default_client: Client,
+}
+
+/// A completed response streamed to a caller-owned file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamedHttpResponse {
+    /// Response metadata and bounded body preview.
+    pub response: HttpResponse,
+    /// SHA-256 digest of the complete bytes written to the output file.
+    pub body_sha256: [u8; 32],
 }
 
 impl HttpEngine {
@@ -81,6 +90,7 @@ impl HttpEngine {
     {
         self.execute_with_cancellation(request, options, None, cancellation, |_| {})
             .await
+            .map(|executed| executed.response)
     }
 
     /// Executes a cancellable request and reports response-header and body progress.
@@ -97,6 +107,7 @@ impl HttpEngine {
     {
         self.execute_with_cancellation(request, options, None, cancellation, progress)
             .await
+            .map(|executed| executed.response)
     }
 
     /// Executes a cancellable request while streaming its response body to a file.
@@ -112,6 +123,31 @@ impl HttpEngine {
     {
         self.execute_with_cancellation(request, options, Some(output), cancellation, |_| {})
             .await
+            .map(|executed| executed.response)
+    }
+
+    /// Executes a cancellable request, streams its body to a file, and reports progress.
+    pub async fn execute_cancellable_to_file_with_progress<C, P>(
+        &self,
+        request: &HttpRequest,
+        options: &ExecutionOptions,
+        output: &Path,
+        cancellation: C,
+        progress: P,
+    ) -> Result<StreamedHttpResponse, HttpError>
+    where
+        C: Future + Send,
+        P: FnMut(HttpProgress) + Send,
+    {
+        let executed = self
+            .execute_with_cancellation(request, options, Some(output), cancellation, progress)
+            .await?;
+        Ok(StreamedHttpResponse {
+            response: executed.response,
+            body_sha256: executed
+                .body_sha256
+                .expect("file responses always include a body digest"),
+        })
     }
 
     async fn execute_with_cancellation<C, P>(
@@ -121,7 +157,7 @@ impl HttpEngine {
         output: Option<&Path>,
         cancellation: C,
         mut progress: P,
-    ) -> Result<HttpResponse, HttpError>
+    ) -> Result<ExecutedHttpResponse, HttpError>
     where
         C: Future + Send,
         P: FnMut(HttpProgress) + Send,
@@ -140,7 +176,7 @@ impl HttpEngine {
         options: &ExecutionOptions,
         output: Option<&Path>,
         progress: &mut P,
-    ) -> Result<HttpResponse, HttpError>
+    ) -> Result<ExecutedHttpResponse, HttpError>
     where
         P: FnMut(HttpProgress),
     {
@@ -158,16 +194,12 @@ impl HttpEngine {
             content_length: expected_size,
         });
         let body = match output {
-            Some(output) => CollectedBody {
-                preview: Vec::new(),
-                size: stream_to_file(&mut response, output, |bytes| {
+            Some(output) => {
+                stream_to_file(&mut response, output, |bytes| {
                     progress(HttpProgress::BodyReceived { bytes });
                 })
-                .await?,
-                complete: false,
-                file: None,
-                retention_error: None,
-            },
+                .await?
+            }
             None => {
                 collect_bounded(
                     &mut response,
@@ -178,17 +210,21 @@ impl HttpEngine {
                 .await?
             }
         };
-        Ok(HttpResponse {
-            status: status.as_u16(),
-            reason: status.canonical_reason().unwrap_or_default().to_owned(),
-            url,
-            duration: started.elapsed(),
-            size: body.size,
-            headers,
-            body: body.preview,
-            body_complete: body.complete,
-            body_file: body.file,
-            body_retention_error: body.retention_error,
+        let body_sha256 = body.sha256;
+        Ok(ExecutedHttpResponse {
+            response: HttpResponse {
+                status: status.as_u16(),
+                reason: status.canonical_reason().unwrap_or_default().to_owned(),
+                url,
+                duration: started.elapsed(),
+                size: body.size,
+                headers,
+                body: body.preview,
+                body_complete: body.complete,
+                body_file: body.file,
+                body_retention_error: body.retention_error,
+            },
+            body_sha256,
         })
     }
 
@@ -201,6 +237,11 @@ impl HttpEngine {
             build_client(follow, maximum).map(Cow::Owned)
         }
     }
+}
+
+struct ExecutedHttpResponse {
+    response: HttpResponse,
+    body_sha256: Option<[u8; 32]>,
 }
 
 fn build_client(follow_redirects: bool, maximum: usize) -> Result<Client, HttpError> {
