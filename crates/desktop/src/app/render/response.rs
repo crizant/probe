@@ -198,7 +198,9 @@ impl ProbeApp {
         for (index, tab) in available_tabs.iter().copied().enumerate() {
             let tab_view = cx.weak_entity();
             let selected = self.response_viewer.tab() == tab;
-            let label = if tab == ResponseViewerTab::Inspect {
+            let label = if tab == ResponseViewerTab::Pretty && document.is_image() {
+                "Preview".to_owned()
+            } else if tab == ResponseViewerTab::Inspect {
                 let count = document.inspection.count();
                 if count > 0 {
                     format!("Inspect [{count}]")
@@ -208,6 +210,7 @@ impl ProbeApp {
             } else {
                 tab.label().to_owned()
             };
+            let debug_label = label.to_ascii_lowercase();
             tabs = tabs.child(
                 components::text_tab(
                     theme,
@@ -222,9 +225,7 @@ impl ProbeApp {
                         });
                     },
                 )
-                .debug_selector(move || {
-                    format!("response-tab-{}", tab.label().to_ascii_lowercase())
-                }),
+                .debug_selector(move || format!("response-tab-{debug_label}")),
             );
         }
         tabs.into_any_element()
@@ -385,6 +386,9 @@ impl ProbeApp {
         let list = match self.response_viewer.tab() {
             ResponseViewerTab::Headers => self.render_response_headers(theme, document, cx),
             ResponseViewerTab::Inspect => self.render_response_inspector(theme, key, document, cx),
+            ResponseViewerTab::Pretty if document.is_image() => {
+                self.render_response_image(theme, key, document)
+            }
             ResponseViewerTab::Pretty | ResponseViewerTab::Raw => {
                 self.render_response_body(theme, key, document, cx)
             }
@@ -411,6 +415,61 @@ impl ProbeApp {
             .when(has_banner, |panel| panel.child(banners))
             .child(list)
             .into_any_element()
+    }
+
+    fn render_response_image(
+        &self,
+        theme: Theme,
+        key: probe_core::RequestKey,
+        document: &PreparedDocument,
+    ) -> gpui::AnyElement {
+        match document.image_preview.as_ref() {
+            Some(ResponseImagePreview::Ready(image)) => {
+                let Some(scroll) = self.response_viewer.image_scroll(key) else {
+                    return placeholder_message(theme, "Image preview is unavailable.");
+                };
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(
+                        div()
+                            .id("response-image-preview")
+                            .debug_selector(|| "response-image-preview".into())
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(scroll)
+                            .p(px(theme.metrics.spacing_2))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .child(
+                                img(image.clone())
+                                    .id("response-preview-image")
+                                    .debug_selector(|| "response-preview-image".into())
+                                    .max_w_full()
+                                    .flex_none()
+                                    .with_loading(move || {
+                                        placeholder_message(theme, "Loading image…")
+                                    })
+                                    .with_fallback(move || {
+                                        placeholder_message(
+                                            theme,
+                                            "The image could not be decoded.",
+                                        )
+                                    }),
+                            ),
+                    )
+                    .child(
+                        Scrollbar::vertical(scroll)
+                            .id("response-image-scrollbar")
+                            .mode(ScrollbarMode::Always),
+                    )
+                    .into_any_element()
+            }
+            Some(ResponseImagePreview::Unavailable(message)) => placeholder_message(theme, message),
+            None => placeholder_message(theme, "Image preview is unavailable."),
+        }
     }
 
     pub(super) fn response_tab_content_spacing(theme: Theme) -> gpui::Div {

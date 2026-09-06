@@ -236,6 +236,122 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn image_response_replaces_pretty_with_scrollable_preview(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let request_key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            let (cancellation, _) = tokio::sync::oneshot::channel();
+            let generation = view.execution.begin(request_key, cancellation);
+            let width = 16_u32;
+            let height = 1_600_u32;
+            let row_bytes = (width * 3).div_ceil(4) * 4;
+            let pixel_bytes = row_bytes * height;
+            let file_size = 54 + pixel_bytes;
+            let mut body = Vec::with_capacity(file_size as usize);
+            body.extend_from_slice(b"BM");
+            body.extend_from_slice(&file_size.to_le_bytes());
+            body.extend_from_slice(&[0; 4]);
+            body.extend_from_slice(&54_u32.to_le_bytes());
+            body.extend_from_slice(&40_u32.to_le_bytes());
+            body.extend_from_slice(&(width as i32).to_le_bytes());
+            body.extend_from_slice(&(height as i32).to_le_bytes());
+            body.extend_from_slice(&1_u16.to_le_bytes());
+            body.extend_from_slice(&24_u16.to_le_bytes());
+            body.extend_from_slice(&0_u32.to_le_bytes());
+            body.extend_from_slice(&pixel_bytes.to_le_bytes());
+            body.extend_from_slice(&[0; 16]);
+            body.resize(file_size as usize, 0x7f);
+            view.complete_execution(
+                request_key,
+                generation,
+                Ok(HttpResponse {
+                    status: 200,
+                    reason: "OK".to_owned(),
+                    url: "https://api.example.test/avatar".to_owned(),
+                    duration: Duration::from_millis(12),
+                    size: body.len(),
+                    headers: vec![ResponseHeader {
+                        name: "content-type".to_owned(),
+                        value: "Image/BMP; charset=binary".to_owned(),
+                    }],
+                    body,
+                    body_complete: true,
+                    body_file: None,
+                    body_retention_error: None,
+                }),
+                cx,
+            );
+            cx.notify();
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("response-tab-preview").is_some());
+        assert!(visual.debug_bounds("response-tab-pretty").is_none());
+        assert!(visual.debug_bounds("response-tab-raw").is_some());
+        assert!(visual.debug_bounds("response-tab-headers").is_some());
+        assert!(visual.debug_bounds("response-image-preview").is_some());
+    }
+    cx.run_until_parked();
+    window
+        .update(cx, |_, _, cx| cx.notify())
+        .expect("test window should remain open");
+    cx.run_until_parked();
+
+    let (preview_bounds, image_before) = {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let preview = visual
+            .debug_bounds("response-image-preview")
+            .expect("image preview should render");
+        let image = visual
+            .debug_bounds("response-preview-image")
+            .expect("preview image should render");
+        assert!(
+            image.size.height > preview.size.height,
+            "long image should overflow preview: image={image:?}, preview={preview:?}"
+        );
+        (preview, image)
+    };
+    window
+        .update(cx, |view, _, _| {
+            assert!(
+                view.response_viewer
+                    .image_scroll(request_key)
+                    .expect("image scroll handle")
+                    .max_offset()
+                    .y
+                    > px(0.0)
+            );
+        })
+        .expect("test window should remain open");
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: preview_bounds.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    let image_after = visual
+        .debug_bounds("response-preview-image")
+        .expect("preview image should remain rendered after scrolling");
+    assert!(image_after.origin.y < image_before.origin.y);
+}
+
+#[gpui::test]
 fn xml_response_inspects_values_and_keeps_syntax_after_visiting_raw(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {

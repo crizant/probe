@@ -1,11 +1,13 @@
-//! Read-only response presentation: Pretty, Raw (Text/Base64), Headers, Inspect, and Search.
+//! Read-only response presentation: Pretty/Preview, Raw (Text/Base64), Headers, Inspect, and
+//! Search.
 //!
 //! This module retains response text without altering it, searches the active
 //! representation, and pretty-prints JSON and XML off the UI thread. Syntax coloring is
 //! applied by the gpui-base `Editor` highlighter.
 
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
+use gpui::{Image, ImageFormat, ScrollHandle};
 use quick_xml::{Reader, events::Event, writer::Writer};
 
 use crate::response_inspector::{
@@ -100,6 +102,7 @@ pub(crate) struct PreparedDocument {
     pub page_body: Vec<u8>,
     pub base64_text: String,
     pub base64_pending: bool,
+    pub image_preview: Option<ResponseImagePreview>,
     pub syntax: ResponseBodySyntax,
     pub binary: bool,
     pub file_backed: bool,
@@ -117,6 +120,10 @@ pub(crate) struct PreparedDocument {
 }
 
 impl PreparedDocument {
+    pub(crate) fn is_image(&self) -> bool {
+        self.image_preview.is_some()
+    }
+
     pub(crate) fn can_load_previous_page(&self) -> bool {
         self.file_backed && self.page_offset > 0 && !self.page_pending
     }
@@ -131,11 +138,18 @@ impl PreparedDocument {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseImagePreview {
+    Ready(Arc<Image>),
+    Unavailable(String),
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ResponseViewerState {
     tab: ResponseViewerTab,
     raw_view: RawBodyView,
     documents: std::collections::BTreeMap<probe_core::RequestKey, PreparedDocument>,
+    image_scrolls: std::collections::BTreeMap<probe_core::RequestKey, ScrollHandle>,
     next_generation: u64,
 }
 
@@ -150,6 +164,10 @@ impl ResponseViewerState {
 
     pub(crate) fn document(&self, key: probe_core::RequestKey) -> Option<&PreparedDocument> {
         self.documents.get(&key)
+    }
+
+    pub(crate) fn image_scroll(&self, key: probe_core::RequestKey) -> Option<&ScrollHandle> {
+        self.image_scrolls.get(&key)
     }
 
     pub(crate) fn inspection_selection(
@@ -169,6 +187,11 @@ impl ResponseViewerState {
     }
 
     pub(crate) fn insert(&mut self, key: probe_core::RequestKey, document: PreparedDocument) {
+        if document.is_image() {
+            self.image_scrolls.insert(key, ScrollHandle::new());
+        } else {
+            self.image_scrolls.remove(&key);
+        }
         self.documents.insert(key, document);
     }
 
@@ -186,10 +209,12 @@ impl ResponseViewerState {
 
     pub(crate) fn remove(&mut self, key: probe_core::RequestKey) {
         self.documents.remove(&key);
+        self.image_scrolls.remove(&key);
     }
 
     pub(crate) fn clear(&mut self) {
         self.documents.clear();
+        self.image_scrolls.clear();
         self.tab = ResponseViewerTab::default();
         self.raw_view = RawBodyView::default();
     }
@@ -201,6 +226,10 @@ impl ResponseViewerState {
         self.documents = std::mem::take(&mut self.documents)
             .into_iter()
             .filter_map(|(key, document)| key_remaps.get(&key).map(|new| (*new, document)))
+            .collect();
+        self.image_scrolls = std::mem::take(&mut self.image_scrolls)
+            .into_iter()
+            .filter_map(|(key, scroll)| key_remaps.get(&key).map(|new| (*new, scroll)))
             .collect();
     }
 
@@ -465,6 +494,7 @@ fn document_from_response(response: &HttpResponse, generation: u64) -> PreparedD
         page_body: Vec::new(),
         base64_text: String::new(),
         base64_pending: false,
+        image_preview: None,
         syntax: ResponseBodySyntax::Plain,
         binary: false,
         file_backed: response.body_file.is_some(),
@@ -486,6 +516,32 @@ pub(crate) fn prepare_document(
     response: &HttpResponse,
     generation: u64,
 ) -> (PreparedDocument, bool, bool) {
+    if let Some(media_type) = response_image_media_type(response) {
+        let mut document = document_from_response(response, generation);
+        document.image_preview = Some(if !response.body_complete {
+            ResponseImagePreview::Unavailable(
+                "The complete image response is unavailable for preview.".to_owned(),
+            )
+        } else if let Some(format) = ImageFormat::from_mime_type(&media_type) {
+            ResponseImagePreview::Ready(Arc::new(Image::from_bytes(format, response.body.clone())))
+        } else {
+            ResponseImagePreview::Unavailable(format!(
+                "The {media_type} image format cannot be previewed."
+            ))
+        });
+        document.binary = body_is_binary(&response.body, document.file_backed);
+        if document.binary {
+            if !matches!(
+                document.image_preview.as_ref(),
+                Some(ResponseImagePreview::Ready(_))
+            ) {
+                document.page_body = response.body.clone();
+            }
+        } else {
+            document.raw_text = String::from_utf8_lossy(&response.body).into_owned();
+        }
+        return (document, false, false);
+    }
     if response.body.is_empty() {
         return (document_from_response(response, generation), false, false);
     }
@@ -656,7 +712,9 @@ fn pretty_xml_text(source: &str) -> Result<String, PrettyXmlError> {
 }
 
 fn page_bytes(document: &PreparedDocument) -> &[u8] {
-    if document.binary {
+    if let Some(ResponseImagePreview::Ready(image)) = &document.image_preview {
+        image.bytes()
+    } else if document.binary {
         &document.page_body
     } else {
         document.raw_text.as_bytes()
@@ -742,6 +800,16 @@ fn content_type(response: &HttpResponse) -> Option<&str> {
         .iter()
         .find(|header| header.name.eq_ignore_ascii_case("content-type"))
         .map(|header| header.value.as_str())
+}
+
+fn response_image_media_type(response: &HttpResponse) -> Option<String> {
+    let media_type = content_type(response)?
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    media_type.starts_with("image/").then_some(media_type)
 }
 
 fn trim_ascii_start(bytes: &[u8]) -> &[u8] {
@@ -870,13 +938,14 @@ fn equal_ignore_case(left: char, right: char) -> bool {
 mod tests {
     use std::time::Duration;
 
+    use gpui::ImageFormat;
     use probe_http::{HttpResponse, ResponseHeader};
 
     use super::{
         PageDirection, PreparedDocument, RESPONSE_PAGE_BYTES, RawBodyView, ResponseBodySyntax,
-        ResponseViewerTab, body_is_binary, encode_base64, join_header_lines, prepare_document,
-        pretty_body, pretty_json_body, pretty_xml_body, response_body_syntax, search_headers,
-        search_text,
+        ResponseImagePreview, ResponseViewerTab, body_is_binary, encode_base64, join_header_lines,
+        prepare_document, pretty_body, pretty_json_body, pretty_xml_body, response_body_syntax,
+        search_headers, search_text,
     };
 
     fn response(body: &[u8], content_type: &str) -> HttpResponse {
@@ -1019,6 +1088,42 @@ mod tests {
         assert!(document.binary);
         assert!(document.raw_text.is_empty());
         assert_eq!(document.page_body, BINARY_BODY);
+    }
+
+    #[test]
+    fn image_content_type_prepares_a_supported_preview() {
+        let image = response(BINARY_BODY, " Image/PNG ; charset=binary");
+        let (document, pretty_pending, inspection_pending) = prepare_document(&image, 3);
+
+        assert!(!pretty_pending);
+        assert!(!inspection_pending);
+        assert!(document.is_image());
+        assert!(document.binary);
+        assert!(matches!(
+            document.image_preview,
+            Some(ResponseImagePreview::Ready(ref image)) if image.format() == ImageFormat::Png
+        ));
+        assert!(document.page_body.is_empty());
+
+        let (key, mut viewer) = viewer_with(document);
+        viewer.ensure_available_tab(key);
+        viewer.show_raw_base64(key);
+        assert_eq!(viewer.visible_text(key), encode_base64(BINARY_BODY));
+    }
+
+    #[test]
+    fn unsupported_image_content_type_still_uses_preview_presentation() {
+        let image = response(BINARY_BODY, "image/avif");
+        let (document, pretty_pending, inspection_pending) = prepare_document(&image, 4);
+
+        assert!(!pretty_pending);
+        assert!(!inspection_pending);
+        assert!(document.is_image());
+        assert!(matches!(
+            document.image_preview,
+            Some(ResponseImagePreview::Unavailable(ref message))
+                if message == "The image/avif image format cannot be previewed."
+        ));
     }
 
     #[test]

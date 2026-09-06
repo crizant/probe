@@ -13,9 +13,9 @@ use gpui::{
     ElementId, FocusHandle, FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyBinding,
     MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, PathPromptOptions, Pixels,
     Point, Render, ScrollHandle, ScrollStrategy, StatefulInteractiveElement as _, Styled as _,
-    Task, TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowControlArea,
-    WindowOptions, deferred, div, point, prelude::FluentBuilder as _, px, relative, size,
-    transparent_black, uniform_list,
+    StyledImage as _, Task, TitlebarOptions, UniformListScrollHandle, Window, WindowBounds,
+    WindowControlArea, WindowOptions, deferred, div, img, point, prelude::FluentBuilder as _, px,
+    relative, size, transparent_black, uniform_list,
 };
 #[cfg(target_os = "macos")]
 use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
@@ -95,7 +95,8 @@ use crate::{
     },
     response_viewer::{
         PageDirection, PreparedDocument, RESPONSE_PAGE_BYTES, RawBodyView, ResponseBodySyntax,
-        ResponseViewerState, ResponseViewerTab, encode_base64, prepare_document, pretty_body,
+        ResponseImagePreview, ResponseViewerState, ResponseViewerTab, encode_base64,
+        prepare_document, pretty_body,
     },
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
