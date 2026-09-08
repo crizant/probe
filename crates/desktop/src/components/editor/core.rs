@@ -35,7 +35,13 @@ impl EditorField {
         if matches!(event, InputEvent::Change)
             && let Some(on_change) = this.on_change.clone()
         {
-            on_change(input.read(cx).value(), window, cx);
+            let value = input.read(cx).value();
+            // Remember edits made by this EditorState before propagating them to
+            // application state. The resulting render is an acknowledgement of
+            // the local edit, not an external value replacement; calling
+            // EditorState::set_value for it would reset the caret and undo stack.
+            this.last_value = value.clone();
+            on_change(value, window, cx);
         }
     }
 }

@@ -7,7 +7,7 @@ use gpui::{
 };
 use gpui_base::{
     Button, Popover,
-    input::{Copy, Cut, InputState, Paste, SelectAll},
+    input::{Copy, Cut, InputState, Paste, SelectAll, Undo},
 };
 
 use super::{
@@ -42,6 +42,85 @@ fn changing_editor_language_refreshes_unchanged_text() {
     assert!(!editor_value_needs_refresh(false, &xml, &same_ptr));
     let same_text: SharedString = r#"<root id="1"/>"#.into();
     assert!(!editor_value_needs_refresh(false, &xml, &same_text));
+}
+
+struct EditableEditorHarness {
+    value: SharedString,
+}
+
+impl Render for EditableEditorHarness {
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::light();
+        let view = cx.weak_entity();
+        div().size_full().p(px(20.0)).child(
+            ProbeEditor {
+                theme,
+                id: "editable-editor-regression".into(),
+                value: self.value.clone(),
+                placeholder: "Body content".into(),
+                decorations: Vec::new(),
+                language: "json".into(),
+                readonly: false,
+                min_height: Some(120.0),
+                padding: EditorInsets::standard(theme),
+                soft_wrap: true,
+                text_color: theme.colors.text.primary,
+                scroll_to_range: None,
+                search_matches: Vec::new(),
+                on_change: Some(Rc::new(move |value, _, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        view.value = value;
+                        cx.notify();
+                    });
+                })),
+                on_mouse_down: None,
+                on_visible_range: None,
+                extra_context_menu_actions: Vec::new(),
+                debug_selector: Some("editable-editor-regression"),
+                variables: None,
+            }
+            .into_any_element(),
+        )
+    }
+}
+
+#[gpui::test]
+fn editable_editor_preserves_caret_and_undo_history_across_controlled_renders(
+    cx: &mut TestAppContext,
+) {
+    cx.update(crate::theme::Theme::init);
+    cx.update(|cx| cx.bind_keys([KeyBinding::new("ctrl-z", Undo, None)]));
+    let window = cx.open_window(size(px(420.0), px(220.0)), |_, _| EditableEditorHarness {
+        value: SharedString::default(),
+    });
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let editor = visual
+        .debug_bounds("editable-editor-regression")
+        .expect("editable editor should render");
+    visual.simulate_click(editor.center(), Modifiers::default());
+    visual.run_until_parked();
+
+    cx.simulate_input(window.into(), "abc");
+    cx.run_until_parked();
+    cx.simulate_input(window.into(), "d");
+    cx.run_until_parked();
+    assert_eq!(
+        window
+            .read_with(cx, |view, _| view.value.clone())
+            .expect("test window should remain open"),
+        "abcd"
+    );
+
+    cx.simulate_keystrokes(window.into(), "ctrl-z");
+    cx.run_until_parked();
+    assert_eq!(
+        window
+            .read_with(cx, |view, _| view.value.clone())
+            .expect("test window should remain open"),
+        ""
+    );
 }
 
 impl Render for TextContextMenuHarness {
