@@ -213,7 +213,7 @@ impl ResponseViewerState {
         if self.tab == ResponseViewerTab::Pretty && document.truncated {
             self.tab = ResponseViewerTab::Raw;
         }
-        if document.binary && self.raw_view == RawBodyView::Text {
+        if document.binary {
             self.raw_view = RawBodyView::Hex;
         }
     }
