@@ -5,7 +5,7 @@
 //! representation, and pretty-prints JSON and XML off the UI thread. Syntax coloring is
 //! applied by the gpui-base `Editor` highlighter.
 
-use std::{ops::Range, sync::Arc};
+use std::{fmt::Write, ops::Range, sync::Arc};
 
 use gpui::{Image, ImageFormat, ScrollHandle, SharedString};
 use quick_xml::{Reader, events::Event, writer::Writer};
@@ -275,7 +275,10 @@ impl ResponseViewerState {
         }
     }
 
-    pub(crate) fn take_hex_job(&mut self, key: probe_core::RequestKey) -> Option<(u64, Vec<u8>)> {
+    pub(crate) fn take_hex_job(
+        &mut self,
+        key: probe_core::RequestKey,
+    ) -> Option<(u64, Vec<u8>, usize)> {
         if self.tab != ResponseViewerTab::Raw || self.raw_view != RawBodyView::Hex {
             return None;
         }
@@ -287,12 +290,13 @@ impl ResponseViewerState {
         if bytes.is_empty() {
             return None;
         }
+        let offset = document.page_offset;
         if bytes.len() <= SYNC_PRETTY_BYTES {
-            document.hex_text = encode_hex(&bytes);
+            document.hex_text = encode_hex(&bytes, offset);
             None
         } else {
             document.hex_pending = true;
-            Some((document.generation, bytes))
+            Some((document.generation, bytes, offset))
         }
     }
 
@@ -531,8 +535,8 @@ impl ResponseViewerState {
     fn show_raw_hex(&mut self, key: probe_core::RequestKey) {
         self.set_tab(ResponseViewerTab::Raw);
         self.set_raw_view(RawBodyView::Hex);
-        if let Some((generation, bytes)) = self.take_hex_job(key) {
-            self.apply_hex(key, generation, encode_hex(&bytes));
+        if let Some((generation, bytes, offset)) = self.take_hex_job(key) {
+            self.apply_hex(key, generation, encode_hex(&bytes, offset));
         }
     }
 }
@@ -839,7 +843,7 @@ fn wrap_base64(encoded: Vec<u8>) -> String {
     wrapped
 }
 
-pub(crate) fn encode_hex(input: &[u8]) -> String {
+pub(crate) fn encode_hex(input: &[u8], base_offset: usize) -> String {
     const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
     const BYTES_PER_LINE: usize = 16;
 
@@ -855,8 +859,8 @@ pub(crate) fn encode_hex(input: &[u8]) -> String {
             output.push('\n');
         }
 
-        let offset = line_index * BYTES_PER_LINE;
-        output.push_str(&format!("{:08x}  ", offset));
+        let offset = base_offset + (line_index * BYTES_PER_LINE);
+        let _ = write!(output, "{:08x}  ", offset);
 
         for (byte_index, byte) in chunk.iter().enumerate() {
             if byte_index == 8 {
@@ -1339,28 +1343,28 @@ mod tests {
 
     #[test]
     fn encode_hex_produces_classic_hex_dump_format() {
-        let empty = encode_hex(b"");
+        let empty = encode_hex(b"", 0);
         assert_eq!(empty, "");
 
-        let single = encode_hex(b"A");
+        let single = encode_hex(b"A", 0);
         assert_eq!(
             single,
             "00000000  41                                                |A|"
         );
 
-        let short = encode_hex(b"Hello");
+        let short = encode_hex(b"Hello", 0);
         assert_eq!(
             short,
             "00000000  48 65 6c 6c 6f                                    |Hello|"
         );
 
-        let sixteen = encode_hex(b"0123456789abcdef");
+        let sixteen = encode_hex(b"0123456789abcdef", 0);
         assert_eq!(
             sixteen,
             "00000000  30 31 32 33 34 35 36 37 38 39 61 62 63 64 65 66  |0123456789abcdef|"
         );
 
-        let multiline = encode_hex(b"0123456789abcdef0123456789");
+        let multiline = encode_hex(b"0123456789abcdef0123456789", 0);
         let lines: Vec<&str> = multiline.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("00000000"));
@@ -1368,9 +1372,26 @@ mod tests {
         assert!(lines[0].ends_with("|0123456789abcdef|"));
         assert!(lines[1].ends_with("|0123456789|"));
 
-        let binary = encode_hex(BINARY_BODY);
+        let binary = encode_hex(BINARY_BODY, 0);
         assert!(binary.contains("00 9f 92 96"));
         assert!(binary.ends_with("|....|"));
+    }
+
+    #[test]
+    fn encode_hex_with_non_zero_base_offset() {
+        let page_offset = 0x1000;
+        let hex = encode_hex(b"Test", page_offset);
+        assert!(hex.starts_with("00001000"));
+
+        let multiline = encode_hex(b"0123456789abcdef0123456789", page_offset);
+        let lines: Vec<&str> = multiline.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("00001000"));
+        assert!(lines[1].starts_with("00001010"));
+
+        let large_offset = 0xdeadbe00;
+        let hex = encode_hex(b"Hello", large_offset);
+        assert!(hex.starts_with("deadbe00"));
     }
 
     #[test]
@@ -1436,9 +1457,14 @@ mod tests {
         assert!(!document.base64_pending);
         assert!(document.hex_text.is_empty());
         assert!(!document.hex_pending);
+
+        viewer.show_raw_base64(key);
+        assert_eq!(viewer.visible_text(key), encode_base64(&[1, 2, 3, 4]));
+
         viewer.show_raw_hex(key);
         let hex = viewer.visible_text(key);
         assert!(hex.contains("01 02 03 04"));
+        assert!(hex.starts_with(&format!("{:08x}", RESPONSE_PAGE_BYTES)));
     }
 
     #[test]

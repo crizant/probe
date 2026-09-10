@@ -217,11 +217,13 @@ impl ProbeApp {
     }
 
     pub(super) fn start_hex_encoding(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let Some((generation, bytes)) = self.response_viewer.take_hex_job(key) else {
+        let Some((generation, bytes, offset)) = self.response_viewer.take_hex_job(key) else {
             return;
         };
         cx.spawn(async move |view, cx| {
-            let encoded = cx.background_spawn(async move { encode_hex(&bytes) }).await;
+            let encoded = cx
+                .background_spawn(async move { encode_hex(&bytes, offset) })
+                .await;
             let _ = view.update(cx, |view, cx| {
                 view.response_viewer.apply_hex(key, generation, encoded);
                 cx.notify();
