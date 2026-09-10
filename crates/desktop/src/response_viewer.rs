@@ -1120,9 +1120,9 @@ mod tests {
 
     use super::{
         PageDirection, PreparedDocument, RESPONSE_PAGE_BYTES, RawBodyView, ResponseBodySyntax,
-        ResponseImagePreview, ResponseViewerTab, body_is_binary, encode_base64, join_header_lines,
-        prepare_document, pretty_body, pretty_json_body, pretty_xml_body, response_body_syntax,
-        search_headers, search_text,
+        ResponseImagePreview, ResponseViewerTab, body_is_binary, encode_base64, encode_hex,
+        join_header_lines, prepare_document, pretty_body, pretty_json_body, pretty_xml_body,
+        response_body_syntax, search_headers, search_text,
     };
 
     fn response(body: &[u8], content_type: &str) -> HttpResponse {
