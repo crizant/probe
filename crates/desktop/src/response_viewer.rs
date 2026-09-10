@@ -1382,7 +1382,7 @@ mod tests {
         let sixteen = encode_hex(b"0123456789abcdef", 0);
         assert_eq!(
             sixteen,
-            "00000000  30 31 32 33 34 35 36 37 38 39 61 62 63 64 65 66  |0123456789abcdef|"
+            "00000000  30 31 32 33 34 35 36 37  38 39 61 62 63 64 65 66  |0123456789abcdef|"
         );
 
         let multiline = encode_hex(b"0123456789abcdef0123456789", 0);
