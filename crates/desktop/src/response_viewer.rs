@@ -1441,7 +1441,7 @@ mod tests {
         viewer.show_raw_hex(key);
         let hex = viewer.visible_text(key);
         assert!(hex.contains("7b 22 6f 6b 22"));
-        assert!(hex.contains("|{\"ok\":|"));
+        assert!(hex.contains("{\"ok\":true}"));
 
         viewer.insert(
             key,
