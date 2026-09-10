@@ -97,7 +97,7 @@ use crate::{
     },
     response_viewer::{
         PageDirection, PreparedDocument, RESPONSE_PAGE_BYTES, RawBodyView, ResponseBodySyntax,
-        ResponseImagePreview, ResponseViewerState, ResponseViewerTab, encode_base64,
+        ResponseImagePreview, ResponseViewerState, ResponseViewerTab, encode_base64, encode_hex,
         prepare_document, pretty_body,
     },
     session::{SessionState, SessionStore},

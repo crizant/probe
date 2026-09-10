@@ -114,6 +114,7 @@ pub(crate) struct PreparedDocument {
     pub retention_notice: Option<String>,
     pub page_offset: usize,
     pub page_len: usize,
+    pub page_revision: u64,
     pub total_size: usize,
     pub page_pending: bool,
     pub headers: Vec<ResponseHeader>,
@@ -254,7 +255,7 @@ impl ResponseViewerState {
     pub(crate) fn take_base64_job(
         &mut self,
         key: probe_core::RequestKey,
-    ) -> Option<(u64, Vec<u8>)> {
+    ) -> Option<(u64, Vec<u8>, u64)> {
         if self.tab != ResponseViewerTab::Raw || self.raw_view != RawBodyView::Base64 {
             return None;
         }
@@ -266,19 +267,20 @@ impl ResponseViewerState {
         if bytes.is_empty() {
             return None;
         }
+        let page_revision = document.page_revision;
         if bytes.len() <= SYNC_PRETTY_BYTES {
             document.base64_text = encode_base64(&bytes);
             None
         } else {
             document.base64_pending = true;
-            Some((document.generation, bytes))
+            Some((document.generation, bytes, page_revision))
         }
     }
 
     pub(crate) fn take_hex_job(
         &mut self,
         key: probe_core::RequestKey,
-    ) -> Option<(u64, Vec<u8>, usize)> {
+    ) -> Option<(u64, Vec<u8>, usize, u64)> {
         if self.tab != ResponseViewerTab::Raw || self.raw_view != RawBodyView::Hex {
             return None;
         }
@@ -291,12 +293,13 @@ impl ResponseViewerState {
             return None;
         }
         let offset = document.page_offset;
+        let page_revision = document.page_revision;
         if bytes.len() <= SYNC_PRETTY_BYTES {
             document.hex_text = encode_hex(&bytes, offset);
             None
         } else {
             document.hex_pending = true;
-            Some((document.generation, bytes, offset))
+            Some((document.generation, bytes, offset, page_revision))
         }
     }
 
@@ -304,12 +307,16 @@ impl ResponseViewerState {
         &mut self,
         key: probe_core::RequestKey,
         generation: u64,
+        page_revision: u64,
         encoded: String,
     ) {
         let Some(document) = self.documents.get_mut(&key) else {
             return;
         };
-        if document.generation != generation || !document.base64_pending {
+        if document.generation != generation
+            || !document.base64_pending
+            || document.page_revision != page_revision
+        {
             return;
         }
         document.base64_text = encoded;
@@ -321,6 +328,7 @@ impl ResponseViewerState {
         key: probe_core::RequestKey,
         generation: u64,
         offset: usize,
+        page_revision: u64,
         encoded: String,
     ) {
         let Some(document) = self.documents.get_mut(&key) else {
@@ -329,6 +337,7 @@ impl ResponseViewerState {
         if document.generation != generation
             || !document.hex_pending
             || document.page_offset != offset
+            || document.page_revision != page_revision
         {
             return;
         }
@@ -421,6 +430,7 @@ impl ResponseViewerState {
         }
         document.page_offset = offset;
         document.page_len = body.len();
+        document.page_revision = document.page_revision.wrapping_add(1);
         if document.binary {
             document.page_body = body;
             document.raw_text = SharedString::default();
@@ -530,8 +540,8 @@ impl ResponseViewerState {
     fn show_raw_base64(&mut self, key: probe_core::RequestKey) {
         self.set_tab(ResponseViewerTab::Raw);
         self.set_raw_view(RawBodyView::Base64);
-        if let Some((generation, bytes)) = self.take_base64_job(key) {
-            self.apply_base64(key, generation, encode_base64(&bytes));
+        if let Some((generation, bytes, page_revision)) = self.take_base64_job(key) {
+            self.apply_base64(key, generation, page_revision, encode_base64(&bytes));
         }
     }
 
@@ -539,8 +549,14 @@ impl ResponseViewerState {
     fn show_raw_hex(&mut self, key: probe_core::RequestKey) {
         self.set_tab(ResponseViewerTab::Raw);
         self.set_raw_view(RawBodyView::Hex);
-        if let Some((generation, bytes, offset)) = self.take_hex_job(key) {
-            self.apply_hex(key, generation, offset, encode_hex(&bytes, offset));
+        if let Some((generation, bytes, offset, page_revision)) = self.take_hex_job(key) {
+            self.apply_hex(
+                key,
+                generation,
+                offset,
+                page_revision,
+                encode_hex(&bytes, offset),
+            );
         }
     }
 }
@@ -571,6 +587,7 @@ fn document_from_response(response: &HttpResponse, generation: u64) -> PreparedD
         retention_notice: response.body_retention_error.clone(),
         page_offset: 0,
         page_len: response.body.len(),
+        page_revision: 0,
         total_size: response.size,
         page_pending: false,
         headers: response.headers.clone(),

@@ -202,7 +202,8 @@ impl ProbeApp {
     }
 
     pub(super) fn start_base64_encoding(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let Some((generation, bytes)) = self.response_viewer.take_base64_job(key) else {
+        let Some((generation, bytes, page_revision)) = self.response_viewer.take_base64_job(key)
+        else {
             return;
         };
         cx.spawn(async move |view, cx| {
@@ -210,7 +211,8 @@ impl ProbeApp {
                 .background_spawn(async move { encode_base64(&bytes) })
                 .await;
             let _ = view.update(cx, |view, cx| {
-                view.response_viewer.apply_base64(key, generation, encoded);
+                view.response_viewer
+                    .apply_base64(key, generation, page_revision, encoded);
                 cx.notify();
             });
         })
@@ -218,7 +220,9 @@ impl ProbeApp {
     }
 
     pub(super) fn start_hex_encoding(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let Some((generation, bytes, offset)) = self.response_viewer.take_hex_job(key) else {
+        let Some((generation, bytes, offset, page_revision)) =
+            self.response_viewer.take_hex_job(key)
+        else {
             return;
         };
         cx.spawn(async move |view, cx| {
@@ -227,7 +231,7 @@ impl ProbeApp {
                 .await;
             let _ = view.update(cx, |view, cx| {
                 view.response_viewer
-                    .apply_hex(key, generation, offset, encoded);
+                    .apply_hex(key, generation, offset, page_revision, encoded);
                 cx.notify();
             });
         })
