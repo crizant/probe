@@ -593,6 +593,12 @@ impl ProbeApp {
         {
             return placeholder_message(theme, "Encoding Base64…");
         }
+        if self.response_viewer.tab() == ResponseViewerTab::Raw
+            && self.response_viewer.raw_view() == RawBodyView::Hex
+            && document.hex_pending
+        {
+            return placeholder_message(theme, "Encoding Hex…");
+        }
         let text = self.response_viewer.visible_text(key);
         if text.is_empty() {
             return placeholder_message(theme, "Empty response body.");

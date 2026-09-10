@@ -74,15 +74,17 @@ pub(crate) enum RawBodyView {
     #[default]
     Text,
     Base64,
+    Hex,
 }
 
 impl RawBodyView {
-    pub(crate) const ALL: [Self; 2] = [Self::Text, Self::Base64];
+    pub(crate) const ALL: [Self; 3] = [Self::Text, Self::Base64, Self::Hex];
 
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Text => "Text",
             Self::Base64 => "Base64",
+            Self::Hex => "Hex",
         }
     }
 }
@@ -102,6 +104,8 @@ pub(crate) struct PreparedDocument {
     pub page_body: Vec<u8>,
     pub base64_text: String,
     pub base64_pending: bool,
+    pub hex_text: String,
+    pub hex_pending: bool,
     pub image_preview: Option<ResponseImagePreview>,
     pub syntax: ResponseBodySyntax,
     pub binary: bool,
@@ -209,7 +213,7 @@ impl ResponseViewerState {
             self.tab = ResponseViewerTab::Raw;
         }
         if document.binary && self.raw_view == RawBodyView::Text {
-            self.raw_view = RawBodyView::Base64;
+            self.raw_view = RawBodyView::Hex;
         }
     }
 
@@ -271,6 +275,27 @@ impl ResponseViewerState {
         }
     }
 
+    pub(crate) fn take_hex_job(&mut self, key: probe_core::RequestKey) -> Option<(u64, Vec<u8>)> {
+        if self.tab != ResponseViewerTab::Raw || self.raw_view != RawBodyView::Hex {
+            return None;
+        }
+        let document = self.documents.get_mut(&key)?;
+        if document.hex_pending || !document.hex_text.is_empty() {
+            return None;
+        }
+        let bytes = page_bytes(document).to_vec();
+        if bytes.is_empty() {
+            return None;
+        }
+        if bytes.len() <= SYNC_PRETTY_BYTES {
+            document.hex_text = encode_hex(&bytes);
+            None
+        } else {
+            document.hex_pending = true;
+            Some((document.generation, bytes))
+        }
+    }
+
     pub(crate) fn apply_base64(
         &mut self,
         key: probe_core::RequestKey,
@@ -285,6 +310,22 @@ impl ResponseViewerState {
         }
         document.base64_text = encoded;
         document.base64_pending = false;
+    }
+
+    pub(crate) fn apply_hex(
+        &mut self,
+        key: probe_core::RequestKey,
+        generation: u64,
+        encoded: String,
+    ) {
+        let Some(document) = self.documents.get_mut(&key) else {
+            return;
+        };
+        if document.generation != generation || !document.hex_pending {
+            return;
+        }
+        document.hex_text = encoded;
+        document.hex_pending = false;
     }
 
     pub(crate) fn apply_pretty(
@@ -381,6 +422,8 @@ impl ResponseViewerState {
         }
         document.base64_text.clear();
         document.base64_pending = false;
+        document.hex_text.clear();
+        document.hex_pending = false;
         document.pretty_text.clear();
         document.pretty_notice = None;
         document.inspection_ranges.clear();
@@ -459,6 +502,7 @@ impl ResponseViewerState {
             ResponseViewerTab::Raw => match self.raw_view {
                 RawBodyView::Text => document.raw_text.clone(),
                 RawBodyView::Base64 => SharedString::from(document.base64_text.as_str()),
+                RawBodyView::Hex => SharedString::from(document.hex_text.as_str()),
             },
             ResponseViewerTab::Headers | ResponseViewerTab::Inspect => SharedString::default(),
         }
@@ -482,6 +526,15 @@ impl ResponseViewerState {
             self.apply_base64(key, generation, encode_base64(&bytes));
         }
     }
+
+    #[cfg(test)]
+    fn show_raw_hex(&mut self, key: probe_core::RequestKey) {
+        self.set_tab(ResponseViewerTab::Raw);
+        self.set_raw_view(RawBodyView::Hex);
+        if let Some((generation, bytes)) = self.take_hex_job(key) {
+            self.apply_hex(key, generation, encode_hex(&bytes));
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -500,6 +553,8 @@ fn document_from_response(response: &HttpResponse, generation: u64) -> PreparedD
         page_body: Vec::new(),
         base64_text: String::new(),
         base64_pending: false,
+        hex_text: String::new(),
+        hex_pending: false,
         image_preview: None,
         syntax: ResponseBodySyntax::Plain,
         binary: false,
@@ -782,6 +837,56 @@ fn wrap_base64(encoded: Vec<u8>) -> String {
         wrapped.push_str(std::str::from_utf8(chunk).expect("base64 alphabet is ASCII"));
     }
     wrapped
+}
+
+pub(crate) fn encode_hex(input: &[u8]) -> String {
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+    const BYTES_PER_LINE: usize = 16;
+
+    if input.is_empty() {
+        return String::new();
+    }
+
+    let line_count = input.len().div_ceil(BYTES_PER_LINE);
+    let mut output = String::with_capacity(line_count * 80);
+
+    for (line_index, chunk) in input.chunks(BYTES_PER_LINE).enumerate() {
+        if line_index > 0 {
+            output.push('\n');
+        }
+
+        let offset = line_index * BYTES_PER_LINE;
+        output.push_str(&format!("{:08x}  ", offset));
+
+        for (byte_index, byte) in chunk.iter().enumerate() {
+            if byte_index == 8 {
+                output.push(' ');
+            }
+            output.push(HEX_CHARS[(byte >> 4) as usize] as char);
+            output.push(HEX_CHARS[(byte & 0x0F) as usize] as char);
+            output.push(' ');
+        }
+
+        let missing = BYTES_PER_LINE - chunk.len();
+        for index in 0..missing {
+            if chunk.len() + index == 8 {
+                output.push(' ');
+            }
+            output.push_str("   ");
+        }
+
+        output.push_str(" |");
+        for byte in chunk {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                output.push(*byte as char);
+            } else {
+                output.push('.');
+            }
+        }
+        output.push('|');
+    }
+
+    output
 }
 
 pub(crate) fn response_body_syntax(response: &HttpResponse) -> ResponseBodySyntax {
@@ -1233,6 +1338,42 @@ mod tests {
     }
 
     #[test]
+    fn encode_hex_produces_classic_hex_dump_format() {
+        let empty = encode_hex(b"");
+        assert_eq!(empty, "");
+
+        let single = encode_hex(b"A");
+        assert_eq!(
+            single,
+            "00000000  41                                                |A|"
+        );
+
+        let short = encode_hex(b"Hello");
+        assert_eq!(
+            short,
+            "00000000  48 65 6c 6c 6f                                    |Hello|"
+        );
+
+        let sixteen = encode_hex(b"0123456789abcdef");
+        assert_eq!(
+            sixteen,
+            "00000000  30 31 32 33 34 35 36 37 38 39 61 62 63 64 65 66  |0123456789abcdef|"
+        );
+
+        let multiline = encode_hex(b"0123456789abcdef0123456789");
+        let lines: Vec<&str> = multiline.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("00000000"));
+        assert!(lines[1].starts_with("00000010"));
+        assert!(lines[0].ends_with("|0123456789abcdef|"));
+        assert!(lines[1].ends_with("|0123456789|"));
+
+        let binary = encode_hex(BINARY_BODY);
+        assert!(binary.contains("00 9f 92 96"));
+        assert!(binary.ends_with("|....|"));
+    }
+
+    #[test]
     fn raw_base64_view_encodes_the_response_body() {
         let json = br#"{"ok":true}"#;
         let (key, mut viewer) =
@@ -1245,13 +1386,34 @@ mod tests {
             prepare_document(&response(BINARY_BODY, "application/octet-stream"), 2).0,
         );
         viewer.ensure_available_tab(key);
-        assert_eq!(viewer.raw_view(), RawBodyView::Base64);
+        assert_eq!(viewer.raw_view(), RawBodyView::Hex);
         viewer.show_raw_base64(key);
         assert_eq!(viewer.visible_text(key), encode_base64(BINARY_BODY));
     }
 
     #[test]
-    fn paging_a_binary_body_replaces_bytes_and_invalidates_base64() {
+    fn raw_hex_view_encodes_the_response_body() {
+        let json = br#"{"ok":true}"#;
+        let (key, mut viewer) =
+            viewer_with(prepare_document(&response(json, "application/json"), 1).0);
+        viewer.show_raw_hex(key);
+        let hex = viewer.visible_text(key);
+        assert!(hex.contains("7b 22 6f 6b 22"));
+        assert!(hex.contains("|{\"ok\":|"));
+
+        viewer.insert(
+            key,
+            prepare_document(&response(BINARY_BODY, "application/octet-stream"), 2).0,
+        );
+        viewer.ensure_available_tab(key);
+        assert_eq!(viewer.raw_view(), RawBodyView::Hex);
+        viewer.show_raw_hex(key);
+        let hex = viewer.visible_text(key);
+        assert!(hex.contains("00 9f 92 96"));
+    }
+
+    #[test]
+    fn paging_a_binary_body_replaces_bytes_and_invalidates_base64_and_hex() {
         let first_page = vec![0xFF; RESPONSE_PAGE_BYTES];
         let (key, mut viewer) = viewer_with(file_backed_document(
             &first_page,
@@ -1260,9 +1422,9 @@ mod tests {
         ));
         viewer.ensure_available_tab(key);
         assert_eq!(viewer.tab(), ResponseViewerTab::Raw);
-        assert_eq!(viewer.raw_view(), RawBodyView::Base64);
-        assert!(viewer.take_base64_job(key).is_some());
-        assert!(viewer.document(key).unwrap().base64_pending);
+        assert_eq!(viewer.raw_view(), RawBodyView::Hex);
+        assert!(viewer.take_hex_job(key).is_some());
+        assert!(viewer.document(key).unwrap().hex_pending);
 
         let (generation, offset) = viewer.begin_page(key, PageDirection::Next).unwrap();
         viewer.apply_page(key, generation, offset, vec![1, 2, 3, 4]);
@@ -1272,8 +1434,11 @@ mod tests {
         assert_eq!(document.page_body, [1, 2, 3, 4]);
         assert!(document.base64_text.is_empty());
         assert!(!document.base64_pending);
-        viewer.show_raw_base64(key);
-        assert_eq!(viewer.visible_text(key), encode_base64(&[1, 2, 3, 4]));
+        assert!(document.hex_text.is_empty());
+        assert!(!document.hex_pending);
+        viewer.show_raw_hex(key);
+        let hex = viewer.visible_text(key);
+        assert!(hex.contains("01 02 03 04"));
     }
 
     #[test]
