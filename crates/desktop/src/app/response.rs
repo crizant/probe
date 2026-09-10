@@ -187,6 +187,7 @@ impl ProbeApp {
         self.response_viewer.set_tab(tab);
         if let Some(key) = self.shell.active_tab() {
             self.start_base64_encoding(key, cx);
+            self.start_hex_encoding(key, cx);
         }
         cx.notify();
     }
@@ -225,7 +226,8 @@ impl ProbeApp {
                 .background_spawn(async move { encode_hex(&bytes, offset) })
                 .await;
             let _ = view.update(cx, |view, cx| {
-                view.response_viewer.apply_hex(key, generation, encoded);
+                view.response_viewer
+                    .apply_hex(key, generation, offset, encoded);
                 cx.notify();
             });
         })

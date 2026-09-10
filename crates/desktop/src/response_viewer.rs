@@ -320,12 +320,16 @@ impl ResponseViewerState {
         &mut self,
         key: probe_core::RequestKey,
         generation: u64,
+        offset: usize,
         encoded: String,
     ) {
         let Some(document) = self.documents.get_mut(&key) else {
             return;
         };
-        if document.generation != generation || !document.hex_pending {
+        if document.generation != generation
+            || !document.hex_pending
+            || document.page_offset != offset
+        {
             return;
         }
         document.hex_text = encoded;
@@ -536,7 +540,7 @@ impl ResponseViewerState {
         self.set_tab(ResponseViewerTab::Raw);
         self.set_raw_view(RawBodyView::Hex);
         if let Some((generation, bytes, offset)) = self.take_hex_job(key) {
-            self.apply_hex(key, generation, encode_hex(&bytes, offset));
+            self.apply_hex(key, generation, offset, encode_hex(&bytes, offset));
         }
     }
 }
