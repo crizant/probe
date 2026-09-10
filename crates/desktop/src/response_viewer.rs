@@ -213,7 +213,7 @@ impl ResponseViewerState {
         if self.tab == ResponseViewerTab::Pretty && document.truncated {
             self.tab = ResponseViewerTab::Raw;
         }
-        if document.binary {
+        if document.binary && self.raw_view == RawBodyView::Text {
             self.raw_view = RawBodyView::Hex;
         }
     }
@@ -1428,9 +1428,28 @@ mod tests {
             prepare_document(&response(BINARY_BODY, "application/octet-stream"), 2).0,
         );
         viewer.ensure_available_tab(key);
-        assert_eq!(viewer.raw_view(), RawBodyView::Hex);
+        assert_eq!(viewer.raw_view(), RawBodyView::Base64);
         viewer.show_raw_base64(key);
         assert_eq!(viewer.visible_text(key), encode_base64(BINARY_BODY));
+    }
+
+    #[test]
+    fn ensure_available_tab_switches_binary_from_text_to_hex() {
+        let (key, mut viewer) =
+            viewer_with(prepare_document(&response(BINARY_BODY, "application/octet-stream"), 1).0);
+        assert_eq!(viewer.raw_view(), RawBodyView::Text);
+        viewer.ensure_available_tab(key);
+        assert_eq!(viewer.raw_view(), RawBodyView::Hex);
+    }
+
+    #[test]
+    fn ensure_available_tab_preserves_base64_for_binary() {
+        let (key, mut viewer) =
+            viewer_with(prepare_document(&response(BINARY_BODY, "application/octet-stream"), 1).0);
+        viewer.set_raw_view(RawBodyView::Base64);
+        assert_eq!(viewer.raw_view(), RawBodyView::Base64);
+        viewer.ensure_available_tab(key);
+        assert_eq!(viewer.raw_view(), RawBodyView::Base64);
     }
 
     #[test]
