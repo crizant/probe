@@ -496,8 +496,9 @@ fn executes_request_as_deterministic_json() {
 
 #[test]
 fn executes_graphql_json_envelopes_and_preserves_application_errors() {
-    let response = br#"{"data":null,"errors":[{"message":"viewer is unavailable"}]}"#.to_vec();
-    let (server_url, server) = serve_once(response.clone(), "application/json");
+    let response =
+        r#"{"data":{"viewer":{"login":"octocat"}},"errors":[{"message":"viewer is unavailable"}]}"#;
+    let (server_url, server) = serve_once(response.as_bytes().to_vec(), "application/json");
     let workspace = graphql_runtime_fixture(&server_url);
     let output = probe()
         .args(["request", "run"])
@@ -512,10 +513,7 @@ fn executes_graphql_json_envelopes_and_preserves_application_errors() {
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
     assert_eq!(value["request"]["method"], "POST");
     assert_eq!(value["response"]["status"], 200);
-    assert_eq!(
-        value["response"]["body"]["content"],
-        "{\"data\":null,\"errors\":[{\"message\":\"viewer is unavailable\"}]}"
-    );
+    assert_eq!(value["response"]["body"]["content"], response);
 
     let captured = server.join().unwrap();
     assert!(captured.head.starts_with("POST /graphql HTTP/1.1\r\n"));
