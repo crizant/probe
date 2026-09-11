@@ -28,7 +28,7 @@ impl EditorSection {
         Self::Authentication,
     ];
 
-    pub(crate) const ALL_GRAPHQL: [Self; 7] = [
+    pub(crate) const ALL_GRAPHQL: [Self; 8] = [
         Self::Path,
         Self::Query,
         Self::Headers,
