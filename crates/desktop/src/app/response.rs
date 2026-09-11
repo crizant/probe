@@ -148,6 +148,7 @@ impl ProbeApp {
             self.response_viewer.ensure_available_tab(key);
         }
         self.start_base64_encoding(key, cx);
+        self.start_hex_encoding(key, cx);
         if let Some((body, syntax)) = pretty_job {
             cx.spawn(async move |view, cx| {
                 let pretty = cx
@@ -186,6 +187,7 @@ impl ProbeApp {
         self.response_viewer.set_tab(tab);
         if let Some(key) = self.shell.active_tab() {
             self.start_base64_encoding(key, cx);
+            self.start_hex_encoding(key, cx);
         }
         cx.notify();
     }
@@ -194,12 +196,14 @@ impl ProbeApp {
         self.response_viewer.set_raw_view(view);
         if let Some(key) = self.shell.active_tab() {
             self.start_base64_encoding(key, cx);
+            self.start_hex_encoding(key, cx);
         }
         cx.notify();
     }
 
     pub(super) fn start_base64_encoding(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let Some((generation, bytes)) = self.response_viewer.take_base64_job(key) else {
+        let Some((generation, bytes, page_revision)) = self.response_viewer.take_base64_job(key)
+        else {
             return;
         };
         cx.spawn(async move |view, cx| {
@@ -207,7 +211,27 @@ impl ProbeApp {
                 .background_spawn(async move { encode_base64(&bytes) })
                 .await;
             let _ = view.update(cx, |view, cx| {
-                view.response_viewer.apply_base64(key, generation, encoded);
+                view.response_viewer
+                    .apply_base64(key, generation, page_revision, encoded);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn start_hex_encoding(&mut self, key: RequestKey, cx: &mut Context<Self>) {
+        let Some((generation, bytes, offset, page_revision)) =
+            self.response_viewer.take_hex_job(key)
+        else {
+            return;
+        };
+        cx.spawn(async move |view, cx| {
+            let encoded = cx
+                .background_spawn(async move { encode_hex(&bytes, offset) })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                view.response_viewer
+                    .apply_hex(key, generation, offset, page_revision, encoded);
                 cx.notify();
             });
         })
@@ -243,6 +267,7 @@ impl ProbeApp {
                         view.response_viewer
                             .apply_page(key, generation, offset, body);
                         view.start_base64_encoding(key, cx);
+                        view.start_hex_encoding(key, cx);
                     }
                     Err(error) => view.response_viewer.fail_page(
                         key,

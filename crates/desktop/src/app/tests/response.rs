@@ -260,6 +260,27 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         assert!(visual.debug_bounds("response-body").is_some());
     }
 
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("response-raw-view-hex").is_some());
+        let hex = visual
+            .debug_bounds("response-raw-view-hex")
+            .expect("raw Hex sub-tab should render");
+        visual.simulate_click(hex.center(), Modifiers::default());
+    }
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.response_viewer.raw_view(), RawBodyView::Hex);
+            let text = view.response_viewer.visible_text(request_key);
+            assert!(text.contains("7b 22 63"));
+        })
+        .expect("test window should remain open");
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("response-body").is_some());
+    }
+
     window
         .update(cx, |view, _, cx| {
             view.response_viewer.set_tab(ResponseViewerTab::Headers);
