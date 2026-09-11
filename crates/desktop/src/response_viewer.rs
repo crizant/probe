@@ -78,7 +78,7 @@ pub(crate) enum RawBodyView {
 }
 
 impl RawBodyView {
-    pub(crate) const ALL: [Self; 3] = [Self::Text, Self::Base64, Self::Hex];
+    pub(crate) const ALL: [Self; 3] = [Self::Text, Self::Hex, Self::Base64];
 
     pub(crate) const fn label(self) -> &'static str {
         match self {
