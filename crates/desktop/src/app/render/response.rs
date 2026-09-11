@@ -4,6 +4,13 @@ impl ProbeApp {
     pub(super) fn render_response_panel(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let active_key = self.shell.active_tab();
         let state = active_key.and_then(|key| self.execution.response(key));
+        let shows_response_tabs = matches!(state, Some(ResponseState::Complete { .. }))
+            && active_key.is_some_and(|key| self.response_viewer.document(key).is_some());
+        let header_vertical_padding = if shows_response_tabs {
+            theme.metrics.spacing_1
+        } else {
+            theme.metrics.spacing_2
+        };
         let (header_leading, header_trailing, content) = match state {
             Some(
                 state @ ResponseState::Running {
@@ -225,8 +232,7 @@ impl ProbeApp {
             .bg(theme.colors.surfaces.raised)
             .child(
                 div()
-                    .pt(px(theme.metrics.spacing_2))
-                    .pb(px(theme.metrics.spacing_1))
+                    .py(px(header_vertical_padding))
                     .px(px(theme.metrics.spacing_2))
                     .flex()
                     .items_center()
@@ -479,6 +485,7 @@ impl ProbeApp {
                         div()
                             .h(px(theme.metrics.control_height))
                             .px(px(theme.metrics.spacing_2))
+                            .mb(px(theme.metrics.spacing_1))
                             .flex()
                             .items_center()
                             .child(self.render_raw_response_tabs(theme, cx)),
@@ -548,7 +555,6 @@ impl ProbeApp {
     pub(super) fn response_tab_content_spacing(theme: Theme) -> gpui::Div {
         div()
             .px(px(theme.metrics.spacing_2))
-            .pt(px(theme.metrics.spacing_1))
             .pb(px(theme.metrics.spacing_2))
     }
 
@@ -556,22 +562,16 @@ impl ProbeApp {
         theme: Theme,
         content: impl gpui::IntoElement,
     ) -> gpui::Div {
-        div()
-            .flex_1()
-            .min_h(px(0.0))
-            .flex()
-            .flex_col()
-            .pt(px(theme.metrics.spacing_1))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .flex()
-                    .flex_col()
-                    .border_t_1()
-                    .border_color(theme.colors.borders.subtle)
-                    .child(content),
-            )
+        div().flex_1().min_h(px(0.0)).flex().flex_col().child(
+            div()
+                .flex_1()
+                .min_h(px(0.0))
+                .flex()
+                .flex_col()
+                .border_t_1()
+                .border_color(theme.colors.borders.subtle)
+                .child(content),
+        )
     }
 
     pub(super) fn render_response_body(
