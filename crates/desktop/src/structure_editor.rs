@@ -5,7 +5,8 @@ pub(crate) const ROOT_PARENT: &str = "";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StructureDialogMode {
-    CreateRequest,
+    CreateHttpRequest,
+    CreateGraphqlRequest,
     CreateFolder,
     Rename { kind: ItemKind, selector: String },
     Move { kind: ItemKind, selector: String },
@@ -20,9 +21,18 @@ pub(crate) struct StructureDialog {
 }
 
 impl StructureDialog {
-    pub(crate) fn create_request(parent: Option<String>) -> Self {
+    pub(crate) fn create_http_request(parent: Option<String>) -> Self {
         Self {
-            mode: StructureDialogMode::CreateRequest,
+            mode: StructureDialogMode::CreateHttpRequest,
+            name: String::new(),
+            parent: parent.unwrap_or_default(),
+            index: String::new(),
+        }
+    }
+
+    pub(crate) fn create_graphql_request(parent: Option<String>) -> Self {
+        Self {
+            mode: StructureDialogMode::CreateGraphqlRequest,
             name: String::new(),
             parent: parent.unwrap_or_default(),
             index: String::new(),
@@ -58,7 +68,8 @@ impl StructureDialog {
 
     pub(crate) const fn title(&self) -> &'static str {
         match self.mode {
-            StructureDialogMode::CreateRequest => "New Request",
+            StructureDialogMode::CreateHttpRequest => "New HTTP Request",
+            StructureDialogMode::CreateGraphqlRequest => "New GraphQL Request",
             StructureDialogMode::CreateFolder => "New Folder",
             StructureDialogMode::Rename { .. } => "Rename",
             StructureDialogMode::Move { .. } => "Move",
@@ -67,7 +78,9 @@ impl StructureDialog {
 
     pub(crate) const fn submit_label(&self) -> &'static str {
         match self.mode {
-            StructureDialogMode::CreateRequest | StructureDialogMode::CreateFolder => "Create",
+            StructureDialogMode::CreateHttpRequest
+            | StructureDialogMode::CreateGraphqlRequest
+            | StructureDialogMode::CreateFolder => "Create",
             StructureDialogMode::Rename { .. } => "Rename",
             StructureDialogMode::Move { .. } => "Move",
         }
@@ -96,7 +109,7 @@ impl StructureDialog {
         };
 
         match &self.mode {
-            StructureDialogMode::CreateRequest => {
+            StructureDialogMode::CreateHttpRequest => {
                 if name.is_empty() {
                     return Err("Request name is required.".to_owned());
                 }
@@ -107,6 +120,20 @@ impl StructureDialog {
                     method: Some("GET".to_owned()),
                     url: None,
                     protocol: probe_opencollection::CreatedRequestProtocol::Http,
+                    graphql: None,
+                })
+            }
+            StructureDialogMode::CreateGraphqlRequest => {
+                if name.is_empty() {
+                    return Err("Request name is required.".to_owned());
+                }
+                Ok(StructureOperation::CreateRequest {
+                    parent,
+                    index: None,
+                    name: name.to_owned(),
+                    method: Some("POST".to_owned()),
+                    url: None,
+                    protocol: probe_opencollection::CreatedRequestProtocol::Graphql,
                     graphql: None,
                 })
             }

@@ -826,3 +826,4 @@ mod environments;
 mod interactions;
 mod response;
 mod workspace;
+mod graphql;

@@ -13,14 +13,29 @@ pub(crate) enum EditorSection {
     Headers,
     Body,
     Authentication,
+    GraphqlQuery,
+    GraphqlVariables,
+    GraphqlOperationName,
+    GraphqlExtensions,
 }
 
 impl EditorSection {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL_HTTP: [Self; 5] = [
         Self::Path,
         Self::Query,
         Self::Headers,
         Self::Body,
+        Self::Authentication,
+    ];
+
+    pub(crate) const ALL_GRAPHQL: [Self; 7] = [
+        Self::Path,
+        Self::Query,
+        Self::Headers,
+        Self::GraphqlQuery,
+        Self::GraphqlVariables,
+        Self::GraphqlOperationName,
+        Self::GraphqlExtensions,
         Self::Authentication,
     ];
 
@@ -31,7 +46,21 @@ impl EditorSection {
             Self::Headers => "Headers",
             Self::Body => "Body",
             Self::Authentication => "Authentication",
+            Self::GraphqlQuery => "Query",
+            Self::GraphqlVariables => "Variables",
+            Self::GraphqlOperationName => "Operation name",
+            Self::GraphqlExtensions => "Extensions",
         }
+    }
+
+    pub(crate) const fn is_graphql(self) -> bool {
+        matches!(
+            self,
+            Self::GraphqlQuery
+                | Self::GraphqlVariables
+                | Self::GraphqlOperationName
+                | Self::GraphqlExtensions
+        )
     }
 }
 

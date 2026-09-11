@@ -50,7 +50,23 @@ impl ProbeApp {
             return;
         }
         self.create_environment_dialog = None;
-        self.structure_dialog = Some(StructureDialog::create_request(
+        self.structure_dialog = Some(StructureDialog::create_http_request(
+            self.selected_parent_selector(),
+        ));
+        self.structure_dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn open_create_graphql_request_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.loaded_workspace.is_none() || self.structure_task.is_some() {
+            return;
+        }
+        self.create_environment_dialog = None;
+        self.structure_dialog = Some(StructureDialog::create_graphql_request(
             self.selected_parent_selector(),
         ));
         self.structure_dialog_focus.focus(window, cx);

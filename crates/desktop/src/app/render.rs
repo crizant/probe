@@ -294,6 +294,9 @@ impl Render for ProbeApp {
             .on_action(cx.listener(|view, _: &NewRequest, window, cx| {
                 view.open_create_request_dialog(window, cx);
             }))
+            .on_action(cx.listener(|view, _: &NewGraphqlRequest, window, cx| {
+                view.open_create_graphql_request_dialog(window, cx);
+            }))
             .on_action(cx.listener(|view, _: &NewFolder, window, cx| {
                 view.open_create_folder_dialog(window, cx);
             }))

@@ -154,6 +154,7 @@ gpui::actions!(
         FocusNextControl,
         FocusPreviousControl,
         NewRequest,
+        NewGraphqlRequest,
         NewFolder,
         DuplicateRequest,
         RenameTreeItem,

@@ -507,7 +507,8 @@ impl ProbeApp {
     }
 
     pub(super) fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
-        let new_request_view = cx.weak_entity();
+        let new_http_request_view = cx.weak_entity();
+        let new_graphql_request_view = cx.weak_entity();
         let new_folder_view = cx.weak_entity();
         let new_collection_view = cx.weak_entity();
         let open_collection_view = cx.weak_entity();
@@ -520,15 +521,15 @@ impl ProbeApp {
         let sidebar_import_popup_focus = self.transient.sidebar_import_popup_focus.clone();
         let can_edit = self.loaded_workspace.is_some() && self.structure_task.is_none();
         let add_menu_state_view = cx.weak_entity();
-        let add_popup = components::popup_surface(theme, "tree-add-menu-popup", 180.0)
+        let add_popup = components::popup_surface(theme, "tree-add-menu-popup", 200.0)
             .gap(px(theme.metrics.spacing_1))
             .child(components::menu_button(
                 theme,
-                "tree-new-request",
-                "Add Request",
+                "tree-new-http-request",
+                "New HTTP Request",
                 None,
                 move |window, cx| {
-                    let _ = new_request_view.update(cx, |view, cx| {
+                    let _ = new_http_request_view.update(cx, |view, cx| {
                         view.transient.structure_add_menu_open = false;
                         view.open_create_request_dialog(window, cx);
                     });
@@ -536,8 +537,20 @@ impl ProbeApp {
             ))
             .child(components::menu_button(
                 theme,
+                "tree-new-graphql-request",
+                "New GraphQL Request",
+                None,
+                move |window, cx| {
+                    let _ = new_graphql_request_view.update(cx, |view, cx| {
+                        view.transient.structure_add_menu_open = false;
+                        view.open_create_graphql_request_dialog(window, cx);
+                    });
+                },
+            ))
+            .child(components::menu_button(
+                theme,
                 "tree-new-folder",
-                "Add Folder",
+                "New Folder",
                 None,
                 move |window, cx| {
                     let _ = new_folder_view.update(cx, |view, cx| {

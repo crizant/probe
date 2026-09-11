@@ -4,6 +4,7 @@ mod authentication;
 mod body;
 mod file;
 mod form;
+mod graphql;
 mod headers;
 mod multipart;
 mod parameters;
@@ -52,6 +53,10 @@ impl ProbeApp {
             })
             .unwrap_or_default();
         let request_breadcrumb_index = breadcrumb_labels.len();
+        let protocol_label = match &request.protocol {
+            probe_core::RequestProtocol::Http => "HTTP request",
+            probe_core::RequestProtocol::Graphql(_) => "GraphQL request",
+        };
         breadcrumb_labels.push(
             request
                 .metadata
@@ -60,6 +65,7 @@ impl ProbeApp {
                 .unwrap_or("Untitled request")
                 .to_owned(),
         );
+        breadcrumb_labels.push(protocol_label.to_owned());
         let save_view = cx.weak_entity();
         let mut breadcrumb_path = div()
             .id("request-breadcrumb-path")
@@ -84,6 +90,10 @@ impl ProbeApp {
                     .debug_selector(|| "request-breadcrumb-request".into())
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.colors.text.primary)
+            } else if index == request_breadcrumb_index + 1 {
+                segment
+                    .debug_selector(|| "request-breadcrumb-protocol".into())
+                    .text_size(px(theme.typography.caption_size - 1.0))
             } else {
                 segment.debug_selector(move || format!("request-breadcrumb-folder-{index}"))
             };
@@ -138,11 +148,17 @@ impl ProbeApp {
             .execution
             .response(key)
             .is_some_and(ResponseState::is_running);
+        let is_graphql = matches!(request.protocol, probe_core::RequestProtocol::Graphql(_));
+        let sections = if is_graphql {
+            EditorSection::ALL_GRAPHQL.as_slice()
+        } else {
+            EditorSection::ALL_HTTP.as_slice()
+        };
         let mut section_tabs = Tabs::new("request-editor-sections")
             .flex()
             .items_center()
             .gap(px(theme.metrics.spacing_1));
-        for (index, section) in EditorSection::ALL.into_iter().enumerate() {
+        for (index, section) in sections.iter().copied().enumerate() {
             let section_view = cx.weak_entity();
             section_tabs = section_tabs.child(components::text_tab(
                 theme,
@@ -154,12 +170,17 @@ impl ProbeApp {
                         EditorSection::Query => format!("  {}", request.query_parameters.len()),
                         EditorSection::Path => format!("  {}", request.path_parameters.len()),
                         EditorSection::Headers => format!("  {}", request.headers.len()),
-                        EditorSection::Body | EditorSection::Authentication => String::new(),
+                        EditorSection::Body
+                        | EditorSection::Authentication
+                        | EditorSection::GraphqlQuery
+                        | EditorSection::GraphqlVariables
+                        | EditorSection::GraphqlOperationName
+                        | EditorSection::GraphqlExtensions => String::new(),
                     }
                 ),
                 self.request_editor.section == section,
                 index + 1,
-                EditorSection::ALL.len(),
+                sections.len(),
                 move |_, _, cx| {
                     let _ = section_view.update(cx, |view, cx| {
                         view.request_editor.section = section;
@@ -180,6 +201,18 @@ impl ProbeApp {
             EditorSection::Body => self.render_body_editor(key, &request, theme, cx),
             EditorSection::Authentication => {
                 self.render_authentication_editor(key, &request, theme, cx)
+            }
+            EditorSection::GraphqlQuery => {
+                self.render_graphql_query_editor(key, &request, theme, cx)
+            }
+            EditorSection::GraphqlVariables => {
+                self.render_graphql_variables_editor(key, &request, theme, cx)
+            }
+            EditorSection::GraphqlOperationName => {
+                self.render_graphql_operation_name_editor(key, &request, theme, cx)
+            }
+            EditorSection::GraphqlExtensions => {
+                self.render_graphql_extensions_editor(key, &request, theme, cx)
             }
         };
 
@@ -320,7 +353,8 @@ impl ProbeApp {
                     .px(px(theme.metrics.spacing_2))
                     .pb(px(theme.metrics.spacing_2))
                     .when(
-                        self.request_editor.section != EditorSection::Body,
+                        self.request_editor.section != EditorSection::Body
+                            && !self.request_editor.section.is_graphql(),
                         |content| content.overflow_y_scroll(),
                     )
                     .child(section),

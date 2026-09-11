@@ -100,7 +100,26 @@ impl PersistenceState {
             authentication: (baseline.and_then(|request| request.authentication.as_ref())
                 != snapshot.authentication.as_ref())
             .then(|| snapshot.authentication.clone()),
-            graphql: None,
+            graphql: match (&baseline.map(|r| &r.protocol), &snapshot.protocol) {
+                (
+                    Some(probe_core::RequestProtocol::Graphql(b)),
+                    probe_core::RequestProtocol::Graphql(s),
+                ) if b != s => {
+                    let baseline_op = baseline.and_then(|r| r.selected_graphql().ok().flatten());
+                    let snapshot_op = snapshot.selected_graphql().ok().flatten();
+                    if baseline_op != snapshot_op {
+                        Some(probe_core::GraphqlUpdate {
+                            query: snapshot_op.and_then(|op| op.query.clone()),
+                            variables: snapshot_op.map(|op| op.variables.clone()),
+                            operation_name: snapshot_op.map(|op| op.operation_name.clone()),
+                            extensions: snapshot_op.map(|op| op.extensions.clone()),
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
         };
         (
             self.revisions.get(&key).copied().unwrap_or_default(),
