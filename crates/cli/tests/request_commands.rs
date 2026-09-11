@@ -495,6 +495,43 @@ fn executes_request_as_deterministic_json() {
 }
 
 #[test]
+fn executes_graphql_json_envelopes_and_preserves_application_errors() {
+    let response = br#"{"data":null,"errors":[{"message":"viewer is unavailable"}]}"#.to_vec();
+    let (server_url, server) = serve_once(response.clone(), "application/json");
+    let workspace = graphql_runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--environment", "local", "--json"])
+        .output()
+        .expect("GraphQL request should run");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["request"]["method"], "POST");
+    assert_eq!(value["response"]["status"], 200);
+    assert_eq!(
+        value["response"]["body"]["content"],
+        "{\"data\":null,\"errors\":[{\"message\":\"viewer is unavailable\"}]}"
+    );
+
+    let captured = server.join().unwrap();
+    assert!(captured.head.starts_with("POST /graphql HTTP/1.1\r\n"));
+    assert!(captured.head.contains("content-type: application/json\r\n"));
+    let envelope: Value =
+        serde_json::from_slice(&captured.body).expect("request should be a JSON envelope");
+    assert_eq!(
+        envelope["query"],
+        "query Viewer($login: String!) { viewer(login: $login) { login } }"
+    );
+    assert_eq!(envelope["variables"]["login"], "octocat");
+    assert_eq!(envelope["operationName"], "Viewer");
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
 fn run_uses_runtime_variables_without_an_environment_and_does_not_persist_them() {
     let (server_url, server) = serve_once(Vec::new(), "text/plain");
     let workspace = runtime_variables_fixture(&server_url);

@@ -82,6 +82,12 @@ engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes t
 response body to the specified path using bounded streaming; response metadata remains on
 stdout. The destination is replaced only after the complete response has been written.
 
+GraphQL over HTTP uses an ordinary `POST` request with a raw JSON body. Probe passes a
+conventional JSON envelope containing `query`, optional `variables`, and optional
+`operationName` through the existing request path; environment and runtime variables are
+interpolated in the raw body. GraphQL execution errors remain response data, so an HTTP `200`
+response with an `errors` array is reported as a successful HTTP request.
+
 Repeatable `--var <name=value>` arguments provide invocation-only variables for `request run`.
 They override selected and inherited environment values before dependent variables are
 interpolated, and also work without `--environment`. If a name is repeated, the last value
