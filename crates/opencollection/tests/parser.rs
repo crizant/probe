@@ -111,6 +111,16 @@ fn parses_and_interpolates_graphql_over_http_requests() {
             .contains(r#""variables": { "login": "{{login}}" }"#)
     );
     assert!(raw.data.contains(r#""operationName": "Viewer""#));
+    let graphql = request
+        .graphql()
+        .expect("GraphQL projection should succeed");
+    assert_eq!(
+        graphql
+            .as_ref()
+            .and_then(|value| value.operation_name.as_deref()),
+        Some("Viewer")
+    );
+    assert_eq!(graphql.unwrap().variables.unwrap()["login"], "{{login}}");
 
     let environment = resolve_environment(&collection.environments, "local")
         .expect("fixture environment should resolve");

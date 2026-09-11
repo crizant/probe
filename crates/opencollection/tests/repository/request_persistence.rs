@@ -175,6 +175,89 @@ fn bundled_update_save_reload_preserves_unknown_fields() {
 }
 
 #[test]
+fn bundled_graphql_update_save_reload_uses_the_canonical_json_body() {
+    let path = temporary_path("graphql-bundled.yml");
+    fs::copy(fixture("graphql-http.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let graphql = probe_core::GraphqlRequest::from_parts(
+        "query Viewer { viewer { login } }".to_owned(),
+        Some(r#"{"includeName":true}"#),
+        Some("Viewer".to_owned()),
+    )
+    .unwrap();
+
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                body: Some(Some(RequestBody::Single(Body::Raw(graphql.as_raw_body())))),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+
+    let reloaded = load_workspace(&path).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("items/0").unwrap())
+        .unwrap();
+    assert_eq!(request.graphql().unwrap(), Some(graphql));
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("type: json"));
+    assert!(!saved.contains("type: graphql"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn unbundled_graphql_update_save_reload_preserves_extensions() {
+    let root = temporary_path("graphql-unbundled");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("opencollection.yml"),
+        "opencollection: 1.0.0\ninfo: { name: GraphQL }\nbundled: false\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("viewer.yml"),
+        concat!(
+            "info: { name: Viewer, type: http }\nhttp:\n  method: POST\n  body:\n    type: json\n",
+            "    data: '{\"query\":\"query Viewer { viewer { login } }\"}'\n",
+            "x-vendor: preserved\n",
+        ),
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&root).unwrap();
+    let graphql = probe_core::GraphqlRequest::from_parts(
+        "query Viewer { viewer { login } }".to_owned(),
+        None,
+        Some("Viewer".to_owned()),
+    )
+    .unwrap();
+    loaded
+        .update_request(
+            "viewer.yml",
+            &RequestUpdate {
+                body: Some(Some(RequestBody::Single(Body::Raw(graphql.as_raw_body())))),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+
+    let reloaded = load_workspace(&root).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("viewer.yml").unwrap())
+        .unwrap();
+    assert_eq!(request.graphql().unwrap(), Some(graphql));
+    assert!(
+        fs::read_to_string(root.join("viewer.yml"))
+            .unwrap()
+            .contains("x-vendor: preserved")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
     let path = temporary_path("desktop-fields.yml");
     fs::copy(fixture("phase1-round-trip.yml"), &path).unwrap();

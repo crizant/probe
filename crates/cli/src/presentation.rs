@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use probe_core::{
-    AuthenticationValue, Body, HttpRequest, MultipartPartKind, MultipartValue, RawBodyKind,
-    RequestBody, VariableValueType,
+    AuthenticationValue, Body, GraphqlRequest, HttpRequest, MultipartPartKind, MultipartValue,
+    RawBodyKind, RequestBody, VariableValueType,
 };
 use probe_http::{HttpResponse, MAX_IN_MEMORY_RESPONSE_BYTES};
 use serde_json::{Map, Value, json};
@@ -65,6 +65,7 @@ pub(super) fn response_json(
     };
     json!({
         "request": {
+            "graphql": request.graphql().ok().flatten().as_ref().map(graphql_json),
             "method": request.method,
             "url": request.url,
         },
@@ -223,6 +224,7 @@ pub(super) fn request_json(
         "authentication": authentication,
         "body": request.body.as_ref().map(request_body_json),
         "environment": environment,
+        "graphql": request.graphql().ok().flatten().as_ref().map(graphql_json),
         "headers": headers,
         "method": request.method,
         "name": request.metadata.name,
@@ -242,6 +244,14 @@ fn body_summary(body: Option<&RequestBody>) -> &'static str {
         Some(RequestBody::Single(Body::File(_))) => "file",
         Some(RequestBody::Variants(_)) => "variants",
     }
+}
+
+fn graphql_json(graphql: &GraphqlRequest) -> Value {
+    json!({
+        "operationName": graphql.operation_name,
+        "query": graphql.query,
+        "variables": graphql.variables,
+    })
 }
 
 fn request_body_json(body: &RequestBody) -> Value {

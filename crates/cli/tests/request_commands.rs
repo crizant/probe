@@ -91,6 +91,27 @@ fn gets_path_parameters_in_json_output() {
 }
 
 #[test]
+fn gets_first_class_graphql_fields_as_json() {
+    let output = probe()
+        .args(["request", "get"])
+        .arg(fixture("graphql-http.yml"))
+        .args(["items/0", "--environment", "local", "--json"])
+        .output()
+        .expect("get command should run");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["graphql"]["operationName"], "Viewer");
+    assert_eq!(value["graphql"]["variables"]["login"], "octocat");
+    assert!(
+        value["body"]["value"]["data"]
+            .as_str()
+            .unwrap()
+            .contains("octocat")
+    );
+}
+
+#[test]
 fn sets_and_persists_request_fields_as_json() {
     let workspace = temporary_path("phase7-workspace.yml");
     fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
@@ -134,6 +155,68 @@ fn sets_and_persists_request_fields_as_json() {
     assert!(saved.contains("vendor.example"));
     assert!(saved.contains("runtime:"));
     fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn sets_and_persists_graphql_fields_as_json() {
+    let workspace = temporary_path("graphql-set-workspace.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
+    let output = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--method",
+            "POST",
+            "--graphql-query",
+            "query Viewer { viewer { login } }",
+            "--graphql-variables",
+            r#"{"includeName":true}"#,
+            "--graphql-operation-name",
+            "Viewer",
+            "--json",
+        ])
+        .output()
+        .expect("GraphQL set command should run");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["graphql"]["query"],
+        "query Viewer { viewer { login } }"
+    );
+    assert_eq!(value["graphql"]["variables"]["includeName"], true);
+    assert_eq!(value["graphql"]["operationName"], "Viewer");
+
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(saved.contains("type: json"));
+    assert!(!saved.contains("type: graphql"));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn graphql_set_rejects_non_object_variables() {
+    let output = probe()
+        .args(["request", "set"])
+        .arg(fixture("phase1-round-trip.yml"))
+        .args([
+            "items/0",
+            "--graphql-query",
+            "query Viewer { viewer { login } }",
+            "--graphql-variables",
+            "[]",
+            "--json",
+        ])
+        .output()
+        .expect("GraphQL set command should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert_eq!(
+        value["error"]["message"],
+        "GraphQL variables must be a JSON object"
+    );
 }
 
 #[test]
@@ -474,6 +557,7 @@ fn executes_request_as_deterministic_json() {
     assert!(output.stderr.is_empty());
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
     assert_eq!(value["request"]["method"], "POST");
+    assert!(value["request"]["graphql"].is_null());
     assert_eq!(value["response"]["status"], 200);
     assert_eq!(value["response"]["sizeBytes"], 15);
     assert_eq!(value["response"]["body"]["encoding"], "utf8");
@@ -512,6 +596,7 @@ fn executes_graphql_json_envelopes_and_preserves_application_errors() {
     assert!(output.stderr.is_empty());
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
     assert_eq!(value["request"]["method"], "POST");
+    assert_eq!(value["request"]["graphql"]["operationName"], "Viewer");
     assert_eq!(value["response"]["status"], 200);
     assert_eq!(value["response"]["body"]["content"], response);
 

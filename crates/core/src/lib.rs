@@ -40,8 +40,9 @@ pub use path_parameters::{
 };
 pub use request::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, BodyVariant, FileReference,
-    FormField, Header, HttpRequest, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBody, RawBodyKind, RequestBody, RequestSettings, RequestUpdate,
+    FormField, GraphqlRequest, GraphqlRequestError, Header, HttpRequest, MultipartPart,
+    MultipartPartKind, MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody,
+    RequestSettings, RequestUpdate,
 };
 pub use request_resolution::{
     RequestVariableInfo, VariableUsage, discover_request_variables, resolve_request,

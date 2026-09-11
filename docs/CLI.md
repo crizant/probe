@@ -82,11 +82,18 @@ engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes t
 response body to the specified path using bounded streaming; response metadata remains on
 stdout. The destination is replaced only after the complete response has been written.
 
-GraphQL over HTTP uses an ordinary `POST` request with a raw JSON body. Probe passes a
-conventional JSON envelope containing `query`, optional `variables`, and optional
-`operationName` through the existing request path; environment and runtime variables are
-interpolated in the raw body. GraphQL execution errors remain response data, so an HTTP `200`
-response with an `errors` array is reported as a successful HTTP request.
+GraphQL over HTTP is represented as an ordinary `POST` request with a canonical raw JSON body.
+When that body is an exact conventional envelope containing `query`, optional object `variables`,
+and optional `operationName`, Probe exposes it as first-class GraphQL data in `request get --json`.
+Use `request set --graphql-query <text> [--graphql-variables <json-object>]
+[--graphql-operation-name <name>]` to persist such an envelope. Environment and runtime variables
+are interpolated in the resulting JSON body. GraphQL execution errors remain response data, so an
+HTTP `200` response with an `errors` array is reported as a successful HTTP request.
+
+OpenCollection 1.0.0 has no GraphQL item or body type. Probe does not add one: GraphQL is stored
+as the compatible `http.body` JSON shape. Envelopes containing protocol extension fields (such as
+persisted-query `extensions`) remain generic JSON to avoid silently dropping data during a typed
+update.
 
 Repeatable `--var <name=value>` arguments provide invocation-only variables for `request run`.
 They override selected and inherited environment values before dependent variables are
@@ -232,11 +239,14 @@ Postman v2.0 uses `postman_collection_v2_0` as `sourceFormat`.
 `folder list --json` returns a `folders` array in deterministic collection order.
 Each entry has nullable `name` and `parent` fields plus a string `selector`.
 
-`request get --json` returns `authentication`, `body`, `environment`, `headers`,
+`request get --json` returns `authentication`, `body`, `environment`, `graphql`, `headers`,
 `method`, `name`, `pathParameters`, `queryParameters`, `selector`, and `url`. `environment` is the
 selected name or JSON `null`. Missing optional values are JSON `null`. Headers and
 query and path parameters contain stable `disabled`, `name`, and `value` fields. Path
 parameters are referenced from URLs with `:variableName` segments.
+
+`graphql` is JSON `null` for requests that are not an exact GraphQL JSON envelope. Otherwise it
+contains nullable `operationName` and `variables` fields plus the string `query` field.
 
 `request set --json` returns the same request shape after the persisted update,
 with `environment` set to JSON `null`.
