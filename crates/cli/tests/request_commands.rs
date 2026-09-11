@@ -28,6 +28,21 @@ fn lists_requests_deterministically_as_json() {
 }
 
 #[test]
+fn request_list_includes_type_field() {
+    let output = probe()
+        .args(["request", "list"])
+        .arg(fixture("graphql-http.yml"))
+        .arg("--json")
+        .output()
+        .expect("list command should run");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["requests"][0]["type"], "graphql");
+    assert_eq!(value["requests"][0]["selector"], "items/0");
+}
+
+#[test]
 fn reads_a_bundled_workspace_from_stdin() {
     let source = fs::read(fixture("phase1-bundled.yml")).unwrap();
     let output = run_with_stdin(&["request", "list", "-", "--json"], &source);
@@ -183,7 +198,7 @@ fn sets_and_persists_graphql_fields_as_json() {
         .arg("items/0")
         .args([
             "--graphql-operation-name",
-            "RenamedViewer",
+            r#""RenamedViewer""#,
             "--graphql-extensions",
             r#"{"persistedQuery":{"version":1}}"#,
             "--json",
@@ -238,6 +253,61 @@ fn sets_and_persists_graphql_fields_as_json() {
 }
 
 #[test]
+fn graphql_operation_name_handles_literal_null_string_vs_json_null() {
+    let workspace = temporary_path("graphql-null-test.yml");
+    fs::copy(fixture("graphql-http.yml"), &workspace).unwrap();
+
+    let set_literal_null = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--graphql-operation-name", r#""null""#, "--json"])
+        .output()
+        .expect("should set literal 'null' string as operation name");
+    assert!(set_literal_null.status.success());
+    let value: Value = serde_json::from_slice(&set_literal_null.stdout).unwrap();
+    assert_eq!(value["graphql"]["operationName"], "null");
+
+    let clear_with_json_null = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--graphql-operation-name", "null", "--json"])
+        .output()
+        .expect("should clear operation name with JSON null");
+    assert!(clear_with_json_null.status.success());
+    let value: Value = serde_json::from_slice(&clear_with_json_null.stdout).unwrap();
+    assert!(value["graphql"]["operationName"].is_null());
+
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn graphql_operation_name_rejects_non_string() {
+    let workspace = temporary_path("graphql-bad-op-name.yml");
+    fs::copy(fixture("graphql-http.yml"), &workspace).unwrap();
+
+    let output = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .args(["items/0", "--graphql-operation-name", "123", "--json"])
+        .output()
+        .expect("should reject non-string operation name");
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("operation name")
+    );
+
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
 fn graphql_set_rejects_non_object_variables() {
     let output = probe()
         .args(["request", "set"])
@@ -283,6 +353,72 @@ fn graphql_set_rejects_http_requests() {
         value["error"]["message"],
         "request is not a native GraphQL request"
     );
+}
+
+#[test]
+fn graphql_create_with_query_implies_graphql_type() {
+    let workspace = temporary_path("graphql-create-implied.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
+
+    let output = probe()
+        .args(["request", "create"])
+        .arg(&workspace)
+        .args([
+            "--name",
+            "Viewer",
+            "--graphql-query",
+            "query Viewer { viewer { login } }",
+            "--json",
+        ])
+        .output()
+        .expect("create with graphql-query should imply graphql type");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["operation"], "create");
+
+    let get_output = probe()
+        .args(["request", "get"])
+        .arg(&workspace)
+        .args([value["selector"].as_str().unwrap(), "--json"])
+        .output()
+        .expect("should read created request");
+    assert!(get_output.status.success());
+    let request: Value = serde_json::from_slice(&get_output.stdout).unwrap();
+    assert_eq!(request["type"], "graphql");
+    assert_eq!(
+        request["graphql"]["query"],
+        "query Viewer { viewer { login } }"
+    );
+
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn graphql_create_rejects_conflicting_http_type() {
+    let workspace = temporary_path("graphql-create-conflict.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
+
+    let output = probe()
+        .args(["request", "create"])
+        .arg(&workspace)
+        .args([
+            "--name",
+            "BadRequest",
+            "--type",
+            "http",
+            "--graphql-query",
+            "query Test { test }",
+            "--json",
+        ])
+        .output()
+        .expect("create should reject conflicting type");
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+
+    fs::remove_file(workspace).unwrap();
 }
 
 #[test]

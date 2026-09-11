@@ -94,7 +94,7 @@ fn creates_native_graphql_requests() {
         "--graphql-query",
         "query Viewer { viewer { login } }",
         "--graphql-operation-name",
-        "Viewer",
+        r#""Viewer""#,
     ]);
     assert_eq!(created["operation"], "create");
     let selector = created["selector"].as_str().unwrap();

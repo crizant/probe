@@ -14,8 +14,8 @@ probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--strict-variables] [--json]
 probe request variables <path> <selector> [--environment <name>] [--json]
 probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--output <file>] [--json]
-probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <name-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
-probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <name-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
+probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
+probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request rename <path> <selector> --name <name> [--json]
 probe request delete <path> <selector> [--json]
 probe request move <path> <selector> [--parent <folder>] [--index <index>] [--json]
@@ -92,9 +92,11 @@ errors are response data.
 
 `request set` updates native GraphQL fields independently with `--graphql-query`,
 `--graphql-variables`, `--graphql-operation-name`, and `--graphql-extensions`; the query does not
-need to be supplied again. Pass JSON `null` to clear variables, extensions, or the operation name.
+need to be supplied again. Pass JSON `null` to clear variables, extensions, or the operation name;
+for operation name, pass a JSON string (e.g. `"Viewer"`) to set it or JSON `null` to clear it.
 `request create --type graphql` writes a native GraphQL item (`info.type: graphql`). GraphQL body
-flags on create also imply that protocol. OpenCollection 1.0.0
+flags on create also imply that protocol. `request set` cannot convert between HTTP and GraphQL
+protocols; recreate the request instead. OpenCollection 1.0.0
 formally defines `query` and JSON-string `variables` in the
 native GraphQL body. Probe also preserves `operationName` and `extensions` there as forward-compatible
 GraphQL-over-HTTP fields; strict OpenCollection 1.0.0 schema validators may reject those two fields.
@@ -238,7 +240,7 @@ change type without incrementing the version.
 Postman v2.0 uses `postman_collection_v2_0` as `sourceFormat`.
 
 `request list --json` returns a `requests` array. Each entry has nullable `method`,
-`name`, and `url` fields plus a string `selector`.
+`name`, and `url` fields plus a string `selector` and a `type` field (`http` or `graphql`).
 
 `folder list --json` returns a `folders` array in deterministic collection order.
 Each entry has nullable `name` and `parent` fields plus a string `selector`.

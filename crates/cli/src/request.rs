@@ -17,7 +17,7 @@ pub(crate) fn list(
     stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
     let loaded = load(input, stdin)?;
-    let mut lines = vec!["SELECTOR\tMETHOD\tNAME\tURL".to_owned()];
+    let mut lines = vec!["SELECTOR\tTYPE\tMETHOD\tNAME\tURL".to_owned()];
     let mut requests = Vec::with_capacity(loaded.requests().len());
     for located in loaded.requests() {
         let request = loaded
@@ -25,13 +25,18 @@ pub(crate) fn list(
             .request(located.key())
             .expect("repository request key must resolve");
         let name = request.metadata.name.as_deref().unwrap_or("");
+        let request_type = request.protocol.as_str();
         let method = request.method.as_deref().unwrap_or("");
         let url = request.url.as_deref().unwrap_or("");
-        lines.push(format!("{}\t{method}\t{name}\t{url}", located.selector()));
+        lines.push(format!(
+            "{}\t{request_type}\t{method}\t{name}\t{url}",
+            located.selector()
+        ));
         requests.push(json!({
             "method": request.method,
             "name": request.metadata.name,
             "selector": located.selector(),
+            "type": request_type,
             "url": request.url,
         }));
     }

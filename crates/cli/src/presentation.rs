@@ -108,8 +108,9 @@ pub(super) fn request_human(
 ) -> Result<String, GraphqlRequestError> {
     let mut output = String::new();
     output.push_str(&format!(
-        "Name: {}\nSelector: {selector}\nEnvironment: {}\nMethod: {}\nURL: {}\n",
+        "Name: {}\nSelector: {selector}\nType: {}\nEnvironment: {}\nMethod: {}\nURL: {}\n",
         request.metadata.name.as_deref().unwrap_or("<unnamed>"),
+        request.protocol.as_str(),
         environment.unwrap_or("<none>"),
         request.method.as_deref().unwrap_or("<unset>"),
         request.url.as_deref().unwrap_or("<unset>"),

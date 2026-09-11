@@ -523,8 +523,9 @@ fn graphql_update(mut options: Options) -> Result<RequestUpdate, CliError> {
             .transpose()?,
         operation_name: options
             .graphql_operation_name
-            .take()
-            .map(|name| if name == "null" { None } else { Some(name) }),
+            .as_deref()
+            .map(|source| parse_graphql_string(source, "operation name"))
+            .transpose()?,
         extensions: options
             .graphql_extensions
             .as_deref()
@@ -544,6 +545,19 @@ fn parse_graphql_object(source: &str, field: &str) -> Result<Option<Map<String, 
         Value::Object(value) => Ok(Some(value)),
         _ => Err(CliError::invalid_arguments(format!(
             "GraphQL {field} must be a JSON object or null"
+        ))),
+    }
+}
+
+fn parse_graphql_string(source: &str, field: &str) -> Result<Option<String>, CliError> {
+    let value: Value = serde_json::from_str(source).map_err(|_| {
+        CliError::invalid_arguments(format!("GraphQL {field} must be a JSON string or null"))
+    })?;
+    match value {
+        Value::Null => Ok(None),
+        Value::String(value) => Ok(Some(value)),
+        _ => Err(CliError::invalid_arguments(format!(
+            "GraphQL {field} must be a JSON string or null"
         ))),
     }
 }
