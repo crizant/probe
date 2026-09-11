@@ -154,7 +154,7 @@ fn read_items(
             );
             let mut folder = match read.item {
                 Some(CollectionItem::Folder(folder)) => folder,
-                Some(CollectionItem::HttpRequest(_)) => {
+                Some(CollectionItem::HttpRequest(_) | CollectionItem::GraphqlRequest(_)) => {
                     return Err(LoadError::InvalidItem {
                         path: folder_config,
                         message: "folder.yml must describe a folder".to_owned(),
@@ -188,6 +188,19 @@ fn read_items(
                         let selector = relative_selector(root, &path);
                         items.push((
                             CollectionItem::HttpRequest(request),
+                            LocatorNode::Request {
+                                selector,
+                                persistence: Some(RequestPersistence {
+                                    document_path: path,
+                                    item_path: Vec::new(),
+                                }),
+                            },
+                        ));
+                    }
+                    CollectionItem::GraphqlRequest(request) => {
+                        let selector = relative_selector(root, &path);
+                        items.push((
+                            CollectionItem::GraphqlRequest(request),
                             LocatorNode::Request {
                                 selector,
                                 persistence: Some(RequestPersistence {
@@ -328,7 +341,7 @@ fn locator_nodes_from_items(
                 .and_then(|info| info.get("type"))
                 .and_then(Value::as_str);
             match item_type {
-                Some("http") => Some(LocatorNode::Request {
+                Some("http" | "graphql") => Some(LocatorNode::Request {
                     selector: format!("{prefix}/{index}"),
                     persistence: document_path.map(|path| RequestPersistence {
                         document_path: path.to_owned(),
@@ -404,6 +417,7 @@ fn item_sequence(item: &CollectionItem) -> f64 {
     match item {
         CollectionItem::Folder(folder) => folder.metadata.sequence,
         CollectionItem::HttpRequest(request) => request.metadata.sequence,
+        CollectionItem::GraphqlRequest(request) => request.metadata.sequence,
     }
     .unwrap_or(f64::INFINITY)
 }

@@ -92,6 +92,13 @@ pub(crate) fn runtime_fixture(server_url: &str) -> PathBuf {
     path
 }
 
+pub(crate) fn graphql_runtime_fixture(server_url: &str) -> PathBuf {
+    let source = fs::read_to_string(fixture("graphql-http.yml")).unwrap();
+    let path = temporary_path("graphql-workspace.yml");
+    fs::write(&path, source.replace("__SERVER_URL__", server_url)).unwrap();
+    path
+}
+
 pub(crate) fn runtime_variables_fixture(server_url: &str) -> PathBuf {
     let source = fs::read_to_string(fixture("phase-runtime-variables.yml")).unwrap();
     let path = temporary_path("runtime-variables.yml");

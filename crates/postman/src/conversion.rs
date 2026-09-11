@@ -239,6 +239,7 @@ fn convert_request(
                 body: convert_body(&request.body, resource_id, diagnostics)?,
                 authentication: convert_authentication(auth, format, resource_id, diagnostics)?,
                 settings: RequestSettings::default(),
+                protocol: probe_core::RequestProtocol::Http,
             })
         }
     }

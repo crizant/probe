@@ -77,6 +77,7 @@ pub(super) fn convert_request(
         body: convert_body(request, diagnostics),
         authentication,
         settings,
+        protocol: probe_core::RequestProtocol::Http,
     }
 }
 

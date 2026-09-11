@@ -14,8 +14,8 @@ probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--strict-variables] [--json]
 probe request variables <path> <selector> [--environment <name>] [--json]
 probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--output <file>] [--json]
-probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--json]
-probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--json]
+probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
+probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request rename <path> <selector> --name <name> [--json]
 probe request delete <path> <selector> [--json]
 probe request move <path> <selector> [--parent <folder>] [--index <index>] [--json]
@@ -82,6 +82,25 @@ engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes t
 response body to the specified path using bounded streaming; response metadata remains on
 stdout. The destination is replaced only after the complete response has been written.
 
+Probe supports OpenCollection-native GraphQL items (`info.type: graphql` with a `graphql` section).
+Their protocol identity and body stay native when saved. At execution time Probe resolves the same
+URL, headers, authentication, environment, and runtime variables used by HTTP requests, then prepares
+a GraphQL-over-HTTP request for the shared HTTP engine. `POST` uses a JSON envelope and `GET` uses
+the `query`, `variables`, `operationName`, and `extensions` URL parameters. An HTTP `200` response
+containing both `data` and `errors` remains a successful transport response; GraphQL application
+errors are response data.
+
+`request set` updates native GraphQL fields independently with `--graphql-query`,
+`--graphql-variables`, `--graphql-operation-name`, and `--graphql-extensions`; the query does not
+need to be supplied again. Pass JSON `null` to clear variables, extensions, or the operation name;
+for operation name, pass a JSON string (e.g. `"Viewer"`) to set it or JSON `null` to clear it.
+`request create --type graphql` writes a native GraphQL item (`info.type: graphql`). GraphQL body
+flags on create also imply that protocol. `request set` cannot convert between HTTP and GraphQL
+protocols; recreate the request instead. OpenCollection 1.0.0
+formally defines `query` and JSON-string `variables` in the
+native GraphQL body. Probe also preserves `operationName` and `extensions` there as forward-compatible
+GraphQL-over-HTTP fields; strict OpenCollection 1.0.0 schema validators may reject those two fields.
+
 Repeatable `--var <name=value>` arguments provide invocation-only variables for `request run`.
 They override selected and inherited environment values before dependent variables are
 interpolated, and also work without `--environment`. If a name is repeated, the last value
@@ -92,7 +111,7 @@ stdin. Stdin does not represent an unbundled directory, and requests loaded this
 use bundled structural selectors.
 
 `request set` is a deliberately small, non-interactive persistence command. At
-least one of `--name`, `--method`, or `--url` is required. It updates the in-memory
+least one supported request field is required. It updates the in-memory
 request first, merges only those fields into the retained YAML document, and then
 atomically replaces the source file. It is unavailable for stdin workspaces.
 
@@ -221,16 +240,21 @@ change type without incrementing the version.
 Postman v2.0 uses `postman_collection_v2_0` as `sourceFormat`.
 
 `request list --json` returns a `requests` array. Each entry has nullable `method`,
-`name`, and `url` fields plus a string `selector`.
+`name`, and `url` fields plus a string `selector` and a `type` field (`http` or `graphql`).
 
 `folder list --json` returns a `folders` array in deterministic collection order.
 Each entry has nullable `name` and `parent` fields plus a string `selector`.
 
-`request get --json` returns `authentication`, `body`, `environment`, `headers`,
+`request get --json` returns `authentication`, `body`, `environment`, `graphql`, `headers`,
 `method`, `name`, `pathParameters`, `queryParameters`, `selector`, and `url`. `environment` is the
 selected name or JSON `null`. Missing optional values are JSON `null`. Headers and
 query and path parameters contain stable `disabled`, `name`, and `value` fields. Path
 parameters are referenced from URLs with `:variableName` segments.
+
+The additional `type` field is `http` or `graphql`. `graphql` is JSON `null` for HTTP requests.
+For native GraphQL requests it contains nullable `query`, `variables`, `operationName`, and
+`extensions` fields for the selected body. GraphQL body variants must have exactly one selected
+entry for inspection, editing, or execution.
 
 `request set --json` returns the same request shape after the persisted update,
 with `environment` set to JSON `null`.
@@ -257,7 +281,8 @@ request-field order:
 
 Without `--environment`, `defined` and `secret` are false because no effective
 environment was selected. Usage locations are `method`, `url`, `header`,
-`query_parameter`, `path_parameter`, `body`, `form_urlencoded`, `multipart`, `file`,
+`query_parameter`, `path_parameter`, `body`, `graphql_query`, `graphql_variables`,
+`graphql_operation_name`, `graphql_extensions`, `form_urlencoded`, `multipart`, `file`,
 or `authentication`. Named request fields also include `name`.
 
 `environment set --json` and `environment unset --json` return `environment`, `name`,
@@ -279,6 +304,8 @@ and `index` are `null` after deletion; `previousSelector` is `null` after creati
 {
   "schemaVersion": 1,
   "request": {
+    "type": "http",
+    "graphql": null,
     "method": "GET",
     "url": "https://api.example.com/users"
   },

@@ -4,7 +4,7 @@ info:
 bundled: true
 items:
   - info:
-      name: Unsupported GraphQL request
+      name: Native GraphQL request
       type: graphql
     graphql:
       method: POST
@@ -15,4 +15,3 @@ items:
     http:
       method: GET
       url: https://api.example.com/users
-

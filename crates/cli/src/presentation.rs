@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use probe_core::{
-    AuthenticationValue, Body, HttpRequest, MultipartPartKind, MultipartValue, RawBodyKind,
-    RequestBody, VariableValueType,
+    AuthenticationValue, Body, GraphqlOperation, GraphqlRequestError, HttpRequest,
+    MultipartPartKind, MultipartValue, RawBodyKind, RequestBody, VariableValueType,
 };
 use probe_http::{HttpResponse, MAX_IN_MEMORY_RESPONSE_BYTES};
 use serde_json::{Map, Value, json};
@@ -52,7 +52,7 @@ pub(super) fn response_json(
     request: &HttpRequest,
     response: &HttpResponse,
     output: Option<&Path>,
-) -> Value {
+) -> Result<Value, GraphqlRequestError> {
     let output_path = output.map(|path| path.to_string_lossy().into_owned());
     let (content, encoding, omitted, omission_reason) = if output.is_some() {
         (None, None, false, None)
@@ -63,8 +63,10 @@ pub(super) fn response_json(
     } else {
         (None, None, true, Some("binary"))
     };
-    json!({
+    Ok(json!({
         "request": {
+            "type": request.protocol.as_str(),
+            "graphql": request.selected_graphql()?.map(graphql_json),
             "method": request.method,
             "url": request.url,
         },
@@ -86,7 +88,7 @@ pub(super) fn response_json(
             "status": response.status,
             "url": response.url,
         }
-    })
+    }))
 }
 
 fn human_size(size: usize) -> String {
@@ -103,11 +105,12 @@ pub(super) fn request_human(
     selector: &str,
     environment: Option<&str>,
     request: &HttpRequest,
-) -> String {
+) -> Result<String, GraphqlRequestError> {
     let mut output = String::new();
     output.push_str(&format!(
-        "Name: {}\nSelector: {selector}\nEnvironment: {}\nMethod: {}\nURL: {}\n",
+        "Name: {}\nSelector: {selector}\nType: {}\nEnvironment: {}\nMethod: {}\nURL: {}\n",
         request.metadata.name.as_deref().unwrap_or("<unnamed>"),
+        request.protocol.as_str(),
         environment.unwrap_or("<none>"),
         request.method.as_deref().unwrap_or("<unset>"),
         request.url.as_deref().unwrap_or("<unset>"),
@@ -157,23 +160,39 @@ pub(super) fn request_human(
         }
     }
 
+    if request.protocol.as_str() == "graphql" {
+        output.push_str("Body: graphql\n");
+        match request.selected_graphql()? {
+            None => output.push_str("GraphQL: <unset>\n"),
+            Some(graphql) => {
+                output.push_str(&format!(
+                    "GraphQL query: {}\nGraphQL variables: {}\nGraphQL operation name: {}\nGraphQL extensions: {}\n",
+                    graphql.query.as_deref().unwrap_or("<unset>"),
+                    graphql_object_human(graphql.variables.as_ref()),
+                    graphql.operation_name.as_deref().unwrap_or("<unset>"),
+                    graphql_object_human(graphql.extensions.as_ref()),
+                ));
+            }
+        }
+    } else {
+        output.push_str(&format!("Body: {}\n", body_summary(request.body.as_ref())));
+    }
     output.push_str(&format!(
-        "Body: {}\nAuthentication: {}\n",
-        body_summary(request.body.as_ref()),
+        "Authentication: {}\n",
         request
             .authentication
             .as_ref()
             .map(|auth| auth.kind.as_str())
             .unwrap_or("<unset>"),
     ));
-    output
+    Ok(output)
 }
 
 pub(super) fn request_json(
     selector: &str,
     environment: Option<&str>,
     request: &HttpRequest,
-) -> Value {
+) -> Result<Value, GraphqlRequestError> {
     let headers: Vec<_> = request
         .headers
         .iter()
@@ -219,18 +238,20 @@ pub(super) fn request_json(
         })
     });
 
-    json!({
+    Ok(json!({
         "authentication": authentication,
         "body": request.body.as_ref().map(request_body_json),
         "environment": environment,
+        "graphql": request.selected_graphql()?.map(graphql_json),
         "headers": headers,
         "method": request.method,
         "name": request.metadata.name,
         "pathParameters": path_parameters,
         "queryParameters": query_parameters,
         "selector": selector,
+        "type": request.protocol.as_str(),
         "url": request.url,
-    })
+    }))
 }
 
 fn body_summary(body: Option<&RequestBody>) -> &'static str {
@@ -242,6 +263,22 @@ fn body_summary(body: Option<&RequestBody>) -> &'static str {
         Some(RequestBody::Single(Body::File(_))) => "file",
         Some(RequestBody::Variants(_)) => "variants",
     }
+}
+
+fn graphql_json(graphql: &GraphqlOperation) -> Value {
+    json!({
+        "extensions": graphql.extensions,
+        "operationName": graphql.operation_name,
+        "query": graphql.query,
+        "variables": graphql.variables,
+    })
+}
+
+fn graphql_object_human(value: Option<&Map<String, Value>>) -> String {
+    value.map_or_else(
+        || "<unset>".to_owned(),
+        |value| Value::Object(value.clone()).to_string(),
+    )
 }
 
 fn request_body_json(body: &RequestBody) -> Value {

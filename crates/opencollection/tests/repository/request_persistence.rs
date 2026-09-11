@@ -102,19 +102,20 @@ fn unbundled_loader_preserves_valid_dot_probe_items() {
     let loaded = load_workspace(&root).unwrap();
 
     assert_eq!(loaded.workspace().folder_count(), 2);
-    assert_eq!(loaded.workspace().request_count(), 3);
+    assert_eq!(loaded.workspace().request_count(), 4);
     assert!(loaded.folder_key(".probe-visible").is_some());
     assert!(loaded.request_key(".probe-visible.yml").is_some());
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn bundled_selector_uses_source_position_when_unsupported_items_are_skipped() {
+fn bundled_selectors_include_native_graphql_requests() {
     let loaded = load_workspace(fixture("phase3-bundled-selectors.yml"))
         .expect("bundled selector fixture should load");
 
-    assert_eq!(loaded.requests().len(), 1);
-    assert_eq!(loaded.requests()[0].selector(), "items/1");
+    assert_eq!(loaded.requests().len(), 2);
+    assert_eq!(loaded.requests()[0].selector(), "items/0");
+    assert_eq!(loaded.requests()[1].selector(), "items/1");
 }
 
 #[test]
@@ -172,6 +173,98 @@ fn bundled_update_save_reload_preserves_unknown_fields() {
     assert!(saved.contains("runtime:"));
     assert!(saved.contains("encodeUrl: true"));
     fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn bundled_graphql_update_save_reload_remains_native() {
+    let path = temporary_path("graphql-bundled.yml");
+    fs::copy(fixture("graphql-http.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let variables = serde_json::json!({"includeName": true})
+        .as_object()
+        .cloned()
+        .unwrap();
+
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                graphql: Some(probe_core::GraphqlUpdate {
+                    query: Some("query Viewer { viewer { login } }".to_owned()),
+                    variables: Some(Some(variables.clone())),
+                    operation_name: Some(Some("Viewer".to_owned())),
+                    ..probe_core::GraphqlUpdate::default()
+                }),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+
+    let reloaded = load_workspace(&path).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("items/0").unwrap())
+        .unwrap();
+    let graphql = request.selected_graphql().unwrap().unwrap();
+    assert_eq!(graphql.variables.as_ref(), Some(&variables));
+    assert_eq!(graphql.operation_name.as_deref(), Some("Viewer"));
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("type: graphql"));
+    assert!(saved.contains("graphql:"));
+    assert!(!saved.contains("type: http"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn unbundled_graphql_update_save_reload_preserves_extensions() {
+    let root = temporary_path("graphql-unbundled");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("opencollection.yml"),
+        "opencollection: 1.0.0\ninfo: { name: GraphQL }\nbundled: false\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("viewer.yml"),
+        concat!(
+            "info: { name: Viewer, type: graphql }\ngraphql:\n  method: POST\n  body:\n",
+            "    query: 'query Viewer { viewer { login } }'\n",
+            "    variables: '{\"old\":true}'\n",
+            "x-vendor: preserved\n",
+        ),
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&root).unwrap();
+    let extensions = serde_json::json!({"persistedQuery": {"version": 1}})
+        .as_object()
+        .cloned()
+        .unwrap();
+    loaded
+        .update_request(
+            "viewer.yml",
+            &RequestUpdate {
+                graphql: Some(probe_core::GraphqlUpdate {
+                    operation_name: Some(Some("Viewer".to_owned())),
+                    extensions: Some(Some(extensions.clone())),
+                    ..probe_core::GraphqlUpdate::default()
+                }),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+
+    let reloaded = load_workspace(&root).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("viewer.yml").unwrap())
+        .unwrap();
+    let graphql = request.selected_graphql().unwrap().unwrap();
+    assert_eq!(graphql.operation_name.as_deref(), Some("Viewer"));
+    assert_eq!(graphql.extensions.as_ref(), Some(&extensions));
+    let saved = fs::read_to_string(root.join("viewer.yml")).unwrap();
+    assert!(saved.contains("x-vendor: preserved"));
+    assert!(saved.contains("type: graphql"));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

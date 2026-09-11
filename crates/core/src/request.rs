@@ -2,6 +2,8 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
+use serde_json::{Map, Value};
+
 use crate::ItemMetadata;
 
 /// An HTTP request definition.
@@ -25,6 +27,8 @@ pub struct HttpRequest {
     pub authentication: Option<Authentication>,
     /// Execution settings.
     pub settings: RequestSettings,
+    /// Canonical protocol identity for this request.
+    pub protocol: RequestProtocol,
 }
 
 /// A non-interactive partial update to an HTTP request.
@@ -46,12 +50,14 @@ pub struct RequestUpdate {
     pub body: Option<Option<RequestBody>>,
     /// Replacement authentication; inner `None` removes it.
     pub authentication: Option<Option<Authentication>>,
+    /// Partial native GraphQL body update.
+    pub graphql: Option<GraphqlUpdate>,
 }
 
 impl RequestUpdate {
     /// Returns whether every field is unchanged.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.name.is_none()
             && self.method.is_none()
             && self.url.is_none()
@@ -60,10 +66,11 @@ impl RequestUpdate {
             && self.path_parameters.is_none()
             && self.body.is_none()
             && self.authentication.is_none()
+            && self.graphql.as_ref().is_none_or(GraphqlUpdate::is_empty)
     }
 
-    /// Applies the update to a domain request.
-    pub fn apply(&self, request: &mut HttpRequest) {
+    /// Applies the update to a domain request, including native GraphQL fields.
+    pub fn apply(&self, request: &mut HttpRequest) -> Result<(), GraphqlRequestError> {
         if let Some(name) = &self.name {
             request.metadata.name = Some(name.clone());
         }
@@ -87,6 +94,31 @@ impl RequestUpdate {
         }
         if let Some(authentication) = &self.authentication {
             request.authentication.clone_from(authentication);
+        }
+        if let Some(graphql) = self.graphql.as_ref().filter(|update| !update.is_empty()) {
+            request.apply_graphql_update(graphql)?;
+        }
+        Ok(())
+    }
+}
+
+/// The canonical protocol represented by an in-memory request.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum RequestProtocol {
+    /// A native OpenCollection HTTP request.
+    #[default]
+    Http,
+    /// A native OpenCollection GraphQL request and its protocol body.
+    Graphql(Option<GraphqlBody>),
+}
+
+impl RequestProtocol {
+    /// Returns the stable lowercase protocol name.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Graphql(_) => "graphql",
         }
     }
 }
@@ -155,6 +187,301 @@ pub enum Body {
     Multipart(Vec<MultipartPart>),
     /// One or more file-body variants.
     File(Vec<FileReference>),
+}
+
+/// A native OpenCollection GraphQL request definition.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GraphqlRequest {
+    /// Request metadata.
+    pub metadata: ItemMetadata,
+    /// GraphQL-over-HTTP method as written in the collection.
+    pub method: Option<String>,
+    /// GraphQL endpoint URL, which may contain variables.
+    pub url: Option<String>,
+    /// Request headers.
+    pub headers: Vec<Header>,
+    /// Query parameters.
+    pub query_parameters: Vec<QueryParameter>,
+    /// Path parameters.
+    pub path_parameters: Vec<QueryParameter>,
+    /// Native GraphQL body definition.
+    pub body: Option<GraphqlBody>,
+    /// Request authentication configuration.
+    pub authentication: Option<Authentication>,
+    /// Execution settings.
+    pub settings: RequestSettings,
+}
+
+/// A native GraphQL body represented directly or as selectable variants.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GraphqlBody {
+    /// One GraphQL operation definition.
+    Single(GraphqlOperation),
+    /// Multiple named operation definitions.
+    Variants(Vec<GraphqlBodyVariant>),
+}
+
+/// A GraphQL operation and GraphQL-over-HTTP request parameters.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GraphqlOperation {
+    /// GraphQL operation document.
+    pub query: Option<String>,
+    /// Optional GraphQL variables object.
+    pub variables: Option<Map<String, Value>>,
+    /// Optional operation name for documents with multiple operations.
+    pub operation_name: Option<String>,
+    /// Optional GraphQL-over-HTTP extensions object.
+    pub extensions: Option<Map<String, Value>>,
+}
+
+/// A selectable native GraphQL body variant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphqlBodyVariant {
+    /// Variant title.
+    pub title: String,
+    /// Whether this variant is selected.
+    pub selected: bool,
+    /// Variant operation.
+    pub body: GraphqlOperation,
+}
+
+/// A partial update to the selected native GraphQL operation.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GraphqlUpdate {
+    /// Replacement query.
+    pub query: Option<String>,
+    /// Replacement variables; inner `None` clears them.
+    pub variables: Option<Option<Map<String, Value>>>,
+    /// Replacement operation name; inner `None` clears it.
+    pub operation_name: Option<Option<String>>,
+    /// Replacement extensions; inner `None` clears them.
+    pub extensions: Option<Option<Map<String, Value>>>,
+}
+
+impl GraphqlUpdate {
+    /// Returns whether every GraphQL field is unchanged.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.query.is_none()
+            && self.variables.is_none()
+            && self.operation_name.is_none()
+            && self.extensions.is_none()
+    }
+
+    /// Applies this update to one operation.
+    pub fn apply(&self, operation: &mut GraphqlOperation) {
+        if let Some(query) = &self.query {
+            operation.query = Some(query.clone());
+        }
+        if let Some(variables) = &self.variables {
+            operation.variables.clone_from(variables);
+        }
+        if let Some(operation_name) = &self.operation_name {
+            operation.operation_name.clone_from(operation_name);
+        }
+        if let Some(extensions) = &self.extensions {
+            operation.extensions.clone_from(extensions);
+        }
+    }
+}
+
+/// An invalid native GraphQL request or update.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GraphqlRequestError {
+    /// A body variant selection is missing or ambiguous.
+    InvalidBodySelection(String),
+    /// GraphQL-only fields were requested for an HTTP request.
+    NotGraphql,
+}
+
+impl std::fmt::Display for GraphqlRequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidBodySelection(message) => formatter.write_str(message),
+            Self::NotGraphql => formatter.write_str("request is not a native GraphQL request"),
+        }
+    }
+}
+
+impl std::error::Error for GraphqlRequestError {}
+
+impl GraphqlRequest {
+    /// Converts this native request into Probe's common in-memory request representation.
+    #[must_use]
+    pub fn into_request(self) -> HttpRequest {
+        HttpRequest {
+            metadata: self.metadata,
+            method: self.method,
+            url: self.url,
+            headers: self.headers,
+            query_parameters: self.query_parameters,
+            path_parameters: self.path_parameters,
+            body: None,
+            authentication: self.authentication,
+            settings: self.settings,
+            protocol: RequestProtocol::Graphql(self.body),
+        }
+    }
+}
+
+impl HttpRequest {
+    /// Returns the native GraphQL body when this is a GraphQL request.
+    #[must_use]
+    pub const fn graphql(&self) -> Option<&GraphqlBody> {
+        match &self.protocol {
+            RequestProtocol::Http | RequestProtocol::Graphql(None) => None,
+            RequestProtocol::Graphql(Some(body)) => Some(body),
+        }
+    }
+
+    /// Finds the single selected operation in a GraphQL variant list.
+    fn selected_graphql_variant<'a, T>(
+        variants: &'a [GraphqlBodyVariant],
+        extractor: impl Fn(&'a GraphqlBodyVariant) -> T,
+    ) -> Result<T, GraphqlRequestError> {
+        let mut selected = variants.iter().filter(|variant| variant.selected);
+        let operation = selected.next().ok_or_else(|| {
+            GraphqlRequestError::InvalidBodySelection(
+                "GraphQL body variants have no selected value".to_owned(),
+            )
+        })?;
+        if selected.next().is_some() {
+            return Err(GraphqlRequestError::InvalidBodySelection(
+                "GraphQL body variants have multiple selected values".to_owned(),
+            ));
+        }
+        Ok(extractor(operation))
+    }
+
+    /// Finds the single selected operation in a mutable GraphQL variant list.
+    fn selected_graphql_variant_mut<'a, T>(
+        variants: &'a mut [GraphqlBodyVariant],
+        extractor: impl Fn(&'a mut GraphqlBodyVariant) -> T,
+    ) -> Result<T, GraphqlRequestError> {
+        let mut selected = variants.iter_mut().filter(|variant| variant.selected);
+        let operation = selected.next().ok_or_else(|| {
+            GraphqlRequestError::InvalidBodySelection(
+                "GraphQL body variants have no selected value".to_owned(),
+            )
+        })?;
+        if selected.next().is_some() {
+            return Err(GraphqlRequestError::InvalidBodySelection(
+                "GraphQL body variants have multiple selected values".to_owned(),
+            ));
+        }
+        Ok(extractor(operation))
+    }
+
+    /// Returns the selected native GraphQL operation.
+    pub fn selected_graphql(&self) -> Result<Option<&GraphqlOperation>, GraphqlRequestError> {
+        match self.graphql() {
+            None => Ok(None),
+            Some(GraphqlBody::Single(operation)) => Ok(Some(operation)),
+            Some(GraphqlBody::Variants(variants)) => {
+                Self::selected_graphql_variant(variants, |variant| &variant.body).map(Some)
+            }
+        }
+    }
+
+    /// Applies a GraphQL-only partial update to the selected operation.
+    pub fn apply_graphql_update(
+        &mut self,
+        update: &GraphqlUpdate,
+    ) -> Result<(), GraphqlRequestError> {
+        let RequestProtocol::Graphql(body) = &mut self.protocol else {
+            return Err(GraphqlRequestError::NotGraphql);
+        };
+        if body.is_none() {
+            *body = Some(GraphqlBody::Single(GraphqlOperation::default()));
+        }
+        let operation = match body.as_mut().expect("GraphQL body was initialized") {
+            GraphqlBody::Single(operation) => operation,
+            GraphqlBody::Variants(variants) => {
+                Self::selected_graphql_variant_mut(variants, |variant| &mut variant.body)?
+            }
+        };
+        update.apply(operation);
+        Ok(())
+    }
+
+    /// Builds the GraphQL-over-HTTP request consumed by Probe's HTTP engine.
+    pub fn prepare_http(&self) -> Result<Self, GraphqlRequestError> {
+        if matches!(self.protocol, RequestProtocol::Http) {
+            return Ok(self.clone());
+        }
+        let mut request = self.clone();
+        request.protocol = RequestProtocol::Http;
+        let operation = self.selected_graphql()?.cloned().unwrap_or_default();
+        if self
+            .method
+            .as_deref()
+            .is_some_and(|method| method.eq_ignore_ascii_case("GET"))
+        {
+            request
+                .query_parameters
+                .retain(|parameter| !is_graphql_http_parameter(&parameter.name));
+            if let Some(query) = operation.query {
+                request.query_parameters.push(QueryParameter {
+                    name: "query".to_owned(),
+                    value: query,
+                    disabled: false,
+                });
+            }
+            append_graphql_parameter(&mut request, "variables", operation.variables);
+            if let Some(operation_name) = operation.operation_name {
+                request.query_parameters.push(QueryParameter {
+                    name: "operationName".to_owned(),
+                    value: operation_name,
+                    disabled: false,
+                });
+            }
+            append_graphql_parameter(&mut request, "extensions", operation.extensions);
+        } else {
+            let envelope = operation.into_json_envelope();
+            request.body = Some(RequestBody::Single(Body::Raw(RawBody {
+                kind: RawBodyKind::Json,
+                data: Value::Object(envelope).to_string(),
+            })));
+        }
+        Ok(request)
+    }
+}
+
+impl GraphqlOperation {
+    fn into_json_envelope(self) -> Map<String, Value> {
+        let mut fields = Map::new();
+        if let Some(query) = self.query {
+            fields.insert("query".to_owned(), Value::String(query));
+        }
+        if let Some(variables) = self.variables {
+            fields.insert("variables".to_owned(), Value::Object(variables));
+        }
+        if let Some(operation_name) = self.operation_name {
+            fields.insert("operationName".to_owned(), Value::String(operation_name));
+        }
+        if let Some(extensions) = self.extensions {
+            fields.insert("extensions".to_owned(), Value::Object(extensions));
+        }
+        fields
+    }
+}
+
+fn append_graphql_parameter(
+    request: &mut HttpRequest,
+    name: &str,
+    value: Option<Map<String, Value>>,
+) {
+    if let Some(value) = value {
+        request.query_parameters.push(QueryParameter {
+            name: name.to_owned(),
+            value: Value::Object(value).to_string(),
+            disabled: false,
+        });
+    }
+}
+
+fn is_graphql_http_parameter(name: &str) -> bool {
+    matches!(name, "query" | "variables" | "operationName" | "extensions")
 }
 
 /// A raw request body.

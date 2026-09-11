@@ -106,6 +106,8 @@ impl StructureDialog {
                     name: name.to_owned(),
                     method: Some("GET".to_owned()),
                     url: None,
+                    protocol: probe_opencollection::CreatedRequestProtocol::Http,
+                    graphql: None,
                 })
             }
             StructureDialogMode::CreateFolder => {

@@ -75,6 +75,73 @@ fn structural_cli_commands_share_repository_operations() {
 }
 
 #[test]
+fn creates_native_graphql_requests() {
+    let workspace = temporary_path("graphql-create.yml");
+    fs::copy(fixture("phase16-bundled.yml"), &workspace).unwrap();
+    let path = workspace.to_str().unwrap();
+    let created = run_json(&[
+        "request",
+        "create",
+        path,
+        "--name",
+        "Viewer",
+        "--type",
+        "graphql",
+        "--method",
+        "POST",
+        "--url",
+        "https://example.com/graphql",
+        "--graphql-query",
+        "query Viewer { viewer { login } }",
+        "--graphql-operation-name",
+        r#""Viewer""#,
+    ]);
+    assert_eq!(created["operation"], "create");
+    let selector = created["selector"].as_str().unwrap();
+    let inspect = run_json(&["request", "get", path, selector]);
+    assert_eq!(inspect["type"], "graphql");
+    assert_eq!(inspect["graphql"]["operationName"], "Viewer");
+    assert!(
+        inspect["graphql"]["query"]
+            .as_str()
+            .unwrap()
+            .contains("query Viewer")
+    );
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(saved.contains("type: graphql"));
+    assert!(saved.contains("graphql:"));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn create_rejects_graphql_fields_on_http_type() {
+    let workspace = temporary_path("graphql-create-http.yml");
+    fs::copy(fixture("phase16-bundled.yml"), &workspace).unwrap();
+    let output = probe()
+        .args(["request", "create"])
+        .arg(&workspace)
+        .args([
+            "--name",
+            "Viewer",
+            "--type",
+            "http",
+            "--graphql-query",
+            "query Viewer { viewer { login } }",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert_eq!(
+        value["error"]["message"],
+        "GraphQL fields cannot be applied to an HTTP request"
+    );
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
 fn structural_cli_errors_have_stable_categories() {
     let workspace = temporary_path("phase16-cli-errors");
     copy_directory(&fixture("phase16-unbundled"), &workspace);

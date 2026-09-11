@@ -11,12 +11,14 @@ pub(super) fn mutate_bundled(
             name,
             method,
             url,
+            protocol,
+            graphql,
         } => {
             validate_name(&name)?;
             let parent_path = destination_path(document, parent.as_deref())?;
             let items = items_mut(document, &parent_path)?;
             let index = checked_index(index, items.len())?;
-            items.insert(index, request_value(&name, method, url));
+            items.insert(index, request_value(&name, method, url, protocol, graphql));
             Ok(result(ItemKind::Request, None, parent, index, &parent_path))
         }
         StructureOperation::CreateFolder {

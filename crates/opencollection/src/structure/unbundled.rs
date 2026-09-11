@@ -11,6 +11,8 @@ pub(super) fn mutate_unbundled(
             name,
             method,
             url,
+            protocol,
+            graphql,
         } => {
             validate_name(&name)?;
             let directory = destination_directory(root, parent.as_deref())?;
@@ -18,7 +20,7 @@ pub(super) fn mutate_unbundled(
             ensure_absent(root, &path)?;
             create_atomic(
                 &path,
-                serde_yaml_ng::to_string(&request_value(&name, method, url))
+                serde_yaml_ng::to_string(&request_value(&name, method, url, protocol, graphql))
                     .map_err(|error| StructureError::InvalidDocument(error.to_string()))?
                     .as_bytes(),
             )?;
