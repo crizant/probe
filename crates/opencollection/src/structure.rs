@@ -8,6 +8,8 @@ use std::{
 use atomic_write_file::AtomicWriteFile;
 use serde_yaml_ng::{Mapping, Value};
 
+use probe_core::GraphqlUpdate;
+
 use crate::repository::{
     LoadedWorkspace, SaveError, SaveLock, WorkspaceSource, atomic_write, load_workspace,
     relative_selector,
@@ -43,10 +45,32 @@ impl ItemKind {
     }
 }
 
+/// Protocol identity for a newly created request.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CreatedRequestProtocol {
+    /// A native OpenCollection HTTP request.
+    #[default]
+    Http,
+    /// A native OpenCollection GraphQL request.
+    Graphql,
+}
+
+impl CreatedRequestProtocol {
+    /// Returns the OpenCollection `info.type` value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Graphql => "graphql",
+        }
+    }
+}
+
 /// A repository-owned structural workspace operation.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum StructureOperation {
-    /// Creates an HTTP request.
+    /// Creates an HTTP or GraphQL request.
     CreateRequest {
         /// Destination folder selector, or `None` for the root.
         parent: Option<String>,
@@ -58,6 +82,10 @@ pub enum StructureOperation {
         method: Option<String>,
         /// Initial URL.
         url: Option<String>,
+        /// Native protocol identity written to `info.type`.
+        protocol: CreatedRequestProtocol,
+        /// Initial native GraphQL body, when creating a GraphQL request.
+        graphql: Option<GraphqlUpdate>,
     },
     /// Creates an empty folder.
     CreateFolder {
@@ -448,15 +476,59 @@ fn selector_from_full_path(path: &[usize]) -> String {
     selector_for(&path[..path.len() - 1], path[path.len() - 1])
 }
 
-fn request_value(name: &str, method: Option<String>, url: Option<String>) -> Value {
-    let mut http = Mapping::new();
+fn request_value(
+    name: &str,
+    method: Option<String>,
+    url: Option<String>,
+    protocol: CreatedRequestProtocol,
+    graphql: Option<GraphqlUpdate>,
+) -> Value {
+    let mut details = Mapping::new();
     if let Some(method) = method {
-        http.insert(Value::String("method".to_owned()), Value::String(method));
+        details.insert(Value::String("method".to_owned()), Value::String(method));
     }
     if let Some(url) = url {
-        http.insert(Value::String("url".to_owned()), Value::String(url));
+        details.insert(Value::String("url".to_owned()), Value::String(url));
     }
-    item_value(name, "http", Some(Value::Mapping(http)))
+    if protocol == CreatedRequestProtocol::Graphql
+        && let Some(graphql) = graphql
+        && !graphql.is_empty()
+    {
+        details.insert(
+            Value::String("body".to_owned()),
+            graphql_body_value(&graphql),
+        );
+    }
+    item_value(name, protocol.as_str(), Some(Value::Mapping(details)))
+}
+
+fn graphql_body_value(update: &GraphqlUpdate) -> Value {
+    let mut body = Mapping::new();
+    if let Some(query) = &update.query {
+        body.insert(
+            Value::String("query".to_owned()),
+            Value::String(query.clone()),
+        );
+    }
+    if let Some(Some(variables)) = &update.variables {
+        body.insert(
+            Value::String("variables".to_owned()),
+            Value::String(serde_json::Value::Object(variables.clone()).to_string()),
+        );
+    }
+    if let Some(Some(operation_name)) = &update.operation_name {
+        body.insert(
+            Value::String("operationName".to_owned()),
+            Value::String(operation_name.clone()),
+        );
+    }
+    if let Some(Some(extensions)) = &update.extensions {
+        body.insert(
+            Value::String("extensions".to_owned()),
+            Value::String(serde_json::Value::Object(extensions.clone()).to_string()),
+        );
+    }
+    Value::Mapping(body)
 }
 
 fn folder_value(name: &str) -> Value {
@@ -496,7 +568,7 @@ fn ensure_kind(value: &Value, expected: ItemKind, selector: &str) -> Result<(), 
         .and_then(Value::as_str);
     let matches = matches!(
         (expected, actual),
-        (ItemKind::Request, Some("http")) | (ItemKind::Folder, Some("folder"))
+        (ItemKind::Request, Some("http" | "graphql")) | (ItemKind::Folder, Some("folder"))
     );
     if matches {
         Ok(())

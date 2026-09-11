@@ -100,6 +100,7 @@ impl PersistenceState {
             authentication: (baseline.and_then(|request| request.authentication.as_ref())
                 != snapshot.authentication.as_ref())
             .then(|| snapshot.authentication.clone()),
+            graphql: None,
         };
         (
             self.revisions.get(&key).copied().unwrap_or_default(),

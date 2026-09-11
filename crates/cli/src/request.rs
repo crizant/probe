@@ -51,8 +51,8 @@ pub(crate) fn get(
     let loaded = load(input, stdin)?;
     let request = selected_request(&loaded, selector, environment, &[], strict_variables)?;
     Ok(CommandOutput {
-        human: request_human(selector, environment, &request),
-        json: request_json(selector, environment, &request),
+        human: request_human(selector, environment, &request).map_err(CliError::graphql)?,
+        json: request_json(selector, environment, &request).map_err(CliError::graphql)?,
     })
 }
 
@@ -119,6 +119,10 @@ fn variable_usage_human(usage: &VariableUsage) -> String {
         VariableUsage::QueryParameter { name } => format!("query parameter: {name}"),
         VariableUsage::PathParameter { name } => format!("path parameter: {name}"),
         VariableUsage::Body => "body".to_owned(),
+        VariableUsage::GraphqlQuery => "GraphQL query".to_owned(),
+        VariableUsage::GraphqlVariables => "GraphQL variables".to_owned(),
+        VariableUsage::GraphqlOperationName => "GraphQL operation name".to_owned(),
+        VariableUsage::GraphqlExtensions => "GraphQL extensions".to_owned(),
         VariableUsage::FormUrlEncoded { name } => format!("form field: {name}"),
         VariableUsage::Multipart { name } => format!("multipart: {name}"),
         VariableUsage::File => "file".to_owned(),
@@ -138,6 +142,10 @@ fn variable_usage_json(usage: &VariableUsage) -> serde_json::Value {
             json!({ "location": "path_parameter", "name": name })
         }
         VariableUsage::Body => json!({ "location": "body" }),
+        VariableUsage::GraphqlQuery => json!({ "location": "graphql_query" }),
+        VariableUsage::GraphqlVariables => json!({ "location": "graphql_variables" }),
+        VariableUsage::GraphqlOperationName => json!({ "location": "graphql_operation_name" }),
+        VariableUsage::GraphqlExtensions => json!({ "location": "graphql_extensions" }),
         VariableUsage::FormUrlEncoded { name } => {
             json!({ "location": "form_urlencoded", "name": name })
         }
@@ -171,9 +179,9 @@ pub(crate) fn update(
     Ok(CommandOutput {
         human: format!(
             "Updated request\n{}",
-            request_human(selector, None, request)
+            request_human(selector, None, request).map_err(CliError::graphql)?
         ),
-        json: request_json(selector, None, request),
+        json: request_json(selector, None, request).map_err(CliError::graphql)?,
     })
 }
 
@@ -188,6 +196,7 @@ pub(crate) fn run(
 ) -> Result<CommandOutput, CliError> {
     let loaded = load(input, stdin)?;
     let request = selected_request(&loaded, selector, environment, variables, strict_variables)?;
+    let prepared = request.prepare_http().map_err(CliError::graphql)?;
     let options = ExecutionOptions {
         base_directory: input.base_directory(),
         ..ExecutionOptions::default()
@@ -200,17 +209,17 @@ pub(crate) fn run(
         let engine = HttpEngine::new().map_err(CliError::http)?;
         if let Some(output) = output {
             engine
-                .execute_cancellable_to_file(&request, &options, output, tokio::signal::ctrl_c())
+                .execute_cancellable_to_file(&prepared, &options, output, tokio::signal::ctrl_c())
                 .await
                 .map_err(CliError::http)
         } else {
             engine
-                .execute_cancellable(&request, &options, tokio::signal::ctrl_c())
+                .execute_cancellable(&prepared, &options, tokio::signal::ctrl_c())
                 .await
                 .map_err(CliError::http)
         }
     })?;
-    Ok(response_output(&request, &response, output))
+    response_output(&request, &response, output)
 }
 
 fn selected_request<'a>(
@@ -252,10 +261,10 @@ fn response_output(
     request: &HttpRequest,
     response: &HttpResponse,
     output: Option<&PathBuf>,
-) -> CommandOutput {
+) -> Result<CommandOutput, CliError> {
     let output = output.map(PathBuf::as_path);
-    CommandOutput {
+    Ok(CommandOutput {
         human: response_human(request, response, output),
-        json: response_json(request, response, output),
-    }
+        json: response_json(request, response, output).map_err(CliError::graphql)?,
+    })
 }

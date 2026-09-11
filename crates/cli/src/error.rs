@@ -1,4 +1,4 @@
-use probe_core::{EnvironmentResolutionError, ImportDiagnostic};
+use probe_core::{EnvironmentResolutionError, GraphqlRequestError, ImportDiagnostic};
 use probe_http::HttpError;
 use probe_opencollection::{CreateError, SaveError, StructureError};
 use probe_postman::PostmanImportError;
@@ -128,6 +128,7 @@ impl CliError {
             SaveError::ReadOnlySource => ("persistence_read_only", PERSISTENCE_EXIT_CODE),
             SaveError::ConcurrentModification(_) => ("workspace_modified", PERSISTENCE_EXIT_CODE),
             SaveError::Environment(error) => return Self::configuration(error.clone()),
+            SaveError::Graphql(error) => return Self::graphql(error.clone()),
             SaveError::InvalidDocument(_) | SaveError::Serialize(_) | SaveError::Io { .. } => {
                 ("persistence_error", PERSISTENCE_EXIT_CODE)
             }
@@ -137,6 +138,15 @@ impl CliError {
             message: error.to_string(),
             exit_code,
             details: None,
+        }
+    }
+
+    pub(crate) fn graphql(error: GraphqlRequestError) -> Self {
+        match error {
+            GraphqlRequestError::NotGraphql => Self::invalid_arguments(error.to_string()),
+            GraphqlRequestError::InvalidBodySelection(message) => {
+                Self::http(HttpError::InvalidBodySelection(message))
+            }
         }
     }
 

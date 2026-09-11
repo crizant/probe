@@ -249,7 +249,89 @@ fn collection_item_value(item: &CollectionItem) -> Value {
             }
             Value::Mapping(item)
         }
+        CollectionItem::GraphqlRequest(request) => {
+            let mut item = item_info_value(&request.metadata, "graphql");
+            let mut graphql = serde_yaml_ng::Mapping::new();
+            if let Some(method) = &request.method {
+                graphql.insert(string_key("method"), Value::String(method.clone()));
+            }
+            if let Some(url) = &request.url {
+                graphql.insert(string_key("url"), Value::String(url.clone()));
+            }
+            if !request.headers.is_empty() {
+                graphql.insert(
+                    string_key("headers"),
+                    Value::Sequence(request.headers.iter().map(header_value).collect()),
+                );
+            }
+            let parameters = request
+                .query_parameters
+                .iter()
+                .map(query_parameter_value)
+                .chain(request.path_parameters.iter().map(path_parameter_value))
+                .collect::<Vec<_>>();
+            if !parameters.is_empty() {
+                graphql.insert(string_key("params"), Value::Sequence(parameters));
+            }
+            if let Some(body) = &request.body {
+                graphql.insert(string_key("body"), graphql_body_value(body));
+            }
+            if let Some(authentication) = &request.authentication {
+                graphql.insert(string_key("auth"), authentication_value(authentication));
+            }
+            item.insert(string_key("graphql"), Value::Mapping(graphql));
+            if let Some(settings) = request_settings_value(&request.settings) {
+                item.insert(string_key("settings"), settings);
+            }
+            Value::Mapping(item)
+        }
     }
+}
+
+fn graphql_body_value(body: &probe_core::GraphqlBody) -> Value {
+    match body {
+        probe_core::GraphqlBody::Single(operation) => graphql_operation_value(operation),
+        probe_core::GraphqlBody::Variants(variants) => Value::Sequence(
+            variants
+                .iter()
+                .map(|variant| {
+                    let mut value = serde_yaml_ng::Mapping::new();
+                    value.insert(string_key("title"), Value::String(variant.title.clone()));
+                    if variant.selected {
+                        value.insert(string_key("selected"), Value::Bool(true));
+                    }
+                    value.insert(string_key("body"), graphql_operation_value(&variant.body));
+                    Value::Mapping(value)
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn graphql_operation_value(operation: &probe_core::GraphqlOperation) -> Value {
+    let mut value = serde_yaml_ng::Mapping::new();
+    if let Some(query) = &operation.query {
+        value.insert(string_key("query"), Value::String(query.clone()));
+    }
+    if let Some(variables) = &operation.variables {
+        value.insert(
+            string_key("variables"),
+            Value::String(serde_json::Value::Object(variables.clone()).to_string()),
+        );
+    }
+    if let Some(operation_name) = &operation.operation_name {
+        value.insert(
+            string_key("operationName"),
+            Value::String(operation_name.clone()),
+        );
+    }
+    if let Some(extensions) = &operation.extensions {
+        value.insert(
+            string_key("extensions"),
+            Value::String(serde_json::Value::Object(extensions.clone()).to_string()),
+        );
+    }
+    Value::Mapping(value)
 }
 
 fn item_info_value(metadata: &probe_core::ItemMetadata, item_type: &str) -> serde_yaml_ng::Mapping {

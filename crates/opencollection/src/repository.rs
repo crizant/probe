@@ -591,7 +591,9 @@ impl LoadedWorkspace {
             .workspace
             .request_mut(located.key)
             .expect("repository request key must resolve");
-        update.apply(request);
+        let mut updated = request.clone();
+        update.apply(&mut updated).map_err(SaveError::Graphql)?;
+        *request = updated;
 
         let persistence = located.persistence.ok_or(SaveError::ReadOnlySource)?;
         let source = self
@@ -940,6 +942,13 @@ fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<
             Value::String(name.clone()),
         );
     }
+    let is_graphql = request
+        .get(Value::String("info".to_owned()))
+        .and_then(Value::as_mapping)
+        .and_then(|info| info.get(Value::String("type".to_owned())))
+        .and_then(Value::as_str)
+        == Some("graphql");
+    let details_name = if is_graphql { "graphql" } else { "http" };
     if update.method.is_some()
         || update.url.is_some()
         || update.headers.is_some()
@@ -947,20 +956,21 @@ fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<
         || update.path_parameters.is_some()
         || update.body.is_some()
         || update.authentication.is_some()
+        || update.graphql.is_some()
     {
-        let http = mapping_child(request, "http")?;
+        let details = mapping_child(request, details_name)?;
         if let Some(method) = &update.method {
-            http.insert(
+            details.insert(
                 Value::String("method".to_owned()),
                 Value::String(method.clone()),
             );
         }
         if let Some(url) = &update.url {
-            http.insert(Value::String("url".to_owned()), Value::String(url.clone()));
+            details.insert(Value::String("url".to_owned()), Value::String(url.clone()));
         }
         if let Some(headers) = &update.headers {
             merge_sequence_preserving(
-                http,
+                details,
                 "headers",
                 headers.iter().map(header_value).collect(),
                 &[],
@@ -968,23 +978,117 @@ fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<
         }
         if update.query_parameters.is_some() || update.path_parameters.is_some() {
             merge_parameters(
-                http,
+                details,
                 update.query_parameters.as_deref(),
                 update.path_parameters.as_deref(),
             );
         }
         if let Some(body) = &update.body {
-            set_optional_merged(http, "body", body.as_ref().map(request_body_value));
+            if is_graphql {
+                return Err(SaveError::InvalidDocument(
+                    "HTTP body updates cannot be applied to a native GraphQL request".to_owned(),
+                ));
+            }
+            set_optional_merged(details, "body", body.as_ref().map(request_body_value));
         }
         if let Some(authentication) = &update.authentication {
             set_optional(
-                http,
+                details,
                 "auth",
                 authentication.as_ref().map(authentication_value),
             );
         }
+        if let Some(graphql) = &update.graphql {
+            if !is_graphql {
+                return Err(SaveError::Graphql(
+                    probe_core::GraphqlRequestError::NotGraphql,
+                ));
+            }
+            apply_graphql_update(details, graphql)?;
+        }
     }
     Ok(())
+}
+
+fn apply_graphql_update(
+    graphql: &mut serde_yaml_ng::Mapping,
+    update: &probe_core::GraphqlUpdate,
+) -> Result<(), SaveError> {
+    let body = graphql_body_mapping(graphql)?;
+    if let Some(query) = &update.query {
+        body.insert(
+            Value::String("query".to_owned()),
+            Value::String(query.clone()),
+        );
+    }
+    if let Some(variables) = &update.variables {
+        set_optional(
+            body,
+            "variables",
+            variables.as_ref().map(|variables| {
+                Value::String(serde_json::Value::Object(variables.clone()).to_string())
+            }),
+        );
+    }
+    if let Some(operation_name) = &update.operation_name {
+        set_optional(
+            body,
+            "operationName",
+            operation_name
+                .as_ref()
+                .map(|value| Value::String(value.clone())),
+        );
+    }
+    if let Some(extensions) = &update.extensions {
+        set_optional(
+            body,
+            "extensions",
+            extensions.as_ref().map(|extensions| {
+                Value::String(serde_json::Value::Object(extensions.clone()).to_string())
+            }),
+        );
+    }
+    Ok(())
+}
+
+fn graphql_body_mapping(
+    graphql: &mut serde_yaml_ng::Mapping,
+) -> Result<&mut serde_yaml_ng::Mapping, SaveError> {
+    let key = Value::String("body".to_owned());
+    if !graphql.contains_key(&key) {
+        graphql.insert(key.clone(), Value::Mapping(serde_yaml_ng::Mapping::new()));
+    }
+    let body = graphql.get_mut(&key).expect("GraphQL body was initialized");
+    let variants = match body {
+        Value::Mapping(body) => return Ok(body),
+        Value::Sequence(variants) => variants,
+        _ => {
+            return Err(SaveError::InvalidDocument(
+                "GraphQL body must be a mapping or variants".to_owned(),
+            ));
+        }
+    };
+    let mut selected = variants.iter_mut().filter(|variant| {
+        variant
+            .as_mapping()
+            .and_then(|variant| variant.get(Value::String("selected".to_owned())))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
+    let variant = selected.next().ok_or_else(|| {
+        SaveError::InvalidDocument("GraphQL body variants have no selected value".to_owned())
+    })?;
+    if selected.next().is_some() {
+        return Err(SaveError::InvalidDocument(
+            "GraphQL body variants have multiple selected values".to_owned(),
+        ));
+    }
+    mapping_child(
+        variant.as_mapping_mut().ok_or_else(|| {
+            SaveError::InvalidDocument("GraphQL body variant is not a mapping".to_owned())
+        })?,
+        "body",
+    )
 }
 
 fn mapping_child<'a>(

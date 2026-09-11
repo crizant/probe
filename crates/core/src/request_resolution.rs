@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    AuthenticationValue, Body, Environment, EnvironmentResolutionError, HttpRequest,
-    MultipartValue, RequestBody, ResolvedEnvironment,
+    AuthenticationValue, Body, Environment, EnvironmentResolutionError, GraphqlBody,
+    GraphqlOperation, HttpRequest, MultipartValue, RequestBody, RequestProtocol,
+    ResolvedEnvironment,
     environment::{EffectiveVariableDeclaration, effective_variable_declarations},
 };
 
@@ -21,6 +22,14 @@ pub enum VariableUsage {
     PathParameter { name: String },
     /// A raw request body.
     Body,
+    /// A native GraphQL query document.
+    GraphqlQuery,
+    /// Native GraphQL variables.
+    GraphqlVariables,
+    /// A native GraphQL operation name.
+    GraphqlOperationName,
+    /// Native GraphQL extensions.
+    GraphqlExtensions,
     /// A form-urlencoded field name or value.
     FormUrlEncoded { name: String },
     /// A multipart part name, value, or content type.
@@ -148,11 +157,82 @@ fn transform_request_strings<E>(
     if let Some(body) = &mut request.body {
         transform_body(body, &mut transform)?;
     }
+    if let RequestProtocol::Graphql(Some(body)) = &mut request.protocol {
+        transform_graphql_body(body, &mut transform)?;
+    }
     if let Some(authentication) = &mut request.authentication {
         for (name, value) in &mut authentication.properties {
             let usage = VariableUsage::Authentication { name: name.clone() };
             transform_authentication_value(value, &usage, &mut transform)?;
         }
+    }
+    Ok(())
+}
+
+fn transform_graphql_body<E>(
+    body: &mut GraphqlBody,
+    transform: &mut impl FnMut(&mut String, &VariableUsage) -> Result<(), E>,
+) -> Result<(), E> {
+    match body {
+        GraphqlBody::Single(operation) => transform_graphql_operation(operation, transform),
+        GraphqlBody::Variants(variants) => {
+            for variant in variants {
+                transform_graphql_operation(&mut variant.body, transform)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn transform_graphql_operation<E>(
+    operation: &mut GraphqlOperation,
+    transform: &mut impl FnMut(&mut String, &VariableUsage) -> Result<(), E>,
+) -> Result<(), E> {
+    if let Some(query) = &mut operation.query {
+        transform(query, &VariableUsage::GraphqlQuery)?;
+    }
+    if let Some(variables) = &mut operation.variables {
+        transform_json_strings(variables, &VariableUsage::GraphqlVariables, transform)?;
+    }
+    if let Some(operation_name) = &mut operation.operation_name {
+        transform(operation_name, &VariableUsage::GraphqlOperationName)?;
+    }
+    if let Some(extensions) = &mut operation.extensions {
+        transform_json_strings(extensions, &VariableUsage::GraphqlExtensions, transform)?;
+    }
+    Ok(())
+}
+
+fn transform_json_strings<E>(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    usage: &VariableUsage,
+    transform: &mut impl FnMut(&mut String, &VariableUsage) -> Result<(), E>,
+) -> Result<(), E> {
+    fn transform_value<E>(
+        value: &mut serde_json::Value,
+        usage: &VariableUsage,
+        transform: &mut impl FnMut(&mut String, &VariableUsage) -> Result<(), E>,
+    ) -> Result<(), E> {
+        match value {
+            serde_json::Value::String(value) => transform(value, usage),
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    transform_value(value, usage, transform)?;
+                }
+                Ok(())
+            }
+            serde_json::Value::Object(values) => {
+                for value in values.values_mut() {
+                    transform_value(value, usage, transform)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    for value in object.values_mut() {
+        transform_value(value, usage, transform)?;
     }
     Ok(())
 }

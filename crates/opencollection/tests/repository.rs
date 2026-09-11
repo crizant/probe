@@ -6,8 +6,9 @@ use probe_core::{
     QueryParameter, RequestBody, RequestUpdate, resolve_environment,
 };
 use probe_opencollection::{
-    CreateError, SaveError, StructureError, StructureOperation, create_bundled_workspace,
-    create_bundled_workspace_from_collection, load_workspace, load_workspace_from_str,
+    CreateError, CreatedRequestProtocol, SaveError, StructureError, StructureOperation,
+    create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
+    load_workspace_from_str,
 };
 
 mod support;

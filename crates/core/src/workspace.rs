@@ -629,6 +629,11 @@ fn index_item(
             request_ancestors.insert(key, ancestors.to_vec());
             WorkspaceItemRef::Request(key)
         }
+        CollectionItem::GraphqlRequest(request) => {
+            let key = RequestKey::from(requests.insert(request.into_request()));
+            request_ancestors.insert(key, ancestors.to_vec());
+            WorkspaceItemRef::Request(key)
+        }
         CollectionItem::Folder(folder) => {
             let arena_key = folders.insert_with_key(|arena_key| WorkspaceFolder {
                 key: FolderKey::from(arena_key),

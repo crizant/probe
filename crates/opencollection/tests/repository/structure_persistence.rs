@@ -13,6 +13,8 @@ fn bundled_structure_edits_save_reload_and_preserve_unknown_fields() {
             name: "Created".to_owned(),
             method: Some("PUT".to_owned()),
             url: Some("https://example.com/created".to_owned()),
+            protocol: CreatedRequestProtocol::Http,
+            graphql: None,
         })
         .unwrap();
     assert_eq!(created.selector.as_deref(), Some("items/1/items/0"));
@@ -198,6 +200,8 @@ fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
             name: "Created Request".to_owned(),
             method: Some("PATCH".to_owned()),
             url: Some("https://example.com/created".to_owned()),
+            protocol: CreatedRequestProtocol::Http,
+            graphql: None,
         })
         .unwrap();
     assert_eq!(
@@ -357,21 +361,20 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
     copy_directory(&fixture("phase16-unbundled"), &root);
     let mut loaded = load_workspace(&root).unwrap();
 
-    for reserved in ["opencollection.yml", "group/unsupported.yml"] {
-        let rejected = loaded
-            .apply_structure(StructureOperation::DeleteRequest {
-                selector: reserved.to_owned(),
-            })
-            .unwrap_err();
-        assert!(matches!(
-            rejected,
-            StructureError::ItemNotFound {
-                kind: probe_opencollection::ItemKind::Request,
-                ..
-            }
-        ));
-        assert!(root.join(reserved).exists());
-    }
+    let reserved = "opencollection.yml";
+    let rejected = loaded
+        .apply_structure(StructureOperation::DeleteRequest {
+            selector: reserved.to_owned(),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        rejected,
+        StructureError::ItemNotFound {
+            kind: probe_opencollection::ItemKind::Request,
+            ..
+        }
+    ));
+    assert!(root.join(reserved).exists());
     fs::create_dir(root.join("rogue")).unwrap();
     fs::write(
         root.join("rogue/folder.yml"),
@@ -385,6 +388,8 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
             name: "Unsafe".to_owned(),
             method: None,
             url: None,
+            protocol: CreatedRequestProtocol::Http,
+            graphql: None,
         })
         .unwrap_err();
     assert!(matches!(
@@ -401,6 +406,8 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
             name: "Alpha".to_owned(),
             method: None,
             url: None,
+            protocol: CreatedRequestProtocol::Http,
+            graphql: None,
         })
         .unwrap_err();
     assert!(matches!(duplicate, StructureError::DuplicateDestination(_)));
@@ -447,4 +454,45 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
     ));
     assert!(root.join("alpha.yml").exists());
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn bundled_create_can_write_native_graphql_requests() {
+    let path = temporary_path("graphql-create.yml");
+    fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let created = loaded
+        .apply_structure(StructureOperation::CreateRequest {
+            parent: None,
+            index: Some(0),
+            name: "Viewer".to_owned(),
+            method: Some("POST".to_owned()),
+            url: Some("https://example.com/graphql".to_owned()),
+            protocol: CreatedRequestProtocol::Graphql,
+            graphql: Some(probe_core::GraphqlUpdate {
+                query: Some("query Viewer { viewer { login } }".to_owned()),
+                operation_name: Some(Some("Viewer".to_owned())),
+                ..probe_core::GraphqlUpdate::default()
+            }),
+        })
+        .unwrap();
+    let selector = created.selector.unwrap();
+    let reloaded = load_workspace(&path).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key(&selector).unwrap())
+        .unwrap();
+    assert_eq!(request.protocol.as_str(), "graphql");
+    assert_eq!(
+        request
+            .selected_graphql()
+            .unwrap()
+            .unwrap()
+            .operation_name
+            .as_deref(),
+        Some("Viewer")
+    );
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("type: graphql"));
+    fs::remove_file(path).unwrap();
 }

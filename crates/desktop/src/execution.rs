@@ -283,6 +283,9 @@ pub(crate) fn execute_http_request<P>(
 where
     P: FnMut(HttpProgress) + Send,
 {
+    let request = request
+        .prepare_http()
+        .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

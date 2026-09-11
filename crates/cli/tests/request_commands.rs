@@ -91,6 +91,24 @@ fn gets_path_parameters_in_json_output() {
 }
 
 #[test]
+fn gets_first_class_graphql_fields_as_json() {
+    let output = probe()
+        .args(["request", "get"])
+        .arg(fixture("graphql-http.yml"))
+        .args(["items/0", "--environment", "local", "--json"])
+        .output()
+        .expect("get command should run");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["type"], "graphql");
+    assert_eq!(value["graphql"]["operationName"], "Viewer");
+    assert_eq!(value["graphql"]["variables"]["login"], "octocat");
+    assert!(value["body"].is_null());
+    assert_eq!(value["graphql"]["extensions"]["trace"]["enabled"], true);
+}
+
+#[test]
 fn sets_and_persists_request_fields_as_json() {
     let workspace = temporary_path("phase7-workspace.yml");
     fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
@@ -134,6 +152,211 @@ fn sets_and_persists_request_fields_as_json() {
     assert!(saved.contains("vendor.example"));
     assert!(saved.contains("runtime:"));
     fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn sets_and_persists_graphql_fields_as_json() {
+    let workspace = temporary_path("graphql-set-workspace.yml");
+    fs::copy(fixture("graphql-http.yml"), &workspace).unwrap();
+    let output = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--graphql-variables", r#"{"includeName":true}"#, "--json"])
+        .output()
+        .expect("GraphQL set command should run");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        value["graphql"]["query"]
+            .as_str()
+            .unwrap()
+            .starts_with("query Viewer")
+    );
+    assert_eq!(value["graphql"]["variables"]["includeName"], true);
+    assert_eq!(value["graphql"]["operationName"], "Viewer");
+
+    let operation = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--graphql-operation-name",
+            "RenamedViewer",
+            "--graphql-extensions",
+            r#"{"persistedQuery":{"version":1}}"#,
+            "--json",
+        ])
+        .output()
+        .expect("partial GraphQL set command should run");
+    assert!(operation.status.success());
+    let value: Value = serde_json::from_slice(&operation.stdout).unwrap();
+    assert_eq!(value["graphql"]["operationName"], "RenamedViewer");
+    assert_eq!(value["graphql"]["variables"]["includeName"], true);
+    assert_eq!(
+        value["graphql"]["extensions"]["persistedQuery"]["version"],
+        1
+    );
+
+    let cleared = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--graphql-variables",
+            "null",
+            "--graphql-extensions",
+            "null",
+            "--json",
+        ])
+        .output()
+        .expect("optional GraphQL fields should clear");
+    assert!(cleared.status.success());
+    let value: Value = serde_json::from_slice(&cleared.stdout).unwrap();
+    assert!(value["graphql"]["variables"].is_null());
+    assert_eq!(value["graphql"]["operationName"], "RenamedViewer");
+    assert!(value["graphql"]["extensions"].is_null());
+    assert!(value["graphql"]["query"].is_string());
+
+    let cleared_name = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--graphql-operation-name", "null", "--json"])
+        .output()
+        .expect("GraphQL operation name should clear");
+    assert!(cleared_name.status.success());
+    let value: Value = serde_json::from_slice(&cleared_name.stdout).unwrap();
+    assert!(value["graphql"]["operationName"].is_null());
+
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(saved.contains("type: graphql"));
+    assert!(saved.contains("graphql:"));
+    assert!(!saved.contains("type: http"));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn graphql_set_rejects_non_object_variables() {
+    let output = probe()
+        .args(["request", "set"])
+        .arg(fixture("phase1-round-trip.yml"))
+        .args([
+            "items/0",
+            "--graphql-query",
+            "query Viewer { viewer { login } }",
+            "--graphql-variables",
+            "[]",
+            "--json",
+        ])
+        .output()
+        .expect("GraphQL set command should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert_eq!(
+        value["error"]["message"],
+        "GraphQL variables must be a JSON object or null"
+    );
+}
+
+#[test]
+fn graphql_set_rejects_http_requests() {
+    let output = probe()
+        .args(["request", "set"])
+        .arg(fixture("phase1-round-trip.yml"))
+        .args([
+            "items/0",
+            "--graphql-query",
+            "query Viewer { viewer { login } }",
+            "--json",
+        ])
+        .output()
+        .expect("GraphQL set command should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert_eq!(
+        value["error"]["message"],
+        "request is not a native GraphQL request"
+    );
+}
+
+#[test]
+fn graphql_get_rejects_ambiguous_body_variants() {
+    let workspace = temporary_path("graphql-variants.yml");
+    fs::write(
+        &workspace,
+        concat!(
+            "opencollection: 1.0.0\ninfo: { name: Variants }\nbundled: true\nitems:\n",
+            "  - info: { name: Viewer, type: graphql }\n",
+            "    graphql:\n      method: POST\n      url: https://example.com/graphql\n",
+            "      body:\n        - title: One\n          selected: true\n",
+            "          body: { query: 'query One { one }' }\n",
+            "        - title: Two\n          selected: true\n",
+            "          body: { query: 'query Two { two }' }\n",
+        ),
+    )
+    .unwrap();
+    let output = probe()
+        .args(["request", "get"])
+        .arg(&workspace)
+        .args(["items/0", "--json"])
+        .output()
+        .expect("GraphQL get command should run");
+
+    assert_eq!(output.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "request_configuration");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("multiple selected values")
+    );
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn reports_graphql_variable_locations() {
+    let output = probe()
+        .args(["request", "variables"])
+        .arg(fixture("graphql-http.yml"))
+        .args(["items/0", "--environment", "local", "--json"])
+        .output()
+        .expect("GraphQL variables command should run");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let variables = value["variables"].as_array().unwrap();
+    let login = variables
+        .iter()
+        .find(|variable| variable["name"] == "login")
+        .unwrap();
+    assert_eq!(
+        login["usages"],
+        serde_json::json!([{ "location": "graphql_variables" }])
+    );
+}
+
+#[test]
+fn gets_graphql_fields_in_human_output() {
+    let output = probe()
+        .args(["request", "get"])
+        .arg(fixture("graphql-http.yml"))
+        .args(["items/0", "--environment", "local"])
+        .output()
+        .expect("GraphQL get command should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Body: graphql"));
+    assert!(stdout.contains("GraphQL query: query Viewer"));
+    assert!(stdout.contains("GraphQL operation name: Viewer"));
+    assert!(stdout.contains("octocat"));
 }
 
 #[test]
@@ -474,6 +697,7 @@ fn executes_request_as_deterministic_json() {
     assert!(output.stderr.is_empty());
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
     assert_eq!(value["request"]["method"], "POST");
+    assert!(value["request"]["graphql"].is_null());
     assert_eq!(value["response"]["status"], 200);
     assert_eq!(value["response"]["sizeBytes"], 15);
     assert_eq!(value["response"]["body"]["encoding"], "utf8");
@@ -491,6 +715,98 @@ fn executes_request_as_deterministic_json() {
     );
     assert!(captured.head.contains("x-probe: phase-five\r\n"));
     assert_eq!(captured.body, b"{\"source\":\"cli\"}");
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn executes_graphql_json_envelopes_and_preserves_application_errors() {
+    let response =
+        r#"{"data":{"viewer":{"login":"octocat"}},"errors":[{"message":"viewer is unavailable"}]}"#;
+    let (server_url, server) = serve_once(response.as_bytes().to_vec(), "application/json");
+    let workspace = graphql_runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--environment", "local", "--json"])
+        .output()
+        .expect("GraphQL request should run");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["request"]["method"], "POST");
+    assert_eq!(value["request"]["graphql"]["operationName"], "Viewer");
+    assert_eq!(value["response"]["status"], 200);
+    assert_eq!(value["response"]["body"]["content"], response);
+
+    let captured = server.join().unwrap();
+    assert!(captured.head.starts_with("POST /graphql HTTP/1.1\r\n"));
+    assert!(captured.head.contains("content-type: application/json\r\n"));
+    let envelope: Value =
+        serde_json::from_slice(&captured.body).expect("request should be a JSON envelope");
+    assert_eq!(
+        envelope["query"],
+        "query Viewer($login: String!) { viewer(login: $login) { login } }"
+    );
+    assert_eq!(envelope["variables"]["login"], "octocat");
+    assert_eq!(envelope["operationName"], "Viewer");
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn executes_native_graphql_get_with_query_parameters() {
+    let (server_url, server) =
+        serve_once(br#"{"data":{"viewer":null}}"#.to_vec(), "application/json");
+    let source = fs::read_to_string(fixture("graphql-http.yml")).unwrap();
+    let workspace = temporary_path("graphql-get-workspace.yml");
+    fs::write(
+        &workspace,
+        source
+            .replace("__SERVER_URL__", &server_url)
+            .replace("method: POST", "method: GET"),
+    )
+    .unwrap();
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .args(["items/0", "--environment", "local", "--json"])
+        .output()
+        .expect("GraphQL GET request should run");
+
+    assert!(output.status.success());
+    let captured = server.join().unwrap();
+    assert!(captured.head.starts_with("GET /graphql?"));
+    assert!(captured.head.contains("query="));
+    assert!(captured.head.contains("variables="));
+    assert!(captured.head.contains("operationName=Viewer"));
+    assert!(captured.head.contains("extensions="));
+    assert!(captured.body.is_empty());
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn native_graphql_runtime_variables_override_the_environment() {
+    let (server_url, server) = serve_once(br#"{"data":{}}"#.to_vec(), "application/json");
+    let workspace = graphql_runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .args([
+            "items/0",
+            "--environment",
+            "local",
+            "--var",
+            "login=hubot",
+            "--json",
+        ])
+        .output()
+        .expect("GraphQL runtime override should run");
+
+    assert!(output.status.success());
+    let captured = server.join().unwrap();
+    let envelope: Value = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(envelope["variables"]["login"], "hubot");
     fs::remove_file(workspace).unwrap();
 }
 

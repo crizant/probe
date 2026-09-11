@@ -1,5 +1,5 @@
 info:
-  name: Unsupported
+  name: Native GraphQL
   type: graphql
 graphql:
   url: https://example.com/graphql

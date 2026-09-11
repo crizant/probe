@@ -10,10 +10,10 @@ use std::{collections::BTreeMap, error::Error as StdError, fmt, time::Duration};
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Author, Body, BodyVariant, Collection,
     CollectionItem, CollectionMetadata, Environment, EnvironmentVariable, FileReference, Folder,
-    FormField, Header, HttpRequest, ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBody, RawBodyKind, RequestBody, RequestSettings, SecretVariable, Variable,
-    VariableValue, VariableValueSet, VariableValueType, VariableValueVariant,
-    validate_environments,
+    FormField, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, GraphqlRequest, Header,
+    HttpRequest, ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter,
+    RawBody, RawBodyKind, RequestBody, RequestSettings, SecretVariable, Variable, VariableValue,
+    VariableValueSet, VariableValueType, VariableValueVariant, validate_environments,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -29,7 +29,9 @@ pub use repository::{
     create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
     load_workspace_from_str,
 };
-pub use structure::{ItemKind, StructureError, StructureOperation, StructureResult};
+pub use structure::{
+    CreatedRequestProtocol, ItemKind, StructureError, StructureOperation, StructureResult,
+};
 
 /// An OpenCollection document together with its supported domain projection.
 #[derive(Clone, Debug)]
@@ -232,6 +234,7 @@ struct ItemDocument {
     #[serde(default)]
     items: Vec<Value>,
     http: Option<HttpDetailsDocument>,
+    graphql: Option<GraphqlDetailsDocument>,
     #[serde(default)]
     settings: RequestSettingsDocument,
 }
@@ -293,6 +296,35 @@ struct HttpDetailsDocument {
     params: Vec<ParameterDocument>,
     body: Option<Value>,
     auth: Option<Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GraphqlDetailsDocument {
+    method: Option<String>,
+    url: Option<String>,
+    #[serde(default)]
+    headers: Vec<HeaderDocument>,
+    #[serde(default)]
+    params: Vec<ParameterDocument>,
+    body: Option<Value>,
+    auth: Option<Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphqlBodyDocument {
+    query: Option<String>,
+    variables: Option<Value>,
+    operation_name: Option<String>,
+    extensions: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlBodyVariantDocument {
+    title: String,
+    #[serde(default)]
+    selected: bool,
+    body: GraphqlBodyDocument,
 }
 
 #[derive(Debug, Deserialize)]
@@ -669,6 +701,67 @@ fn project_request_body(value: Value) -> Result<Option<RequestBody>, serde_yaml_
     }
 }
 
+fn project_graphql_body(value: Value) -> Result<GraphqlBody, serde_yaml_ng::Error> {
+    if value.is_sequence() {
+        let variants: Vec<GraphqlBodyVariantDocument> = serde_yaml_ng::from_value(value)?;
+        Ok(GraphqlBody::Variants(
+            variants
+                .into_iter()
+                .map(|variant| {
+                    project_graphql_operation(variant.body).map(|body| GraphqlBodyVariant {
+                        title: variant.title,
+                        selected: variant.selected,
+                        body,
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+        ))
+    } else {
+        let body: GraphqlBodyDocument = serde_yaml_ng::from_value(value)?;
+        Ok(GraphqlBody::Single(project_graphql_operation(body)?))
+    }
+}
+
+fn project_graphql_operation(
+    body: GraphqlBodyDocument,
+) -> Result<GraphqlOperation, serde_yaml_ng::Error> {
+    Ok(GraphqlOperation {
+        query: body.query,
+        variables: body
+            .variables
+            .map(|value| project_graphql_object(value, "variables"))
+            .transpose()?,
+        operation_name: body.operation_name,
+        extensions: body
+            .extensions
+            .map(|value| project_graphql_object(value, "extensions"))
+            .transpose()?,
+    })
+}
+
+fn project_graphql_object(
+    value: Value,
+    field: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>, serde_yaml_ng::Error> {
+    let value = match value {
+        Value::String(source) => serde_json::from_str(&source).map_err(|error| {
+            <serde_yaml_ng::Error as serde::de::Error>::custom(format!(
+                "GraphQL {field} must contain a JSON object: {error}"
+            ))
+        })?,
+        value => serde_json::to_value(value).map_err(|error| {
+            <serde_yaml_ng::Error as serde::de::Error>::custom(format!(
+                "GraphQL {field} must be a JSON object: {error}"
+            ))
+        })?,
+    };
+    value.as_object().cloned().ok_or_else(|| {
+        <serde_yaml_ng::Error as serde::de::Error>::custom(format!(
+            "GraphQL {field} must be a JSON object"
+        ))
+    })
+}
+
 fn project_body(value: Value) -> Result<Option<Body>, serde_yaml_ng::Error> {
     let kind: BodyKindDocument = serde_yaml_ng::from_value(value.clone())?;
 
@@ -807,6 +900,38 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
                 method: http.method,
                 url: http.url,
                 headers: http
+                    .headers
+                    .into_iter()
+                    .map(HeaderDocument::into_domain)
+                    .collect(),
+                query_parameters,
+                path_parameters,
+                body,
+                authentication,
+                settings,
+                protocol: probe_core::RequestProtocol::Http,
+            })))
+        }
+        Some("graphql") => {
+            let item: ItemDocument = serde_yaml_ng::from_value(value)?;
+            let settings = item.settings.into_domain()?;
+            let graphql = item.graphql.unwrap_or_default();
+            let body = graphql.body.map(project_graphql_body).transpose()?;
+            let authentication = graphql.auth.map(project_authentication).transpose()?;
+            let mut query_parameters = Vec::new();
+            let mut path_parameters = Vec::new();
+            for parameter in graphql.params {
+                match parameter.parameter_type.as_str() {
+                    "query" => query_parameters.push(parameter.into_domain()),
+                    "path" => path_parameters.push(parameter.into_domain()),
+                    _ => {}
+                }
+            }
+            Ok(Some(CollectionItem::GraphqlRequest(GraphqlRequest {
+                metadata: item.info.into_domain(),
+                method: graphql.method,
+                url: graphql.url,
+                headers: graphql
                     .headers
                     .into_iter()
                     .map(HeaderDocument::into_domain)

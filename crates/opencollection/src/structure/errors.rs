@@ -139,6 +139,7 @@ impl From<SaveError> for StructureError {
                 selector,
             },
             SaveError::EmptyUpdate => Self::InvalidDocument("empty structural update".to_owned()),
+            SaveError::Graphql(error) => Self::InvalidDocument(error.to_string()),
             SaveError::Environment(error) => Self::InvalidDocument(error.to_string()),
         }
     }

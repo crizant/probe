@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, BodyVariant, Environment,
-    EnvironmentResolutionError, EnvironmentVariable, FileReference, FormField, Header, HttpRequest,
-    MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBody, RawBodyKind,
-    RequestBody, SecretVariable, Variable, VariableUsage, VariableValue, VariableValueSet,
-    discover_request_variables,
+    EnvironmentResolutionError, EnvironmentVariable, FileReference, FormField, GraphqlBody,
+    GraphqlOperation, GraphqlRequest, Header, HttpRequest, MultipartPart, MultipartPartKind,
+    MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody, SecretVariable, Variable,
+    VariableUsage, VariableValue, VariableValueSet, discover_request_variables,
 };
 
 fn plain(name: &str) -> EnvironmentVariable {
@@ -341,4 +341,47 @@ fn malformed_and_empty_interpolation_match_resolution_parser_semantics() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn discovers_native_graphql_interpolation_locations() {
+    let request = GraphqlRequest {
+        url: Some("{{baseUrl}}/graphql".to_owned()),
+        body: Some(GraphqlBody::Single(GraphqlOperation {
+            query: Some("query {{operation}} { viewer }".to_owned()),
+            variables: Some(
+                serde_json::json!({ "login": "{{login}}" })
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+            operation_name: Some("{{operation}}".to_owned()),
+            extensions: Some(
+                serde_json::json!({ "trace": "{{trace}}" })
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        })),
+        ..GraphqlRequest::default()
+    }
+    .into_request();
+    let variables = discover_request_variables(&request, &[], None).unwrap();
+    let find = |name: &str| {
+        variables
+            .iter()
+            .find(|variable| variable.name == name)
+            .unwrap()
+    };
+
+    assert_eq!(find("baseUrl").usages, vec![VariableUsage::Url]);
+    assert_eq!(
+        find("operation").usages,
+        vec![
+            VariableUsage::GraphqlQuery,
+            VariableUsage::GraphqlOperationName,
+        ]
+    );
+    assert_eq!(find("login").usages, vec![VariableUsage::GraphqlVariables]);
+    assert_eq!(find("trace").usages, vec![VariableUsage::GraphqlExtensions]);
 }

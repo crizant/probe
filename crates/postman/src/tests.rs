@@ -151,7 +151,9 @@ fn imports_all_supported_bodies_and_expands_authentication_inheritance() {
         .iter()
         .map(|item| match item {
             CollectionItem::HttpRequest(request) => request,
-            CollectionItem::Folder(_) => panic!("payload item should be a request"),
+            CollectionItem::Folder(_) | CollectionItem::GraphqlRequest(_) => {
+                panic!("payload item should be an HTTP request")
+            }
         })
         .collect::<Vec<_>>();
     assert_eq!(

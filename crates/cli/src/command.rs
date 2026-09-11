@@ -1,23 +1,29 @@
 use std::path::PathBuf;
 
-use probe_core::RequestUpdate;
-use probe_opencollection::StructureOperation;
+use probe_core::{GraphqlUpdate, RequestUpdate};
+use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
+use serde_json::{Map, Value};
 
 use crate::{CliError, WorkspaceInput};
 
-const ENVIRONMENT: u16 = 1 << 0;
-const OUTPUT: u16 = 1 << 1;
-const NAME: u16 = 1 << 2;
-const METHOD: u16 = 1 << 3;
-const URL: u16 = 1 << 4;
-const PARENT: u16 = 1 << 5;
-const INDEX: u16 = 1 << 6;
-const VALUE: u16 = 1 << 7;
-const EXTENDS: u16 = 1 << 8;
-const WORKSPACE: u16 = 1 << 9;
-const ALLOW_PARTIAL: u16 = 1 << 10;
-const VAR: u16 = 1 << 11;
-const STRICT_VARIABLES: u16 = 1 << 12;
+const ENVIRONMENT: u32 = 1 << 0;
+const OUTPUT: u32 = 1 << 1;
+const NAME: u32 = 1 << 2;
+const METHOD: u32 = 1 << 3;
+const URL: u32 = 1 << 4;
+const PARENT: u32 = 1 << 5;
+const INDEX: u32 = 1 << 6;
+const VALUE: u32 = 1 << 7;
+const EXTENDS: u32 = 1 << 8;
+const WORKSPACE: u32 = 1 << 9;
+const ALLOW_PARTIAL: u32 = 1 << 10;
+const VAR: u32 = 1 << 11;
+const STRICT_VARIABLES: u32 = 1 << 12;
+const GRAPHQL_QUERY: u32 = 1 << 13;
+const GRAPHQL_VARIABLES: u32 = 1 << 14;
+const GRAPHQL_OPERATION_NAME: u32 = 1 << 15;
+const GRAPHQL_EXTENSIONS: u32 = 1 << 16;
+const TYPE: u32 = 1 << 17;
 
 #[derive(Debug)]
 pub(crate) enum Command {
@@ -70,12 +76,12 @@ pub(crate) enum Command {
     Set {
         input: WorkspaceInput,
         selector: String,
-        update: RequestUpdate,
+        update: Box<RequestUpdate>,
     },
     Structure {
         input: WorkspaceInput,
         operation_name: &'static str,
-        operation: StructureOperation,
+        operation: Box<StructureOperation>,
     },
     EnvironmentSet {
         input: WorkspaceInput,
@@ -116,10 +122,15 @@ struct Options {
     allow_partial: bool,
     variables: Vec<(String, String)>,
     strict_variables: bool,
+    graphql_query: Option<String>,
+    graphql_variables: Option<String>,
+    graphql_operation_name: Option<String>,
+    graphql_extensions: Option<String>,
+    request_type: Option<String>,
 }
 
 impl Options {
-    fn present(&self) -> u16 {
+    fn present(&self) -> u32 {
         option_bit(self.environment.is_some(), ENVIRONMENT)
             | option_bit(self.output.is_some(), OUTPUT)
             | option_bit(self.update.name.is_some(), NAME)
@@ -133,9 +144,17 @@ impl Options {
             | option_bit(self.allow_partial, ALLOW_PARTIAL)
             | option_bit(!self.variables.is_empty(), VAR)
             | option_bit(self.strict_variables, STRICT_VARIABLES)
+            | option_bit(self.graphql_query.is_some(), GRAPHQL_QUERY)
+            | option_bit(self.graphql_variables.is_some(), GRAPHQL_VARIABLES)
+            | option_bit(
+                self.graphql_operation_name.is_some(),
+                GRAPHQL_OPERATION_NAME,
+            )
+            | option_bit(self.graphql_extensions.is_some(), GRAPHQL_EXTENSIONS)
+            | option_bit(self.request_type.is_some(), TYPE)
     }
 
-    fn allow(&self, allowed: u16) -> Result<(), CliError> {
+    fn allow(&self, allowed: u32) -> Result<(), CliError> {
         if self.present() & !allowed == 0 {
             Ok(())
         } else {
@@ -144,7 +163,7 @@ impl Options {
     }
 }
 
-const fn option_bit(present: bool, bit: u16) -> u16 {
+const fn option_bit(present: bool, bit: u32) -> u32 {
     if present { bit } else { 0 }
 }
 
@@ -230,29 +249,53 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path, selector] if group == "request" && action == "set" => {
-            options.allow(NAME | METHOD | URL)?;
-            if options.update.is_empty() {
+            options.allow(
+                NAME | METHOD
+                    | URL
+                    | GRAPHQL_QUERY
+                    | GRAPHQL_VARIABLES
+                    | GRAPHQL_OPERATION_NAME
+                    | GRAPHQL_EXTENSIONS,
+            )?;
+            let update = graphql_update(options)?;
+            if update.is_empty() {
                 return Err(invalid_command());
             }
             Ok(Command::Set {
                 input: input(path),
                 selector: selector.clone(),
-                update: options.update,
+                update: Box::new(update),
             })
         }
         [group, action, path] if group == "request" && action == "create" => {
-            options.allow(NAME | METHOD | URL | PARENT | INDEX)?;
-            let name = options.update.name.ok_or_else(invalid_command)?;
+            options.allow(
+                NAME | METHOD
+                    | URL
+                    | PARENT
+                    | INDEX
+                    | TYPE
+                    | GRAPHQL_QUERY
+                    | GRAPHQL_VARIABLES
+                    | GRAPHQL_OPERATION_NAME
+                    | GRAPHQL_EXTENSIONS,
+            )?;
+            let protocol = created_request_protocol(&options)?;
+            let parent = options.parent.clone();
+            let index = options.index;
+            let update = graphql_update(options)?;
+            let name = update.name.ok_or_else(invalid_command)?;
             Ok(Command::Structure {
                 input: input(path),
                 operation_name: "create",
-                operation: StructureOperation::CreateRequest {
-                    parent: options.parent,
-                    index: options.index,
+                operation: Box::new(StructureOperation::CreateRequest {
+                    parent,
+                    index,
                     name,
-                    method: options.update.method,
-                    url: options.update.url,
-                },
+                    method: update.method,
+                    url: update.url,
+                    protocol,
+                    graphql: update.graphql,
+                }),
             })
         }
         [group, action, path] if group == "folder" && action == "create" => {
@@ -260,11 +303,11 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             Ok(Command::Structure {
                 input: input(path),
                 operation_name: "create",
-                operation: StructureOperation::CreateFolder {
+                operation: Box::new(StructureOperation::CreateFolder {
                     parent: options.parent,
                     index: options.index,
                     name: options.update.name.ok_or_else(invalid_command)?,
-                },
+                }),
             })
         }
         [group, action, path, selector]
@@ -405,6 +448,13 @@ fn validate_scoped_options(args: &[String], options: &Options) -> Result<(), Cli
             "--allow-partial is only valid for collection import",
         ));
     }
+    let is_request_create =
+        matches!(args, [group, action, _] if group == "request" && action == "create");
+    if options.request_type.is_some() && !is_request_create {
+        return Err(CliError::invalid_arguments(
+            "--type is only valid for request create",
+        ));
+    }
     Ok(())
 }
 
@@ -426,7 +476,76 @@ fn extract_options(args: &mut Vec<String>) -> Result<Options, CliError> {
         allow_partial: extract_flag(args, "--allow-partial")?,
         variables: extract_variables(args)?,
         strict_variables: extract_flag(args, "--strict-variables")?,
+        graphql_query: extract_string_option(args, "--graphql-query")?,
+        graphql_variables: extract_string_option(args, "--graphql-variables")?,
+        graphql_operation_name: extract_string_option(args, "--graphql-operation-name")?,
+        graphql_extensions: extract_string_option(args, "--graphql-extensions")?,
+        request_type: extract_string_option(args, "--type")?,
     })
+}
+
+fn graphql_requested(options: &Options) -> bool {
+    options.graphql_query.is_some()
+        || options.graphql_variables.is_some()
+        || options.graphql_operation_name.is_some()
+        || options.graphql_extensions.is_some()
+}
+
+fn created_request_protocol(options: &Options) -> Result<CreatedRequestProtocol, CliError> {
+    match options.request_type.as_deref() {
+        None if graphql_requested(options) => Ok(CreatedRequestProtocol::Graphql),
+        None | Some("http") => {
+            if graphql_requested(options) {
+                Err(CliError::invalid_arguments(
+                    "GraphQL fields cannot be applied to an HTTP request",
+                ))
+            } else {
+                Ok(CreatedRequestProtocol::Http)
+            }
+        }
+        Some("graphql") => Ok(CreatedRequestProtocol::Graphql),
+        Some(_) => Err(CliError::invalid_arguments(
+            "--type must be http or graphql",
+        )),
+    }
+}
+
+fn graphql_update(mut options: Options) -> Result<RequestUpdate, CliError> {
+    if !graphql_requested(&options) {
+        return Ok(options.update);
+    }
+    let graphql = GraphqlUpdate {
+        query: options.graphql_query.take(),
+        variables: options
+            .graphql_variables
+            .as_deref()
+            .map(|source| parse_graphql_object(source, "variables"))
+            .transpose()?,
+        operation_name: options
+            .graphql_operation_name
+            .take()
+            .map(|name| if name == "null" { None } else { Some(name) }),
+        extensions: options
+            .graphql_extensions
+            .as_deref()
+            .map(|source| parse_graphql_object(source, "extensions"))
+            .transpose()?,
+    };
+    options.update.graphql = Some(graphql);
+    Ok(options.update)
+}
+
+fn parse_graphql_object(source: &str, field: &str) -> Result<Option<Map<String, Value>>, CliError> {
+    let value: Value = serde_json::from_str(source).map_err(|_| {
+        CliError::invalid_arguments(format!("GraphQL {field} must be a JSON object or null"))
+    })?;
+    match value {
+        Value::Null => Ok(None),
+        Value::Object(value) => Ok(Some(value)),
+        _ => Err(CliError::invalid_arguments(format!(
+            "GraphQL {field} must be a JSON object or null"
+        ))),
+    }
 }
 
 fn extract_variables(args: &mut Vec<String>) -> Result<Vec<(String, String)>, CliError> {
@@ -511,7 +630,7 @@ fn structure(
     Command::Structure {
         input,
         operation_name,
-        operation,
+        operation: Box::new(operation),
     }
 }
 
