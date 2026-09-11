@@ -823,7 +823,7 @@ fn writable_structure_fixture(suffix: &str) -> PathBuf {
 }
 
 mod environments;
+mod graphql;
 mod interactions;
 mod response;
 mod workspace;
-mod graphql;

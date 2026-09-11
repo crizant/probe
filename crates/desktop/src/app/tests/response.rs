@@ -19,7 +19,7 @@ fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
         })
         .expect("test window should be open");
 
-    for section in EditorSection::ALL {
+    for section in EditorSection::ALL_HTTP {
         window
             .update(cx, |view, _, cx| {
                 view.request_editor.section = section;
