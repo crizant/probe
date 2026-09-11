@@ -289,7 +289,7 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
     cx.run_until_parked();
 
     let graphql_key = window
-        .update(cx, |view, window, cx| {
+        .update(cx, |view, _, _| {
             view.loaded_workspace
                 .as_ref()
                 .unwrap()
