@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf, time::Duration};
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, CollectionItem, EnvironmentVariable,
     MultipartValue, RawBodyKind, RequestBody, VariableValue, VariableValueSet, VariableValueType,
-    Workspace, WorkspaceItemRef,
+    Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
 };
 use probe_opencollection::parse;
 
@@ -68,6 +68,7 @@ fn fixtures_round_trip_without_data_loss() {
     for name in [
         "phase1-round-trip.yml",
         "phase1-bodies-auth-environments.yml",
+        "graphql-http.yml",
     ] {
         let source = fixture(name);
         let parsed = parse(&source).unwrap_or_else(|_| panic!("{name} should parse"));
@@ -85,6 +86,41 @@ fn fixtures_round_trip_without_data_loss() {
             serde_yaml_ng::from_str(&serialized).expect("serialized output should be YAML");
         assert_eq!(before, after, "{name}");
     }
+}
+
+#[test]
+fn parses_and_interpolates_graphql_over_http_requests() {
+    let parsed = parse(&fixture("graphql-http.yml")).expect("GraphQL fixture should parse");
+    let collection = parsed.collection();
+    let CollectionItem::HttpRequest(request) = &collection.items[0] else {
+        panic!("fixture should contain an HTTP request");
+    };
+
+    assert_eq!(request.method.as_deref(), Some("POST"));
+    assert_eq!(request.url.as_deref(), Some("{{serverUrl}}/graphql"));
+    let Some(RequestBody::Single(Body::Raw(raw))) = &request.body else {
+        panic!("GraphQL request should use a raw JSON body");
+    };
+    assert_eq!(raw.kind, RawBodyKind::Json);
+    assert!(
+        raw.data
+            .contains(r#""query": "query Viewer($login: String!)"#)
+    );
+    assert!(
+        raw.data
+            .contains(r#""variables": { "login": "{{login}}" }"#)
+    );
+    assert!(raw.data.contains(r#""operationName": "Viewer""#));
+
+    let environment = resolve_environment(&collection.environments, "local")
+        .expect("fixture environment should resolve");
+    let resolved = resolve_request(request, &environment)
+        .expect("GraphQL request variables should interpolate");
+    assert_eq!(resolved.url.as_deref(), Some("__SERVER_URL__/graphql"));
+    let Some(RequestBody::Single(Body::Raw(raw))) = resolved.body else {
+        panic!("resolved GraphQL request should retain its raw JSON body");
+    };
+    assert!(raw.data.contains(r#""variables": { "login": "octocat" }"#));
 }
 
 #[test]
