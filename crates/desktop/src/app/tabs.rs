@@ -304,6 +304,14 @@ impl ProbeApp {
         let Some(key) = self.shell.active_tab() else {
             return;
         };
+        let is_graphql = self
+            .loaded_workspace
+            .as_ref()
+            .and_then(|loaded| loaded.workspace().request(key))
+            .is_some_and(|request| {
+                matches!(request.protocol, probe_core::RequestProtocol::Graphql(_))
+            });
+        self.request_editor.ensure_available_section(is_graphql);
         self.selected_tree_item = Some(WorkspaceItemRef::Request(key));
         self.reveal_request_in_sidebar(key);
     }
