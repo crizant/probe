@@ -1,6 +1,44 @@
 use super::*;
 
 #[gpui::test]
+fn add_menu_renders_compact_request_and_folder_markers(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.transient.structure_add_menu_open = true;
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(
+        visual
+            .debug_bounds("tree-new-http-request-leading")
+            .is_some()
+    );
+    assert!(
+        visual
+            .debug_bounds("tree-new-graphql-request-leading")
+            .is_some()
+    );
+    assert!(visual.debug_bounds("tree-new-folder-leading").is_some());
+}
+
+#[gpui::test]
 fn dismissing_transient_surfaces_closes_the_request_execution_menu(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {

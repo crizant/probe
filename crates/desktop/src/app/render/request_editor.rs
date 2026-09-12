@@ -53,10 +53,6 @@ impl ProbeApp {
             })
             .unwrap_or_default();
         let request_breadcrumb_index = breadcrumb_labels.len();
-        let protocol_label = match &request.protocol {
-            probe_core::RequestProtocol::Http => "HTTP request",
-            probe_core::RequestProtocol::Graphql(_) => "GraphQL request",
-        };
         breadcrumb_labels.push(
             request
                 .metadata
@@ -65,7 +61,6 @@ impl ProbeApp {
                 .unwrap_or("Untitled request")
                 .to_owned(),
         );
-        breadcrumb_labels.push(protocol_label.to_owned());
         let save_view = cx.weak_entity();
         let mut breadcrumb_path = div()
             .id("request-breadcrumb-path")
@@ -90,10 +85,6 @@ impl ProbeApp {
                     .debug_selector(|| "request-breadcrumb-request".into())
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.colors.text.primary)
-            } else if index == request_breadcrumb_index + 1 {
-                segment
-                    .debug_selector(|| "request-breadcrumb-protocol".into())
-                    .text_size(px(theme.typography.caption_size - 1.0))
             } else {
                 segment.debug_selector(move || format!("request-breadcrumb-folder-{index}"))
             };
@@ -106,6 +97,18 @@ impl ProbeApp {
             .w_full()
             .flex()
             .items_center()
+            .child(
+                components::protocol_marker(
+                    theme,
+                    request_protocol_label(&request.protocol),
+                    request_protocol_color(theme, &request.protocol),
+                )
+                .id("request-protocol-label")
+                .debug_selector(|| "request-protocol-label".into())
+                .flex_none()
+                .ml(px(theme.metrics.spacing_1))
+                .mr(px(theme.metrics.spacing_2)),
+            )
             .child(breadcrumb_path)
             .child(
                 Button::new("request-save")

@@ -98,17 +98,21 @@ fn tree_item_icon_color(theme: Theme, selected: bool) -> gpui::Rgba {
     }
 }
 
-pub(crate) fn tree_folder_icon(theme: Theme, expanded: bool, selected: bool) -> gpui::Div {
+fn folder_icon(theme: Theme, expanded: bool, selected: bool, size: f32) -> gpui::Div {
     let icon = if expanded {
-        library_icon(
-            "lucide-folder-open",
-            &FOLDER_OPEN_SVG,
-            theme.metrics.icon_standard,
-        )
+        library_icon("lucide-folder-open", &FOLDER_OPEN_SVG, size)
     } else {
-        library_icon("lucide-folder", &FOLDER_SVG, theme.metrics.icon_standard)
+        library_icon("lucide-folder", &FOLDER_SVG, size)
     };
     icon.text_color(tree_item_icon_color(theme, selected))
+}
+
+pub(crate) fn tree_folder_icon(theme: Theme, expanded: bool, selected: bool) -> gpui::Div {
+    folder_icon(theme, expanded, selected, theme.metrics.icon_standard)
+}
+
+pub(crate) fn menu_folder_icon(theme: Theme) -> gpui::Div {
+    folder_icon(theme, false, false, 14.0)
 }
 
 pub(crate) fn plus_icon(_theme: Theme) -> gpui::Div {

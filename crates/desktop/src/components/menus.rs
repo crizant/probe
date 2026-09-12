@@ -1,6 +1,26 @@
 use super::buttons::focus_ring_shadow;
 use super::*;
 
+pub(super) struct MenuButtonContent {
+    label: String,
+    shortcut: Option<String>,
+    leading: Option<AnyElement>,
+    accessibility_label: Option<String>,
+    gap: Option<f32>,
+}
+
+impl MenuButtonContent {
+    pub(super) fn new(label: impl Into<String>, shortcut: Option<String>) -> Self {
+        Self {
+            label: label.into(),
+            shortcut,
+            leading: None,
+            accessibility_label: None,
+            gap: None,
+        }
+    }
+}
+
 pub(crate) fn menu_button(
     theme: Theme,
     id: impl Into<ElementId>,
@@ -11,16 +31,33 @@ pub(crate) fn menu_button(
     menu_button_with_style(
         theme,
         id,
-        label,
-        shortcut,
+        MenuButtonContent::new(label, shortcut),
         true,
         MenuButtonStyle {
+            height: theme.metrics.control_height + 4.0,
             padding_x: theme.metrics.spacing_2,
             text_color: theme.colors.text.primary,
             shortcut_color: theme.colors.text.muted,
         },
         on_activate,
     )
+}
+
+pub(crate) fn menu_button_with_leading(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<String>,
+    accessibility_label: impl Into<String>,
+    leading: impl IntoElement,
+    on_activate: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let mut content = MenuButtonContent::new(label, None);
+    content.leading = Some(leading.into_any_element());
+    content.accessibility_label = Some(accessibility_label.into());
+    content.gap = Some(theme.metrics.spacing_1);
+    let mut style = MenuButtonStyle::standard(theme);
+    style.height = theme.metrics.control_height;
+    menu_button_with_style(theme, id, content, true, style, on_activate)
 }
 
 pub(crate) fn shortcut_label_for_action(
@@ -98,7 +135,7 @@ fn menu_row_button(
     Button::new(id)
         .selected(selected)
         .w_full()
-        .h(px(theme.metrics.control_height + 4.0))
+        .h(px(style.height))
         .px(px(style.padding_x))
         .flex()
         .items_center()
@@ -316,10 +353,10 @@ pub(crate) fn destructive_menu_button(
     menu_button_with_style(
         theme,
         id,
-        label,
-        shortcut,
+        MenuButtonContent::new(label, shortcut),
         true,
         MenuButtonStyle {
+            height: theme.metrics.control_height + 4.0,
             padding_x: theme.metrics.spacing_2,
             text_color: theme.colors.status.error,
             shortcut_color: theme.colors.status.error,
@@ -330,6 +367,7 @@ pub(crate) fn destructive_menu_button(
 
 #[derive(Clone, Copy)]
 pub(super) struct MenuButtonStyle {
+    pub(super) height: f32,
     pub(super) padding_x: f32,
     pub(super) text_color: gpui::Rgba,
     pub(super) shortcut_color: gpui::Rgba,
@@ -338,6 +376,7 @@ pub(super) struct MenuButtonStyle {
 impl MenuButtonStyle {
     pub(super) fn standard(theme: Theme) -> Self {
         Self {
+            height: theme.metrics.control_height + 4.0,
             padding_x: theme.metrics.spacing_2,
             text_color: theme.colors.text.primary,
             shortcut_color: theme.colors.text.muted,
@@ -348,15 +387,20 @@ impl MenuButtonStyle {
 pub(super) fn menu_button_with_style(
     theme: Theme,
     id: impl Into<ElementId>,
-    label: impl Into<String>,
-    shortcut: Option<String>,
+    content: MenuButtonContent,
     enabled: bool,
     style: MenuButtonStyle,
     on_activate: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let id = id.into();
     let debug_selector = id.to_string();
-    let label = label.into();
+    let MenuButtonContent {
+        label,
+        shortcut,
+        leading,
+        accessibility_label,
+        gap,
+    } = content;
     let on_activate = Rc::new(on_activate);
     let pointer_activate = on_activate.clone();
     let keyboard_activate = on_activate;
@@ -383,7 +427,8 @@ pub(super) fn menu_button_with_style(
                     .w_full()
                     .flex()
                     .items_center()
-                    .gap(px(theme.metrics.spacing_2))
+                    .gap(px(gap.unwrap_or(theme.metrics.spacing_2)))
+                    .when_some(leading, |row, leading| row.child(leading))
                     .child(truncated_label(label).flex_1())
                     .when_some(shortcut, |row, shortcut| {
                         row.child(
@@ -395,6 +440,9 @@ pub(super) fn menu_button_with_style(
                         )
                     }),
             )
+            .when_some(accessibility_label, |button, label| {
+                button.accessibility_label(label)
+            })
             .disabled(!enabled)
             .styles(move |styles| {
                 styles.disabled(move |button| {

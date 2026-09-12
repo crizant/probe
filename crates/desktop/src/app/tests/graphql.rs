@@ -45,6 +45,14 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
         })
         .unwrap();
 
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("request-protocol-label").is_some());
+        assert!(visual.debug_bounds("request-tree-protocol-label").is_some());
+        assert!(visual.debug_bounds("request-breadcrumb-protocol").is_none());
+    }
+
     // Verify the request was created with GraphQL protocol
     window
         .update(cx, |view, _, _| {

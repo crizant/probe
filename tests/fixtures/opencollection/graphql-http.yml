@@ -4,22 +4,22 @@ info:
 bundled: true
 config:
   environments:
-    - name: local
-      variables:
-        - name: serverUrl
-          value: __SERVER_URL__
-        - name: login
-          value: octocat
+  - name: local
+    variables:
+    - name: serverUrl
+      value: __SERVER_URL__
+    - name: login
+      value: octocat
 items:
-  - info:
-      name: Query viewer
-      type: graphql
-      seq: 1
-    graphql:
-      method: POST
-      url: "{{serverUrl}}/graphql"
-      body:
-        query: "query Viewer($login: String!) { viewer(login: $login) { login } }"
-        variables: '{"login":"{{login}}"}'
-        operationName: Viewer
-        extensions: '{"trace":{"enabled":true}}'
+- info:
+    name: Query viewer
+    type: graphql
+    seq: 1
+  graphql:
+    method: POST
+    url: '{{serverUrl}}/graphql'
+    body:
+      query: 'query Viewer($login: String!) { viewer(login: $login) { login } }'
+      variables: '{"login":"{{login}}"}'
+      operationName: Viewer
+      extensions: '{"trace":{"enabled":true}}'
