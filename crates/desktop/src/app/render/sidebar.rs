@@ -1,5 +1,7 @@
 use super::*;
 
+const ADD_MENU_MARKER_WIDTH: f32 = 24.0;
+
 impl ProbeApp {
     pub(super) fn render_toasts(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.toasts.is_empty() {
@@ -55,6 +57,7 @@ impl ProbeApp {
             .unwrap_or("Untitled request")
             .to_owned();
         let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
+        let navigation_label = request_navigation_label(&request.protocol, &method);
         let position = point(
             tooltip.position.x + px(theme.metrics.spacing_1),
             tooltip.position.y + px(theme.metrics.control_height * 0.5),
@@ -81,10 +84,10 @@ impl ProbeApp {
                     .debug_selector(|| "request-tab-tooltip-method".into())
                     .flex_none()
                     .font_family(theme.typography.monospace_family)
-                    .text_size(px(tree_method_font_size(theme, &method)))
+                    .text_size(px(tree_method_font_size(theme, &navigation_label)))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.method_color(&method))
-                    .child(method),
+                    .text_color(request_navigation_color(theme, &request.protocol, &method))
+                    .child(navigation_label),
             )
             .child(components::truncated_label(label).min_w(px(0.0)).flex_1());
 
@@ -267,7 +270,10 @@ impl ProbeApp {
                     .as_deref()
                     .unwrap_or("Untitled request");
                 let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
-                let method_label = tree_method_label(&method).to_owned();
+                let navigation_label = request_navigation_label(&request.protocol, &method);
+                let navigation_color = request_navigation_color(theme, &request.protocol, &method);
+                let is_graphql =
+                    matches!(request.protocol, probe_core::RequestProtocol::Graphql(_));
                 let selected = self.selected_tree_item == Some(WorkspaceItemRef::Request(key));
                 let view = cx.weak_entity();
                 let context_menu_view = cx.weak_entity();
@@ -298,14 +304,17 @@ impl ProbeApp {
                                 .items_center()
                                 .truncate()
                                 .font_family(theme.typography.monospace_family)
-                                .text_size(px(tree_method_font_size(theme, &method_label)))
+                                .text_size(px(tree_method_font_size(theme, &navigation_label)))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(if selected {
                                     theme.colors.selection.active_foreground
                                 } else {
-                                    theme.method_color(&method)
+                                    navigation_color
                                 })
-                                .child(method_label.clone()),
+                                .when(is_graphql, |label| {
+                                    label.debug_selector(|| "request-tree-protocol-label".into())
+                                })
+                                .child(navigation_label.clone()),
                         )
                         .child(
                             components::truncated_label(label.to_owned())
@@ -323,7 +332,7 @@ impl ProbeApp {
                         kind: ItemKind::Request,
                         selector: loaded.request_selector(key).unwrap_or_default().to_owned(),
                         label: label.to_owned(),
-                        method: Some(method_label),
+                        method: Some(navigation_label),
                         depth,
                         selected,
                     },
@@ -507,7 +516,8 @@ impl ProbeApp {
     }
 
     pub(super) fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
-        let new_request_view = cx.weak_entity();
+        let new_http_request_view = cx.weak_entity();
+        let new_graphql_request_view = cx.weak_entity();
         let new_folder_view = cx.weak_entity();
         let new_collection_view = cx.weak_entity();
         let open_collection_view = cx.weak_entity();
@@ -520,25 +530,54 @@ impl ProbeApp {
         let sidebar_import_popup_focus = self.transient.sidebar_import_popup_focus.clone();
         let can_edit = self.loaded_workspace.is_some() && self.structure_task.is_none();
         let add_menu_state_view = cx.weak_entity();
-        let add_popup = components::popup_surface(theme, "tree-add-menu-popup", 180.0)
-            .gap(px(theme.metrics.spacing_1))
-            .child(components::menu_button(
+        let add_popup = components::popup_surface(theme, "tree-add-menu-popup", 200.0)
+            .child(components::menu_button_with_leading(
                 theme,
-                "tree-new-request",
-                "Add Request",
-                None,
+                "tree-new-http-request",
+                "HTTP",
+                "New HTTP Request",
+                components::menu_leading_slot(
+                    ADD_MENU_MARKER_WIDTH,
+                    components::protocol_marker(theme, "HTTP", theme.colors.protocols.http)
+                        .text_size(px(tree_method_font_size(theme, "HTTP"))),
+                )
+                .debug_selector(|| "tree-new-http-request-leading".into()),
                 move |window, cx| {
-                    let _ = new_request_view.update(cx, |view, cx| {
+                    let _ = new_http_request_view.update(cx, |view, cx| {
                         view.transient.structure_add_menu_open = false;
                         view.open_create_request_dialog(window, cx);
                     });
                 },
             ))
-            .child(components::menu_button(
+            .child(components::menu_button_with_leading(
+                theme,
+                "tree-new-graphql-request",
+                "GraphQL",
+                "New GraphQL Request",
+                components::menu_leading_slot(
+                    ADD_MENU_MARKER_WIDTH,
+                    components::protocol_marker(theme, "GQL", theme.colors.protocols.graphql)
+                        .text_size(px(tree_method_font_size(theme, "GQL"))),
+                )
+                .debug_selector(|| "tree-new-graphql-request-leading".into()),
+                move |window, cx| {
+                    let _ = new_graphql_request_view.update(cx, |view, cx| {
+                        view.transient.structure_add_menu_open = false;
+                        view.open_create_graphql_request_dialog(window, cx);
+                    });
+                },
+            ))
+            .child(components::menu_separator(theme))
+            .child(components::menu_button_with_leading(
                 theme,
                 "tree-new-folder",
-                "Add Folder",
-                None,
+                "Folder",
+                "New Folder",
+                components::menu_leading_slot(
+                    ADD_MENU_MARKER_WIDTH,
+                    components::menu_folder_icon(theme),
+                )
+                .debug_selector(|| "tree-new-folder-leading".into()),
                 move |window, cx| {
                     let _ = new_folder_view.update(cx, |view, cx| {
                         view.transient.structure_add_menu_open = false;

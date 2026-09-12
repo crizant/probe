@@ -19,7 +19,7 @@ fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
         })
         .expect("test window should be open");
 
-    for section in EditorSection::ALL {
+    for section in EditorSection::ALL_HTTP {
         window
             .update(cx, |view, _, cx| {
                 view.request_editor.section = section;
@@ -36,6 +36,19 @@ fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
             assert!(visual.debug_bounds("request-breadcrumb").is_some());
             assert!(visual.debug_bounds("request-breadcrumb-folder-0").is_some());
             assert!(visual.debug_bounds("request-breadcrumb-request").is_some());
+            assert!(visual.debug_bounds("request-protocol-label").is_some());
+            assert!(visual.debug_bounds("request-breadcrumb-protocol").is_none());
+            assert!(
+                visual
+                    .debug_bounds("request-protocol-label")
+                    .unwrap()
+                    .right()
+                    <= visual
+                        .debug_bounds("request-breadcrumb-folder-0")
+                        .unwrap()
+                        .left(),
+                "the protocol label should precede the breadcrumb"
+            );
             assert!(visual.debug_bounds("request-method-trigger").is_some());
             assert!(visual.debug_bounds("request-environment-trigger").is_some());
             if section == EditorSection::Body {

@@ -740,7 +740,9 @@ impl ProbeApp {
 
         let mut target_exists = true;
         match &mut dialog.mode {
-            StructureDialogMode::CreateRequest | StructureDialogMode::CreateFolder => {}
+            StructureDialogMode::CreateHttpRequest
+            | StructureDialogMode::CreateGraphqlRequest
+            | StructureDialogMode::CreateFolder => {}
             StructureDialogMode::Rename { kind, selector }
             | StructureDialogMode::Move { kind, selector } => {
                 if let Some(mapped) = remaps.get(selector) {

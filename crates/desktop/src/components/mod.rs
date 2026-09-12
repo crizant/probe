@@ -78,14 +78,14 @@ pub(crate) use buttons::{
 use icons::{CHECK_SVG, CHEVRON_RIGHT_SVG, SEARCH_SVG, folder_open_icon, library_icon};
 pub(crate) use icons::{
     add_menu_button, chevron_icon, close_icon, download_icon, home_button, hover_fill, locate_icon,
-    plus_icon, save_icon, sidebar_toggle, trash_icon, tree_folder_icon,
+    menu_folder_icon, plus_icon, save_icon, sidebar_toggle, trash_icon, tree_folder_icon,
 };
-use menus::{MenuButtonStyle, context_menu_separator, menu_button_with_style};
+use menus::{MenuButtonContent, MenuButtonStyle, context_menu_separator, menu_button_with_style};
 pub(crate) use menus::{
     app_menu_trigger, cascading_menu, checked_menu_button, destructive_menu_button,
-    import_submenu_menu_button, menu_button, menu_separator, pane_layout_toggle,
-    positioned_cascading_menu, shortcut_label_for_action, shortcut_label_for_action_in_context,
-    switch,
+    import_submenu_menu_button, menu_button, menu_button_with_leading, menu_separator,
+    pane_layout_toggle, positioned_cascading_menu, shortcut_label_for_action,
+    shortcut_label_for_action_in_context, switch,
 };
 pub(crate) use splitter::pane_splitter;
 pub(crate) use toasts::{TOAST_STACK_WIDTH, toast};
@@ -94,6 +94,26 @@ pub(crate) use toasts::{TOAST_STACK_WIDTH, toast};
 pub(crate) const COMPACT_ACTION_BUTTON_WIDTH: f32 = 72.0;
 pub(crate) const COMPACT_DIALOG_WIDTH: f32 = 420.0;
 pub(crate) const WIDE_DIALOG_WIDTH: f32 = 520.0;
+
+pub(crate) fn protocol_marker(theme: Theme, label: &'static str, color: gpui::Rgba) -> gpui::Div {
+    div()
+        .whitespace_nowrap()
+        .font_family(theme.typography.monospace_family)
+        .text_size(px(theme.typography.caption_size - 1.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(color)
+        .child(label)
+}
+
+pub(crate) fn menu_leading_slot(width: f32, content: impl IntoElement) -> gpui::Div {
+    div()
+        .w(px(width))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(content)
+}
 
 #[cfg(test)]
 mod components_tests;

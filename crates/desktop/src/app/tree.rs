@@ -47,10 +47,15 @@ impl Render for TreeDrag {
             .border_color(theme.colors.borders.standard)
             .text_size(px(theme.typography.caption_size));
         if let Some(method) = &self.method {
+            let is_graphql = method == "GQL";
             preview = preview.child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.method_color(method))
+                    .text_color(if is_graphql {
+                        theme.colors.protocols.graphql
+                    } else {
+                        theme.method_color(method)
+                    })
                     .child(method.clone()),
             );
         } else if self.kind == ItemKind::Folder {

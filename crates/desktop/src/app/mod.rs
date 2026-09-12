@@ -66,12 +66,14 @@ use dialogs::{
 };
 use presentation::{
     InspectListRow, PrettyRevealState, ShellSelectors, inspect_list_rows, inspect_row_index,
-    inspect_row_label, placeholder_message, request_method_options, response_status_color,
+    inspect_row_label, placeholder_message, request_method_options, request_navigation_color,
+    request_navigation_label, request_protocol_color, request_protocol_label,
+    response_status_color,
 };
 use transient::TransientSurfaces;
 use tree::{
     TreeDrag, TreeRow, TreeRowSpec, flatten_visible_tree_rows, tree_hierarchy_guides,
-    tree_level_indent, tree_method_font_size, tree_method_label, tree_row_button,
+    tree_level_indent, tree_method_font_size, tree_row_button,
 };
 
 use crate::{
@@ -154,6 +156,7 @@ gpui::actions!(
         FocusNextControl,
         FocusPreviousControl,
         NewRequest,
+        NewGraphqlRequest,
         NewFolder,
         DuplicateRequest,
         RenameTreeItem,

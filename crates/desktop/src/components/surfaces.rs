@@ -91,8 +91,7 @@ fn text_context_menu_action(
     menu_button_with_style(
         theme,
         id,
-        label,
-        shortcut,
+        MenuButtonContent::new(label, shortcut),
         enabled,
         MenuButtonStyle::standard(theme),
         move |window, cx| {
@@ -220,8 +219,7 @@ pub(super) fn with_text_context_menu(
             menu = menu.child(menu_button_with_style(
                 theme,
                 text_context_menu_id(id, action.id),
-                action.label,
-                None,
+                MenuButtonContent::new(action.label, None),
                 enabled,
                 MenuButtonStyle::standard(theme),
                 move |window, cx| {

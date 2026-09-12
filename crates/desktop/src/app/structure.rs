@@ -7,6 +7,14 @@ impl ProbeApp {
             .as_ref()
             .is_some_and(|loaded| loaded.workspace().request(key).is_some())
         {
+            let is_graphql = self
+                .loaded_workspace
+                .as_ref()
+                .and_then(|loaded| loaded.workspace().request(key))
+                .is_some_and(|request| {
+                    matches!(request.protocol, probe_core::RequestProtocol::Graphql(_))
+                });
+            self.request_editor.ensure_available_section(is_graphql);
             self.selected_tree_item = Some(WorkspaceItemRef::Request(key));
             self.shell.open_request(key);
             self.response_viewer.ensure_available_tab(key);
@@ -50,7 +58,23 @@ impl ProbeApp {
             return;
         }
         self.create_environment_dialog = None;
-        self.structure_dialog = Some(StructureDialog::create_request(
+        self.structure_dialog = Some(StructureDialog::create_http_request(
+            self.selected_parent_selector(),
+        ));
+        self.structure_dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn open_create_graphql_request_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.loaded_workspace.is_none() || self.structure_task.is_some() {
+            return;
+        }
+        self.create_environment_dialog = None;
+        self.structure_dialog = Some(StructureDialog::create_graphql_request(
             self.selected_parent_selector(),
         ));
         self.structure_dialog_focus.focus(window, cx);
@@ -458,6 +482,14 @@ impl ProbeApp {
         if let Some(WorkspaceItemRef::Request(key)) = self.selected_tree_item
             && result.previous_selector.is_none()
         {
+            let is_graphql = self
+                .loaded_workspace
+                .as_ref()
+                .and_then(|loaded| loaded.workspace().request(key))
+                .is_some_and(|request| {
+                    matches!(request.protocol, probe_core::RequestProtocol::Graphql(_))
+                });
+            self.request_editor.ensure_available_section(is_graphql);
             self.shell.open_request(key);
         }
         self.rebuild_visible_tree_rows();

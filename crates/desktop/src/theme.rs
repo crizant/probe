@@ -36,6 +36,7 @@ pub struct Colors {
     pub actions: ActionColors,
     pub selection: SelectionColors,
     pub status: StatusColors,
+    pub protocols: ProtocolColors,
     pub methods: MethodColors,
     pub responses: ResponseColors,
     pub syntax: SyntaxColors,
@@ -92,6 +93,12 @@ pub struct StatusColors {
     pub warning: Rgba,
     pub error: Rgba,
     pub informational: Rgba,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProtocolColors {
+    pub http: Rgba,
+    pub graphql: Rgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -378,6 +385,10 @@ fn porcelain_honey() -> Colors {
             error: rgba(0xc43d3dff),         // red
             informational: rgba(0x227c8fff), // blue teal
         },
+        protocols: ProtocolColors {
+            http: rgba(0x227c8fff),    // blue teal
+            graphql: rgba(0x7c5bbdff), // violet
+        },
         methods: MethodColors {
             get: rgba(0x1f8a70ff),    // teal
             post: rgba(0xe7821bff),   // reference orange
@@ -447,6 +458,10 @@ fn graphite_honey() -> Colors {
             warning: rgba(0xe39a32ff),       // burnt amber
             error: rgba(0xff7f7fff),         // red
             informational: rgba(0x75c6d4ff), // blue teal
+        },
+        protocols: ProtocolColors {
+            http: rgba(0x75c6d4ff),    // blue teal
+            graphql: rgba(0xb89af7ff), // violet
         },
         methods: MethodColors {
             get: rgba(0x72d6c2ff),    // teal

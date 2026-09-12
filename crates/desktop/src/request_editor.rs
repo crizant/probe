@@ -13,14 +13,29 @@ pub(crate) enum EditorSection {
     Headers,
     Body,
     Authentication,
+    GraphqlQuery,
+    GraphqlVariables,
+    GraphqlOperationName,
+    GraphqlExtensions,
 }
 
 impl EditorSection {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL_HTTP: [Self; 5] = [
         Self::Path,
         Self::Query,
         Self::Headers,
         Self::Body,
+        Self::Authentication,
+    ];
+
+    pub(crate) const ALL_GRAPHQL: [Self; 8] = [
+        Self::Path,
+        Self::Query,
+        Self::Headers,
+        Self::GraphqlQuery,
+        Self::GraphqlVariables,
+        Self::GraphqlOperationName,
+        Self::GraphqlExtensions,
         Self::Authentication,
     ];
 
@@ -31,6 +46,28 @@ impl EditorSection {
             Self::Headers => "Headers",
             Self::Body => "Body",
             Self::Authentication => "Authentication",
+            Self::GraphqlQuery => "Document",
+            Self::GraphqlVariables => "Variables",
+            Self::GraphqlOperationName => "Operation name",
+            Self::GraphqlExtensions => "Extensions",
+        }
+    }
+
+    pub(crate) const fn is_graphql(self) -> bool {
+        matches!(
+            self,
+            Self::GraphqlQuery
+                | Self::GraphqlVariables
+                | Self::GraphqlOperationName
+                | Self::GraphqlExtensions
+        )
+    }
+
+    pub(crate) fn available_for(self, is_graphql: bool) -> bool {
+        if is_graphql {
+            Self::ALL_GRAPHQL.contains(&self)
+        } else {
+            Self::ALL_HTTP.contains(&self)
         }
     }
 }
@@ -148,6 +185,17 @@ impl RequestEditorState {
     pub(crate) fn clear(&mut self) {
         self.section = EditorSection::default();
         self.body_drafts.clear();
+    }
+
+    pub(crate) fn ensure_available_section(&mut self, is_graphql: bool) {
+        if self.section.available_for(is_graphql) {
+            return;
+        }
+        self.section = if is_graphql {
+            EditorSection::GraphqlQuery
+        } else {
+            EditorSection::Body
+        };
     }
 
     pub(crate) fn remap_requests(&mut self, keys: &BTreeMap<RequestKey, RequestKey>) {
@@ -338,8 +386,8 @@ mod tests {
     };
 
     use super::{
-        BodyEditorKind, RequestEditorState, apply_url_bar_value, raw_body_mut, set_auth_property,
-        set_authentication, url_bar_value,
+        BodyEditorKind, EditorSection, RequestEditorState, apply_url_bar_value, raw_body_mut,
+        set_auth_property, set_authentication, url_bar_value,
     };
 
     #[test]
@@ -531,6 +579,38 @@ mod tests {
         let mut reloaded = HttpRequest::default();
         editor.switch_body_kind(new_key, &mut reloaded, BodyEditorKind::Json);
         assert_eq!(raw_body_mut(&mut reloaded).unwrap(), "{\"draft\":true}");
+    }
+
+    #[test]
+    fn ensure_available_section_resets_http_only_sections_for_graphql() {
+        let mut editor = RequestEditorState {
+            section: EditorSection::Body,
+            ..RequestEditorState::default()
+        };
+        editor.ensure_available_section(true);
+        assert_eq!(editor.section, EditorSection::GraphqlQuery);
+    }
+
+    #[test]
+    fn ensure_available_section_resets_graphql_only_sections_for_http() {
+        let mut editor = RequestEditorState {
+            section: EditorSection::GraphqlVariables,
+            ..RequestEditorState::default()
+        };
+        editor.ensure_available_section(false);
+        assert_eq!(editor.section, EditorSection::Body);
+    }
+
+    #[test]
+    fn ensure_available_section_keeps_shared_sections() {
+        let mut editor = RequestEditorState {
+            section: EditorSection::Headers,
+            ..RequestEditorState::default()
+        };
+        editor.ensure_available_section(true);
+        assert_eq!(editor.section, EditorSection::Headers);
+        editor.ensure_available_section(false);
+        assert_eq!(editor.section, EditorSection::Headers);
     }
 
     fn request_key() -> probe_core::RequestKey {
