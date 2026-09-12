@@ -52,7 +52,7 @@ pub(super) fn convert_preview(
         &folders,
         &preview.resources,
         &mut diagnostics,
-    );
+    )?;
 
     diagnose_unsupported_requests(
         &preview.resources.grpc_requests,
@@ -188,7 +188,7 @@ fn convert_items(
     folders: &BTreeMap<&str, &YaakFolder>,
     resources: &Resources,
     diagnostics: &mut Vec<ImportDiagnostic>,
-) -> Vec<CollectionItem> {
+) -> Result<Vec<CollectionItem>, YaakImportError> {
     enum SourceItem<'a> {
         Folder(&'a YaakFolder),
         Request(&'a YaakHttpRequest),
@@ -236,7 +236,7 @@ fn convert_items(
         .map(|item| match item {
             SourceItem::Folder(folder) => {
                 diagnose_folder(folder, diagnostics);
-                CollectionItem::Folder(Folder {
+                Ok(CollectionItem::Folder(Folder {
                     metadata: ItemMetadata {
                         name: nonempty(&folder.name),
                         sequence: Some(folder.sort_priority),
@@ -247,15 +247,12 @@ fn convert_items(
                         folders,
                         resources,
                         diagnostics,
-                    ),
-                })
+                    )?,
+                }))
             }
-            SourceItem::Request(request) => CollectionItem::HttpRequest(convert_request(
-                workspace,
-                request,
-                folders,
-                diagnostics,
-            )),
+            SourceItem::Request(request) => {
+                convert_request(workspace, request, folders, diagnostics)
+            }
         })
         .collect()
 }

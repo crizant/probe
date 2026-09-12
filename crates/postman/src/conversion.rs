@@ -1,17 +1,21 @@
 mod authentication;
 mod body;
+mod graphql;
 mod url;
 mod variables;
 
 use probe_core::{
-    Collection, CollectionItem, CollectionMetadata, Folder, Header, HttpRequest, ImportDiagnostic,
-    ItemMetadata, RequestSettings, lossy_import_diagnostic_count, sort_import_diagnostics,
+    Collection, CollectionItem, CollectionMetadata, Folder, GraphqlRequest, Header, HttpRequest,
+    ImportDiagnostic, ItemMetadata, RequestSettings, lossy_import_diagnostic_count,
+    sort_import_diagnostics,
 };
 use serde::Deserialize;
 use serde_json::Value;
 
 use self::{
-    authentication::convert_authentication, body::convert_body, url::convert_url,
+    authentication::convert_authentication,
+    body::{ConvertedRequestBody, convert_body},
+    url::convert_url,
     variables::convert_collection_variables,
 };
 use crate::{
@@ -149,7 +153,7 @@ fn convert_items(
                             "saved Postman response examples cannot be represented by the current Probe domain",
                         ));
                     }
-                    Ok(CollectionItem::HttpRequest(convert_request(
+                    convert_request(
                         item,
                         request,
                         inherited_auth,
@@ -157,7 +161,7 @@ fn convert_items(
                         index,
                         format,
                         diagnostics,
-                    )?))
+                    )
                 }
                 (Some(_), Some(_)) => Err(PostmanImportError::Invalid(format!(
                     "Postman item '{resource_id}' cannot contain both request and child items"
@@ -179,9 +183,9 @@ fn convert_request(
     index: usize,
     format: PostmanSourceFormat,
     diagnostics: &mut Vec<ImportDiagnostic>,
-) -> Result<HttpRequest, PostmanImportError> {
+) -> Result<CollectionItem, PostmanImportError> {
     match request {
-        PostmanRequest::Url(url) => Ok(HttpRequest {
+        PostmanRequest::Url(url) => Ok(CollectionItem::HttpRequest(HttpRequest {
             metadata: item_metadata(item, index),
             method: Some("GET".to_owned()),
             url: Some(convert_string(
@@ -199,7 +203,7 @@ fn convert_request(
             )?,
             settings: RequestSettings::default(),
             ..HttpRequest::default()
-        }),
+        })),
         PostmanRequest::Object(request) => {
             diagnose_extra_fields("request", Some(resource_id), &request.extra, diagnostics);
             diagnose_nonempty_description(
@@ -229,18 +233,40 @@ fn convert_request(
             let (url, query_parameters, path_parameters) =
                 convert_url(&request.url, resource_id, diagnostics)?;
             let auth = request.auth.as_ref().or(inherited_auth);
-            Ok(HttpRequest {
-                metadata: item_metadata(item, index),
-                method: nonempty(&request.method),
-                url: Some(url),
-                headers: convert_headers(&request.header, resource_id, diagnostics)?,
-                query_parameters,
-                path_parameters,
-                body: convert_body(&request.body, resource_id, diagnostics)?,
-                authentication: convert_authentication(auth, format, resource_id, diagnostics)?,
-                settings: RequestSettings::default(),
-                protocol: probe_core::RequestProtocol::Http,
-            })
+            let metadata = item_metadata(item, index);
+            let method = nonempty(&request.method);
+            let headers = convert_headers(&request.header, resource_id, diagnostics)?;
+            let authentication = convert_authentication(auth, format, resource_id, diagnostics)?;
+            let settings = RequestSettings::default();
+            Ok(
+                match convert_body(&request.body, resource_id, diagnostics)? {
+                    ConvertedRequestBody::Http(body) => CollectionItem::HttpRequest(HttpRequest {
+                        metadata,
+                        method,
+                        url: Some(url),
+                        headers,
+                        query_parameters,
+                        path_parameters,
+                        body,
+                        authentication,
+                        settings,
+                        protocol: probe_core::RequestProtocol::Http,
+                    }),
+                    ConvertedRequestBody::Graphql(body) => {
+                        CollectionItem::GraphqlRequest(GraphqlRequest {
+                            metadata,
+                            method,
+                            url: Some(url),
+                            headers,
+                            query_parameters,
+                            path_parameters,
+                            body,
+                            authentication,
+                            settings,
+                        })
+                    }
+                },
+            )
         }
     }
 }

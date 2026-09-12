@@ -164,6 +164,80 @@ fn imports_a_postman_v21_collection_as_bundled_opencollection_json() {
 }
 
 #[test]
+fn imports_postman_graphql_requests_as_native_graphql() {
+    let destination = temporary_path("postman-graphql-import.yml");
+    let output = probe()
+        .args(["collection", "import", "postman"])
+        .arg(postman_fixture("collection-graphql-v2.1.json"))
+        .arg(&destination)
+        .arg("--json")
+        .output()
+        .expect("Postman GraphQL import should run");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["imported"], true);
+    assert_eq!(value["counts"]["requests"], 2);
+    let saved = fs::read_to_string(&destination).unwrap();
+    assert!(saved.contains("type: graphql"));
+    assert!(saved.contains("operationName: Viewer"));
+
+    let inspect = probe()
+        .args(["request", "get"])
+        .arg(&destination)
+        .args(["items/0", "--json"])
+        .output()
+        .unwrap();
+    assert!(inspect.status.success());
+    let request: Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(request["type"], "graphql");
+    assert_eq!(request["graphql"]["operationName"], "Viewer");
+    assert_eq!(request["graphql"]["variables"]["login"], "{{login}}");
+    fs::remove_file(destination).unwrap();
+}
+
+#[test]
+fn imports_yaak_graphql_requests_as_native_graphql() {
+    let destination = temporary_path("yaak-graphql-import.yml");
+    let output = probe()
+        .args(["collection", "import", "yaak"])
+        .arg(yaak_fixture("export-graphql-v4.json"))
+        .arg(&destination)
+        .arg("--json")
+        .output()
+        .expect("Yaak GraphQL import should run");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["imported"], true);
+    assert_eq!(value["counts"]["requests"], 2);
+    let saved = fs::read_to_string(&destination).unwrap();
+    assert!(saved.contains("type: graphql"));
+    assert!(saved.contains("operationName: Viewer"));
+
+    let inspect = probe()
+        .args(["request", "get"])
+        .arg(&destination)
+        .args(["items/0", "--json"])
+        .output()
+        .unwrap();
+    assert!(inspect.status.success());
+    let request: Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(request["type"], "graphql");
+    assert_eq!(request["graphql"]["operationName"], "Viewer");
+    assert_eq!(request["graphql"]["variables"]["login"], "{{LOGIN}}");
+    fs::remove_file(destination).unwrap();
+}
+
+#[test]
 fn postman_import_is_strict_and_never_overwrites() {
     let destination = temporary_path("postman-lossy.yml");
     let source = postman_fixture("collection-lossy.json");

@@ -1,5 +1,8 @@
 use crate::{ImportDiagnosticSeverity, YaakImportError, YaakSourceFormat, inspect_yaak_source};
-use probe_core::{AuthenticationKind, Body, CollectionItem, RequestBody};
+use probe_core::{
+    AuthenticationKind, Body, CollectionItem, GraphqlBody, RequestBody, WorkspaceItemRef,
+};
+use probe_opencollection::create_bundled_workspace_from_collection;
 use std::{fs, path::PathBuf, time::SystemTime};
 
 fn temporary_path(name: &str) -> PathBuf {
@@ -154,4 +157,121 @@ fn sync_directory_allows_partial_import_with_unsupported_resources() {
             && diagnostic.resource_id.as_deref() == Some("sse_1")
     }));
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn imports_native_graphql_requests_and_round_trips() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/yaak/export-graphql-v4.json");
+    let imported = inspect_yaak_source(&path)
+        .unwrap()
+        .convert(None, false)
+        .unwrap();
+    assert!(!imported.partial);
+    assert_eq!(imported.collection.items.len(), 2);
+
+    let CollectionItem::GraphqlRequest(viewer) = &imported.collection.items[0] else {
+        panic!("first item should be a GraphQL request");
+    };
+    assert_eq!(viewer.metadata.name.as_deref(), Some("Viewer"));
+    assert_eq!(viewer.headers[0].value, "{{TRACE}}");
+    let Some(GraphqlBody::Single(operation)) = &viewer.body else {
+        panic!("Viewer should have a single GraphQL operation");
+    };
+    assert_eq!(
+        operation.query.as_deref(),
+        Some("query Viewer($login: String!) { viewer(login: $login) { login } }")
+    );
+    assert_eq!(operation.operation_name.as_deref(), Some("Viewer"));
+    assert_eq!(
+        operation
+            .variables
+            .as_ref()
+            .and_then(|variables| variables.get("login"))
+            .and_then(serde_json::Value::as_str),
+        Some("{{LOGIN}}")
+    );
+    assert_eq!(
+        operation
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("trace"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|trace| trace.get("enabled")),
+        Some(&serde_json::Value::Bool(true))
+    );
+
+    let CollectionItem::GraphqlRequest(legacy) = &imported.collection.items[1] else {
+        panic!("second item should be a GraphQL request");
+    };
+    let Some(GraphqlBody::Single(operation)) = &legacy.body else {
+        panic!("legacy envelope should have a single GraphQL operation");
+    };
+    assert_eq!(operation.query.as_deref(), Some("query Pet { pet { id } }"));
+    assert_eq!(operation.operation_name.as_deref(), Some("Pet"));
+    assert_eq!(
+        operation
+            .variables
+            .as_ref()
+            .and_then(|variables| variables.get("id"))
+            .and_then(serde_json::Value::as_str),
+        Some("{{PET_ID}}")
+    );
+
+    let destination = temporary_path("graphql-roundtrip.yml");
+    let loaded =
+        create_bundled_workspace_from_collection(&destination, &imported.collection).unwrap();
+    let workspace = loaded.workspace();
+    assert_eq!(workspace.request_count(), 2);
+    let WorkspaceItemRef::Request(request_key) = workspace.root_items()[0] else {
+        panic!("round-tripped root item should be a request");
+    };
+    let request = workspace.request(request_key).unwrap();
+    assert_eq!(request.protocol.as_str(), "graphql");
+    assert_eq!(
+        request
+            .selected_graphql()
+            .unwrap()
+            .unwrap()
+            .operation_name
+            .as_deref(),
+        Some("Viewer")
+    );
+    assert!(
+        fs::read_to_string(&destination)
+            .unwrap()
+            .contains("type: graphql")
+    );
+    fs::remove_file(destination).unwrap();
+}
+
+#[test]
+fn rejects_malformed_graphql_variables() {
+    let path = temporary_path("invalid-graphql.json");
+    fs::write(
+        &path,
+        r#"{
+  "yaakSchema": 4,
+  "resources": {
+    "workspaces": [{"model":"workspace","id":"wk_1","name":"Broken"}],
+    "httpRequests": [{
+      "model":"http_request",
+      "id":"rq_1",
+      "workspaceId":"wk_1",
+      "name":"Broken",
+      "method":"POST",
+      "url":"https://api.example.com/graphql",
+      "bodyType":"graphql",
+      "body":{"query":"{ pet { id } }","variables":"[]"}
+    }]
+  }
+}"#,
+    )
+    .unwrap();
+    let preview = inspect_yaak_source(&path).unwrap();
+    assert!(matches!(
+        preview.convert(None, false),
+        Err(YaakImportError::Invalid(message)) if message.contains("variables")
+    ));
+    fs::remove_file(path).unwrap();
 }

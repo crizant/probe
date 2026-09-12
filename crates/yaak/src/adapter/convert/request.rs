@@ -1,11 +1,12 @@
 use super::*;
+use probe_core::{GraphqlBody, GraphqlOperation, GraphqlRequest};
 
 pub(super) fn convert_request(
     workspace: &YaakWorkspace,
     request: &YaakHttpRequest,
     folders: &BTreeMap<&str, &YaakFolder>,
     diagnostics: &mut Vec<ImportDiagnostic>,
-) -> HttpRequest {
+) -> Result<CollectionItem, YaakImportError> {
     diagnose_extra_fields(
         "http_request",
         Some(&request.id),
@@ -58,27 +59,43 @@ pub(super) fn convert_request(
             diagnostics,
         );
     }
-    HttpRequest {
-        metadata: ItemMetadata {
-            name: nonempty(&request.name),
-            sequence: Some(request.sort_priority),
-        },
-        method: nonempty(&request.method),
-        url: Some(convert_templates(
-            &request.url,
-            "http_request",
-            &request.id,
-            "url",
-            diagnostics,
-        )),
+    let metadata = ItemMetadata {
+        name: nonempty(&request.name),
+        sequence: Some(request.sort_priority),
+    };
+    let method = nonempty(&request.method);
+    let url = Some(convert_templates(
+        &request.url,
+        "http_request",
+        &request.id,
+        "url",
+        diagnostics,
+    ));
+    if request.body_type.as_deref() == Some("graphql") {
+        return Ok(CollectionItem::GraphqlRequest(GraphqlRequest {
+            metadata,
+            method,
+            url,
+            headers,
+            query_parameters,
+            path_parameters,
+            body: convert_graphql_body(request, diagnostics)?,
+            authentication,
+            settings,
+        }));
+    }
+    Ok(CollectionItem::HttpRequest(HttpRequest {
+        metadata,
+        method,
+        url,
         headers,
         query_parameters,
         path_parameters,
-        body: convert_body(request, diagnostics),
+        body: convert_http_body(request, diagnostics),
         authentication,
         settings,
         protocol: probe_core::RequestProtocol::Http,
-    }
+    }))
 }
 
 fn folder_ancestors<'a>(
@@ -312,13 +329,13 @@ fn override_setting<T: Copy + Default>(setting: &Option<InheritedSetting<T>>, va
     }
 }
 
-fn convert_body(
+fn convert_http_body(
     request: &YaakHttpRequest,
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> Option<RequestBody> {
     let body_type = request.body_type.as_deref()?;
     let body = match body_type {
-        "application/json" | "graphql" => Body::Raw(RawBody {
+        "application/json" => Body::Raw(RawBody {
             kind: RawBodyKind::Json,
             data: body_text(request, diagnostics),
         }),
@@ -443,4 +460,215 @@ fn body_forms(request: &YaakHttpRequest) -> Vec<YaakFormField> {
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default()
+}
+
+const GRAPHQL_BODY_FIELDS: &[&str] = &["query", "variables", "operationName", "extensions", "text"];
+
+fn convert_graphql_body(
+    request: &YaakHttpRequest,
+    diagnostics: &mut Vec<ImportDiagnostic>,
+) -> Result<Option<GraphqlBody>, YaakImportError> {
+    diagnose_unknown_graphql_fields(request, diagnostics);
+    let query = request.body.get("query").and_then(Value::as_str);
+    let text = request.body.get("text").and_then(Value::as_str);
+    if query.is_some() && text.is_some_and(|value| !value.is_empty()) {
+        diagnostics.push(lossy(
+            "inactive_body_data",
+            "http_request",
+            Some(&request.id),
+            Some("text"),
+            "inactive Yaak body data cannot be represented alongside the selected GraphQL query",
+        ));
+    }
+    let (query, variables, operation_name, extensions, query_field) = if let Some(query) = query {
+        (
+            Some(query.to_owned()),
+            request.body.get("variables").cloned(),
+            request
+                .body
+                .get("operationName")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            request.body.get("extensions").cloned(),
+            "body.query",
+        )
+    } else if let Some(envelope) = text.and_then(parse_graphql_envelope) {
+        (
+            Some(envelope.query),
+            envelope.variables,
+            envelope.operation_name,
+            envelope.extensions,
+            "body.text",
+        )
+    } else if let Some(text) = text {
+        (
+            Some(text.to_owned()),
+            request.body.get("variables").cloned(),
+            request
+                .body
+                .get("operationName")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            request.body.get("extensions").cloned(),
+            "body.text",
+        )
+    } else if request.body.is_empty() {
+        return Ok(None);
+    } else {
+        (
+            None,
+            request.body.get("variables").cloned(),
+            request
+                .body
+                .get("operationName")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            request.body.get("extensions").cloned(),
+            "body.query",
+        )
+    };
+    Ok(Some(GraphqlBody::Single(GraphqlOperation {
+        query: query
+            .as_deref()
+            .and_then(|query| graphql_string(query, request, query_field, diagnostics)),
+        variables: parse_graphql_object(variables.as_ref(), "variables", request, diagnostics)?,
+        operation_name: operation_name.as_deref().and_then(|name| {
+            graphql_string(
+                name,
+                request,
+                if query_field == "body.text" {
+                    "body.text"
+                } else {
+                    "body.operationName"
+                },
+                diagnostics,
+            )
+        }),
+        extensions: parse_graphql_object(extensions.as_ref(), "extensions", request, diagnostics)?,
+    })))
+}
+
+struct GraphqlEnvelope {
+    query: String,
+    variables: Option<Value>,
+    operation_name: Option<String>,
+    extensions: Option<Value>,
+}
+
+fn parse_graphql_envelope(text: &str) -> Option<GraphqlEnvelope> {
+    let Value::Object(object) = serde_json::from_str(text).ok()? else {
+        return None;
+    };
+    Some(GraphqlEnvelope {
+        query: object.get("query")?.as_str()?.to_owned(),
+        variables: object.get("variables").cloned(),
+        operation_name: object
+            .get("operationName")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        extensions: object.get("extensions").cloned(),
+    })
+}
+
+fn diagnose_unknown_graphql_fields(
+    request: &YaakHttpRequest,
+    diagnostics: &mut Vec<ImportDiagnostic>,
+) {
+    for field in request.body.keys() {
+        if !GRAPHQL_BODY_FIELDS.contains(&field.as_str()) {
+            diagnostics.push(lossy(
+                "unknown_field",
+                "http_request",
+                Some(&request.id),
+                Some(field),
+                &format!("unknown Yaak field '{field}' cannot be guaranteed to survive import"),
+            ));
+        }
+    }
+}
+
+fn graphql_string(
+    value: &str,
+    request: &YaakHttpRequest,
+    field: &str,
+    diagnostics: &mut Vec<ImportDiagnostic>,
+) -> Option<String> {
+    nonempty(&convert_templates(
+        value,
+        "http_request",
+        &request.id,
+        field,
+        diagnostics,
+    ))
+}
+
+fn parse_graphql_object(
+    value: Option<&Value>,
+    field: &str,
+    request: &YaakHttpRequest,
+    diagnostics: &mut Vec<ImportDiagnostic>,
+) -> Result<Option<serde_json::Map<String, Value>>, YaakImportError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let field_path = format!("body.{field}");
+    match value {
+        Value::Null => Ok(None),
+        Value::String(text) if text.trim().is_empty() => Ok(None),
+        Value::String(text) => parse_object_json(
+            &convert_templates(text, "http_request", &request.id, &field_path, diagnostics),
+            field,
+            &request.id,
+        ),
+        Value::Object(_) => {
+            let mut converted = value.clone();
+            convert_json_strings(&mut converted, &mut |text| {
+                convert_templates(text, "http_request", &request.id, &field_path, diagnostics)
+            });
+            match converted {
+                Value::Object(object) => Ok(Some(object)),
+                _ => unreachable!("GraphQL object conversion preserves objects"),
+            }
+        }
+        _ => Err(YaakImportError::Invalid(format!(
+            "GraphQL {field} for request '{}' must be a JSON object",
+            request.id
+        ))),
+    }
+}
+
+fn parse_object_json(
+    text: &str,
+    field: &str,
+    resource_id: &str,
+) -> Result<Option<serde_json::Map<String, Value>>, YaakImportError> {
+    let parsed: Value = serde_json::from_str(text).map_err(|error| {
+        YaakImportError::Invalid(format!(
+            "invalid GraphQL {field} for request '{resource_id}': {error}"
+        ))
+    })?;
+    match parsed {
+        Value::Null => Ok(None),
+        Value::Object(object) => Ok(Some(object)),
+        _ => Err(YaakImportError::Invalid(format!(
+            "GraphQL {field} for request '{resource_id}' must be a JSON object"
+        ))),
+    }
+}
+
+fn convert_json_strings(value: &mut Value, convert: &mut impl FnMut(&str) -> String) {
+    match value {
+        Value::String(text) => *text = convert(text),
+        Value::Array(values) => {
+            for value in values {
+                convert_json_strings(value, convert);
+            }
+        }
+        Value::Object(fields) => {
+            for value in fields.values_mut() {
+                convert_json_strings(value, convert);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }

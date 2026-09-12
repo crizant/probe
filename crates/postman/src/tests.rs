@@ -5,8 +5,8 @@ use std::{
 };
 
 use probe_core::{
-    AuthenticationKind, Body, CollectionItem, EnvironmentVariable, MultipartPartKind, RequestBody,
-    VariableValue, VariableValueSet, VariableValueType, WorkspaceItemRef,
+    AuthenticationKind, Body, CollectionItem, EnvironmentVariable, GraphqlBody, MultipartPartKind,
+    RequestBody, VariableValue, VariableValueSet, VariableValueType, WorkspaceItemRef,
 };
 use probe_opencollection::create_bundled_workspace_from_collection;
 
@@ -146,13 +146,12 @@ fn imports_all_supported_bodies_and_expands_authentication_inheritance() {
         panic!("first item should be a folder");
     };
     assert_eq!(folder.items.len(), 5);
-    let requests = folder
-        .items
+    let requests = folder.items[..4]
         .iter()
         .map(|item| match item {
             CollectionItem::HttpRequest(request) => request,
             CollectionItem::Folder(_) | CollectionItem::GraphqlRequest(_) => {
-                panic!("payload item should be an HTTP request")
+                panic!("first four payload items should be HTTP requests")
             }
         })
         .collect::<Vec<_>>();
@@ -184,10 +183,29 @@ fn imports_all_supported_bodies_and_expands_authentication_inheritance() {
         requests[3].body,
         Some(RequestBody::Single(Body::File(_)))
     ));
-    assert!(matches!(
-        requests[4].body,
-        Some(RequestBody::Single(Body::Raw(_)))
-    ));
+    let CollectionItem::GraphqlRequest(graphql) = &folder.items[4] else {
+        panic!("fifth payload item should be a GraphQL request");
+    };
+    assert_eq!(
+        graphql.url.as_deref(),
+        Some("https://api.example.com/graphql")
+    );
+    let Some(GraphqlBody::Single(operation)) = &graphql.body else {
+        panic!("GraphQL request should have a single operation");
+    };
+    assert_eq!(
+        operation.query.as_deref(),
+        Some("query Pet($id: ID) { pet(id: $id) { id } }")
+    );
+    assert_eq!(operation.operation_name.as_deref(), Some("Pet"));
+    assert_eq!(
+        operation
+            .variables
+            .as_ref()
+            .and_then(|variables| variables.get("id"))
+            .and_then(serde_json::Value::as_str),
+        Some("{{petId}}")
+    );
     let CollectionItem::HttpRequest(string_request) = &imported.collection.items[1] else {
         panic!("second root item should be a request");
     };
@@ -277,4 +295,112 @@ fn bundled_save_reload_preserves_imported_semantics_and_environment() {
     };
     assert_eq!(request, source_request);
     fs::remove_file(destination).unwrap();
+}
+
+#[test]
+fn imports_native_graphql_requests_and_round_trips() {
+    let imported = inspect_postman_source(fixture("collection-graphql-v2.1.json"))
+        .unwrap()
+        .convert(false)
+        .unwrap();
+    assert!(!imported.partial);
+    assert_eq!(imported.collection.items.len(), 2);
+
+    let CollectionItem::GraphqlRequest(viewer) = &imported.collection.items[0] else {
+        panic!("first item should be a GraphQL request");
+    };
+    assert_eq!(viewer.metadata.name.as_deref(), Some("Viewer"));
+    assert_eq!(viewer.method.as_deref(), Some("POST"));
+    assert_eq!(viewer.headers[0].name, "X-Trace");
+    let Some(GraphqlBody::Single(operation)) = &viewer.body else {
+        panic!("Viewer should have a single GraphQL operation");
+    };
+    assert_eq!(
+        operation.query.as_deref(),
+        Some("query Viewer($login: String!) { viewer(login: $login) { login } }")
+    );
+    assert_eq!(operation.operation_name.as_deref(), Some("Viewer"));
+    assert_eq!(
+        operation
+            .variables
+            .as_ref()
+            .and_then(|variables| variables.get("login"))
+            .and_then(serde_json::Value::as_str),
+        Some("{{login}}")
+    );
+    assert_eq!(
+        operation
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("trace"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|trace| trace.get("enabled")),
+        Some(&serde_json::Value::Bool(true))
+    );
+
+    let CollectionItem::GraphqlRequest(object_vars) = &imported.collection.items[1] else {
+        panic!("second item should be a GraphQL request");
+    };
+    assert_eq!(object_vars.method.as_deref(), Some("GET"));
+    let Some(GraphqlBody::Single(operation)) = &object_vars.body else {
+        panic!("object-variable request should have a single GraphQL operation");
+    };
+    assert_eq!(
+        operation
+            .variables
+            .as_ref()
+            .and_then(|variables| variables.get("id"))
+            .and_then(serde_json::Value::as_str),
+        Some("{{petId}}")
+    );
+
+    let destination = temporary_path("graphql-roundtrip.yml");
+    let loaded =
+        create_bundled_workspace_from_collection(&destination, &imported.collection).unwrap();
+    let workspace = loaded.workspace();
+    assert_eq!(workspace.request_count(), 2);
+    let WorkspaceItemRef::Request(request_key) = workspace.root_items()[0] else {
+        panic!("round-tripped root item should be a request");
+    };
+    let request = workspace.request(request_key).unwrap();
+    assert_eq!(request.protocol.as_str(), "graphql");
+    let operation = request.selected_graphql().unwrap().unwrap();
+    assert_eq!(operation.operation_name.as_deref(), Some("Viewer"));
+    assert!(
+        fs::read_to_string(&destination)
+            .unwrap()
+            .contains("type: graphql")
+    );
+    fs::remove_file(destination).unwrap();
+}
+
+#[test]
+fn rejects_malformed_graphql_variables() {
+    let path = temporary_path("invalid-graphql.json");
+    fs::write(
+        &path,
+        r#"{
+  "info": {
+    "name": "Broken GraphQL",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Broken",
+      "request": {
+        "method": "POST",
+        "url": "https://api.example.com/graphql",
+        "body": { "mode": "graphql", "graphql": { "query": "{ pet { id } }", "variables": "[]" } }
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    let preview = inspect_postman_source(&path).unwrap();
+    assert!(matches!(
+        preview.convert(false),
+        Err(PostmanImportError::Invalid(message)) if message.contains("variables")
+    ));
+    fs::remove_file(path).unwrap();
 }

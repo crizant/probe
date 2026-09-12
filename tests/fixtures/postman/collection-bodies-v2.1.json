@@ -85,7 +85,11 @@
             "method": "POST",
             "body": {
               "mode": "graphql",
-              "graphql": { "query": "query Pet { pet { id } }", "variables": "{}" }
+              "graphql": {
+                "query": "query Pet($id: ID) { pet(id: $id) { id } }",
+                "variables": "{\"id\":\"{{petId}}\"}",
+                "operationName": "Pet"
+              }
             },
             "url": "https://api.example.com/graphql"
           }

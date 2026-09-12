@@ -1,0 +1,47 @@
+{
+  "yaakVersion": "2026.5.0",
+  "yaakSchema": 4,
+  "resources": {
+    "workspaces": [
+      {
+        "model": "workspace",
+        "id": "wk_gql",
+        "name": "GraphQL Pets"
+      }
+    ],
+    "httpRequests": [
+      {
+        "model": "http_request",
+        "id": "rq_gql",
+        "workspaceId": "wk_gql",
+        "name": "Viewer",
+        "method": "POST",
+        "url": "https://api.example.com/graphql",
+        "sortPriority": 1,
+        "headers": [
+          { "name": "X-Trace", "value": "${[TRACE]}", "enabled": true }
+        ],
+        "bodyType": "graphql",
+        "body": {
+          "query": "query Viewer($login: String!) { viewer(login: $login) { login } }",
+          "variables": "{\"login\":\"${[env.LOGIN]}\"}",
+          "operationName": "Viewer",
+          "extensions": "{\"trace\":{\"enabled\":true}}"
+        }
+      },
+      {
+        "model": "http_request",
+        "id": "rq_gql_text",
+        "workspaceId": "wk_gql",
+        "name": "Legacy Envelope",
+        "method": "POST",
+        "url": "https://api.example.com/graphql",
+        "sortPriority": 2,
+        "bodyType": "graphql",
+        "body": {
+          "text": "{\"query\":\"query Pet { pet { id } }\",\"variables\":{\"id\":\"${[PET_ID]}\"},\"operationName\":\"Pet\"}"
+        }
+      }
+    ]
+  }
+}
