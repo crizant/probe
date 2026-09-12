@@ -469,9 +469,9 @@ fn convert_graphql_body(
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> Result<Option<GraphqlBody>, YaakImportError> {
     diagnose_unknown_graphql_fields(request, diagnostics);
-    let query = request.body.get("query").and_then(Value::as_str);
-    let text = request.body.get("text").and_then(Value::as_str);
-    if query.is_some() && text.is_some_and(|value| !value.is_empty()) {
+    let query = optional_graphql_string(request.body.get("query"), "query", &request.id)?;
+    let text = optional_graphql_string(request.body.get("text"), "text", &request.id)?;
+    if query.is_some() && text.is_some_and(|value| !value.trim().is_empty()) {
         diagnostics.push(lossy(
             "inactive_body_data",
             "http_request",
@@ -584,6 +584,20 @@ fn diagnose_unknown_graphql_fields(
                 &format!("unknown Yaak field '{field}' cannot be guaranteed to survive import"),
             ));
         }
+    }
+}
+
+fn optional_graphql_string<'a>(
+    value: Option<&'a Value>,
+    field: &str,
+    request_id: &str,
+) -> Result<Option<&'a str>, YaakImportError> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text)),
+        Some(_) => Err(YaakImportError::Invalid(format!(
+            "GraphQL {field} for request '{request_id}' must be a string"
+        ))),
     }
 }
 

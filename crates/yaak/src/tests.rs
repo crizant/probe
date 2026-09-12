@@ -246,6 +246,91 @@ fn imports_native_graphql_requests_and_round_trips() {
 }
 
 #[test]
+fn rejects_non_string_graphql_query_and_text() {
+    for (body, field) in [
+        (r#"{"query":{"nested":true}}"#, "query"),
+        (r#"{"text":{"query":"{ pet { id } }"}}"#, "text"),
+    ] {
+        let path = temporary_path(&format!("invalid-graphql-{field}.json"));
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+  "yaakSchema": 4,
+  "resources": {{
+    "workspaces": [{{"model":"workspace","id":"wk_1","name":"Broken"}}],
+    "httpRequests": [{{
+      "model":"http_request",
+      "id":"rq_1",
+      "workspaceId":"wk_1",
+      "name":"Broken",
+      "method":"POST",
+      "url":"https://api.example.com/graphql",
+      "bodyType":"graphql",
+      "body":{body}
+    }}]
+  }}
+}}"#
+            ),
+        )
+        .unwrap();
+        let preview = inspect_yaak_source(&path).unwrap();
+        assert!(
+            matches!(
+                preview.convert(None, false),
+                Err(YaakImportError::Invalid(message)) if message.contains(field)
+            ),
+            "non-string GraphQL {field} should be rejected"
+        );
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn ignores_whitespace_only_inactive_graphql_text() {
+    let path = temporary_path("graphql-whitespace-text.json");
+    fs::write(
+        &path,
+        r#"{
+  "yaakSchema": 4,
+  "resources": {
+    "workspaces": [{"model":"workspace","id":"wk_1","name":"Whitespace"}],
+    "httpRequests": [{
+      "model":"http_request",
+      "id":"rq_1",
+      "workspaceId":"wk_1",
+      "name":"Viewer",
+      "method":"POST",
+      "url":"https://api.example.com/graphql",
+      "bodyType":"graphql",
+      "body":{"query":"{ pet { id } }","text":"   "}
+    }]
+  }
+}"#,
+    )
+    .unwrap();
+    let imported = inspect_yaak_source(&path)
+        .unwrap()
+        .convert(None, false)
+        .unwrap();
+    assert!(!imported.partial);
+    assert!(
+        imported
+            .diagnostics
+            .iter()
+            .all(|diagnostic| { diagnostic.code != "inactive_body_data" })
+    );
+    let CollectionItem::GraphqlRequest(request) = &imported.collection.items[0] else {
+        panic!("item should be a GraphQL request");
+    };
+    let Some(GraphqlBody::Single(operation)) = &request.body else {
+        panic!("request should have a single GraphQL operation");
+    };
+    assert_eq!(operation.query.as_deref(), Some("{ pet { id } }"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn rejects_malformed_graphql_variables() {
     let path = temporary_path("invalid-graphql.json");
     fs::write(
