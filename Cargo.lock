@@ -4906,6 +4906,7 @@ name = "probe-yaak"
 version = "0.7.1"
 dependencies = [
  "probe-core",
+ "probe-opencollection",
  "serde",
  "serde_json",
  "serde_yaml_ng",

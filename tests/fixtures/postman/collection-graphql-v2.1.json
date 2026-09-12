@@ -1,0 +1,43 @@
+{
+  "info": {
+    "_postman_id": "pm_graphql",
+    "name": "Postman GraphQL",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "id": "gql_string_vars",
+      "name": "Viewer",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "X-Trace", "value": "{{traceId}}" }],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "query Viewer($login: String!) { viewer(login: $login) { login } }",
+            "variables": "{\"login\":\"{{login}}\"}",
+            "operationName": "Viewer",
+            "extensions": "{\"trace\":{\"enabled\":true}}"
+          }
+        },
+        "url": "https://api.example.com/graphql"
+      }
+    },
+    {
+      "id": "gql_object_vars",
+      "name": "Object Variables",
+      "request": {
+        "method": "GET",
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "query Pet($id: ID!) { pet(id: $id) { name } }",
+            "variables": { "id": "{{petId}}" },
+            "operationName": "Pet"
+          }
+        },
+        "url": "https://api.example.com/graphql"
+      }
+    }
+  ]
+}
