@@ -285,10 +285,17 @@ impl Render for ProbeApp {
             .on_action(cx.listener(|view, _: &QuitApplication, window, cx| {
                 view.quit_application(window, cx);
             }))
+            .on_action(cx.listener(|_, _: &TabOrIndent, window, cx| {
+                window.focus_next(cx);
+            }))
+            .on_action(cx.listener(|_, _: &ShiftTabOrOutdent, window, cx| {
+                window.focus_prev(cx);
+            }))
             .on_action(cx.listener(|_, _: &FocusNextControl, window, cx| {
                 window.focus_next(cx);
             }))
             .on_action(cx.listener(|_, _: &FocusPreviousControl, window, cx| {
+                // Only navigate, never outdent (for Ctrl+Shift+Tab)
                 window.focus_prev(cx);
             }))
             .on_action(cx.listener(|view, _: &NewRequest, window, cx| {

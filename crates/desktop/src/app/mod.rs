@@ -155,6 +155,8 @@ gpui::actions!(
         QuitApplication,
         FocusNextControl,
         FocusPreviousControl,
+        TabOrIndent,
+        ShiftTabOrOutdent,
         NewRequest,
         NewGraphqlRequest,
         NewFolder,
@@ -180,9 +182,7 @@ gpui::actions!(
         CancelCreateEnvironmentDialog,
         CancelEnvironmentManagerDialog,
         DeleteSelectedEnvironment,
-        CancelApplicationDialog,
-        IndentLine,
-        OutdentLine
+        CancelApplicationDialog
     ]
 );
 
@@ -765,8 +765,8 @@ fn install_system_menu(_: &mut App) {}
 
 fn bind_platform_hotkeys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("tab", FocusNextControl, None),
-        KeyBinding::new("shift-tab", FocusPreviousControl, None),
+        KeyBinding::new("tab", TabOrIndent, None),
+        KeyBinding::new("shift-tab", ShiftTabOrOutdent, None),
         KeyBinding::new("up", SelectPreviousTreeItem, Some("RequestTree")),
         KeyBinding::new("down", SelectNextTreeItem, Some("RequestTree")),
         KeyBinding::new("left", CollapseTreeItem, Some("RequestTree")),
@@ -800,10 +800,8 @@ fn bind_platform_hotkeys(cx: &mut App) {
             Some("EnvironmentManagerDialog"),
         ),
         KeyBinding::new("escape", CancelApplicationDialog, Some("ApplicationDialog")),
-        KeyBinding::new("tab", IndentLine, Some("ProbeEditor")),
-        KeyBinding::new("shift-tab", OutdentLine, Some("ProbeEditor")),
-        KeyBinding::new("ctrl-tab", FocusNextControl, Some("ProbeEditor")),
-        KeyBinding::new("ctrl-shift-tab", FocusPreviousControl, Some("ProbeEditor")),
+        KeyBinding::new("ctrl-tab", FocusNextControl, None),
+        KeyBinding::new("ctrl-shift-tab", FocusPreviousControl, None),
     ]);
 
     #[cfg(target_os = "macos")]
