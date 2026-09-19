@@ -67,7 +67,7 @@ impl HighlightStyleResolver for ProbeHighlightStyles {
     }
 }
 
-struct SyntectHighlighter {
+pub(crate) struct SyntectHighlighter {
     language: SharedString,
     highlights: Vec<(Range<usize>, &'static str)>,
     semantic_names: HashMap<Scope, Option<&'static str>>,
@@ -86,6 +86,19 @@ impl SyntectHighlighter {
             semantic_names: HashMap::new(),
             json_meta: HashMap::new(),
         })
+    }
+
+    /// Parse text and return highlights for use in context menu logic.
+    /// This is a convenience method for non-editor contexts that need token information.
+    pub(crate) fn parse_for_menu(text: &str, language: &str) -> Vec<(Range<usize>, &'static str)> {
+        if text.is_empty() || language.is_empty() || !within_highlight_budget(text.len()) {
+            return Vec::new();
+        }
+        let Some(mut highlighter) = Self::new(language) else {
+            return Vec::new();
+        };
+        highlighter.reparse(text);
+        highlighter.highlights
     }
 
     fn reparse(&mut self, text: &str) {
@@ -402,6 +415,25 @@ mod tests {
             nulls.iter().any(|lexeme| lexeme.contains("null"))
                 || booleans.iter().any(|lexeme| lexeme.contains("null")),
             "null should be a constant; got nulls={nulls:?} booleans={booleans:?}"
+        );
+    }
+
+    #[test]
+    fn json_string_scope_excludes_quotes() {
+        let source = r#"{"key": "value"}"#;
+        let highlights = highlight("json", source);
+        let strings = lexemes(source, &highlights, "string");
+        // Syntect string scopes exclude the surrounding quotes
+        assert!(
+            strings.contains(&"value"),
+            "string scopes should not include quotes: {strings:?}"
+        );
+        // Verify the quotes are not part of the string token
+        assert!(
+            !strings
+                .iter()
+                .any(|lexeme| lexeme.starts_with('"') && lexeme.ends_with('"')),
+            "string scopes should not include quotes: {strings:?}"
         );
     }
 

@@ -1,4 +1,6 @@
 use super::*;
+use crate::components::controls::TextContextMenuLabel;
+use gpui::ClipboardItem;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BodySyntax {
@@ -64,6 +66,56 @@ pub(crate) fn response_body_input(
         options.active_match,
         inspection_reveal,
     );
+
+    let mut actions = vec![TextContextMenuExtraAction {
+        id: "inspect",
+        label: TextContextMenuLabel::Static("Inspect"),
+        requires_selection: false,
+        is_enabled: options.inspect_enabled,
+        on_click: options.on_inspect,
+    }];
+
+    // Add "Copy string" action for JSON responses only
+    if options.language == "json" {
+        use crate::response_string_copy::StringAtCursor;
+
+        let shared_text = text.clone();
+        let shared_language = options.language.clone();
+
+        actions.push(TextContextMenuExtraAction {
+            id: "copy-string",
+            label: TextContextMenuLabel::Dynamic({
+                let text = shared_text.clone();
+                let language = shared_language.clone();
+                Rc::new(move |_selected, offset| {
+                    let highlights = parse_highlights(&text, &language);
+                    StringAtCursor::extract(&text, &highlights, offset)
+                        .map(|s| s.label)
+                        .unwrap_or_else(|| "Copy string".to_owned())
+                })
+            }),
+            requires_selection: false,
+            is_enabled: {
+                let text = shared_text.clone();
+                let language = shared_language.clone();
+                Rc::new(move |_selected, offset| {
+                    let highlights = parse_highlights(&text, &language);
+                    StringAtCursor::extract(&text, &highlights, offset).is_some()
+                })
+            },
+            on_click: {
+                let text = shared_text;
+                let language = shared_language;
+                Rc::new(move |_selected, offset, _window, cx| {
+                    let highlights = parse_highlights(&text, &language);
+                    if let Some(extracted) = StringAtCursor::extract(&text, &highlights, offset) {
+                        cx.write_to_clipboard(ClipboardItem::new_string(extracted.unescaped));
+                    }
+                })
+            },
+        });
+    }
+
     response_editor(
         theme,
         id,
@@ -78,14 +130,14 @@ pub(crate) fn response_body_input(
         },
         options.on_visible_range,
         Some(options.on_mouse_down),
-        vec![TextContextMenuExtraAction {
-            id: "inspect",
-            label: "Inspect",
-            requires_selection: false,
-            is_enabled: options.inspect_enabled,
-            on_click: options.on_inspect,
-        }],
+        actions,
     )
+}
+
+/// Parse syntax highlights for the given text and language.
+/// Returns highlight ranges with their semantic roles.
+fn parse_highlights(text: &str, language: &str) -> Vec<(Range<usize>, &'static str)> {
+    crate::syntax::SyntectHighlighter::parse_for_menu(text, language)
 }
 
 pub(crate) fn response_headers_input(

@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::surfaces::TextContextLabelHandler;
 
 #[derive(Clone, Copy)]
 pub(in crate::components) struct EditorInsets {
@@ -40,10 +41,16 @@ impl EditorInsets {
 #[derive(Clone)]
 pub(in crate::components) struct TextContextMenuExtraAction {
     pub(in crate::components) id: &'static str,
-    pub(in crate::components) label: &'static str,
+    pub(in crate::components) label: TextContextMenuLabel,
     pub(in crate::components) requires_selection: bool,
     pub(in crate::components) is_enabled: TextContextEnableHandler,
     pub(in crate::components) on_click: TextContextActionHandler,
+}
+
+#[derive(Clone)]
+pub(in crate::components) enum TextContextMenuLabel {
+    Static(&'static str),
+    Dynamic(TextContextLabelHandler),
 }
 
 pub(crate) struct ResponseBodyInputOptions<'a> {
