@@ -320,10 +320,10 @@ impl RenderOnce for ProbeEditor {
                         state.update(cx, |editor, cx| editor.focus(window, cx));
                         window.refresh();
                     } else {
-                        // Blur the editor by moving focus away
+                        // Blur the editor by clearing window focus
                         let focus_handle = state.read(cx).focus_handle(cx);
                         if focus_handle.is_focused(window) {
-                            window.focus_next(cx);
+                            window.blur();
                         }
                     }
                 }
@@ -334,6 +334,8 @@ impl RenderOnce for ProbeEditor {
                 move |_: &crate::app::IndentLine, window, cx| {
                     let readonly = field.read(cx).readonly;
                     if readonly {
+                        // In readonly mode, Tab should navigate focus
+                        window.focus_next(cx);
                         return;
                     }
 
@@ -348,6 +350,8 @@ impl RenderOnce for ProbeEditor {
                 move |_: &crate::app::OutdentLine, window, cx| {
                     let readonly = field.read(cx).readonly;
                     if readonly {
+                        // In readonly mode, Shift+Tab should navigate focus backwards
+                        window.focus_prev(cx);
                         return;
                     }
 
@@ -415,7 +419,11 @@ impl RenderOnce for ProbeEditor {
 }
 
 /// Apply indent to the current selection or line using undo-preserving edit.
-fn apply_indent(editor: &mut EditorState, window: &mut Window, cx: &mut Context<EditorState>) {
+pub(super) fn apply_indent(
+    editor: &mut EditorState,
+    window: &mut Window,
+    cx: &mut Context<EditorState>,
+) {
     let value = editor.value();
     let indent_str = detect_indentation(&value);
     let selection = editor.selected_range();
@@ -469,7 +477,11 @@ fn apply_indent(editor: &mut EditorState, window: &mut Window, cx: &mut Context<
 }
 
 /// Apply outdent to the current selection or line using undo-preserving edit.
-fn apply_outdent(editor: &mut EditorState, window: &mut Window, cx: &mut Context<EditorState>) {
+pub(super) fn apply_outdent(
+    editor: &mut EditorState,
+    window: &mut Window,
+    cx: &mut Context<EditorState>,
+) {
     let value = editor.value();
     let indent_str = detect_indentation(&value);
     let selection = editor.selected_range();
@@ -502,19 +514,26 @@ fn apply_outdent(editor: &mut EditorState, window: &mut Window, cx: &mut Context
 
     // Build outdented text and track removals
     let mut new_text = String::new();
-    let mut total_removed = 0;
-    let mut removed_before_cursor_line = 0;
-
-    // Find which line the cursor is on
-    let cursor_line = affected_text[..selection.start.saturating_sub(line_start)]
-        .chars()
-        .filter(|&c| c == '\n')
-        .count();
+    let mut removed_before_start = 0;
+    let mut removed_before_end = 0;
 
     for (i, line) in lines.iter().enumerate() {
         if i > 0 {
             new_text.push('\n');
         }
+
+        // Calculate this line's byte offset in the original text
+        let line_byte_start = line_start
+            + if i == 0 {
+                0
+            } else {
+                affected_text[..affected_text
+                    .split('\n')
+                    .take(i)
+                    .map(|l| l.len() + 1)
+                    .sum::<usize>()]
+                    .len()
+            };
 
         let (trimmed, removed) = if let Some(stripped) = line.strip_prefix(indent_str.as_str()) {
             (stripped, indent_str.len())
@@ -528,16 +547,26 @@ fn apply_outdent(editor: &mut EditorState, window: &mut Window, cx: &mut Context
             (*line, 0)
         };
 
-        if i < cursor_line {
-            removed_before_cursor_line += removed;
+        // Track removals before selection start
+        if line_byte_start < selection.start {
+            removed_before_start += removed;
         }
-        total_removed += removed;
+        // Track removals before selection end (includes cursor's own line)
+        if line_byte_start < selection.end {
+            removed_before_end += removed;
+        }
+
         new_text.push_str(trimmed);
     }
 
     // Calculate new cursor/selection position
-    let new_start = selection.start.saturating_sub(removed_before_cursor_line);
-    let new_end = selection.end.saturating_sub(total_removed);
+    // For empty caret (start == end), both should move by the same amount
+    let new_start = selection.start.saturating_sub(removed_before_start);
+    let new_end = if selection.start == selection.end {
+        new_start // Keep caret collapsed
+    } else {
+        selection.end.saturating_sub(removed_before_end)
+    };
 
     // Apply the edit: select the range and replace it
     editor.set_selected_range(line_start..line_end, cx);

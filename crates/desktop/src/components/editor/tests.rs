@@ -9,8 +9,8 @@ use gpui_base::{
     input::{EditorState, InputState},
 };
 
+use super::core::{detect_auto_pair, detect_indentation};
 use super::*;
-use super::core::{AutoPairResult, detect_auto_pair, detect_indentation};
 use crate::theme::Theme;
 
 #[test]
@@ -524,16 +524,14 @@ fn detect_auto_pair_ignores_non_pairing_chars() {
 }
 
 #[test]
-fn detect_auto_pair_ignores_existing_closer() {
-    let old = SharedString::from("test");
-    let new = SharedString::from("test{");
-    // But the next char is already }
-    let old2 = SharedString::from("test{");
-    let new2 = SharedString::from("test{{");
-    let result = detect_auto_pair(&old2, &new2, 6..6);
-    // Should not pair because we're testing the detection logic
-    // In practice this would be caught by checking next_char == closing_char
-    assert!(result.is_some()); // The detection happens, but insertion is prevented elsewhere
+fn detect_auto_pair_skips_when_closer_already_present() {
+    let old = SharedString::from("test}");
+    let new = SharedString::from("test{}");
+    // Cursor at 5 (after {), next char is }
+    let selection = 5..5;
+    let result = detect_auto_pair(&old, &new, selection);
+    // Should return None because next char is already the closing char
+    assert!(result.is_none());
 }
 
 #[test]
