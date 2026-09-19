@@ -6,7 +6,6 @@
 use std::ops::Range;
 
 /// Maximum characters to show in the "Copy string" menu preview label.
-#[cfg(test)]
 const PREVIEW_MAX_CHARS: usize = 24;
 
 /// Detect if the cursor/offset is within a JSON string token in the highlighted text.
@@ -22,13 +21,29 @@ pub(crate) fn find_string_token_at_offset(
 }
 
 /// Extract and unescape a JSON string from the source text given its byte range.
-/// The range should include the surrounding quotes. Returns the unescaped string content
-/// without the quotes, or None if the range doesn't contain a valid JSON string literal.
+/// The range may or may not include the surrounding quotes depending on the highlighter.
+/// Returns the unescaped string content without quotes, or None if extraction fails.
 pub(crate) fn extract_json_string(text: &str, range: Range<usize>) -> Option<String> {
-    let token = text.get(range)?;
-    // JSON strings start and end with double quotes
-    let quoted = token.strip_prefix('"')?.strip_suffix('"')?;
-    Some(unescape_json_string(quoted))
+    let token = text.get(range.clone())?;
+
+    // Check if the token includes quotes (some highlighters include them, some don't)
+    if let Some(quoted) = token.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        // Token includes quotes, strip and unescape
+        return Some(unescape_json_string(quoted));
+    }
+
+    // Token doesn't include quotes, check if we can expand the range to include them
+    if range.start > 0 && range.end < text.len() {
+        let before = text.as_bytes().get(range.start.saturating_sub(1))?;
+        let after = text.as_bytes().get(range.end)?;
+        if *before == b'"' && *after == b'"' {
+            // The token is the content between quotes, unescape it
+            return Some(unescape_json_string(token));
+        }
+    }
+
+    // Couldn't determine string boundaries
+    None
 }
 
 /// Unescape a JSON string (without surrounding quotes).
@@ -92,10 +107,6 @@ fn unescape_json_string(escaped: &str) -> String {
 /// Generate a preview label for the "Copy string" menu item.
 /// Format: `Copy "preview…"` for long strings, `Copy "short"` for short strings.
 /// Escapes any double quotes in the preview to avoid breaking menu layout.
-///
-/// Note: Currently not used in production due to `TextContextMenuExtraAction` requiring
-/// static label strings. This function is preserved for future enhancement and is tested.
-#[cfg(test)]
 pub(crate) fn string_copy_menu_label(unescaped: &str) -> String {
     let preview = if unescaped.chars().count() > PREVIEW_MAX_CHARS {
         let truncated: String = unescaped.chars().take(PREVIEW_MAX_CHARS).collect();
@@ -112,7 +123,6 @@ pub(crate) fn string_copy_menu_label(unescaped: &str) -> String {
 }
 
 /// Escape double quotes in the preview text for safe menu label display.
-#[cfg(test)]
 fn escape_preview_quotes(text: &str) -> String {
     text.replace('"', "\\\"")
 }
@@ -147,6 +157,7 @@ mod tests {
 
     #[test]
     fn extract_json_string_removes_quotes_and_unescapes() {
+        // Case 1: Range includes quotes (some highlighters)
         let text = r#""hello""#;
         assert_eq!(extract_json_string(text, 0..7), Some("hello".to_owned()));
 
@@ -161,6 +172,19 @@ mod tests {
             extract_json_string(text, 0..12),
             Some("say \"hi\"".to_owned())
         );
+
+        // Case 2: Range excludes quotes (Syntect behavior)
+        let text = r#"{"key": "hello"}"#;
+        // Range 9..14 is just "hello" without quotes
+        assert_eq!(extract_json_string(text, 9..14), Some("hello".to_owned()));
+
+        // Test with escape sequences
+        let text = "{\"key\": \"line\\nbreak\"}";
+        // Range 9..20 is "line\nbreak" (the literal backslash-n text, 11 chars)
+        assert_eq!(
+            extract_json_string(text, 9..20),
+            Some("line\nbreak".to_owned())
+        );
     }
 
     #[test]
@@ -170,6 +194,24 @@ mod tests {
             extract_json_string(text, 0..15),
             Some("emoji: ☺".to_owned())
         );
+    }
+
+    #[test]
+    fn extract_json_string_handles_long_strings() {
+        // Test a long string (>100 chars)
+        let long_value = "a".repeat(150);
+        let json = format!(r#"{{"key": "{}"}}"#, long_value);
+        // Range 9..159 is the long string without quotes
+        let result = extract_json_string(&json, 9..159);
+        assert_eq!(result, Some(long_value));
+
+        // Test with escapes in a long string
+        let long_with_escapes = format!("prefix{}middle{}suffix", r"\n", r"\t");
+        let json = format!(r#"{{"key": "{}"}}"#, long_with_escapes);
+        let range_start = 9;
+        let range_end = range_start + long_with_escapes.len();
+        let result = extract_json_string(&json, range_start..range_end);
+        assert_eq!(result, Some("prefix\nmiddle\tsuffix".to_owned()));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::controls::TextContextMenuLabel;
 use gpui::ClipboardItem;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,7 +69,7 @@ pub(crate) fn response_body_input(
 
     let mut actions = vec![TextContextMenuExtraAction {
         id: "inspect",
-        label: "Inspect",
+        label: TextContextMenuLabel::Static("Inspect"),
         requires_selection: false,
         is_enabled: options.inspect_enabled,
         on_click: options.on_inspect,
@@ -76,16 +77,26 @@ pub(crate) fn response_body_input(
 
     // Add "Copy string" action for JSON/XML responses
     if !options.language.is_empty() {
-        use crate::response_string_copy::{extract_json_string, find_string_token_at_offset};
+        use crate::response_string_copy::{
+            extract_json_string, find_string_token_at_offset, string_copy_menu_label,
+        };
 
         let copy_text = text.clone();
         let copy_language = options.language.clone();
+        let label_text = text.clone();
+        let label_language = options.language.clone();
 
-        // Note: The label is static ("Copy string") due to TextContextMenuExtraAction limitations.
-        // Future enhancement could add dynamic label support for previews like 'Copy "value…"'
         actions.push(TextContextMenuExtraAction {
             id: "copy-string",
-            label: "Copy string",
+            label: TextContextMenuLabel::Dynamic(Rc::new(move |_selected, offset| {
+                let highlights = parse_highlights(&label_text, &label_language);
+                if let Some(range) = find_string_token_at_offset(&highlights, offset)
+                    && let Some(unescaped) = extract_json_string(label_text.as_ref(), range)
+                {
+                    return string_copy_menu_label(&unescaped);
+                }
+                "Copy string".to_owned()
+            })),
             requires_selection: false,
             is_enabled: Rc::new(move |_selected, offset| {
                 if copy_language.is_empty() {

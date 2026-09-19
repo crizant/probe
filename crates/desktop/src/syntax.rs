@@ -419,6 +419,25 @@ mod tests {
     }
 
     #[test]
+    fn json_string_scope_excludes_quotes() {
+        let source = r#"{"key": "value"}"#;
+        let highlights = highlight("json", source);
+        let strings = lexemes(source, &highlights, "string");
+        // Syntect string scopes exclude the surrounding quotes
+        assert!(
+            strings.contains(&"value"),
+            "string scopes should not include quotes: {strings:?}"
+        );
+        // Verify the quotes are not part of the string token
+        assert!(
+            !strings
+                .iter()
+                .any(|lexeme| lexeme.starts_with('"') && lexeme.ends_with('"')),
+            "string scopes should not include quotes: {strings:?}"
+        );
+    }
+
+    #[test]
     fn xml_tags_attributes_and_comments_map_to_probe_roles() {
         let source = r#"<?xml version="1.0"?><root id="1"><!-- n --><item/></root>"#;
         let highlights = highlight("xml", source);

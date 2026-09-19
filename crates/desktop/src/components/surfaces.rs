@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::controls::TextContextMenuLabel;
 
 pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
     div().min_w(px(0.0)).truncate().child(text.into())
@@ -211,15 +212,23 @@ pub(super) fn with_text_context_menu(
             let action_state = state.clone();
             let action_is_enabled = action.is_enabled.clone();
             let action_handler = action.on_click.clone();
+            let action_label = action.label.clone();
             let target = text_context_target(&action_state, cx);
             let enabled = target.as_ref().is_some_and(|(selected, cursor_offset)| {
                 (!action.requires_selection || selected.is_some())
                     && action_is_enabled(selected.as_deref(), *cursor_offset)
             });
+            let label = match &action_label {
+                TextContextMenuLabel::Static(s) => s.to_string(),
+                TextContextMenuLabel::Dynamic(handler) => target
+                    .as_ref()
+                    .map(|(selected, offset)| handler(selected.as_deref(), *offset))
+                    .unwrap_or_default(),
+            };
             menu = menu.child(menu_button_with_style(
                 theme,
                 text_context_menu_id(id, action.id),
-                MenuButtonContent::new(action.label, None),
+                MenuButtonContent::new(label, None),
                 enabled,
                 MenuButtonStyle::standard(theme),
                 move |window, cx| {
@@ -642,6 +651,7 @@ fn variable_value_input(
 pub(super) type InputChangeHandler = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 pub(super) type TextContextActionHandler = Rc<dyn Fn(Option<String>, usize, &mut Window, &mut App)>;
 pub(super) type TextContextEnableHandler = Rc<dyn Fn(Option<&str>, usize) -> bool>;
+pub(super) type TextContextLabelHandler = Rc<dyn Fn(Option<&str>, usize) -> String>;
 pub(super) type DropdownChangeHandler<T> = Rc<dyn Fn(Option<&T>, &mut Window, &mut App)>;
 pub(super) type DropdownActionHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub(super) type EditorMouseDownHandler = Rc<dyn Fn(&mut Window, &mut App)>;
