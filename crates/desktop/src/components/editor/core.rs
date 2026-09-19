@@ -425,8 +425,24 @@ pub(super) fn apply_indent(
     cx: &mut Context<EditorState>,
 ) {
     let value = editor.value();
-    let indent_str = detect_indentation(&value);
     let selection = editor.selected_range();
+
+    let (new_text, line_start, line_end, new_selection) = compute_indent(&value, selection);
+
+    // Apply the edit: select the range and replace it
+    editor.set_selected_range(line_start..line_end, cx);
+    editor.replace(new_text, window, cx);
+    // Restore selection
+    editor.set_selected_range(new_selection, cx);
+}
+
+/// Pure function: compute indented text and new selection.
+/// Returns (new_text, line_start, line_end, new_selection).
+pub(super) fn compute_indent(
+    value: &str,
+    selection: Range<usize>,
+) -> (String, usize, usize, Range<usize>) {
+    let indent_str = detect_indentation(value);
 
     // Expand to cover full lines
     let line_start = value[..selection.start]
@@ -451,7 +467,7 @@ pub(super) fn apply_indent(
     let lines: Vec<&str> = affected_text.split('\n').collect();
 
     if lines.is_empty() {
-        return;
+        return (String::new(), line_start, line_end, selection);
     }
 
     // Build indented text
@@ -469,11 +485,7 @@ pub(super) fn apply_indent(
     let new_start = selection.start + indent_len;
     let new_end = selection.end + (indent_len * lines.len());
 
-    // Apply the edit: select the range and replace it
-    editor.set_selected_range(line_start..line_end, cx);
-    editor.replace(new_text, window, cx);
-    // Restore selection
-    editor.set_selected_range(new_start..new_end, cx);
+    (new_text, line_start, line_end, new_start..new_end)
 }
 
 /// Apply outdent to the current selection or line using undo-preserving edit.
@@ -483,8 +495,24 @@ pub(super) fn apply_outdent(
     cx: &mut Context<EditorState>,
 ) {
     let value = editor.value();
-    let indent_str = detect_indentation(&value);
     let selection = editor.selected_range();
+
+    let (new_text, line_start, line_end, new_selection) = compute_outdent(&value, selection);
+
+    // Apply the edit: select the range and replace it
+    editor.set_selected_range(line_start..line_end, cx);
+    editor.replace(new_text, window, cx);
+    // Restore selection
+    editor.set_selected_range(new_selection, cx);
+}
+
+/// Pure function: compute outdented text and new selection.
+/// Returns (new_text, line_start, line_end, new_selection).
+pub(super) fn compute_outdent(
+    value: &str,
+    selection: Range<usize>,
+) -> (String, usize, usize, Range<usize>) {
+    let indent_str = detect_indentation(value);
 
     // Expand to cover full lines
     let line_start = value[..selection.start]
@@ -509,7 +537,7 @@ pub(super) fn apply_outdent(
     let lines: Vec<&str> = affected_text.split('\n').collect();
 
     if lines.is_empty() {
-        return;
+        return (String::new(), line_start, line_end, selection);
     }
 
     // Build outdented text and track removals
@@ -568,11 +596,7 @@ pub(super) fn apply_outdent(
         selection.end.saturating_sub(removed_before_end)
     };
 
-    // Apply the edit: select the range and replace it
-    editor.set_selected_range(line_start..line_end, cx);
-    editor.replace(new_text, window, cx);
-    // Restore selection
-    editor.set_selected_range(new_start..new_end, cx);
+    (new_text, line_start, line_end, new_start..new_end)
 }
 
 /// Detect the indentation style used in the document.
