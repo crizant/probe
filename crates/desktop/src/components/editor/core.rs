@@ -9,6 +9,7 @@ struct EditorField {
     last_scroll_range: Option<Range<usize>>,
     language: SharedString,
     soft_wrap: bool,
+    readonly: bool,
     _subscription: Subscription,
 }
 
@@ -32,16 +33,43 @@ impl EditorField {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(event, InputEvent::Change)
-            && let Some(on_change) = this.on_change.clone()
-        {
+        if matches!(event, InputEvent::Change) {
             let value = input.read(cx).value();
+            let selection = input.read(cx).selected_range();
+
+            // Auto-pairing: check if we should insert a closing character
+            if !this.readonly
+                && let Some(pair_result) = detect_auto_pair(&this.last_value, &value, selection)
+            {
+                input.update(cx, |editor, cx| {
+                    // Save current selection
+                    let saved_selection = editor.selected_range();
+                    // Set selection to insertion point
+                    editor.set_selected_range(pair_result.cursor..pair_result.cursor, cx);
+                    // Insert the closing character
+                    editor.insert(pair_result.closing_char.to_string(), window, cx);
+                    // Restore cursor position (between the pair)
+                    editor.set_selected_range(saved_selection, cx);
+                });
+                // Update last_value to the new text with the pair
+                this.last_value = input.read(cx).value();
+
+                if let Some(on_change) = this.on_change.clone() {
+                    let current_value = input.read(cx).value();
+                    on_change(current_value, window, cx);
+                }
+                return;
+            }
+
             // Remember edits made by this EditorState before propagating them to
             // application state. The resulting render is an acknowledgement of
             // the local edit, not an external value replacement; calling
             // EditorState::set_value for it would reset the caret and undo stack.
             this.last_value = value.clone();
-            on_change(value, window, cx);
+
+            if let Some(on_change) = this.on_change.clone() {
+                on_change(value, window, cx);
+            }
         }
     }
 }
@@ -135,11 +163,13 @@ impl RenderOnce for ProbeEditor {
                 last_scroll_range: None,
                 language: language.clone(),
                 soft_wrap,
+                readonly: self.readonly,
                 _subscription: subscription,
             }
         });
         field.update(cx, |field, cx| {
             field.on_change = self.on_change.clone();
+            field.readonly = self.readonly;
             let language_changed = field.language != self.language;
             if language_changed {
                 field.language = self.language.clone();
@@ -289,7 +319,45 @@ impl RenderOnce for ProbeEditor {
                         });
                         state.update(cx, |editor, cx| editor.focus(window, cx));
                         window.refresh();
+                    } else {
+                        // Blur the editor by clearing window focus
+                        let focus_handle = state.read(cx).focus_handle(cx);
+                        if focus_handle.is_focused(window) {
+                            window.blur();
+                        }
                     }
+                }
+            })
+            .on_action({
+                let field = field.clone();
+                let state = state.clone();
+                move |_: &crate::app::IndentLine, window, cx| {
+                    let readonly = field.read(cx).readonly;
+                    if readonly {
+                        // In readonly mode, Tab should navigate focus
+                        window.focus_next(cx);
+                        return;
+                    }
+
+                    state.update(cx, |editor, cx| {
+                        apply_indent(editor, window, cx);
+                    });
+                }
+            })
+            .on_action({
+                let field = field.clone();
+                let state = state.clone();
+                move |_: &crate::app::OutdentLine, window, cx| {
+                    let readonly = field.read(cx).readonly;
+                    if readonly {
+                        // In readonly mode, Shift+Tab should navigate focus backwards
+                        window.focus_prev(cx);
+                        return;
+                    }
+
+                    state.update(cx, |editor, cx| {
+                        apply_outdent(editor, window, cx);
+                    });
                 }
             })
             .on_mouse_down(MouseButton::Left, {
@@ -348,4 +416,270 @@ impl RenderOnce for ProbeEditor {
             cx,
         )
     }
+}
+
+/// Apply indent to the current selection or line using undo-preserving edit.
+pub(super) fn apply_indent(
+    editor: &mut EditorState,
+    window: &mut Window,
+    cx: &mut Context<EditorState>,
+) {
+    let value = editor.value();
+    let selection = editor.selected_range();
+
+    let (new_text, line_start, line_end, new_selection) = compute_indent(&value, selection);
+
+    // Apply the edit: select the range and replace it
+    editor.set_selected_range(line_start..line_end, cx);
+    editor.replace(new_text, window, cx);
+    // Restore selection
+    editor.set_selected_range(new_selection, cx);
+}
+
+/// Pure function: compute indented text and new selection.
+/// Returns (new_text, line_start, line_end, new_selection).
+pub(super) fn compute_indent(
+    value: &str,
+    selection: Range<usize>,
+) -> (String, usize, usize, Range<usize>) {
+    let indent_str = detect_indentation(value);
+
+    // Expand to cover full lines
+    let line_start = value[..selection.start]
+        .rfind('\n')
+        .map_or(0, |pos| pos + 1);
+    let line_end = if selection.end == selection.start {
+        value[selection.end..]
+            .find('\n')
+            .map_or(value.len(), |pos| selection.end + pos)
+    } else {
+        // For selections, if we're at the start of a line don't include it
+        if selection.end > 0 && value.as_bytes().get(selection.end - 1) == Some(&b'\n') {
+            selection.end.saturating_sub(1)
+        } else {
+            value[selection.end..]
+                .find('\n')
+                .map_or(value.len(), |pos| selection.end + pos)
+        }
+    };
+
+    let affected_text = &value[line_start..line_end];
+    let lines: Vec<&str> = affected_text.split('\n').collect();
+
+    if lines.is_empty() {
+        return (String::new(), line_start, line_end, selection);
+    }
+
+    // Build indented text
+    let mut new_text = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+        new_text.push_str(&indent_str);
+        new_text.push_str(line);
+    }
+
+    // Calculate new cursor/selection position
+    let indent_len = indent_str.len();
+    let new_start = selection.start + indent_len;
+    let new_end = selection.end + (indent_len * lines.len());
+
+    (new_text, line_start, line_end, new_start..new_end)
+}
+
+/// Apply outdent to the current selection or line using undo-preserving edit.
+pub(super) fn apply_outdent(
+    editor: &mut EditorState,
+    window: &mut Window,
+    cx: &mut Context<EditorState>,
+) {
+    let value = editor.value();
+    let selection = editor.selected_range();
+
+    let (new_text, line_start, line_end, new_selection) = compute_outdent(&value, selection);
+
+    // Apply the edit: select the range and replace it
+    editor.set_selected_range(line_start..line_end, cx);
+    editor.replace(new_text, window, cx);
+    // Restore selection
+    editor.set_selected_range(new_selection, cx);
+}
+
+/// Pure function: compute outdented text and new selection.
+/// Returns (new_text, line_start, line_end, new_selection).
+pub(super) fn compute_outdent(
+    value: &str,
+    selection: Range<usize>,
+) -> (String, usize, usize, Range<usize>) {
+    let indent_str = detect_indentation(value);
+
+    // Expand to cover full lines
+    let line_start = value[..selection.start]
+        .rfind('\n')
+        .map_or(0, |pos| pos + 1);
+    let line_end = if selection.end == selection.start {
+        value[selection.end..]
+            .find('\n')
+            .map_or(value.len(), |pos| selection.end + pos)
+    } else {
+        // For selections, if we're at the start of a line don't include it
+        if selection.end > 0 && value.as_bytes().get(selection.end - 1) == Some(&b'\n') {
+            selection.end.saturating_sub(1)
+        } else {
+            value[selection.end..]
+                .find('\n')
+                .map_or(value.len(), |pos| selection.end + pos)
+        }
+    };
+
+    let affected_text = &value[line_start..line_end];
+    let lines: Vec<&str> = affected_text.split('\n').collect();
+
+    if lines.is_empty() {
+        return (String::new(), line_start, line_end, selection);
+    }
+
+    // Build outdented text and track removals
+    let mut new_text = String::new();
+    let mut removed_before_start = 0;
+    let mut removed_before_end = 0;
+
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+
+        // Calculate this line's byte offset in the original text
+        let line_byte_start = line_start
+            + if i == 0 {
+                0
+            } else {
+                affected_text[..affected_text
+                    .split('\n')
+                    .take(i)
+                    .map(|l| l.len() + 1)
+                    .sum::<usize>()]
+                    .len()
+            };
+
+        let (trimmed, removed) = if let Some(stripped) = line.strip_prefix(indent_str.as_str()) {
+            (stripped, indent_str.len())
+        } else if let Some(stripped) = line.strip_prefix('\t') {
+            (stripped, 1)
+        } else if let Some(stripped) = line.strip_prefix("    ") {
+            (stripped, 4)
+        } else if let Some(stripped) = line.strip_prefix("  ") {
+            (stripped, 2)
+        } else {
+            (*line, 0)
+        };
+
+        // Track removals before selection start
+        if line_byte_start < selection.start {
+            removed_before_start += removed;
+        }
+        // Track removals before selection end (includes cursor's own line)
+        if line_byte_start < selection.end {
+            removed_before_end += removed;
+        }
+
+        new_text.push_str(trimmed);
+    }
+
+    // Calculate new cursor/selection position
+    // For empty caret (start == end), both should move by the same amount
+    let new_start = selection.start.saturating_sub(removed_before_start);
+    let new_end = if selection.start == selection.end {
+        new_start // Keep caret collapsed
+    } else {
+        selection.end.saturating_sub(removed_before_end)
+    };
+
+    (new_text, line_start, line_end, new_start..new_end)
+}
+
+/// Detect the indentation style used in the document.
+pub(super) fn detect_indentation(text: &str) -> String {
+    for line in text.lines() {
+        if line.starts_with('\t') {
+            return "\t".to_string();
+        }
+        if line.starts_with("    ") {
+            return "    ".to_string();
+        }
+        if line.starts_with("  ") {
+            return "  ".to_string();
+        }
+    }
+    "  ".to_string()
+}
+
+pub(super) struct AutoPairResult {
+    pub(super) closing_char: char,
+    pub(super) cursor: usize,
+}
+
+/// Detect if auto-pairing should be applied.
+/// Returns Some with the closing character and cursor position if pairing should happen.
+pub(super) fn detect_auto_pair(
+    old_value: &SharedString,
+    new_value: &SharedString,
+    selection: Range<usize>,
+) -> Option<AutoPairResult> {
+    // Only auto-pair on single character insertion with empty selection
+    if old_value.len() + 1 != new_value.len() || selection.start != selection.end {
+        return None;
+    }
+
+    let cursor = selection.start;
+    if cursor == 0 {
+        return None;
+    }
+
+    // Get the inserted character by finding the difference
+    // We need to be careful with UTF-8 byte offsets
+    let old_bytes = old_value.as_bytes();
+    let new_bytes = new_value.as_bytes();
+
+    // Find where the insertion happened by comparing bytes
+    let mut insert_pos = 0;
+    while insert_pos < old_bytes.len().min(new_bytes.len())
+        && old_bytes[insert_pos] == new_bytes[insert_pos]
+    {
+        insert_pos += 1;
+    }
+
+    // The inserted character starts at insert_pos in new_bytes
+    if insert_pos >= new_bytes.len() {
+        return None;
+    }
+
+    // Decode the character at insert_pos
+    let remaining = &new_bytes[insert_pos..];
+    let inserted_char = std::str::from_utf8(remaining).ok()?.chars().next()?;
+
+    let closing_char = match inserted_char {
+        '"' => '"',
+        '\'' => '\'',
+        '`' => '`',
+        '(' => ')',
+        '[' => ']',
+        '{' => '}',
+        _ => return None,
+    };
+
+    // Check if the next character is already the closing character
+    // cursor is the byte offset after insertion
+    if cursor < new_value.len()
+        && let Some(next_char) = new_value[cursor..].chars().next()
+        && next_char == closing_char
+    {
+        return None;
+    }
+
+    Some(AutoPairResult {
+        closing_char,
+        cursor,
+    })
 }

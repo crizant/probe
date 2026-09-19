@@ -9,6 +9,7 @@ use gpui_base::{
     input::{EditorState, InputState},
 };
 
+use super::core::{detect_auto_pair, detect_indentation};
 use super::*;
 use crate::theme::Theme;
 
@@ -461,4 +462,203 @@ fn variable_highlight_shapes_multiline_value_without_panicking(cx: &mut TestAppC
             highlight_path_variables: false,
         },
     );
+}
+
+#[test]
+fn detect_indentation_prefers_tabs() {
+    assert_eq!(detect_indentation("\tindented"), "\t");
+}
+
+#[test]
+fn detect_indentation_prefers_four_spaces_over_two() {
+    assert_eq!(detect_indentation("    indented"), "    ");
+}
+
+#[test]
+fn detect_indentation_detects_two_spaces() {
+    assert_eq!(detect_indentation("  indented"), "  ");
+}
+
+#[test]
+fn detect_indentation_defaults_to_two_spaces() {
+    assert_eq!(detect_indentation("no indentation"), "  ");
+}
+
+#[test]
+fn detect_auto_pair_finds_opening_brace() {
+    let old = SharedString::from("test");
+    let new = SharedString::from("test{");
+    let selection = 5..5;
+    let result = detect_auto_pair(&old, &new, selection);
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().closing_char, '}');
+}
+
+#[test]
+fn detect_auto_pair_finds_opening_paren() {
+    let old = SharedString::from("func");
+    let new = SharedString::from("func(");
+    let selection = 5..5;
+    let result = detect_auto_pair(&old, &new, selection);
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().closing_char, ')');
+}
+
+#[test]
+fn detect_auto_pair_finds_opening_quote() {
+    let old = SharedString::from("name: ");
+    let new = SharedString::from("name: \"");
+    let selection = 7..7;
+    let result = detect_auto_pair(&old, &new, selection);
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().closing_char, '"');
+}
+
+#[test]
+fn detect_auto_pair_ignores_non_pairing_chars() {
+    let old = SharedString::from("test");
+    let new = SharedString::from("testa");
+    let selection = 5..5;
+    let result = detect_auto_pair(&old, &new, selection);
+    assert!(result.is_none());
+}
+
+#[test]
+fn detect_auto_pair_skips_when_closer_already_present() {
+    let old = SharedString::from("test}");
+    let new = SharedString::from("test{}");
+    // Cursor at 5 (after {), next char is }
+    let selection = 5..5;
+    let result = detect_auto_pair(&old, &new, selection);
+    // Should return None because next char is already the closing char
+    assert!(result.is_none());
+}
+
+#[test]
+fn detect_auto_pair_handles_unicode() {
+    let old = SharedString::from("测试");
+    let new = SharedString::from("测试{");
+    // UTF-8: 测=3 bytes, 试=3 bytes, {=1 byte = 7 bytes total
+    let selection = 7..7;
+    let result = detect_auto_pair(&old, &new, selection);
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().closing_char, '}');
+}
+
+#[test]
+fn detect_auto_pair_ignores_multi_char_insertion() {
+    let old = SharedString::from("test");
+    let new = SharedString::from("test{{}");
+    let selection = 6..6;
+    let result = detect_auto_pair(&old, &new, selection);
+    assert!(result.is_none());
+}
+
+#[test]
+fn detect_auto_pair_ignores_selection() {
+    let old = SharedString::from("test");
+    let new = SharedString::from("test{");
+    let selection = 4..5; // Has selection
+    let result = detect_auto_pair(&old, &new, selection);
+    assert!(result.is_none());
+}
+
+#[test]
+fn compute_indent_on_single_line_with_empty_caret() {
+    let value = "hello";
+    let selection = 2..2; // Caret at 'l'
+    let (new_text, _, _, new_selection) = super::core::compute_indent(value, selection);
+    assert_eq!(new_text, "  hello");
+    assert_eq!(new_selection, 4..4); // Caret moved by 2
+}
+
+#[test]
+fn compute_indent_on_multiline_selection() {
+    let value = "line1\nline2\nline3";
+    let selection = 3..10; // From "e1" to "e2"
+    let (new_text, line_start, line_end, new_selection) =
+        super::core::compute_indent(value, selection);
+    // Only returns affected lines (line1 and line2, not line3)
+    assert_eq!(new_text, "  line1\n  line2");
+    assert_eq!(line_start, 0);
+    assert_eq!(line_end, 11); // "line1\nline2".len()
+    // Selection expands by 2 spaces per line (2 lines affected)
+    assert_eq!(new_selection.start, 5); // 3 + 2
+    assert_eq!(new_selection.end, 14); // 10 + 2*2
+}
+
+#[test]
+fn compute_indent_on_partial_line_selection() {
+    let value = "abc\ndef\nghi";
+    let selection = 5..9; // From "ef" to "gh"
+    let (new_text, line_start, line_end, new_selection) =
+        super::core::compute_indent(value, selection);
+    // Should indent both lines that touch the selection
+    assert_eq!(new_text, "  def\n  ghi");
+    assert_eq!(line_start, 4);
+    assert_eq!(line_end, 11);
+    assert_eq!(new_selection.start, 7); // 5 + 2
+    assert_eq!(new_selection.end, 13); // 9 + 2*2
+}
+
+#[test]
+fn compute_outdent_on_single_line_with_empty_caret() {
+    let value = "  hello";
+    let selection = 4..4; // Caret at 'l'
+    let (new_text, _, _, new_selection) = super::core::compute_outdent(value, selection);
+    assert_eq!(new_text, "hello");
+    // Caret must stay collapsed and move back by 2
+    assert_eq!(new_selection, 2..2);
+}
+
+#[test]
+fn compute_outdent_on_multiline_with_partial_selection() {
+    let value = "  line1\n  line2\n  line3";
+    let selection = 5..14; // From "e1" to "e2"
+    let (new_text, line_start, line_end, new_selection) =
+        super::core::compute_outdent(value, selection);
+    // Only returns affected lines (line1 and line2, not line3)
+    assert_eq!(new_text, "line1\nline2");
+    assert_eq!(line_start, 0);
+    assert_eq!(line_end, 15); // "  line1\n  line2".len()
+    // Selection shrinks by removed indents
+    assert_eq!(new_selection.start, 3); // 5 - 2 (from line1)
+    assert_eq!(new_selection.end, 10); // 14 - 2 (line1) - 2 (line2)
+}
+
+#[test]
+fn compute_outdent_preserves_empty_caret() {
+    let value = "  hello";
+    let selection = 2..2; // Empty caret
+    let (new_text, _, _, new_selection) = super::core::compute_outdent(value, selection);
+    assert_eq!(new_text, "hello");
+    // Must keep start == end
+    assert_eq!(new_selection.start, new_selection.end);
+    assert_eq!(new_selection, 0..0);
+}
+
+#[test]
+fn compute_outdent_on_mixed_indentation() {
+    let value = "  line1\n    line2";
+    let selection = 3..12; // Spans both lines
+    let (new_text, line_start, line_end, new_selection) =
+        super::core::compute_outdent(value, selection);
+    // Second line has 4 spaces, but indent_str is "  " (2 spaces based on first line)
+    // So it removes 2 spaces from both lines
+    assert_eq!(new_text, "line1\n  line2");
+    assert_eq!(line_start, 0);
+    assert_eq!(line_end, value.len());
+    // Both lines lose 2 spaces each
+    assert_eq!(new_selection.start, 1); // 3 - 2
+    assert_eq!(new_selection.end, 8); // 12 - 2 (line1) - 2 (line2)
+}
+
+#[test]
+fn compute_outdent_on_lines_with_no_indentation() {
+    let value = "line1\nline2";
+    let selection = 2..8;
+    let (new_text, _, _, new_selection) = super::core::compute_outdent(value, selection);
+    assert_eq!(new_text, "line1\nline2");
+    // No change since there's no indentation
+    assert_eq!(new_selection, 2..8);
 }
