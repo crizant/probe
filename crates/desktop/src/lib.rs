@@ -13,6 +13,7 @@ mod filesystem;
 mod persistence;
 mod request_editor;
 mod response_inspector;
+mod response_string_copy;
 mod response_viewer;
 mod session;
 mod shell;

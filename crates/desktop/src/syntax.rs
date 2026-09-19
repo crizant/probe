@@ -67,7 +67,7 @@ impl HighlightStyleResolver for ProbeHighlightStyles {
     }
 }
 
-struct SyntectHighlighter {
+pub(crate) struct SyntectHighlighter {
     language: SharedString,
     highlights: Vec<(Range<usize>, &'static str)>,
     semantic_names: HashMap<Scope, Option<&'static str>>,
@@ -86,6 +86,19 @@ impl SyntectHighlighter {
             semantic_names: HashMap::new(),
             json_meta: HashMap::new(),
         })
+    }
+
+    /// Parse text and return highlights for use in context menu logic.
+    /// This is a convenience method for non-editor contexts that need token information.
+    pub(crate) fn parse_for_menu(text: &str, language: &str) -> Vec<(Range<usize>, &'static str)> {
+        if text.is_empty() || language.is_empty() || !within_highlight_budget(text.len()) {
+            return Vec::new();
+        }
+        let Some(mut highlighter) = Self::new(language) else {
+            return Vec::new();
+        };
+        highlighter.reparse(text);
+        highlighter.highlights
     }
 
     fn reparse(&mut self, text: &str) {
