@@ -1,9 +1,9 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    AppContext as _, Axis, ClipboardItem, Context, Entity, Image, IntoElement, KeyBinding,
-    Modifiers, MouseButton, Render, SharedString, TestAppContext, VisualTestContext, div, point,
-    prelude::*, px, size,
+    AppContext as _, Axis, ClipboardItem, Context, Entity, Focusable as _, Image, IntoElement,
+    KeyBinding, Modifiers, MouseButton, Render, SharedString, TestAppContext, VisualTestContext,
+    div, point, prelude::*, px, size,
 };
 use gpui_base::{
     Button, Popover,
@@ -14,6 +14,7 @@ use super::{
     DropdownButton, EditorInsets, ProbeEditor, VariableContext, clipboard_has_pasteable_text,
     dropdown, editor_value_needs_refresh, menu_button, pane_splitter,
 };
+use crate::app::{FocusNextControl, FocusPreviousControl, ShiftTabOrOutdent, TabOrIndent};
 use crate::theme::Theme;
 
 struct MenuTestView {
@@ -46,41 +47,59 @@ fn changing_editor_language_refreshes_unchanged_text() {
 
 struct EditableEditorHarness {
     value: SharedString,
+    readonly: bool,
+    soft_wrap: bool,
+    next: Entity<InputState>,
+    selection: Option<std::ops::Range<usize>>,
 }
 
 impl Render for EditableEditorHarness {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::light();
         let view = cx.weak_entity();
-        div().size_full().p(px(20.0)).child(
-            ProbeEditor {
-                theme,
-                id: "editable-editor-regression".into(),
-                value: self.value.clone(),
-                placeholder: "Body content".into(),
-                decorations: Vec::new(),
-                language: "json".into(),
-                readonly: false,
-                min_height: Some(120.0),
-                padding: EditorInsets::standard(theme),
-                soft_wrap: true,
-                text_color: theme.colors.text.primary,
-                scroll_to_range: None,
-                search_matches: Vec::new(),
-                on_change: Some(Rc::new(move |value, _, cx| {
-                    let _ = view.update(cx, |view, cx| {
-                        view.value = value;
-                        cx.notify();
-                    });
-                })),
-                on_mouse_down: None,
-                on_visible_range: None,
-                extra_context_menu_actions: Vec::new(),
-                debug_selector: Some("editable-editor-regression"),
-                variables: None,
-            }
-            .into_any_element(),
-        )
+        div()
+            .size_full()
+            .p(px(20.0))
+            .on_action(|_: &TabOrIndent, window, cx| window.focus_next(cx))
+            .on_action(|_: &ShiftTabOrOutdent, window, cx| window.focus_prev(cx))
+            .on_action(|_: &FocusNextControl, window, cx| window.focus_next(cx))
+            .on_action(|_: &FocusPreviousControl, window, cx| window.focus_prev(cx))
+            .flex()
+            .flex_col()
+            .child(
+                ProbeEditor {
+                    theme,
+                    id: "editable-editor-regression".into(),
+                    value: self.value.clone(),
+                    placeholder: "Body content".into(),
+                    decorations: Vec::new(),
+                    language: "json".into(),
+                    readonly: self.readonly,
+                    min_height: Some(120.0),
+                    padding: EditorInsets::standard(theme),
+                    soft_wrap: self.soft_wrap,
+                    text_color: theme.colors.text.primary,
+                    scroll_to_range: self.selection.clone(),
+                    search_matches: Vec::new(),
+                    on_change: Some(Rc::new(move |value, _, cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            view.value = value;
+                            cx.notify();
+                        });
+                    })),
+                    on_mouse_down: None,
+                    on_visible_range: None,
+                    extra_context_menu_actions: Vec::new(),
+                    debug_selector: Some("editable-editor-regression"),
+                    variables: None,
+                }
+                .into_any_element(),
+            )
+            .child(
+                gpui_base::InputBase::new("tab-next-control")
+                    .debug_selector(|| "tab-next-control".into())
+                    .child(gpui_base::Input::new(&self.next)),
+            )
     }
 }
 
@@ -90,8 +109,14 @@ fn editable_editor_preserves_caret_and_undo_history_across_controlled_renders(
 ) {
     cx.update(crate::theme::Theme::init);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("ctrl-z", Undo, None)]));
-    let window = cx.open_window(size(px(420.0), px(220.0)), |_, _| EditableEditorHarness {
-        value: SharedString::default(),
+    let window = cx.open_window(size(px(420.0), px(220.0)), |window, cx| {
+        EditableEditorHarness {
+            value: SharedString::default(),
+            readonly: false,
+            soft_wrap: true,
+            next: cx.new(|cx| InputState::new(window, cx)),
+            selection: None,
+        }
     });
     cx.run_until_parked();
 
@@ -120,6 +145,140 @@ fn editable_editor_preserves_caret_and_undo_history_across_controlled_renders(
             .read_with(cx, |view, _| view.value.clone())
             .expect("test window should remain open"),
         ""
+    );
+}
+
+#[gpui::test]
+fn editable_editor_dispatches_tab_actions_and_undo_atomically(cx: &mut TestAppContext) {
+    cx.update(crate::theme::Theme::init);
+    cx.update(|cx| {
+        cx.bind_keys([
+            KeyBinding::new("tab", TabOrIndent, None),
+            KeyBinding::new("shift-tab", ShiftTabOrOutdent, None),
+            KeyBinding::new("ctrl-tab", FocusNextControl, None),
+            KeyBinding::new("ctrl-shift-tab", FocusPreviousControl, None),
+            KeyBinding::new("ctrl-a", SelectAll, None),
+            KeyBinding::new("ctrl-z", Undo, None),
+        ])
+    });
+    let window = cx.open_window(size(px(420.0), px(220.0)), |window, cx| {
+        EditableEditorHarness {
+            value: "😀\n  beta".into(),
+            readonly: false,
+            soft_wrap: true,
+            next: cx.new(|cx| InputState::new(window, cx)),
+            selection: None,
+        }
+    });
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let bounds = visual
+        .debug_bounds("editable-editor-regression")
+        .expect("editable editor should render");
+    visual.simulate_click(bounds.center(), Modifiers::default());
+    visual.run_until_parked();
+    let editor_focus = window
+        .update(cx, |_, window, cx| window.focused(cx).unwrap())
+        .unwrap();
+
+    cx.simulate_keystrokes(window.into(), "ctrl-a tab");
+    cx.run_until_parked();
+    assert_eq!(
+        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+        "  😀\n    beta"
+    );
+
+    cx.simulate_keystrokes(window.into(), "ctrl-z");
+    cx.run_until_parked();
+    assert_eq!(
+        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+        "😀\n  beta"
+    );
+
+    cx.simulate_keystrokes(window.into(), "ctrl-a shift-tab");
+    cx.run_until_parked();
+    assert_eq!(
+        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+        "😀\nbeta"
+    );
+
+    window
+        .update(cx, |view, _, cx| {
+            view.value = "😀\n  beta".into();
+            view.selection = Some(view.value.len()..view.value.len());
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), "shift-tab ctrl-z");
+    cx.simulate_input(window.into(), "X");
+    cx.run_until_parked();
+    assert_eq!(
+        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+        "😀\n  betaX",
+        "undo should restore the collapsed caret after the outdent"
+    );
+
+    cx.simulate_keystrokes(window.into(), "ctrl-tab");
+    cx.run_until_parked();
+    assert_eq!(
+        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+        "😀\n  betaX",
+        "Ctrl-Tab navigation must not edit the body"
+    );
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.next.read(cx).focus_handle(cx).is_focused(window));
+        })
+        .unwrap();
+    cx.simulate_keystrokes(window.into(), "ctrl-shift-tab");
+    cx.run_until_parked();
+
+    let focused_after_ctrl_tab = window
+        .update(cx, |view, window, cx| {
+            view.soft_wrap = false;
+            cx.notify();
+            window.focused(cx)
+        })
+        .unwrap();
+    assert_eq!(focused_after_ctrl_tab, Some(editor_focus));
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes(window.into(), "ctrl-a tab");
+    cx.run_until_parked();
+    assert_eq!(
+        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+        "  😀\n    betaX",
+        "editable editors should indent even when soft wrapping is disabled"
+    );
+    cx.simulate_keystrokes(window.into(), "ctrl-z");
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.readonly = true;
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_click(bounds.center(), Modifiers::default());
+    visual.run_until_parked();
+    let readonly_focus = window
+        .update(cx, |_, window, cx| window.focused(cx))
+        .unwrap();
+    cx.simulate_keystrokes(window.into(), "tab");
+    cx.run_until_parked();
+    let next_focus = window
+        .update(cx, |_, window, cx| window.focused(cx))
+        .unwrap();
+    assert_ne!(next_focus, readonly_focus);
+    assert_eq!(
+        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+        "😀\n  betaX",
+        "readonly Tab should navigate without editing"
     );
 }
 

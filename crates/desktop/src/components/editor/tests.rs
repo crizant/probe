@@ -567,8 +567,11 @@ fn detect_auto_pair_ignores_selection() {
 fn compute_indent_on_single_line_with_empty_caret() {
     let value = "hello";
     let selection = 2..2; // Caret at 'l'
-    let (new_text, _, _, new_selection) = super::core::compute_indent(value, selection);
-    assert_eq!(new_text, "  hello");
+    let (new_text, replace_start, replace_end, new_selection) =
+        super::core::compute_indent(value, selection);
+    assert_eq!(new_text, "  ");
+    assert_eq!(replace_start, 2);
+    assert_eq!(replace_end, 2);
     assert_eq!(new_selection, 4..4); // Caret moved by 2
 }
 
@@ -604,11 +607,14 @@ fn compute_indent_on_partial_line_selection() {
 #[test]
 fn compute_outdent_on_single_line_with_empty_caret() {
     let value = "  hello";
-    let selection = 4..4; // Caret at 'l'
-    let (new_text, _, _, new_selection) = super::core::compute_outdent(value, selection);
+    let selection = 2..2; // Caret after "  " (only whitespace before)
+    let (new_text, replace_start, replace_end, new_selection) =
+        super::core::compute_outdent(value, selection);
+    // Hybrid: caret with only whitespace before → whole-line outdent
     assert_eq!(new_text, "hello");
-    // Caret must stay collapsed and move back by 2
-    assert_eq!(new_selection, 2..2);
+    assert_eq!(replace_start, 0);
+    assert_eq!(replace_end, 7);
+    assert_eq!(new_selection, 0..0); // Caret at start after outdent
 }
 
 #[test]
@@ -661,4 +667,33 @@ fn compute_outdent_on_lines_with_no_indentation() {
     assert_eq!(new_text, "line1\nline2");
     // No change since there's no indentation
     assert_eq!(new_selection, 2..8);
+}
+
+#[test]
+fn compute_indent_mid_line_inserts_at_caret() {
+    let (text, start, end, selection) = super::core::compute_indent("hello world", 6..6);
+    assert_eq!(text, "  ");
+    assert_eq!((start, end, selection), (6, 6, 8..8));
+}
+
+#[test]
+fn compute_indent_with_selection_indents_the_whole_line() {
+    let (text, start, end, selection) = super::core::compute_indent("hello world", 3..7);
+    assert_eq!(text, "  hello world");
+    assert_eq!((start, end, selection), (0, 11, 5..9));
+}
+
+#[test]
+fn compute_outdent_mid_line_preserves_inline_payload_whitespace() {
+    let (text, start, end, selection) = super::core::compute_outdent("  hello  world", 9..9);
+    assert_eq!(text, "hello  world");
+    assert_eq!((start, end, selection), (0, 14, 7..7));
+}
+
+#[test]
+fn compute_outdent_at_end_of_indented_line_removes_leading_indent() {
+    let value = "  hello";
+    let (text, start, end, selection) = super::core::compute_outdent(value, 7..7);
+    assert_eq!(text, "hello");
+    assert_eq!((start, end, selection), (0, value.len(), 5..5));
 }

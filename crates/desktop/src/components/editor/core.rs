@@ -1,4 +1,6 @@
 use super::*;
+use crate::app::{ShiftTabOrOutdent, TabOrIndent};
+use gpui::EntityInputHandler as _;
 
 struct EditorField {
     state: Entity<EditorState>,
@@ -297,7 +299,6 @@ impl RenderOnce for ProbeEditor {
             .when_some(self.debug_selector, |editor, selector| {
                 editor.debug_selector(move || selector.into())
             })
-            .key_context("ProbeEditor")
             .on_action({
                 let search_state = search_state.clone();
                 move |_: &Search, window, cx| {
@@ -328,37 +329,30 @@ impl RenderOnce for ProbeEditor {
                     }
                 }
             })
-            .on_action({
-                let field = field.clone();
-                let state = state.clone();
-                move |_: &crate::app::IndentLine, window, cx| {
-                    let readonly = field.read(cx).readonly;
-                    if readonly {
-                        // In readonly mode, Tab should navigate focus
-                        window.focus_next(cx);
-                        return;
-                    }
-
-                    state.update(cx, |editor, cx| {
-                        apply_indent(editor, window, cx);
-                    });
-                }
-            })
-            .on_action({
-                let field = field.clone();
-                let state = state.clone();
-                move |_: &crate::app::OutdentLine, window, cx| {
-                    let readonly = field.read(cx).readonly;
-                    if readonly {
-                        // In readonly mode, Shift+Tab should navigate focus backwards
-                        window.focus_prev(cx);
-                        return;
-                    }
-
-                    state.update(cx, |editor, cx| {
-                        apply_outdent(editor, window, cx);
-                    });
-                }
+            .when(!self.readonly, |editor| {
+                editor
+                    .on_action({
+                        let state = state.clone();
+                        move |_: &TabOrIndent, window, cx| {
+                            if state.read(cx).focus_handle(cx).is_focused(window) {
+                                state.update(cx, |editor, cx| apply_indent(editor, window, cx));
+                                cx.stop_propagation();
+                            } else {
+                                cx.propagate();
+                            }
+                        }
+                    })
+                    .on_action({
+                        let state = state.clone();
+                        move |_: &ShiftTabOrOutdent, window, cx| {
+                            if state.read(cx).focus_handle(cx).is_focused(window) {
+                                state.update(cx, |editor, cx| apply_outdent(editor, window, cx));
+                                cx.stop_propagation();
+                            } else {
+                                cx.propagate();
+                            }
+                        }
+                    })
             })
             .on_mouse_down(MouseButton::Left, {
                 let state = state.clone();
@@ -370,7 +364,7 @@ impl RenderOnce for ProbeEditor {
                     state.update(cx, |editor, cx| editor.focus(window, cx));
                 }
             })
-            .child(div().size_full().child(Editor::new(&state)));
+            .child(Editor::new(&state));
         let editor = response_search_highlight_overlay(
             self.theme,
             state.clone(),
@@ -418,6 +412,10 @@ impl RenderOnce for ProbeEditor {
     }
 }
 
+fn byte_range_to_utf16(value: &str, range: Range<usize>) -> Range<usize> {
+    value[..range.start].encode_utf16().count()..value[..range.end].encode_utf16().count()
+}
+
 /// Apply indent to the current selection or line using undo-preserving edit.
 pub(super) fn apply_indent(
     editor: &mut EditorState,
@@ -425,29 +423,40 @@ pub(super) fn apply_indent(
     cx: &mut Context<EditorState>,
 ) {
     let value = editor.value();
-    let selection = editor.selected_range();
-
-    let (new_text, line_start, line_end, new_selection) = compute_indent(&value, selection);
-
-    // Apply the edit: select the range and replace it
-    editor.set_selected_range(line_start..line_end, cx);
-    editor.replace(new_text, window, cx);
-    // Restore selection
+    let original_selection = editor.selected_range();
+    let (new_text, replace_start, replace_end, new_selection) =
+        compute_indent(&value, original_selection.clone());
+    if replace_start == replace_end && replace_start == original_selection.start {
+        editor.insert(new_text, window, cx);
+    } else {
+        let range_utf16 = byte_range_to_utf16(&value, replace_start..replace_end);
+        editor.replace_text_in_range(Some(range_utf16), &new_text, window, cx);
+    }
     editor.set_selected_range(new_selection, cx);
 }
 
 /// Pure function: compute indented text and new selection.
-/// Returns (new_text, line_start, line_end, new_selection).
+/// Returns `(new_text, replace_start, replace_end, new_selection)`.
 pub(super) fn compute_indent(
     value: &str,
     selection: Range<usize>,
 ) -> (String, usize, usize, Range<usize>) {
     let indent_str = detect_indentation(value);
-
-    // Expand to cover full lines
+    let has_selection = selection.start != selection.end;
     let line_start = value[..selection.start]
         .rfind('\n')
         .map_or(0, |pos| pos + 1);
+
+    if !has_selection && !value[line_start..selection.start].trim().is_empty() {
+        let new_position = selection.start + indent_str.len();
+        return (
+            indent_str,
+            selection.start,
+            selection.start,
+            new_position..new_position,
+        );
+    }
+
     let line_end = if selection.end == selection.start {
         value[selection.end..]
             .find('\n')
@@ -496,28 +505,26 @@ pub(super) fn apply_outdent(
 ) {
     let value = editor.value();
     let selection = editor.selected_range();
-
-    let (new_text, line_start, line_end, new_selection) = compute_outdent(&value, selection);
-
-    // Apply the edit: select the range and replace it
-    editor.set_selected_range(line_start..line_end, cx);
-    editor.replace(new_text, window, cx);
-    // Restore selection
-    editor.set_selected_range(new_selection, cx);
+    let (new_text, replace_start, replace_end, new_selection) = compute_outdent(&value, selection);
+    if new_text != value[replace_start..replace_end] {
+        let range_utf16 = byte_range_to_utf16(&value, replace_start..replace_end);
+        editor.replace_text_in_range(Some(range_utf16), &new_text, window, cx);
+        editor.set_selected_range(new_selection, cx);
+    }
 }
 
 /// Pure function: compute outdented text and new selection.
-/// Returns (new_text, line_start, line_end, new_selection).
+/// Returns `(new_text, replace_start, replace_end, new_selection)`.
 pub(super) fn compute_outdent(
     value: &str,
     selection: Range<usize>,
 ) -> (String, usize, usize, Range<usize>) {
     let indent_str = detect_indentation(value);
-
-    // Expand to cover full lines
+    // Expand to cover full lines.
     let line_start = value[..selection.start]
         .rfind('\n')
         .map_or(0, |pos| pos + 1);
+
     let line_end = if selection.end == selection.start {
         value[selection.end..]
             .find('\n')
