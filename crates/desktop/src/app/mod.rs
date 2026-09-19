@@ -180,7 +180,9 @@ gpui::actions!(
         CancelCreateEnvironmentDialog,
         CancelEnvironmentManagerDialog,
         DeleteSelectedEnvironment,
-        CancelApplicationDialog
+        CancelApplicationDialog,
+        IndentLine,
+        OutdentLine
     ]
 );
 
@@ -798,6 +800,10 @@ fn bind_platform_hotkeys(cx: &mut App) {
             Some("EnvironmentManagerDialog"),
         ),
         KeyBinding::new("escape", CancelApplicationDialog, Some("ApplicationDialog")),
+        KeyBinding::new("tab", IndentLine, Some("ProbeEditor")),
+        KeyBinding::new("shift-tab", OutdentLine, Some("ProbeEditor")),
+        KeyBinding::new("ctrl-tab", FocusNextControl, Some("ProbeEditor")),
+        KeyBinding::new("ctrl-shift-tab", FocusPreviousControl, Some("ProbeEditor")),
     ]);
 
     #[cfg(target_os = "macos")]

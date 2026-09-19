@@ -32,16 +32,27 @@ impl EditorField {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(event, InputEvent::Change)
-            && let Some(on_change) = this.on_change.clone()
-        {
+        if matches!(event, InputEvent::Change) {
             let value = input.read(cx).value();
-            // Remember edits made by this EditorState before propagating them to
-            // application state. The resulting render is an acknowledgement of
-            // the local edit, not an external value replacement; calling
-            // EditorState::set_value for it would reset the caret and undo stack.
-            this.last_value = value.clone();
-            on_change(value, window, cx);
+            let selection = input.read(cx).selected_range();
+
+            // Check for auto-pairing
+            if let Some((new_value, new_selection)) =
+                check_and_apply_auto_pair(&this.last_value, &value, selection)
+            {
+                input.update(cx, |editor, cx| {
+                    editor.set_value(new_value.clone(), window, cx);
+                    editor.set_selected_range(new_selection, cx);
+                });
+                this.last_value = new_value;
+            } else {
+                this.last_value = value.clone();
+            }
+
+            if let Some(on_change) = this.on_change.clone() {
+                let current_value = input.read(cx).value();
+                on_change(current_value, window, cx);
+            }
         }
     }
 }
@@ -289,6 +300,36 @@ impl RenderOnce for ProbeEditor {
                         });
                         state.update(cx, |editor, cx| editor.focus(window, cx));
                         window.refresh();
+                    } else {
+                        window.focus_next(cx);
+                    }
+                }
+            })
+            .on_action({
+                let state = state.clone();
+                move |_: &crate::app::IndentLine, window, cx| {
+                    let value = state.read(cx).value();
+                    let selection = state.read(cx).selected_range();
+
+                    if let Some((new_value, new_selection)) = apply_indent(&value, selection) {
+                        state.update(cx, |editor, cx| {
+                            editor.set_value(new_value, window, cx);
+                            editor.set_selected_range(new_selection, cx);
+                        });
+                    }
+                }
+            })
+            .on_action({
+                let state = state.clone();
+                move |_: &crate::app::OutdentLine, window, cx| {
+                    let value = state.read(cx).value();
+                    let selection = state.read(cx).selected_range();
+
+                    if let Some((new_value, new_selection)) = apply_outdent(&value, selection) {
+                        state.update(cx, |editor, cx| {
+                            editor.set_value(new_value, window, cx);
+                            editor.set_selected_range(new_selection, cx);
+                        });
                     }
                 }
             })
@@ -348,4 +389,176 @@ impl RenderOnce for ProbeEditor {
             cx,
         )
     }
+}
+
+/// Indent the current selection or line by adding indentation at the start of each line.
+/// Returns the new value and selection if changes were made.
+fn apply_indent(
+    value: &SharedString,
+    selection: Range<usize>,
+) -> Option<(SharedString, Range<usize>)> {
+    let indent_str = detect_indentation(value);
+
+    let start = selection.start;
+    let end = selection.end;
+
+    let line_start = value[..start].rfind('\n').map_or(0, |pos| pos + 1);
+    let line_end = if end == start {
+        value[end..].find('\n').map_or(value.len(), |pos| end + pos)
+    } else {
+        end
+    };
+
+    let affected_text = &value[line_start..line_end];
+    let lines: Vec<&str> = affected_text.split('\n').collect();
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut new_text = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+        new_text.push_str(&indent_str);
+        new_text.push_str(line);
+    }
+
+    let new_value = format!("{}{}{}", &value[..line_start], new_text, &value[line_end..]);
+    let indent_len = indent_str.len();
+    let new_start = start + indent_len;
+    let new_end = end + indent_len * lines.len();
+
+    Some((new_value.into(), new_start..new_end))
+}
+
+/// Outdent the current selection or line by removing indentation from the start of each line.
+/// Returns the new value and selection if changes were made.
+fn apply_outdent(
+    value: &SharedString,
+    selection: Range<usize>,
+) -> Option<(SharedString, Range<usize>)> {
+    let indent_str = detect_indentation(value);
+
+    let start = selection.start;
+    let end = selection.end;
+
+    let line_start = value[..start].rfind('\n').map_or(0, |pos| pos + 1);
+    let line_end = if end == start {
+        value[end..].find('\n').map_or(value.len(), |pos| end + pos)
+    } else {
+        end
+    };
+
+    let affected_text = &value[line_start..line_end];
+    let lines: Vec<&str> = affected_text.split('\n').collect();
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut new_text = String::new();
+    let mut removed_chars = 0;
+    let mut removed_before_start = 0;
+
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+
+        let line_offset = line_start + new_text.len() + if i > 0 { 1 } else { 0 };
+        let trimmed = if line.starts_with(&indent_str) {
+            let removed = indent_str.len();
+            removed_chars += removed;
+            if line_offset < start {
+                removed_before_start += removed;
+            }
+            &line[removed..]
+        } else if let Some(stripped) = line.strip_prefix('\t') {
+            removed_chars += 1;
+            if line_offset < start {
+                removed_before_start += 1;
+            }
+            stripped
+        } else if let Some(stripped) = line.strip_prefix("    ") {
+            removed_chars += 4;
+            if line_offset < start {
+                removed_before_start += 4;
+            }
+            stripped
+        } else if let Some(stripped) = line.strip_prefix("  ") {
+            removed_chars += 2;
+            if line_offset < start {
+                removed_before_start += 2;
+            }
+            stripped
+        } else {
+            line
+        };
+        new_text.push_str(trimmed);
+    }
+
+    let new_value = format!("{}{}{}", &value[..line_start], new_text, &value[line_end..]);
+    let new_start = start.saturating_sub(removed_before_start);
+    let new_end = end.saturating_sub(removed_chars);
+
+    Some((new_value.into(), new_start..new_end))
+}
+
+/// Detect the indentation style used in the document.
+fn detect_indentation(text: &str) -> String {
+    for line in text.lines() {
+        if line.starts_with('\t') {
+            return "\t".to_string();
+        }
+        if line.starts_with("    ") {
+            return "    ".to_string();
+        }
+        if line.starts_with("  ") {
+            return "  ".to_string();
+        }
+    }
+    "  ".to_string()
+}
+
+/// Check if auto-pairing should be applied and return the new value and selection if so.
+fn check_and_apply_auto_pair(
+    old_value: &SharedString,
+    new_value: &SharedString,
+    selection: Range<usize>,
+) -> Option<(SharedString, Range<usize>)> {
+    if old_value.len() + 1 != new_value.len() || selection.start != selection.end {
+        return None;
+    }
+
+    let cursor = selection.start;
+    if cursor == 0 {
+        return None;
+    }
+
+    let inserted_char = new_value.chars().nth(cursor - 1)?;
+
+    let closing_char = match inserted_char {
+        '"' => '"',
+        '\'' => '\'',
+        '`' => '`',
+        '(' => ')',
+        '[' => ']',
+        '{' => '}',
+        _ => return None,
+    };
+
+    let next_char = new_value.chars().nth(cursor);
+
+    if next_char == Some(closing_char) {
+        return None;
+    }
+
+    let mut result = String::with_capacity(new_value.len() + 1);
+    result.push_str(&new_value[..cursor]);
+    result.push(closing_char);
+    result.push_str(&new_value[cursor..]);
+
+    Some((result.into(), cursor..cursor))
 }
