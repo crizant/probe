@@ -576,7 +576,8 @@ fn compute_indent_on_single_line_with_empty_caret() {
 fn compute_indent_on_multiline_selection() {
     let value = "line1\nline2\nline3";
     let selection = 3..10; // From "e1" to "e2"
-    let (new_text, line_start, line_end, new_selection) = super::core::compute_indent(value, selection);
+    let (new_text, line_start, line_end, new_selection) =
+        super::core::compute_indent(value, selection);
     // Only returns affected lines (line1 and line2, not line3)
     assert_eq!(new_text, "  line1\n  line2");
     assert_eq!(line_start, 0);
@@ -590,7 +591,8 @@ fn compute_indent_on_multiline_selection() {
 fn compute_indent_on_partial_line_selection() {
     let value = "abc\ndef\nghi";
     let selection = 5..9; // From "ef" to "gh"
-    let (new_text, line_start, line_end, new_selection) = super::core::compute_indent(value, selection);
+    let (new_text, line_start, line_end, new_selection) =
+        super::core::compute_indent(value, selection);
     // Should indent both lines that touch the selection
     assert_eq!(new_text, "  def\n  ghi");
     assert_eq!(line_start, 4);
@@ -613,7 +615,8 @@ fn compute_outdent_on_single_line_with_empty_caret() {
 fn compute_outdent_on_multiline_with_partial_selection() {
     let value = "  line1\n  line2\n  line3";
     let selection = 5..14; // From "e1" to "e2"
-    let (new_text, line_start, line_end, new_selection) = super::core::compute_outdent(value, selection);
+    let (new_text, line_start, line_end, new_selection) =
+        super::core::compute_outdent(value, selection);
     // Only returns affected lines (line1 and line2, not line3)
     assert_eq!(new_text, "line1\nline2");
     assert_eq!(line_start, 0);
@@ -638,7 +641,8 @@ fn compute_outdent_preserves_empty_caret() {
 fn compute_outdent_on_mixed_indentation() {
     let value = "  line1\n    line2";
     let selection = 3..12; // Spans both lines
-    let (new_text, line_start, line_end, new_selection) = super::core::compute_outdent(value, selection);
+    let (new_text, line_start, line_end, new_selection) =
+        super::core::compute_outdent(value, selection);
     // Second line has 4 spaces, but indent_str is "  " (2 spaces based on first line)
     // So it removes 2 spaces from both lines
     assert_eq!(new_text, "line1\n  line2");
