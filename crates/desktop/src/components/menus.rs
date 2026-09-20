@@ -128,6 +128,7 @@ pub(crate) fn app_menu_trigger(
 fn menu_row_button(
     theme: Theme,
     id: impl Into<ElementId>,
+    enabled: bool,
     selected: bool,
     style: MenuButtonStyle,
     content: impl IntoElement,
@@ -146,7 +147,9 @@ fn menu_row_button(
         .text_size(px(theme.typography.body_size))
         .text_color(style.text_color)
         .cursor_pointer()
-        .hover(move |button| button.bg(theme.colors.surfaces.sidebar))
+        .when(enabled, |button| {
+            button.hover(move |button| button.bg(theme.colors.surfaces.sidebar))
+        })
         .focus_visible(move |button| button.border_1().border_color(theme.colors.borders.focused))
         .styles(move |styles| {
             styles.selected(move |button| button.bg(theme.colors.surfaces.sidebar))
@@ -173,6 +176,7 @@ pub(crate) fn submenu_menu_button(
             menu_row_button(
                 theme,
                 id,
+                true,
                 open,
                 MenuButtonStyle::standard(theme),
                 div()
@@ -207,6 +211,7 @@ pub(crate) fn import_submenu_menu_button(
     menu_row_button(
         theme,
         id,
+        true,
         open,
         MenuButtonStyle::standard(theme),
         div()
@@ -297,6 +302,7 @@ pub(crate) fn checked_menu_button(
             menu_row_button(
                 theme,
                 id,
+                true,
                 false,
                 MenuButtonStyle::standard(theme),
                 div()
@@ -421,6 +427,7 @@ pub(super) fn menu_button_with_style(
             menu_row_button(
                 theme,
                 id,
+                enabled,
                 false,
                 style,
                 div()
@@ -447,7 +454,7 @@ pub(super) fn menu_button_with_style(
             .styles(move |styles| {
                 styles.disabled(move |button| {
                     button
-                        .text_color(theme.colors.actions.disabled)
+                        .text_color(theme.colors.actions.disabled_foreground)
                         .cursor_default()
                 })
             })
