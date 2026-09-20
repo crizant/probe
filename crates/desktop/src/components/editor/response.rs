@@ -1,6 +1,14 @@
 use super::*;
 use crate::components::controls::TextContextMenuLabel;
 use gpui::ClipboardItem;
+use std::cell::RefCell;
+
+type ResponseValueCache = RefCell<
+    Option<(
+        usize,
+        Option<Rc<crate::response_string_copy::ValueAtCursor>>,
+    )>,
+>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BodySyntax {
@@ -75,41 +83,43 @@ pub(crate) fn response_body_input(
         on_click: options.on_inspect,
     }];
 
-    // Add "Copy string" action for JSON responses only
-    if options.language == "json" {
-        use crate::response_string_copy::StringAtCursor;
-
+    // Add scalar-value copying for structured response views.
+    if matches!(options.language.as_ref(), "json" | "xml") {
         let shared_text = text.clone();
         let shared_language = options.language.clone();
+        let value_cache = Rc::new(RefCell::new(None));
 
         actions.push(TextContextMenuExtraAction {
-            id: "copy-string",
+            id: "copy-value",
             label: TextContextMenuLabel::Dynamic({
                 let text = shared_text.clone();
                 let language = shared_language.clone();
+                let cache = value_cache.clone();
                 Rc::new(move |_selected, offset| {
-                    let highlights = parse_highlights(&text, &language);
-                    StringAtCursor::extract(&text, &highlights, offset)
-                        .map(|s| s.label)
-                        .unwrap_or_else(|| "Copy string".to_owned())
+                    cached_value_at_cursor(&cache, &text, &language, offset)
+                        .map(|value| value.label.clone())
+                        .unwrap_or_else(|| "Copy value".to_owned())
                 })
             }),
             requires_selection: false,
             is_enabled: {
                 let text = shared_text.clone();
                 let language = shared_language.clone();
+                let cache = value_cache.clone();
                 Rc::new(move |_selected, offset| {
-                    let highlights = parse_highlights(&text, &language);
-                    StringAtCursor::extract(&text, &highlights, offset).is_some()
+                    cached_value_at_cursor(&cache, &text, &language, offset).is_some()
                 })
             },
             on_click: {
                 let text = shared_text;
                 let language = shared_language;
+                let cache = value_cache;
                 Rc::new(move |_selected, offset, _window, cx| {
-                    let highlights = parse_highlights(&text, &language);
-                    if let Some(extracted) = StringAtCursor::extract(&text, &highlights, offset) {
-                        cx.write_to_clipboard(ClipboardItem::new_string(extracted.unescaped));
+                    if let Some(extracted) =
+                        cached_value_at_cursor(&cache, &text, &language, offset)
+                        && let Some(value) = extracted.clipboard_value(&text)
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(value));
                     }
                 })
             },
@@ -134,10 +144,21 @@ pub(crate) fn response_body_input(
     )
 }
 
-/// Parse syntax highlights for the given text and language.
-/// Returns highlight ranges with their semantic roles.
-fn parse_highlights(text: &str, language: &str) -> Vec<(Range<usize>, &'static str)> {
-    crate::syntax::SyntectHighlighter::parse_for_menu(text, language)
+fn cached_value_at_cursor(
+    cache: &ResponseValueCache,
+    text: &str,
+    language: &str,
+    offset: usize,
+) -> Option<Rc<crate::response_string_copy::ValueAtCursor>> {
+    if let Some((cached_offset, value)) = cache.borrow().as_ref()
+        && *cached_offset == offset
+    {
+        return value.clone();
+    }
+    let value =
+        crate::response_string_copy::ValueAtCursor::extract(text, language, offset).map(Rc::new);
+    *cache.borrow_mut() = Some((offset, value.clone()));
+    value
 }
 
 pub(crate) fn response_headers_input(

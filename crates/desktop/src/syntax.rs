@@ -88,19 +88,6 @@ impl SyntectHighlighter {
         })
     }
 
-    /// Parse text and return highlights for use in context menu logic.
-    /// This is a convenience method for non-editor contexts that need token information.
-    pub(crate) fn parse_for_menu(text: &str, language: &str) -> Vec<(Range<usize>, &'static str)> {
-        if text.is_empty() || language.is_empty() || !within_highlight_budget(text.len()) {
-            return Vec::new();
-        }
-        let Some(mut highlighter) = Self::new(language) else {
-            return Vec::new();
-        };
-        highlighter.reparse(text);
-        highlighter.highlights
-    }
-
     fn reparse(&mut self, text: &str) {
         let syntax = find_syntax(self.language.as_ref())
             .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
