@@ -1,5 +1,6 @@
 use super::*;
 
+mod auto_edit;
 mod core;
 mod response;
 mod search;

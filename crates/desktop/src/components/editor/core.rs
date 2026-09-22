@@ -1,3 +1,4 @@
+use super::auto_edit::{apply_auto_edit, apply_editor_auto_edit, detect_auto_edit};
 use super::*;
 use crate::app::{ShiftTabOrOutdent, TabOrIndent};
 use gpui::EntityInputHandler as _;
@@ -39,25 +40,26 @@ impl EditorField {
             let value = input.read(cx).value();
             let selection = input.read(cx).selected_range();
 
-            // Auto-pairing: check if we should insert a closing character
+            // Inserting or deleting below emits another Change. Once last_value
+            // is the final text, that follow-up compares equal and returns
+            // without pairing, overtyping, deleting the other side of an empty
+            // pair, or calling on_change again.
+            if value == this.last_value {
+                return;
+            }
+
             if !this.readonly
-                && let Some(pair_result) = detect_auto_pair(&this.last_value, &value, selection)
+                && let Some(edit) = detect_auto_edit(&this.last_value, &value, selection)
             {
+                let (final_text, _) = apply_auto_edit(&value, &edit);
+                this.last_value = SharedString::from(final_text);
                 input.update(cx, |editor, cx| {
-                    // Save current selection
-                    let saved_selection = editor.selected_range();
-                    // Set selection to insertion point
-                    editor.set_selected_range(pair_result.cursor..pair_result.cursor, cx);
-                    // Insert the closing character
-                    editor.insert(pair_result.closing_char.to_string(), window, cx);
-                    // Restore cursor position (between the pair)
-                    editor.set_selected_range(saved_selection, cx);
+                    apply_editor_auto_edit(editor, &edit, window, cx);
                 });
-                // Update last_value to the new text with the pair
-                this.last_value = input.read(cx).value();
+                let current_value = input.read(cx).value();
+                this.last_value = current_value.clone();
 
                 if let Some(on_change) = this.on_change.clone() {
-                    let current_value = input.read(cx).value();
                     on_change(current_value, window, cx);
                 }
                 return;
@@ -620,73 +622,4 @@ pub(super) fn detect_indentation(text: &str) -> String {
         }
     }
     "  ".to_string()
-}
-
-pub(super) struct AutoPairResult {
-    pub(super) closing_char: char,
-    pub(super) cursor: usize,
-}
-
-/// Detect if auto-pairing should be applied.
-/// Returns Some with the closing character and cursor position if pairing should happen.
-pub(super) fn detect_auto_pair(
-    old_value: &SharedString,
-    new_value: &SharedString,
-    selection: Range<usize>,
-) -> Option<AutoPairResult> {
-    // Only auto-pair on single character insertion with empty selection
-    if old_value.len() + 1 != new_value.len() || selection.start != selection.end {
-        return None;
-    }
-
-    let cursor = selection.start;
-    if cursor == 0 {
-        return None;
-    }
-
-    // Get the inserted character by finding the difference
-    // We need to be careful with UTF-8 byte offsets
-    let old_bytes = old_value.as_bytes();
-    let new_bytes = new_value.as_bytes();
-
-    // Find where the insertion happened by comparing bytes
-    let mut insert_pos = 0;
-    while insert_pos < old_bytes.len().min(new_bytes.len())
-        && old_bytes[insert_pos] == new_bytes[insert_pos]
-    {
-        insert_pos += 1;
-    }
-
-    // The inserted character starts at insert_pos in new_bytes
-    if insert_pos >= new_bytes.len() {
-        return None;
-    }
-
-    // Decode the character at insert_pos
-    let remaining = &new_bytes[insert_pos..];
-    let inserted_char = std::str::from_utf8(remaining).ok()?.chars().next()?;
-
-    let closing_char = match inserted_char {
-        '"' => '"',
-        '\'' => '\'',
-        '`' => '`',
-        '(' => ')',
-        '[' => ']',
-        '{' => '}',
-        _ => return None,
-    };
-
-    // Check if the next character is already the closing character
-    // cursor is the byte offset after insertion
-    if cursor < new_value.len()
-        && let Some(next_char) = new_value[cursor..].chars().next()
-        && next_char == closing_char
-    {
-        return None;
-    }
-
-    Some(AutoPairResult {
-        closing_char,
-        cursor,
-    })
 }

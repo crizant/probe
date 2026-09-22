@@ -9,7 +9,8 @@ use gpui_base::{
     input::{EditorState, InputState},
 };
 
-use super::core::{detect_auto_pair, detect_indentation};
+use super::auto_edit::{apply_auto_edit, detect_auto_edit};
+use super::core::detect_indentation;
 use super::*;
 use crate::theme::Theme;
 
@@ -484,83 +485,158 @@ fn detect_indentation_defaults_to_two_spaces() {
     assert_eq!(detect_indentation("no indentation"), "  ");
 }
 
+fn outcome(old: &str, new: &str, caret: usize) -> (String, usize) {
+    match detect_auto_edit(old, new, caret..caret) {
+        Some(edit) => apply_auto_edit(new, &edit),
+        None => (new.to_string(), caret),
+    }
+}
+
+fn assert_outcome(old: &str, new: &str, caret: usize, expect: &str, expect_caret: usize) {
+    assert_eq!(outcome(old, new, caret), (expect.to_string(), expect_caret));
+}
+
 #[test]
-fn detect_auto_pair_finds_opening_brace() {
+fn auto_edit_pairs_opening_brace_paren_and_bracket() {
+    assert_outcome("test", "test{", 5, "test{}", 5);
+    assert_outcome("func", "func(", 5, "func()", 5);
+    assert_outcome("list", "list[", 5, "list[]", 5);
+}
+
+#[test]
+fn auto_edit_pairs_quote_at_end_of_line() {
+    assert_outcome("name: ", "name: \"", 7, "name: \"\"", 7);
+    assert_outcome("it", "it'", 3, "it''", 3);
+    assert_outcome("it", "it`", 3, "it``", 3);
+}
+
+#[test]
+fn auto_edit_pairs_quote_before_whitespace() {
+    assert_outcome("a b", "a\" b", 2, "a\"\" b", 2);
+    assert_outcome("a\tb", "a\"\tb", 2, "a\"\"\tb", 2);
+    assert_outcome("a\nb", "a\"\nb", 2, "a\"\"\nb", 2);
+}
+
+#[test]
+fn auto_edit_does_not_pair_quote_before_comma() {
+    assert_outcome("value,", "value\",", 6, "value\",", 6);
+}
+
+#[test]
+fn auto_edit_closing_quote_does_not_insert_another() {
+    assert_outcome("\"hello", "\"hello\"", 7, "\"hello\"", 7);
+}
+
+#[test]
+fn auto_edit_overtypes_quote_inside_empty_pair() {
+    // "|" + " -> ""|
+    assert_outcome("\"\"", "\"\"\"", 2, "\"\"", 2);
+}
+
+#[test]
+fn auto_edit_escaped_quote_does_not_pair_or_overtype() {
+    assert_outcome("\\", "\\\"", 2, "\\\"", 2);
+    // "a\|" + " leaves the escaped quote in place
+    assert_outcome("\"a\\\"", "\"a\\\"\"", 4, "\"a\\\"\"", 4);
+}
+
+#[test]
+fn auto_edit_pairs_unescaped_quote_after_even_backslashes() {
+    // \\" at end of line
+    assert_outcome("\\\\", "\\\\\"", 3, "\\\\\"\"", 3);
+}
+
+#[test]
+fn auto_edit_quote_parity_is_per_line() {
+    // A quote on the previous line does not make this line a closer.
+    assert_outcome("\"\n", "\"\n\"", 3, "\"\n\"\"", 3);
+    // The opener on this line still closes, despite the previous line.
+    assert_outcome("\"\n\"hello", "\"\n\"hello\"", 9, "\"\n\"hello\"", 9);
+}
+
+#[test]
+fn auto_edit_pairs_brace_before_other_text() {
+    assert_outcome("host", "{host", 1, "{}host", 1);
+}
+
+#[test]
+fn auto_edit_does_not_pair_brace_when_closer_is_next() {
+    assert_outcome("}", "{}", 1, "{}", 1);
+    assert_outcome("test}", "test{}", 5, "test{}", 5);
+}
+
+#[test]
+fn auto_edit_overtypes_brace_closer_in_template() {
+    // {{host|}} + } -> {{host}|}
+    let (text, caret) = outcome("{{host}}", "{{host}}}", 7);
+    assert_eq!(text, "{{host}}");
+    assert_eq!(caret, 7);
+    assert_eq!(&text[..caret], "{{host}");
+    assert_eq!(&text[caret..], "}");
+}
+
+#[test]
+fn auto_edit_overtypes_paren_and_bracket_closers() {
+    assert_outcome("()", "())", 2, "()", 2);
+    assert_outcome("[]", "[]]", 2, "[]", 2);
+}
+
+#[test]
+fn auto_edit_leaves_typed_closer_when_next_differs() {
+    assert_outcome("", ")", 1, ")", 1);
+    assert_outcome("x", "x)", 2, "x)", 2);
+}
+
+#[test]
+fn auto_edit_backspace_deletes_empty_pairs() {
+    assert_outcome("\"\"", "\"", 0, "", 0);
+    assert_outcome("''", "'", 0, "", 0);
+    assert_outcome("``", "`", 0, "", 0);
+    assert_outcome("()", ")", 0, "", 0);
+    assert_outcome("{}", "}", 0, "", 0);
+    assert_outcome("[]", "]", 0, "", 0);
+}
+
+#[test]
+fn auto_edit_backspace_of_inner_empty_braces_leaves_outer_pair() {
+    // {{|}} backspace -> {|}
+    assert_outcome("{{}}", "{}}", 1, "{}", 1);
+}
+
+#[test]
+fn auto_edit_backspace_inside_non_empty_quotes_keeps_closer() {
+    // "a|" backspace -> "|"
+    assert_outcome("\"a\"", "\"\"", 1, "\"\"", 1);
+}
+
+#[test]
+fn auto_edit_forward_delete_of_closer_leaves_opener() {
+    // (|) forward-delete of )
+    assert_outcome("()", "(", 1, "(", 1);
+}
+
+#[test]
+fn auto_edit_ignores_non_pairing_chars() {
+    assert_outcome("test", "testa", 5, "testa", 5);
+}
+
+#[test]
+fn auto_edit_handles_unicode_around_brace() {
+    // UTF-8: 测=3 bytes, 试=3 bytes, {=1 byte
+    assert_outcome("测试", "测试{", 7, "测试{}", 7);
+}
+
+#[test]
+fn auto_edit_ignores_multi_char_edits() {
+    assert_outcome("test", "test{{}", 6, "test{{}", 6);
+    assert_outcome("()", "", 0, "", 0);
+}
+
+#[test]
+fn auto_edit_ignores_non_empty_selection() {
     let old = SharedString::from("test");
     let new = SharedString::from("test{");
-    let selection = 5..5;
-    let result = detect_auto_pair(&old, &new, selection);
-    assert!(result.is_some());
-    assert_eq!(result.unwrap().closing_char, '}');
-}
-
-#[test]
-fn detect_auto_pair_finds_opening_paren() {
-    let old = SharedString::from("func");
-    let new = SharedString::from("func(");
-    let selection = 5..5;
-    let result = detect_auto_pair(&old, &new, selection);
-    assert!(result.is_some());
-    assert_eq!(result.unwrap().closing_char, ')');
-}
-
-#[test]
-fn detect_auto_pair_finds_opening_quote() {
-    let old = SharedString::from("name: ");
-    let new = SharedString::from("name: \"");
-    let selection = 7..7;
-    let result = detect_auto_pair(&old, &new, selection);
-    assert!(result.is_some());
-    assert_eq!(result.unwrap().closing_char, '"');
-}
-
-#[test]
-fn detect_auto_pair_ignores_non_pairing_chars() {
-    let old = SharedString::from("test");
-    let new = SharedString::from("testa");
-    let selection = 5..5;
-    let result = detect_auto_pair(&old, &new, selection);
-    assert!(result.is_none());
-}
-
-#[test]
-fn detect_auto_pair_skips_when_closer_already_present() {
-    let old = SharedString::from("test}");
-    let new = SharedString::from("test{}");
-    // Cursor at 5 (after {), next char is }
-    let selection = 5..5;
-    let result = detect_auto_pair(&old, &new, selection);
-    // Should return None because next char is already the closing char
-    assert!(result.is_none());
-}
-
-#[test]
-fn detect_auto_pair_handles_unicode() {
-    let old = SharedString::from("测试");
-    let new = SharedString::from("测试{");
-    // UTF-8: 测=3 bytes, 试=3 bytes, {=1 byte = 7 bytes total
-    let selection = 7..7;
-    let result = detect_auto_pair(&old, &new, selection);
-    assert!(result.is_some());
-    assert_eq!(result.unwrap().closing_char, '}');
-}
-
-#[test]
-fn detect_auto_pair_ignores_multi_char_insertion() {
-    let old = SharedString::from("test");
-    let new = SharedString::from("test{{}");
-    let selection = 6..6;
-    let result = detect_auto_pair(&old, &new, selection);
-    assert!(result.is_none());
-}
-
-#[test]
-fn detect_auto_pair_ignores_selection() {
-    let old = SharedString::from("test");
-    let new = SharedString::from("test{");
-    let selection = 4..5; // Has selection
-    let result = detect_auto_pair(&old, &new, selection);
-    assert!(result.is_none());
+    assert!(detect_auto_edit(&old, &new, 4..5).is_none());
 }
 
 #[test]
