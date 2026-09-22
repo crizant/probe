@@ -1,4 +1,6 @@
 use super::*;
+use gpui::UnderlineStyle;
+use probe_core::VariableStatus;
 
 #[allow(clippy::too_many_arguments)]
 pub(in crate::components) fn variable_input_overlay(
@@ -29,6 +31,7 @@ pub(in crate::components) fn variable_input_overlay(
             theme.typography.monospace_family,
             theme.typography.body_size,
             highlight_path_variables,
+            variables.clone(),
         ));
     let tooltip_ranges = variable_ranges(&value);
     if tooltip_ranges.is_empty() {
@@ -161,14 +164,14 @@ pub(super) fn variable_editor_overlay(
         if editor.visible_row_range().is_none() {
             window.request_animation_frame();
         }
-        for (index, (range, name)) in ranges.into_iter().enumerate() {
-            let Some(bounds) = editor.range_to_bounds(&range) else {
+        for (index, reference) in ranges.iter().enumerate() {
+            let Some(bounds) = editor.range_to_bounds(&reference.range) else {
                 continue;
             };
             hits = hits.child(variable_hover_hit(
                 ("body-variable-hover", index),
                 index,
-                name,
+                reference.name(&value).to_owned(),
                 hover.clone(),
                 bounds.origin.x - origin.x,
                 bounds.origin.y - origin.y,
@@ -288,7 +291,7 @@ fn with_variable_tooltip(
 pub(in crate::components) fn variable_span_layout(
     window: &mut Window,
     value: &str,
-    ranges: &[(Range<usize>, String)],
+    ranges: &[VariableReference],
     font_family: &'static str,
     font_size: f32,
     current_scroll_x: Pixels,
@@ -317,10 +320,14 @@ pub(in crate::components) fn variable_span_layout(
     });
     ranges
         .iter()
-        .map(|(range, name)| {
-            let start = line.x_for_index(range.start) + scroll_x;
-            let end = line.x_for_index(range.end) + scroll_x;
-            (name.clone(), start, (end - start).max(px(1.0)))
+        .map(|reference| {
+            let start = line.x_for_index(reference.range.start) + scroll_x;
+            let end = line.x_for_index(reference.range.end) + scroll_x;
+            (
+                reference.name(value).to_owned(),
+                start,
+                (end - start).max(px(1.0)),
+            )
         })
         .collect()
 }
@@ -332,8 +339,8 @@ fn variable_highlight_layer(
     font_family: &'static str,
     text_size: f32,
     highlight_path_variables: bool,
+    variables: VariableContext,
 ) -> impl IntoElement {
-    let highlight_color = theme.colors.syntax.string.into();
     let base_color = if ranges_empty {
         transparent_black()
     } else {
@@ -361,16 +368,18 @@ fn variable_highlight_layer(
         .child(VariableHighlightElement {
             state,
             base_color,
-            highlight_color,
+            palette: variable_highlight_palette(theme),
             highlight_path_variables,
+            variables,
         })
 }
 
 pub(in crate::components) struct VariableHighlightElement {
     pub(in crate::components) state: Entity<InputState>,
     pub(in crate::components) base_color: Hsla,
-    pub(in crate::components) highlight_color: Hsla,
+    pub(in crate::components) palette: VariableHighlightPalette,
     pub(in crate::components) highlight_path_variables: bool,
+    pub(in crate::components) variables: VariableContext,
 }
 
 pub(in crate::components) struct VariableHighlightPrepaintState {
@@ -423,10 +432,7 @@ impl Element for VariableHighlightElement {
     ) -> Self::PrepaintState {
         let state = self.state.clone();
         let value = single_line(state.read(cx).value());
-        let ranges = input_variable_ranges(&value, self.highlight_path_variables)
-            .into_iter()
-            .map(|(range, _)| range)
-            .collect::<Vec<_>>();
+        let references = input_variable_ranges(&value, self.highlight_path_variables);
         let cursor = state.read(cx).cursor();
         let style = window.text_style();
         let run = TextRun {
@@ -437,7 +443,11 @@ impl Element for VariableHighlightElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = variable_highlight_runs(&value, &ranges, &run, self.highlight_color);
+        let variables = &self.variables;
+        let runs =
+            variable_highlight_runs(&value, &references, &run, self.palette, |kind, name| {
+                reference_status(variables, kind, name)
+            });
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window
             .text_system()
@@ -502,35 +512,44 @@ impl Element for VariableHighlightElement {
 /// when the caret would otherwise sit past the visible width.
 pub(in crate::components) fn variable_highlight_runs(
     value: &str,
-    ranges: &[Range<usize>],
+    references: &[VariableReference],
     base: &TextRun,
-    highlight_color: Hsla,
+    palette: VariableHighlightPalette,
+    mut status_for: impl FnMut(ReferenceKind, &str) -> VariableStatus,
 ) -> Vec<TextRun> {
     let mut runs = Vec::new();
     let mut ix = 0;
-    for range in ranges {
-        let start = range.start.min(value.len());
-        let end = range.end.min(value.len());
+    for reference in references {
+        // URL highlights can nest, as in `{{a:b}}` plus `:b`. The earlier span
+        // keeps the overlap; a fully covered span is not painted.
+        let start = reference.range.start.min(value.len()).max(ix);
+        let end = reference.range.end.min(value.len());
         if ix < start {
             runs.push(TextRun {
                 len: start - ix,
                 color: base.color,
+                underline: base.underline,
                 ..base.clone()
             });
         }
-        if end > start {
-            runs.push(TextRun {
-                len: end - start,
-                color: highlight_color,
-                ..base.clone()
-            });
+        if start >= end {
+            continue;
         }
-        ix = ix.max(end);
+        let (color, underline) =
+            placeholder_paint(status_for(reference.kind, reference.name(value)), palette);
+        runs.push(TextRun {
+            len: end - start,
+            color,
+            underline,
+            ..base.clone()
+        });
+        ix = end;
     }
     if ix < value.len() {
         runs.push(TextRun {
             len: value.len() - ix,
             color: base.color,
+            underline: base.underline,
             ..base.clone()
         });
     }
@@ -585,26 +604,31 @@ pub(in crate::components) fn variable_tooltip_presentation(
     name: &str,
     variables: &VariableContext,
 ) -> VariableTooltipPresentation {
-    if variables.secrets.contains(name) {
-        return unavailable_variable_tooltip(&variables.unavailable_message);
-    }
-    if let Some(value) = variables.values.get(name) {
-        return VariableTooltipPresentation {
-            value: value.clone(),
+    match variables.status(name) {
+        VariableStatus::Resolved => VariableTooltipPresentation {
+            value: variables
+                .values
+                .get(name)
+                .cloned()
+                .unwrap_or_else(String::new),
             placeholder: "Variable value",
             editable: variables.on_change.is_some(),
             hint: None,
-        };
-    }
-    if variables.on_change.is_some() {
-        return VariableTooltipPresentation {
+        },
+        VariableStatus::SecretWithoutValue => VariableTooltipPresentation {
+            value: variables.unavailable_message.clone(),
+            placeholder: "Variable value",
+            editable: false,
+            hint: Some("Secret has no value in this environment"),
+        },
+        VariableStatus::Missing if variables.on_change.is_some() => VariableTooltipPresentation {
             value: String::new(),
             placeholder: "Enter a value to create",
             editable: true,
             hint: Some("Not defined in this environment"),
-        };
+        },
+        VariableStatus::Missing => unavailable_variable_tooltip(&variables.unavailable_message),
     }
-    unavailable_variable_tooltip(&variables.unavailable_message)
 }
 
 fn unavailable_variable_tooltip(message: &str) -> VariableTooltipPresentation {
@@ -623,7 +647,70 @@ pub(in crate::components) struct VariableTooltipPresentation {
     pub(in crate::components) hint: Option<&'static str>,
 }
 
-pub(in crate::components) fn variable_ranges(value: &str) -> Vec<(Range<usize>, String)> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::components) enum ReferenceKind {
+    Environment,
+    Path,
+}
+
+/// A placeholder whose highlight range and lookup name are spans of the scanned value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::components) struct VariableReference {
+    pub(in crate::components) range: Range<usize>,
+    /// Trimmed `{{ name }}` lookup, or the path-parameter name after `:`.
+    pub(in crate::components) name: Range<usize>,
+    pub(in crate::components) kind: ReferenceKind,
+}
+
+impl VariableReference {
+    pub(in crate::components) fn name<'a>(&self, value: &'a str) -> &'a str {
+        &value[self.name.clone()]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::components) struct VariableHighlightPalette {
+    pub(in crate::components) resolved: Hsla,
+    pub(in crate::components) unresolved: Hsla,
+}
+
+pub(in crate::components) fn variable_highlight_palette(theme: Theme) -> VariableHighlightPalette {
+    VariableHighlightPalette {
+        resolved: theme.colors.syntax.string.into(),
+        unresolved: theme.colors.status.error.into(),
+    }
+}
+
+pub(in crate::components) fn reference_status(
+    variables: &VariableContext,
+    kind: ReferenceKind,
+    name: &str,
+) -> VariableStatus {
+    match kind {
+        ReferenceKind::Environment => variables.status(name),
+        ReferenceKind::Path => variables.path_status(name),
+    }
+}
+
+pub(in crate::components) fn placeholder_paint(
+    status: VariableStatus,
+    palette: VariableHighlightPalette,
+) -> (Hsla, Option<UnderlineStyle>) {
+    if status.is_resolved() {
+        (palette.resolved, None)
+    } else {
+        (
+            palette.unresolved,
+            Some(UnderlineStyle {
+                thickness: px(1.0),
+                color: Some(palette.unresolved),
+                wavy: false,
+            }),
+        )
+    }
+}
+
+pub(in crate::components) fn variable_ranges(value: &str) -> Vec<VariableReference> {
     let mut ranges = Vec::new();
     let mut offset = 0;
     let mut remaining = value;
@@ -632,11 +719,17 @@ pub(in crate::components) fn variable_ranges(value: &str) -> Vec<(Range<usize>, 
         let Some(end) = after_start.find("}}") else {
             break;
         };
-        let name = after_start[..end].trim();
+        let raw_name = &after_start[..end];
+        let name = raw_name.trim();
         if !name.is_empty() && !name.contains("{{") {
             let range_start = offset + start;
-            let range_end = range_start + 2 + end + 2;
-            ranges.push((range_start..range_end, name.to_owned()));
+            let leading = raw_name.len() - raw_name.trim_start().len();
+            let name_start = range_start + 2 + leading;
+            ranges.push(VariableReference {
+                range: range_start..range_start + 2 + end + 2,
+                name: name_start..name_start + name.len(),
+                kind: ReferenceKind::Environment,
+            });
         }
         let consumed = start + 2 + end + 2;
         offset += consumed;
@@ -648,11 +741,19 @@ pub(in crate::components) fn variable_ranges(value: &str) -> Vec<(Range<usize>, 
 pub(in crate::components) fn input_variable_ranges(
     value: &str,
     highlight_path_variables: bool,
-) -> Vec<(Range<usize>, String)> {
+) -> Vec<VariableReference> {
     let mut ranges = variable_ranges(value);
     if highlight_path_variables {
-        ranges.extend(path_variable_ranges(value));
-        ranges.sort_by_key(|(range, _)| range.start);
+        ranges.extend(
+            path_variable_spans(value)
+                .into_iter()
+                .map(|span| VariableReference {
+                    range: span.range,
+                    name: span.name,
+                    kind: ReferenceKind::Path,
+                }),
+        );
+        ranges.sort_by_key(|reference| reference.range.start);
     }
     ranges
 }

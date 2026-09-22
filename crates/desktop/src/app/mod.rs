@@ -324,6 +324,11 @@ pub(crate) struct ProbeApp {
     pretty_reveal: Cell<Option<PrettyRevealState>>,
     tab_bar_scroll: ScrollHandle,
     pending_tab_reveal: bool,
+    frame_variable_context: Option<components::VariableContext>,
+    #[cfg(test)]
+    variable_context_frames: Cell<usize>,
+    #[cfg(test)]
+    environment_resolution_count: Cell<usize>,
     #[cfg(test)]
     rendered_sidebar_rows: usize,
     #[cfg(test)]
@@ -434,6 +439,11 @@ impl ProbeApp {
             pretty_reveal: Cell::new(None),
             tab_bar_scroll: ScrollHandle::new(),
             pending_tab_reveal: false,
+            frame_variable_context: None,
+            #[cfg(test)]
+            variable_context_frames: Cell::new(0),
+            #[cfg(test)]
+            environment_resolution_count: Cell::new(0),
             #[cfg(test)]
             rendered_sidebar_rows: 0,
             #[cfg(test)]

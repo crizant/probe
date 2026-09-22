@@ -482,13 +482,26 @@ fn push_merged_highlight_bounds(bounds: &mut Vec<Bounds<Pixels>>, next: Bounds<P
 }
 
 pub(in crate::components) fn body_text_highlights(
-    theme: Theme,
-    variables: &[(Range<usize>, String)],
+    value: &str,
+    references: &[super::variables::VariableReference],
+    palette: super::variables::VariableHighlightPalette,
+    mut status_for: impl FnMut(super::variables::ReferenceKind, &str) -> probe_core::VariableStatus,
 ) -> Vec<TextDecoration> {
-    variables
+    references
         .iter()
-        .map(|(range, _)| {
-            text_decoration(range.clone(), Some(theme.colors.syntax.string.into()), None)
+        .map(|reference| {
+            let (color, underline) = super::variables::placeholder_paint(
+                status_for(reference.kind, reference.name(value)),
+                palette,
+            );
+            TextDecoration::new(
+                reference.range.clone(),
+                HighlightStyle {
+                    color: Some(color),
+                    underline,
+                    ..Default::default()
+                },
+            )
         })
         .collect()
 }

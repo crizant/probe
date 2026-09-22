@@ -352,9 +352,43 @@ type ManageEnvironmentsHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub(crate) struct VariableContext {
     pub(crate) values: BTreeMap<String, String>,
     pub(crate) secrets: BTreeSet<String>,
+    /// Enabled path-parameter names with a non-empty value.
+    ///
+    /// `None` means this field does not highlight path placeholders, so every
+    /// `:name` is missing if a caller asks.
+    pub(crate) path_values: Option<BTreeSet<String>>,
     pub(crate) unavailable_message: String,
     pub(crate) on_change: Option<VariableChangeHandler>,
     pub(crate) on_manage_environments: Option<ManageEnvironmentsHandler>,
+}
+
+impl VariableContext {
+    pub(crate) fn status(&self, name: &str) -> probe_core::VariableStatus {
+        probe_core::variable_status(&self.values, &self.secrets, name)
+    }
+
+    pub(crate) fn path_status(&self, name: &str) -> probe_core::VariableStatus {
+        if self
+            .path_values
+            .as_ref()
+            .is_some_and(|names| names.contains(name))
+        {
+            probe_core::VariableStatus::Resolved
+        } else {
+            probe_core::VariableStatus::Missing
+        }
+    }
+
+    pub(crate) fn with_path_values(mut self, parameters: &[probe_core::QueryParameter]) -> Self {
+        self.path_values = Some(
+            parameters
+                .iter()
+                .filter(|parameter| !parameter.disabled && !parameter.value.is_empty())
+                .map(|parameter| parameter.name.clone())
+                .collect(),
+        );
+        self
+    }
 }
 
 impl std::fmt::Debug for VariableContext {
@@ -363,6 +397,7 @@ impl std::fmt::Debug for VariableContext {
             .debug_struct("VariableContext")
             .field("values", &self.values)
             .field("secrets", &self.secrets)
+            .field("path_values", &self.path_values)
             .field("unavailable_message", &self.unavailable_message)
             .finish_non_exhaustive()
     }

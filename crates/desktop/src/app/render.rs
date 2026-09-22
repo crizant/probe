@@ -166,8 +166,12 @@ impl Render for ProbeApp {
         if self.toasts.stack_state.is_expanded() != self.toast_paused {
             self.schedule_toast_lifecycle(cx);
         }
+        #[cfg(test)]
+        self.variable_context_frames
+            .set(self.variable_context_frames.get() + 1);
+        self.frame_variable_context = Some(self.resolve_variable_context(cx));
 
-        div()
+        let root = div()
             .size_full()
             .relative()
             .track_focus(&self.focus_handle)
@@ -453,6 +457,10 @@ impl Render for ProbeApp {
             .child(self.render_request_tab_tooltip(theme))
             .child(self.render_tab_context_menu(theme, window, cx))
             .child(self.render_tree_context_menu(theme, window, cx))
-            .child(self.render_toasts(theme, cx))
+            .child(self.render_toasts(theme, cx));
+        // The element tree has cloned the context it needs. Drop the memo so a
+        // later call, including one after the selection changes, resolves fresh.
+        self.frame_variable_context = None;
+        root
     }
 }

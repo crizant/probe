@@ -276,7 +276,8 @@ impl ProbeApp {
                                         ("request-url", key.slot()),
                                         url.clone(),
                                         "https://api.example.com/users/:userId",
-                                        self.variable_context(cx),
+                                        self.variable_context(cx)
+                                            .with_path_values(&request.path_parameters),
                                         move |value, _, input_cx| {
                                             let _ = url_view.update(input_cx, |view, cx| {
                                                 view.edit_request(

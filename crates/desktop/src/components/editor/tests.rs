@@ -13,6 +13,7 @@ use super::auto_edit::{apply_auto_edit, detect_auto_edit};
 use super::core::detect_indentation;
 use super::*;
 use crate::theme::Theme;
+use probe_core::VariableStatus;
 
 #[test]
 fn editor_paint_style_uses_visible_caret_and_selection() {
@@ -44,10 +45,11 @@ fn variable_ranges_find_mustache_placeholders() {
     let value = "{{host}}/users/{{id}}";
     let ranges = variable_ranges(value);
     assert_eq!(ranges.len(), 2);
-    assert_eq!(&value[ranges[0].0.clone()], "{{host}}");
-    assert_eq!(ranges[0].1, "host");
-    assert_eq!(&value[ranges[1].0.clone()], "{{id}}");
-    assert_eq!(ranges[1].1, "id");
+    assert_eq!(&value[ranges[0].range.clone()], "{{host}}");
+    assert_eq!(ranges[0].name(value), "host");
+    assert_eq!(ranges[0].kind, ReferenceKind::Environment);
+    assert_eq!(&value[ranges[1].range.clone()], "{{id}}");
+    assert_eq!(ranges[1].name(value), "id");
 }
 
 #[test]
@@ -55,20 +57,21 @@ fn variable_ranges_trim_names_and_find_placeholders_in_json() {
     let value = "{\n  \"tenant\": \"{{ tenant }}\"\n}";
     let ranges = variable_ranges(value);
     assert_eq!(ranges.len(), 1);
-    assert_eq!(&value[ranges[0].0.clone()], "{{ tenant }}");
-    assert_eq!(ranges[0].1, "tenant");
+    assert_eq!(&value[ranges[0].range.clone()], "{{ tenant }}");
+    assert_eq!(ranges[0].name(value), "tenant");
 }
 
 #[test]
 fn variable_tooltip_presentation_creates_missing_writable_variables() {
     let mut values = BTreeMap::new();
     values.insert("host".to_owned(), "api.example".to_owned());
+    values.insert("empty".to_owned(), String::new());
     let variables = VariableContext {
         values,
         secrets: ["token".to_owned()].into_iter().collect(),
         unavailable_message: "unavailable".to_owned(),
         on_change: Some(std::rc::Rc::new(|_, _, _, _| {})),
-        on_manage_environments: None,
+        ..VariableContext::default()
     };
     let existing = variable_tooltip_presentation("host", &variables);
     assert_eq!(existing.value, "api.example");
@@ -81,10 +84,15 @@ fn variable_tooltip_presentation_creates_missing_writable_variables() {
     assert!(missing.editable);
     assert_eq!(missing.hint, Some("Not defined in this environment"));
 
+    let empty = variable_tooltip_presentation("empty", &variables);
+    assert_eq!(empty.value, "");
+    assert!(empty.editable);
+    assert!(empty.hint.is_none());
+
     let secret = variable_tooltip_presentation("token", &variables);
     assert_eq!(secret.value, "unavailable");
     assert!(!secret.editable);
-    assert!(secret.hint.is_none());
+    assert_eq!(secret.hint, Some("Secret has no value in this environment"));
 }
 
 #[test]
@@ -153,22 +161,46 @@ fn variable_span_layout_keeps_duplicate_names_and_follows_scroll(cx: &mut TestAp
 
 #[test]
 fn body_text_highlights_overlay_mustache_variables() {
-    let theme = Theme::light();
     let value = "{\"host\":\"{{host}}\"}";
     let ranges = variable_ranges(value);
-    let highlights = body_text_highlights(theme, &ranges);
+    let palette = stand_in_palette();
+    let highlights = body_text_highlights(value, &ranges, palette, |_, _| VariableStatus::Resolved);
     assert_eq!(highlights.len(), 1);
     assert_eq!(&value[highlights[0].range.clone()], "{{host}}");
+    assert_eq!(highlights[0].style.color, Some(palette.resolved));
+    assert!(highlights[0].style.underline.is_none());
+}
+
+#[test]
+fn body_text_highlights_underline_unresolved_mustache_spans() {
+    let value = "{\"host\":\"{{host}}\",\"missing\":\"{{missing}}\"}";
+    let ranges = variable_ranges(value);
+    let palette = stand_in_palette();
+    let highlights = body_text_highlights(value, &ranges, palette, |_, name| {
+        if name == "host" {
+            VariableStatus::Resolved
+        } else {
+            VariableStatus::Missing
+        }
+    });
+    assert_eq!(highlights.len(), 2);
+    assert_eq!(highlights[0].style.color, Some(palette.resolved));
+    assert!(highlights[0].style.underline.is_none());
+    assert_eq!(&value[highlights[1].range.clone()], "{{missing}}");
+    assert_eq!(highlights[1].style.color, Some(palette.unresolved));
+    let underline = highlights[1]
+        .style
+        .underline
+        .expect("unresolved placeholders keep a non-color cue");
+    assert_eq!(underline.thickness, px(1.0));
+    assert_eq!(underline.color, Some(palette.unresolved));
 }
 
 #[test]
 fn variable_highlight_runs_color_only_mustache_spans() {
     let value = "{{host}}/users";
-    let ranges = variable_ranges(value)
-        .into_iter()
-        .map(|(range, _)| range)
-        .collect::<Vec<_>>();
-    let highlight = hsla(0.33, 0.6, 0.5, 1.0);
+    let ranges = variable_ranges(value);
+    let palette = stand_in_palette();
     let base = gpui::TextRun {
         len: value.len(),
         font: gpui::Font::default(),
@@ -177,23 +209,143 @@ fn variable_highlight_runs_color_only_mustache_spans() {
         underline: None,
         strikethrough: None,
     };
-    let runs = variable_highlight_runs(value, &ranges, &base, highlight);
+    let runs = variable_highlight_runs(value, &ranges, &base, palette, |_, _| {
+        VariableStatus::Resolved
+    });
     assert_eq!(runs.len(), 2);
-    assert_eq!(runs[0].color, highlight);
+    assert_eq!(runs[0].color, palette.resolved);
+    assert!(runs[0].underline.is_none());
     assert_eq!(runs[0].len, "{{host}}".len());
     assert_eq!(runs[1].color, transparent_black());
     assert_eq!(runs[1].len, "/users".len());
 }
 
 #[test]
+fn variable_highlight_runs_underline_unresolved_mustache_spans() {
+    let value = "{{host}}/{{missing}}";
+    let ranges = variable_ranges(value);
+    let palette = stand_in_palette();
+    let base = gpui::TextRun {
+        len: value.len(),
+        font: gpui::Font::default(),
+        color: hsla(0.0, 0.0, 0.2, 1.0),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let runs = variable_highlight_runs(value, &ranges, &base, palette, |_, name| {
+        if name == "host" {
+            VariableStatus::Resolved
+        } else {
+            VariableStatus::SecretWithoutValue
+        }
+    });
+    assert_eq!(runs.len(), 3);
+    assert_eq!(runs[0].color, palette.resolved);
+    assert!(runs[0].underline.is_none());
+    assert_eq!(runs[1].color, base.color);
+    assert!(runs[1].underline.is_none());
+    assert_eq!(runs[2].color, palette.unresolved);
+    assert_eq!(runs[2].len, "{{missing}}".len());
+    let underline = runs[2]
+        .underline
+        .expect("unresolved placeholders keep a non-color cue");
+    assert_eq!(underline.thickness, px(1.0));
+    assert_eq!(underline.color, Some(palette.unresolved));
+}
+
+#[test]
+fn variable_highlight_runs_clamp_overlapping_url_placeholders() {
+    let value = "{{a:b}}";
+    let ranges = input_variable_ranges(value, true);
+    let palette = stand_in_palette();
+    let base = gpui::TextRun {
+        len: value.len(),
+        font: gpui::Font::default(),
+        color: transparent_black(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let mut classified = Vec::new();
+    let runs = variable_highlight_runs(value, &ranges, &base, palette, |kind, name| {
+        classified.push((kind, name.to_owned()));
+        VariableStatus::Resolved
+    });
+    assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), value.len());
+    assert_eq!(
+        classified,
+        vec![(ReferenceKind::Environment, "a:b".to_owned())]
+    );
+}
+
+#[test]
+fn path_placeholders_are_classified_apart_from_matching_environment_names() {
+    let value = "https://{{host}}/users/:host";
+    let references = input_variable_ranges(value, true);
+    assert_eq!(references.len(), 2);
+    assert_eq!(references[0].kind, ReferenceKind::Environment);
+    assert_eq!(references[0].name(value), "host");
+    assert_eq!(&value[references[0].range.clone()], "{{host}}");
+    assert_eq!(references[1].kind, ReferenceKind::Path);
+    assert_eq!(references[1].name(value), "host");
+    assert_eq!(&value[references[1].range.clone()], ":host");
+
+    let environment_only = VariableContext {
+        values: BTreeMap::from([("host".to_owned(), "api.example".to_owned())]),
+        ..VariableContext::default()
+    };
+    assert_eq!(
+        reference_status(&environment_only, ReferenceKind::Environment, "host"),
+        VariableStatus::Resolved
+    );
+    assert_eq!(
+        reference_status(&environment_only, ReferenceKind::Path, "host"),
+        VariableStatus::Missing
+    );
+
+    let path_only = VariableContext::default().with_path_values(&[probe_core::QueryParameter {
+        name: "host".to_owned(),
+        value: "42".to_owned(),
+        disabled: false,
+    }]);
+    assert_eq!(
+        reference_status(&path_only, ReferenceKind::Environment, "host"),
+        VariableStatus::Missing
+    );
+    assert_eq!(
+        reference_status(&path_only, ReferenceKind::Path, "host"),
+        VariableStatus::Resolved
+    );
+
+    let blank_or_disabled = VariableContext::default().with_path_values(&[
+        probe_core::QueryParameter {
+            name: "blank".to_owned(),
+            value: String::new(),
+            disabled: false,
+        },
+        probe_core::QueryParameter {
+            name: "off".to_owned(),
+            value: "kept".to_owned(),
+            disabled: true,
+        },
+    ]);
+    assert_eq!(
+        reference_status(&blank_or_disabled, ReferenceKind::Path, "blank"),
+        VariableStatus::Missing
+    );
+    assert_eq!(
+        reference_status(&blank_or_disabled, ReferenceKind::Path, "off"),
+        VariableStatus::Missing
+    );
+}
+
+#[test]
 fn variable_highlight_runs_paint_non_variable_text_with_the_base_color() {
     let value = "https://{{host}}/users";
-    let ranges = variable_ranges(value)
-        .into_iter()
-        .map(|(range, _)| range)
-        .collect::<Vec<_>>();
+    let ranges = variable_ranges(value);
     let base_color = hsla(0.0, 0.0, 0.25, 1.0);
-    let highlight = hsla(0.33, 0.6, 0.5, 1.0);
+    let palette = stand_in_palette();
     let base = gpui::TextRun {
         len: value.len(),
         font: gpui::Font::default(),
@@ -203,12 +355,22 @@ fn variable_highlight_runs_paint_non_variable_text_with_the_base_color() {
         strikethrough: None,
     };
 
-    let runs = variable_highlight_runs(value, &ranges, &base, highlight);
+    let runs = variable_highlight_runs(value, &ranges, &base, palette, |_, _| {
+        VariableStatus::Resolved
+    });
 
     assert_eq!(runs.len(), 3);
     assert_eq!(runs[0].color, base_color);
-    assert_eq!(runs[1].color, highlight);
+    assert_eq!(runs[1].color, palette.resolved);
+    assert!(runs[1].underline.is_none());
     assert_eq!(runs[2].color, base_color);
+}
+
+fn stand_in_palette() -> VariableHighlightPalette {
+    VariableHighlightPalette {
+        resolved: hsla(0.33, 0.6, 0.5, 1.0),
+        unresolved: hsla(0.02, 0.75, 0.46, 1.0),
+    }
 }
 
 #[test]
@@ -382,8 +544,9 @@ fn variable_highlight_scrolls_with_caret_at_end_of_long_url(cx: &mut TestAppCont
         VariableHighlightElement {
             state: input.clone(),
             base_color: transparent_black(),
-            highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+            palette: stand_in_palette(),
             highlight_path_variables: false,
+            variables: VariableContext::default(),
         }
     });
 
@@ -426,8 +589,9 @@ fn variable_highlight_stays_at_origin_when_caret_is_at_start(cx: &mut TestAppCon
         |_, _| VariableHighlightElement {
             state: input,
             base_color: transparent_black(),
-            highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+            palette: stand_in_palette(),
             highlight_path_variables: false,
+            variables: VariableContext::default(),
         },
     );
 
@@ -459,8 +623,9 @@ fn variable_highlight_shapes_multiline_value_without_panicking(cx: &mut TestAppC
         |_, _| VariableHighlightElement {
             state: input,
             base_color: transparent_black(),
-            highlight_color: hsla(0.33, 0.6, 0.5, 1.0),
+            palette: stand_in_palette(),
             highlight_path_variables: false,
+            variables: VariableContext::default(),
         },
     );
 }

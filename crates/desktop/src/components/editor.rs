@@ -30,13 +30,14 @@ pub(super) use search::{
 };
 pub(crate) use variables::single_line;
 use variables::variable_editor_overlay;
-#[cfg(not(test))]
-use variables::variable_ranges;
 #[cfg(test)]
 pub(super) use variables::{
-    VariableHighlightElement, input_text_scroll_offset, variable_highlight_runs, variable_ranges,
+    ReferenceKind, VariableHighlightElement, VariableHighlightPalette, input_text_scroll_offset,
+    reference_status, variable_highlight_palette, variable_highlight_runs, variable_ranges,
     variable_span_layout, variable_tooltip_presentation,
 };
 pub(super) use variables::{
     VariableTooltipPresentation, input_variable_ranges, variable_input_overlay,
 };
+#[cfg(not(test))]
+use variables::{reference_status, variable_highlight_palette, variable_ranges};

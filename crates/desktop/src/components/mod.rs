@@ -32,7 +32,7 @@ use gpui_base::{
         InputState, Paste, Search, SelectAll, TextDecoration, TextDecorationCollection,
     },
 };
-use probe_core::path_variable_ranges;
+use probe_core::path_variable_spans;
 
 mod buttons;
 mod controls;

@@ -1819,3 +1819,167 @@ fn json_body_variables_show_resolved_tooltips(cx: &mut TestAppContext) {
     }
     fs::remove_file(fixture).unwrap();
 }
+
+#[gpui::test]
+fn variable_context_resolves_once_per_frame_for_many_headers(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_environment_fixture("variable-resolution")
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let request_key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(request_key, cx);
+            view.select_environment(Some("development".to_owned()), cx);
+            view.request_editor.section = EditorSection::Headers;
+            view.edit_request(
+                request_key,
+                |request| {
+                    request.headers = (0..12)
+                        .map(|index| probe_core::Header {
+                            name: format!("X-{index}"),
+                            value: format!("{{{{name{index}}}}}"),
+                            disabled: false,
+                        })
+                        .collect();
+                },
+                cx,
+            );
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.variable_context_frames.set(0);
+            view.environment_resolution_count.set(0);
+            cx.notify();
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+    let (frames, resolutions) = window
+        .update(cx, |view, _, _| {
+            (
+                view.variable_context_frames.get(),
+                view.environment_resolution_count.get(),
+            )
+        })
+        .expect("test window should be open");
+    assert!(
+        frames >= 1,
+        "rendering the request should paint at least one frame"
+    );
+    assert_eq!(
+        resolutions, frames,
+        "each frame should resolve the environment once, frames={frames} resolutions={resolutions}"
+    );
+    assert!(
+        resolutions < 12,
+        "many header fields should share one resolution, frames={frames} resolutions={resolutions}"
+    );
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
+fn variable_context_reclassifies_when_the_selected_environment_changes(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let request_key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            view.select_environment(Some("development".to_owned()), cx);
+            cx.notify();
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, cx| {
+            let resolutions_before = view.environment_resolution_count.get();
+            let development = view.variable_context(cx);
+            assert!(
+                view.environment_resolution_count.get() > resolutions_before,
+                "variable_context outside a render pass should resolve again"
+            );
+            assert!(development.on_manage_environments.is_some());
+            assert_eq!(
+                development.status("baseUrl"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_eq!(
+                development.values.get("baseUrl").map(String::as_str),
+                Some("https://dev.example.com")
+            );
+            assert_eq!(
+                development.status("token"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_eq!(
+                development.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert_eq!(
+                development.status("disabledValue"),
+                probe_core::VariableStatus::Missing
+            );
+            assert_eq!(
+                development.status("missing"),
+                probe_core::VariableStatus::Missing
+            );
+
+            view.select_environment(Some("base".to_owned()), cx);
+            let base = view.variable_context(cx);
+            assert_eq!(base.status("host"), probe_core::VariableStatus::Resolved);
+            assert_eq!(
+                base.values.get("host").map(String::as_str),
+                Some("api.example.com")
+            );
+            assert_eq!(base.status("token"), probe_core::VariableStatus::Missing);
+            assert_eq!(
+                base.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert_eq!(
+                base.status("disabledValue"),
+                probe_core::VariableStatus::Missing
+            );
+            assert_eq!(
+                base.values.get("baseUrl").map(String::as_str),
+                Some("https://api.example.com")
+            );
+
+            view.shell.select_environment(None);
+            let unselected = view.variable_context(cx);
+            assert_eq!(
+                unselected.status("baseUrl"),
+                probe_core::VariableStatus::Missing
+            );
+            assert_eq!(
+                unselected.status("secretToken"),
+                probe_core::VariableStatus::Missing
+            );
+            assert_eq!(
+                unselected.status("host"),
+                probe_core::VariableStatus::Missing
+            );
+            assert_eq!(
+                unselected.status("token"),
+                probe_core::VariableStatus::Missing
+            );
+        })
+        .expect("test window should be open");
+}
