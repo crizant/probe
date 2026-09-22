@@ -23,6 +23,10 @@ fn converts_export_http_hierarchy_and_environment() {
     let imported = preview.convert(None, false).unwrap();
     assert_eq!(imported.collection.metadata.name.as_deref(), Some("Pets"));
     assert_eq!(imported.collection.environments[0].name, "Global Variables");
+    assert_eq!(
+        imported.default_environment.as_deref(),
+        Some("Global Variables")
+    );
     let CollectionItem::Folder(folder) = &imported.collection.items[0] else {
         panic!("expected folder");
     };
@@ -40,6 +44,88 @@ fn converts_export_http_hierarchy_and_environment() {
         panic!("expected raw body");
     };
     assert!(body.data.contains("{{TOKEN}}"));
+}
+
+#[test]
+fn selects_the_default_environment_from_converted_scopes() {
+    let global_later = temporary_path("default-global.json");
+    fs::write(
+        &global_later,
+        r#"{
+  "yaakSchema": 4,
+  "resources": {
+    "workspaces": [{"model": "workspace", "id": "wk_1", "name": "Scoped"}],
+    "environments": [
+      {"model": "environment", "id": "en_folder", "workspaceId": "wk_1", "name": "Folder Only", "parentModel": "folder"},
+      {"model": "environment", "id": "en_staging", "workspaceId": "wk_1", "name": "Staging", "parentModel": "environment"},
+      {"model": "environment", "id": "en_global", "workspaceId": "wk_1", "name": "Global Variables", "parentModel": "workspace"}
+    ]
+  }
+}"#,
+    )
+    .unwrap();
+    let imported = inspect_yaak_source(&global_later)
+        .unwrap()
+        .convert(None, true)
+        .unwrap();
+    assert_eq!(
+        imported.default_environment.as_deref(),
+        Some("Global Variables")
+    );
+    assert_eq!(
+        imported
+            .collection
+            .environments
+            .iter()
+            .map(|environment| environment.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Staging", "Global Variables"]
+    );
+    fs::remove_file(&global_later).unwrap();
+
+    let fallback = temporary_path("default-fallback.json");
+    fs::write(
+        &fallback,
+        r#"{
+  "yaakSchema": 4,
+  "resources": {
+    "workspaces": [{"model": "workspace", "id": "wk_1", "name": "Scoped"}],
+    "environments": [
+      {"model": "environment", "id": "en_folder", "workspaceId": "wk_1", "name": "Folder Only", "parentModel": "folder"},
+      {"model": "environment", "id": "en_staging", "workspaceId": "wk_1", "name": "Staging", "parentModel": "environment"},
+      {"model": "environment", "id": "en_prod", "workspaceId": "wk_1", "name": "Production", "parentModel": "environment"}
+    ]
+  }
+}"#,
+    )
+    .unwrap();
+    let imported = inspect_yaak_source(&fallback)
+        .unwrap()
+        .convert(None, true)
+        .unwrap();
+    assert_eq!(imported.default_environment.as_deref(), Some("Staging"));
+    assert!(
+        imported
+            .collection
+            .environments
+            .iter()
+            .all(|environment| environment.name != "Folder Only")
+    );
+    fs::remove_file(&fallback).unwrap();
+
+    let empty = temporary_path("default-none.json");
+    fs::write(
+        &empty,
+        r#"{"yaakSchema":4,"resources":{"workspaces":[{"model":"workspace","id":"wk_1","name":"Empty"}]}}"#,
+    )
+    .unwrap();
+    let imported = inspect_yaak_source(&empty)
+        .unwrap()
+        .convert(None, false)
+        .unwrap();
+    assert_eq!(imported.default_environment, None);
+    assert!(imported.collection.environments.is_empty());
+    fs::remove_file(empty).unwrap();
 }
 
 #[test]

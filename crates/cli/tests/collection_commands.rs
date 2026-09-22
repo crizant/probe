@@ -109,6 +109,7 @@ fn imports_a_yaak_export_as_bundled_opencollection_json() {
     assert_eq!(value["counts"]["requests"], 1);
     assert_eq!(value["counts"]["folders"], 1);
     assert_eq!(value["counts"]["environments"], 1);
+    assert_eq!(value["defaultEnvironment"], "Global Variables");
     assert!(destination.is_file());
 
     let validate = probe()

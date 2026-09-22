@@ -91,6 +91,8 @@ pub struct ImportedYaakWorkspace {
     pub diagnostics: Vec<ImportDiagnostic>,
     /// Whether lossy conversion was explicitly enabled and required.
     pub partial: bool,
+    /// Workspace global environment, or the first converted environment when none is global.
+    pub default_environment: Option<String>,
 }
 
 /// Failure to inspect or convert a Yaak source.

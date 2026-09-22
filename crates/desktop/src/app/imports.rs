@@ -518,7 +518,7 @@ impl ProbeApp {
                 source_name: imported.workspace.name,
                 collection: imported.collection,
                 warning_count: imported.diagnostics.len(),
-                selected_environment: None,
+                selected_environment: imported.default_environment,
                 kind: ImportedCollectionKind::Yaak,
             },
             window,
