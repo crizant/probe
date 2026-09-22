@@ -11,9 +11,9 @@ enum PathSegmentAction {
 
 /// Ordered, deduplicated `:variableName` placeholders parsed from the URL path.
 pub(crate) fn path_variable_names(url: &str) -> Vec<String> {
-    path_variable_ranges(url)
+    path_variable_spans(url)
         .into_iter()
-        .map(|(_, name)| name)
+        .map(|span| url[span.name].to_owned())
         .fold(Vec::new(), |mut names, name| {
             if !names.iter().any(|existing| existing == &name) {
                 names.push(name);
@@ -22,12 +22,26 @@ pub(crate) fn path_variable_names(url: &str) -> Vec<String> {
         })
 }
 
-/// Byte ranges and names for `:placeholder` segments in the URL path.
-pub fn path_variable_ranges(url: &str) -> Vec<(Range<usize>, String)> {
+/// Byte spans for one `:placeholder` in the URL path.
+///
+/// `range` includes the colon. `name` is the span after it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PathVariableSpan {
+    /// Byte range of `:name`, including the colon.
+    pub range: Range<usize>,
+    /// Byte range of the name after the colon.
+    pub name: Range<usize>,
+}
+
+/// Byte spans for `:placeholder` segments in the URL path.
+///
+/// The scan allocates only the returned vector.
+#[must_use]
+pub fn path_variable_spans(url: &str) -> Vec<PathVariableSpan> {
     let bounds = path_bounds(url);
     let path = &url[bounds.clone()];
     let path_start = bounds.start;
-    let mut ranges = Vec::new();
+    let mut spans = Vec::new();
     let mut cursor = 0;
     while let Some(relative_colon) = path[cursor..].find(':') {
         let colon = cursor + relative_colon;
@@ -37,11 +51,23 @@ pub fn path_variable_ranges(url: &str) -> Vec<(Range<usize>, String)> {
             .map_or(path.len(), |end| name_start + end);
         let name = &path[name_start..name_end];
         if is_valid_path_variable_name(name) {
-            ranges.push((path_start + colon..path_start + name_end, name.to_owned()));
+            let end = path_start + name_end;
+            spans.push(PathVariableSpan {
+                range: path_start + colon..end,
+                name: path_start + name_start..end,
+            });
         }
         cursor = name_start.max(name_end);
     }
-    ranges
+    spans
+}
+
+/// Byte ranges and names for `:placeholder` segments in the URL path.
+pub fn path_variable_ranges(url: &str) -> Vec<(Range<usize>, String)> {
+    path_variable_spans(url)
+        .into_iter()
+        .map(|span| (span.range, url[span.name].to_owned()))
+        .collect()
 }
 
 /// Substitutes enabled path parameter values into `:name` placeholders.

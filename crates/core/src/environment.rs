@@ -6,6 +6,44 @@ use std::{
 
 use crate::{Environment, EnvironmentVariable, Variable, VariableValue, VariableValueSet};
 
+/// Whether a `{{name}}` reference would be substituted in a resolved environment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VariableStatus {
+    /// The name has a resolved value, including an explicit empty string.
+    Resolved,
+    /// The name is an enabled secret with no runtime value.
+    SecretWithoutValue,
+    /// The name is absent or disabled.
+    Missing,
+}
+
+impl VariableStatus {
+    /// Returns whether this name would be substituted.
+    #[must_use]
+    pub const fn is_resolved(self) -> bool {
+        matches!(self, Self::Resolved)
+    }
+}
+
+/// Classifies `name` the same way [`ResolvedEnvironment::variable_status`] does.
+///
+/// Secrets without runtime values are checked first, matching interpolation.
+/// An explicit empty string is [`VariableStatus::Resolved`].
+#[must_use]
+pub fn variable_status(
+    variables: &BTreeMap<String, String>,
+    secrets_without_values: &BTreeSet<String>,
+    name: &str,
+) -> VariableStatus {
+    if secrets_without_values.contains(name) {
+        VariableStatus::SecretWithoutValue
+    } else if variables.contains_key(name) {
+        VariableStatus::Resolved
+    } else {
+        VariableStatus::Missing
+    }
+}
+
 /// An environment selected and resolved entirely in memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedEnvironment {
@@ -32,6 +70,12 @@ impl ResolvedEnvironment {
     #[must_use]
     pub const fn secrets_without_values(&self) -> &BTreeSet<String> {
         &self.secrets_without_values
+    }
+
+    /// Reports whether `name` would be substituted from this environment.
+    #[must_use]
+    pub fn variable_status(&self, name: &str) -> VariableStatus {
+        variable_status(&self.variables, &self.secrets_without_values, name)
     }
 
     /// Looks up a resolved variable.

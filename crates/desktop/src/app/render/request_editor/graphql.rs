@@ -123,7 +123,7 @@ impl ProbeApp {
                     .text_color(theme.colors.text.secondary)
                     .child("Operation name (optional)"),
             )
-            .child(components::url_text_input(
+            .child(components::variable_text_input(
                 theme,
                 ("graphql-operation-name", key.slot()),
                 operation_name.to_owned(),

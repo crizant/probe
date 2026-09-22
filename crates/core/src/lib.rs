@@ -22,8 +22,9 @@ pub use collection::{
     nonempty_string, sort_import_diagnostics, warning_import_diagnostic,
 };
 pub use environment::{
-    EffectiveEnvironmentVariable, EnvironmentResolutionError, ResolvedEnvironment,
+    EffectiveEnvironmentVariable, EnvironmentResolutionError, ResolvedEnvironment, VariableStatus,
     resolve_environment, resolve_environment_with_overrides, validate_environments,
+    variable_status,
 };
 pub use environment_edit::{
     create_environment, delete_environment, effective_environment_variables, replace_environment,
@@ -38,8 +39,8 @@ pub use expect::{
     ExpectationOutcome, ExpectationParseError, StatusExpectation, evaluate_expectations,
 };
 pub use path_parameters::{
-    add_path_parameter, apply_path_parameters, ensure_path_parameters_from_url,
-    path_variable_ranges, remove_path_parameter_at, rename_path_parameter_at,
+    PathVariableSpan, add_path_parameter, apply_path_parameters, ensure_path_parameters_from_url,
+    path_variable_ranges, path_variable_spans, remove_path_parameter_at, rename_path_parameter_at,
     synchronize_path_parameters,
 };
 pub use request::{

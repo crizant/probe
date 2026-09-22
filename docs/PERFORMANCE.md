@@ -24,6 +24,18 @@ The benchmark groups measure separate boundaries:
   across the loaded workspace.
 - `cli_startup/help`: operating-system process creation and Probe startup through
   rendering `probe --help`.
+- `environment_resolution`: resolving a three-level `extends` chain of 10, 100, and
+  500 variables. The leaf interpolates a parent value, so nested variable resolution
+  is included.
+- `environment_variable_status`: three `variable_status` lookups (a present value, a
+  secret with no runtime value, and an absent name) on an already resolved
+  environment.
+
+The desktop classifies `{{name}}` placeholders with `probe_core::VariableStatus`
+while painting a request. `ProbeApp` resolves the selected environment once at the
+start of each frame and reuses that context for every variable-bearing field. The
+memo is cleared before the frame returns, so event handlers and other calls outside
+that render resolve the current selection instead of a previous frame.
 
 Criterion stores machine-local reports under `target/criterion`. Compare results on
 the same machine and build profile; absolute timings from different machines are not

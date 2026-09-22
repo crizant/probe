@@ -27,7 +27,12 @@ pub(crate) fn body_text_input(
 ) -> gpui::AnyElement {
     let value = value.into();
     let ranges = variable_ranges(&value);
-    let decorations = body_text_highlights(theme, &ranges);
+    let decorations = body_text_highlights(
+        &value,
+        &ranges,
+        variable_highlight_palette(theme),
+        |kind, name| reference_status(&variables, kind, name),
+    );
     ProbeEditor {
         theme,
         id: id.into(),

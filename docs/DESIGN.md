@@ -146,6 +146,29 @@ unexpectedly, or replace platform-standard interaction behavior. Selection, focu
 errors, disabled controls, and request/response status must remain distinguishable
 without relying on color alone.
 
+## Variable Placeholders
+
+Request fields highlight two kinds of placeholders. `{{name}}` is an environment
+variable from the selected environment. `:name` in the URL path is a path parameter
+on that request. Only the URL bar highlights path placeholders; other fields ignore
+`:name`.
+
+A placeholder is painted by whether it would be substituted if the request ran now.
+Resolved placeholders use the syntax string color and no underline. Unresolved
+placeholders use the status error color and a 1px underline, so the state stays
+visible without color.
+
+Unresolved covers an environment variable that is absent or disabled, a secret with
+no runtime value, a path-parameter row that is missing, disabled, or still blank, and
+every `{{name}}` when no environment is selected or environment resolution failed. An
+environment variable set to an empty string is resolved. A blank path parameter is
+not, because those rows are created empty as soon as `:name` is typed.
+
+`:name` is never classified against the environment, and `{{name}}` is never
+classified against path parameters, even when the names coincide. Highlights and
+hover tooltips share `probe_core::VariableStatus`. Path placeholders are edited in
+the path-parameters section and do not use the environment tooltip.
+
 ## Future Plain-Text Themes
 
 User-defined themes will be stored in versioned, human-editable plain-text files. The

@@ -1,11 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, Environment,
     EnvironmentResolutionError, EnvironmentVariable, FormField, Header, HttpRequest, MultipartPart,
     MultipartPartKind, MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody,
-    SecretVariable, Variable, VariableValue, VariableValueSet, VariableValueVariant,
-    resolve_environment, resolve_environment_with_overrides, resolve_request,
+    ResolvedEnvironment, SecretVariable, Variable, VariableStatus, VariableValue, VariableValueSet,
+    VariableValueVariant, resolve_environment, resolve_environment_with_overrides, resolve_request,
+    variable_status,
 };
 
 fn variable(name: &str, value: &str) -> EnvironmentVariable {
@@ -292,6 +293,67 @@ fn preserves_undefined_variables_and_rejects_unavailable_secrets() {
     assert_eq!(
         resolved.interpolate("{{token}}").unwrap_err(),
         EnvironmentResolutionError::SecretVariableUnavailable("token".to_owned())
+    );
+}
+
+#[test]
+fn variable_status_matches_strict_interpolation_for_effective_names() {
+    let disabled = EnvironmentVariable::Plain(Variable {
+        name: Some("disabled".to_owned()),
+        value: Some(VariableValueSet::Single(VariableValue::String(
+            "hidden".to_owned(),
+        ))),
+        disabled: true,
+    });
+    let environments = [
+        environment(
+            "base",
+            None,
+            vec![variable("inherited", "from-base"), secret("token")],
+        ),
+        environment(
+            "development",
+            Some("base"),
+            vec![variable("local", "child"), variable("empty", ""), disabled],
+        ),
+    ];
+    let resolved = resolve_environment(&environments, "development").unwrap();
+
+    assert_status(
+        &resolved,
+        "inherited",
+        VariableStatus::Resolved,
+        Some("from-base"),
+    );
+    assert_status(&resolved, "local", VariableStatus::Resolved, Some("child"));
+    assert_status(&resolved, "empty", VariableStatus::Resolved, Some(""));
+    assert_status(&resolved, "token", VariableStatus::SecretWithoutValue, None);
+    assert_status(&resolved, "disabled", VariableStatus::Missing, None);
+    assert_status(&resolved, "absent", VariableStatus::Missing, None);
+
+    let mut variables = BTreeMap::new();
+    variables.insert("token".to_owned(), "stored".to_owned());
+    let secrets = BTreeSet::from(["token".to_owned()]);
+    assert_eq!(
+        variable_status(&variables, &secrets, "token"),
+        VariableStatus::SecretWithoutValue
+    );
+}
+
+fn assert_status(
+    resolved: &ResolvedEnvironment,
+    name: &str,
+    expected: VariableStatus,
+    value: Option<&str>,
+) {
+    let status = resolved.variable_status(name);
+    assert_eq!(status, expected, "{name}");
+    assert_eq!(resolved.variable(name), value, "{name}");
+    let strict = resolved.interpolate_strict(&format!("{{{{{name}}}}}"));
+    assert_eq!(
+        status.is_resolved(),
+        strict.is_ok(),
+        "{name} status {status:?} should agree with strict interpolation {strict:?}"
     );
 }
 

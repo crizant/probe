@@ -1045,7 +1045,23 @@ impl ProbeApp {
         self.loaded_workspace.as_ref()?.workspace().request(key)
     }
 
-    pub(super) fn variable_context(&self, cx: &mut Context<Self>) -> components::VariableContext {
+    pub(in crate::app) fn variable_context(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> components::VariableContext {
+        if let Some(context) = &self.frame_variable_context {
+            return context.clone();
+        }
+        self.resolve_variable_context(cx)
+    }
+
+    pub(super) fn resolve_variable_context(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> components::VariableContext {
+        #[cfg(test)]
+        self.environment_resolution_count
+            .set(self.environment_resolution_count.get() + 1);
         let on_manage_environments = self.loaded_workspace.is_some().then(|| {
             let view = cx.weak_entity();
             Rc::new(move |window: &mut Window, cx: &mut gpui::App| {
@@ -1084,6 +1100,7 @@ impl ProbeApp {
                         });
                     })),
                     on_manage_environments,
+                    ..components::VariableContext::default()
                 }
             }
             Err(error) => components::VariableContext {
