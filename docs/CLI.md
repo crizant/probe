@@ -229,6 +229,7 @@ change type without incrementing the version.
 {
   "schemaVersion": 1,
   "counts": { "environments": 1, "folders": 1, "requests": 1 },
+  "defaultEnvironment": "Global Variables",
   "imported": true,
   "partial": false,
   "path": "/tmp/imported.yml",
@@ -254,7 +255,7 @@ change type without incrementing the version.
 }
 ```
 
-`collection.id`, `collection.name`, and `collectionVariablesEnvironment` are nullable.
+`collection.id`, `collection.name`, `collectionVariablesEnvironment`, and `defaultEnvironment` are nullable.
 Postman v2.0 uses `postman_collection_v2_0` as `sourceFormat`.
 
 `request list --json` returns a `requests` array. Each entry has nullable `method`,

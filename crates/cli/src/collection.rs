@@ -44,14 +44,16 @@ pub(crate) fn import_yaak(
         .map_err(CliError::create)?;
     let path = source_path_or(loaded.source_path(), destination);
     let warning_count = imported.diagnostics.len();
+    let environment = imported.default_environment;
     Ok(CommandOutput {
         human: format!(
-            "Imported Yaak workspace\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nWarnings: {warning_count}\n",
+            "Imported Yaak workspace\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nDefault environment: {}\nWarnings: {warning_count}\n",
             imported.workspace.name,
             path.display(),
             loaded.workspace().request_count(),
             loaded.workspace().folder_count(),
             loaded.workspace().environments().len(),
+            environment.as_deref().unwrap_or("none"),
         ),
         json: json!({
             "imported": true,
@@ -61,6 +63,7 @@ pub(crate) fn import_yaak(
                 "id": imported.workspace.id,
                 "name": imported.workspace.name,
             },
+            "defaultEnvironment": environment,
             "path": path,
             "counts": workspace_counts(&loaded),
             "warnings": imported.diagnostics.iter().map(import_diagnostic_json).collect::<Vec<_>>(),

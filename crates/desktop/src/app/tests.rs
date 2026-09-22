@@ -15,7 +15,7 @@ use probe_core::{
 };
 use probe_http::{HttpResponse, ResponseHeader};
 use probe_postman::{COLLECTION_VARIABLES_ENVIRONMENT, inspect_postman_source};
-use probe_yaak::{ImportDiagnostic, ImportDiagnosticSeverity};
+use probe_yaak::{ImportDiagnostic, ImportDiagnosticSeverity, inspect_yaak_source};
 use tokio::sync::oneshot;
 
 use super::imports::{CollectionPathResolution, resolve_collection_path};
@@ -168,6 +168,12 @@ fn collection_folder_resolution_finds_and_orders_bundled_yaml_files() {
 fn postman_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/postman")
+        .join(name)
+}
+
+fn yaak_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/yaak")
         .join(name)
 }
 
@@ -590,6 +596,49 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
                 view.shell.selected_environment(),
                 Some(COLLECTION_VARIABLES_ENVIRONMENT)
             );
+            assert_eq!(
+                view.workspace_path.as_deref(),
+                Some(destination.canonicalize().unwrap().as_path())
+            );
+        })
+        .unwrap();
+    fs::remove_file(destination).unwrap();
+}
+
+#[gpui::test]
+fn successful_yaak_import_selects_global_environment(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let imported = inspect_yaak_source(yaak_fixture("export-v4.json"))
+        .unwrap()
+        .convert(None, false)
+        .unwrap();
+    let destination = std::env::temp_dir().join(format!(
+        "probe-desktop-yaak-{}-{}.yml",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.choose_yaak_import_destination(imported, window, cx);
+        })
+        .unwrap();
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection({
+        let destination = destination.clone();
+        move |_| Some(destination)
+    });
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.shell.selected_environment(), Some("Global Variables"));
             assert_eq!(
                 view.workspace_path.as_deref(),
                 Some(destination.canonicalize().unwrap().as_path())

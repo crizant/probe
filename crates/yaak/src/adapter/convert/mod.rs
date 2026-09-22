@@ -37,13 +37,15 @@ pub(super) fn convert_preview(
         .collect();
     validate_folder_graph(workspace, &folders, &preview.resources)?;
 
+    let (environments, default_environment) =
+        convert_environments(workspace, &preview.resources, &mut diagnostics)?;
     let mut collection = Collection {
         metadata: CollectionMetadata {
             name: Some(workspace.name.clone()),
             summary: nonempty(&workspace.description),
             ..CollectionMetadata::default()
         },
-        environments: convert_environments(workspace, &preview.resources, &mut diagnostics)?,
+        environments,
         ..Collection::default()
     };
     collection.items = convert_items(
@@ -92,6 +94,7 @@ pub(super) fn convert_preview(
         collection,
         diagnostics,
         partial: requires_partial,
+        default_environment,
     })
 }
 
@@ -270,7 +273,7 @@ fn convert_environments(
     workspace: &YaakWorkspace,
     resources: &Resources,
     diagnostics: &mut Vec<ImportDiagnostic>,
-) -> Result<Vec<Environment>, YaakImportError> {
+) -> Result<(Vec<Environment>, Option<String>), YaakImportError> {
     let selected = resources
         .environments
         .iter()
@@ -293,6 +296,7 @@ fn convert_environments(
     }
     let mut names = BTreeSet::new();
     let mut converted = Vec::new();
+    let mut global_name = None;
     for environment in selected {
         diagnose_extra_fields(
             "environment",
@@ -359,6 +363,9 @@ fn convert_environments(
                 })
             })
             .collect();
+        if environment.parent_model == "workspace" {
+            global_name = Some(environment.name.clone());
+        }
         converted.push(Environment {
             name: environment.name.clone(),
             color: environment.color.clone(),
@@ -367,5 +374,10 @@ fn convert_environments(
             variables,
         });
     }
-    Ok(converted)
+    let default_environment = global_name.or_else(|| {
+        converted
+            .first()
+            .map(|environment| environment.name.clone())
+    });
+    Ok((converted, default_environment))
 }
