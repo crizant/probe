@@ -838,6 +838,7 @@ fn executes_request_as_deterministic_json() {
     assert_eq!(value["response"]["sizeBytes"], 15);
     assert_eq!(value["response"]["body"]["encoding"], "utf8");
     assert_eq!(value["response"]["body"]["content"], "{\"result\":\"ok\"}");
+    assert!(value.get("expectations").is_none());
     let captured = server.join().unwrap();
     assert!(
         captured
@@ -1226,6 +1227,282 @@ fn dry_run_rejects_an_output_file() {
     assert_eq!(output.status.code(), Some(2));
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["error"]["category"], "invalid_arguments");
+}
+
+#[test]
+fn expect_passes_when_status_matches() {
+    let (server_url, server) = serve_once(b"{\"ok\":true}".to_vec(), "application/json");
+    let workspace = runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--environment", "local", "--expect", "status=200", "--json"])
+        .output()
+        .expect("expect command should run");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["response"]["status"], 200);
+    assert_eq!(value["expectations"][0]["expr"], "status=200");
+    assert_eq!(value["expectations"][0]["ok"], true);
+    assert_eq!(value["expectations"][0]["actual"], 200);
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn expect_fails_when_status_does_not_match() {
+    let (server_url, server) =
+        serve_once_with_status(b"missing".to_vec(), "text/plain", 404, "Not Found");
+    let workspace = runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--environment", "local", "--expect", "status=200", "--json"])
+        .output()
+        .expect("expect command should fail");
+
+    assert_eq!(output.status.code(), Some(9));
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["error"]["category"], "expectation_failed");
+    assert_eq!(value["error"]["exitCode"], 9);
+    assert_eq!(
+        value["error"]["details"]["expectations"][0]["expr"],
+        "status=200"
+    );
+    assert_eq!(value["error"]["details"]["expectations"][0]["ok"], false);
+    assert_eq!(value["error"]["details"]["expectations"][0]["actual"], 404);
+    assert!(value.get("response").is_none());
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn expect_accepts_alternate_status_codes() {
+    let (server_url, server) =
+        serve_once_with_status(b"created".to_vec(), "text/plain", 201, "Created");
+    let workspace = runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--expect",
+            "status=200|201",
+            "--json",
+        ])
+        .output()
+        .expect("alternate expect command should run");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["expectations"][0]["expr"], "status=200|201");
+    assert_eq!(value["expectations"][0]["ok"], true);
+    assert_eq!(value["expectations"][0]["actual"], 201);
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn expect_rejects_an_invalid_expression_without_sending() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+    listener
+        .set_nonblocking(true)
+        .expect("listener should be non-blocking");
+    let server_url = format!("http://{}", listener.local_addr().unwrap());
+    let workspace = runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--expect",
+            "header:content-type~json",
+            "--json",
+        ])
+        .output()
+        .expect("invalid expect should be rejected");
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert_eq!(
+        value["error"]["message"],
+        "invalid --expect expression: header:content-type~json; expected status=<code> or status=<code|code>"
+    );
+    assert!(
+        matches!(
+            listener.accept(),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ),
+        "invalid --expect must not send the request"
+    );
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn expect_reports_every_outcome_when_one_expression_fails() {
+    let (server_url, server) =
+        serve_once_with_status(b"created".to_vec(), "text/plain", 201, "Created");
+    let workspace = runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--expect",
+            "status=200",
+            "--expect",
+            "status=201",
+            "--json",
+        ])
+        .output()
+        .expect("expect command should fail");
+
+    assert_eq!(output.status.code(), Some(9));
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["error"]["category"], "expectation_failed");
+    assert_eq!(
+        value["error"]["message"],
+        "expectation failed: status=200 (actual 201)"
+    );
+    assert!(value.get("response").is_none());
+    let expectations = value["error"]["details"]["expectations"]
+        .as_array()
+        .expect("expectations should be an array");
+    assert_eq!(expectations.len(), 2);
+    assert_eq!(expectations[0]["expr"], "status=200");
+    assert_eq!(expectations[0]["ok"], false);
+    assert_eq!(expectations[0]["actual"], 201);
+    assert_eq!(expectations[1]["expr"], "status=201");
+    assert_eq!(expectations[1]["ok"], true);
+    assert_eq!(expectations[1]["actual"], 201);
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
+
+    let (server_url, server) =
+        serve_once_with_status(b"created".to_vec(), "text/plain", 201, "Created");
+    let workspace = runtime_fixture(&server_url);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--expect",
+            "status=200",
+            "--expect",
+            "status=201",
+        ])
+        .output()
+        .expect("expect command should fail");
+
+    assert_eq!(output.status.code(), Some(9));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"error[expectation_failed]: expectation failed: status=200 (actual 201)\n"
+    );
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn expect_keeps_the_output_file_when_the_status_fails() {
+    let response_body = b"missing".to_vec();
+    let (server_url, server) =
+        serve_once_with_status(response_body.clone(), "text/plain", 404, "Not Found");
+    let workspace = runtime_fixture(&server_url);
+    let body_output = temporary_path("response.bin");
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--environment", "local", "--output"])
+        .arg(&body_output)
+        .args(["--expect", "status=200", "--json"])
+        .output()
+        .expect("expect command should fail after writing the body");
+
+    assert_eq!(output.status.code(), Some(9));
+    assert_eq!(fs::read(&body_output).unwrap(), response_body);
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
+    fs::remove_file(body_output).unwrap();
+}
+
+#[test]
+fn expect_rejects_a_missing_value_without_sending() {
+    let cases: &[&[&str]] = &[
+        &["--environment", "local", "--json", "--expect"],
+        &["--environment", "local", "--expect", "--dry-run", "--json"],
+    ];
+    for arguments in cases {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("listener should be non-blocking");
+        let server_url = format!("http://{}", listener.local_addr().unwrap());
+        let workspace = runtime_fixture(&server_url);
+        let output = probe()
+            .args(["request", "run"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(*arguments)
+            .output()
+            .expect("missing --expect value should be rejected");
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(output.stderr.is_empty(), "{arguments:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments");
+        assert_eq!(
+            value["error"]["message"],
+            "--expect requires status=<code> or status=<code|code>"
+        );
+        assert!(
+            matches!(
+                listener.accept(),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+            ),
+            "missing --expect must not send the request ({arguments:?})"
+        );
+        fs::remove_file(workspace).unwrap();
+    }
+}
+
+#[test]
+fn expect_rejects_combination_with_dry_run() {
+    let output = probe()
+        .args(["request", "run"])
+        .arg(fixture("phase4-environments.yml"))
+        .arg("items/0")
+        .args(["--dry-run", "--expect", "status=200", "--json"])
+        .output()
+        .expect("expect plus dry-run should be rejected");
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert_eq!(value["error"]["exitCode"], 2);
 }
 
 #[test]
