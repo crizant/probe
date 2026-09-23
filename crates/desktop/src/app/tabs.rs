@@ -483,9 +483,9 @@ impl ProbeApp {
                         .request_key(selector)
                         .expect("created request must resolve after repository reload");
                     if let Some(request) = workspace.request_mut(created_key) {
-                        let sequence = request.metadata.sequence;
+                        let metadata = request.metadata.clone();
                         *request = draft;
-                        request.metadata.sequence = sequence;
+                        request.metadata = metadata;
                     }
                     Ok::<_, (bool, String)>((workspace, disk_workspace, structure_result))
                 })

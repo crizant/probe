@@ -167,7 +167,7 @@ fn saving_detached_request_keeps_the_persisted_sequence(cx: &mut TestAppContext)
                 .workspace()
                 .request(saved_key)
                 .unwrap();
-            assert_eq!(saved.metadata.sequence, created.metadata.sequence);
+            assert_eq!(saved.metadata, created.metadata);
             assert!(!view.request_is_dirty(saved_key));
         })
         .unwrap();
