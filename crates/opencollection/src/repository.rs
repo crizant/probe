@@ -132,6 +132,19 @@ impl LoadedWorkspace {
         self.workspace.request_mut(key)
     }
 
+    /// Adds an in-memory editor draft with no persistence locator.
+    pub fn add_detached_request(&mut self, request: probe_core::HttpRequest) -> RequestKey {
+        self.workspace.add_detached_request(request)
+    }
+
+    /// Removes an in-memory editor draft after its tab closes.
+    pub fn remove_detached_request(&mut self, key: RequestKey) -> Option<probe_core::HttpRequest> {
+        if self.request_selector(key).is_some() {
+            return None;
+        }
+        self.workspace.remove_request(key)
+    }
+
     /// Updates a plain environment variable in the in-memory workspace.
     pub fn set_environment_variable(
         &mut self,
@@ -930,7 +943,10 @@ fn request_document_mut<'a>(
     Ok(current)
 }
 
-fn apply_request_update(document: &mut Value, update: &RequestUpdate) -> Result<(), SaveError> {
+pub(crate) fn apply_request_update(
+    document: &mut Value,
+    update: &RequestUpdate,
+) -> Result<(), SaveError> {
     let request = document.as_mapping_mut().ok_or_else(|| {
         SaveError::InvalidDocument("the request item is not a mapping".to_owned())
     })?;

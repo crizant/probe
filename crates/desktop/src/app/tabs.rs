@@ -30,6 +30,38 @@ impl Render for TabDrag {
 }
 
 impl ProbeApp {
+    pub(super) fn new_detached_request(
+        &mut self,
+        graphql: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(loaded) = self.loaded_workspace.as_mut() else {
+            return;
+        };
+        let request = HttpRequest {
+            method: Some(if graphql { "POST" } else { "GET" }.to_owned()),
+            protocol: if graphql {
+                probe_core::RequestProtocol::Graphql(None)
+            } else {
+                probe_core::RequestProtocol::Http
+            },
+            ..HttpRequest::default()
+        };
+        let key = loaded.add_detached_request(request);
+        self.detached_requests.insert(key);
+        self.transient.request_tab_add_menu_open = false;
+        self.selected_tree_item = None;
+        self.request_editor.ensure_available_section(graphql);
+        self.shell.open_request(key);
+        self.response_viewer.ensure_available_tab(key);
+        self.reveal_active_tab();
+        // The add menu takes focus and then unmounts. Put focus back on the
+        // window before that draw, so Cmd/Ctrl+S reaches the new tab.
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
     pub(super) fn on_tab_drag_move(
         &mut self,
         source: RequestKey,
@@ -150,6 +182,14 @@ impl ProbeApp {
     pub(super) fn close_tab_now(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         let previous_active = self.shell.active_tab();
         self.shell.close_tab(key);
+        if self.detached_requests.remove(&key) {
+            self.committed_detached_requests.remove(&key);
+            if let Some(loaded) = self.loaded_workspace.as_mut() {
+                loaded.remove_detached_request(key);
+            }
+            self.execution.remove(key);
+            self.response_viewer.remove(key);
+        }
         if self.shell.active_tab() != previous_active {
             self.select_and_reveal_active_request_in_sidebar();
         }
@@ -165,7 +205,7 @@ impl ProbeApp {
         }
         for key in open_tabs {
             if key != keep {
-                self.shell.close_tab(key);
+                self.close_tab_now(key, cx);
             }
         }
         self.shell.open_request(keep);
@@ -179,16 +219,22 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return Vec::new();
         };
-        self.persistence
+        let mut dirty = self
+            .persistence
             .dirty_keys(loaded.requests().iter().filter_map(|located| {
                 loaded
                     .workspace()
                     .request(located.key())
                     .map(|request| (located.key(), request))
-            }))
+            }));
+        dirty.extend(self.detached_requests.iter().copied());
+        dirty
     }
 
     pub(super) fn request_is_dirty(&self, key: RequestKey) -> bool {
+        if self.detached_requests.contains(&key) {
+            return true;
+        }
         self.loaded_workspace
             .as_ref()
             .and_then(|loaded| loaded.workspace().request(key))
@@ -341,6 +387,10 @@ impl ProbeApp {
 
     pub(super) fn save_active_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(key) = self.shell.active_tab() {
+            if self.detached_requests.contains(&key) {
+                self.open_save_detached_request_dialog(key, window, cx);
+                return;
+            }
             let dirty = self
                 .loaded_workspace
                 .as_ref()
@@ -351,6 +401,175 @@ impl ProbeApp {
                 self.start_next_request_save(window, cx);
             }
         }
+    }
+
+    pub(super) fn persist_detached_request(
+        &mut self,
+        key: RequestKey,
+        name: String,
+        parent: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.committed_detached_requests.contains(&key) {
+            self.pending_close = None;
+            self.show_toast(ToastIntent::Warning, "This request was written, but the collection could not refresh. Reopen the collection before saving it again.", cx);
+            return;
+        }
+        if self.structure_task.is_some()
+            || self.request_save_task.is_some()
+            || self.environment_save_task.is_some()
+        {
+            self.show_toast(
+                ToastIntent::Warning,
+                "Wait for the current save to finish.",
+                cx,
+            );
+            return;
+        }
+        let Some(mut workspace) = self.loaded_workspace.clone() else {
+            return;
+        };
+        let Some(mut draft) = workspace.workspace().request(key).cloned() else {
+            return;
+        };
+        draft.metadata.name = Some(name.clone());
+        let graphql = matches!(draft.protocol, probe_core::RequestProtocol::Graphql(_));
+        let graphql_update =
+            draft
+                .selected_graphql()
+                .ok()
+                .flatten()
+                .map(|operation| probe_core::GraphqlUpdate {
+                    query: operation.query.clone(),
+                    variables: Some(operation.variables.clone()),
+                    operation_name: Some(operation.operation_name.clone()),
+                    extensions: Some(operation.extensions.clone()),
+                });
+        let operation = StructureOperation::CreateRequest {
+            parent,
+            index: None,
+            name,
+            method: draft.method.clone(),
+            url: draft.url.clone(),
+            protocol: if graphql {
+                probe_opencollection::CreatedRequestProtocol::Graphql
+            } else {
+                probe_opencollection::CreatedRequestProtocol::Http
+            },
+            graphql: graphql_update,
+            update: Some(probe_core::RequestUpdate {
+                headers: Some(draft.headers.clone()),
+                query_parameters: Some(draft.query_parameters.clone()),
+                path_parameters: Some(draft.path_parameters.clone()),
+                body: (!graphql).then(|| draft.body.clone()),
+                authentication: Some(draft.authentication.clone()),
+                ..probe_core::RequestUpdate::default()
+            }),
+        };
+        let operation_for_task = operation.clone();
+        self.loading = true;
+        self.structure_task = Some(cx.spawn_in(window, async move |view, window| {
+            let result = window
+                .background_spawn(async move {
+                    let (structure_result, disk_workspace) = workspace
+                        .apply_structure_with_disk_snapshot(operation_for_task)
+                        .map_err(|error| (matches!(error, probe_opencollection::StructureError::CommittedRefreshFailed { .. }), error.to_string()))?;
+                    let selector = structure_result
+                        .selector
+                        .as_deref()
+                        .expect("created request must have a selector");
+                    let created_key = workspace
+                        .request_key(selector)
+                        .expect("created request must resolve after repository reload");
+                    if let Some(request) = workspace.request_mut(created_key) {
+                        *request = draft;
+                    }
+                    Ok::<_, (bool, String)>((workspace, disk_workspace, structure_result))
+                })
+                .await;
+            let _ = view.update_in(window, |view, window, cx| {
+                view.structure_task = None;
+                view.loading = false;
+                match result {
+                    Ok((workspace, disk_workspace, result)) => {
+                        let current_draft = view
+                            .loaded_workspace
+                            .as_ref()
+                            .and_then(|loaded| loaded.workspace().request(key))
+                            .cloned();
+                        let active_before = view.shell.active_tab();
+                        view.detached_requests.remove(&key);
+                        let remaps = view.apply_structure_result(
+                            workspace,
+                            disk_workspace,
+                            result.clone(),
+                            (&operation, Some(key)),
+                            window,
+                            cx,
+                        );
+                        if let Some(selector) = result.selector.as_deref()
+                            && let Some(new_key) = view
+                                .loaded_workspace
+                                .as_ref()
+                                .and_then(|loaded| loaded.request_key(selector))
+                            && let Some(current) = current_draft
+                            && let Some(loaded) = view.loaded_workspace.as_mut()
+                            && let Some(request) = loaded.request_mut(new_key)
+                        {
+                            let saved = request.clone();
+                            *request = current;
+                            request.metadata = saved.metadata.clone();
+                            if *request != saved {
+                                view.persistence.edited(new_key);
+                            }
+                        }
+                        if let Some(active_key) =
+                            active_before.and_then(|key| remaps.get(&key).copied())
+                        {
+                            view.shell.open_request(active_key);
+                            view.select_and_reveal_active_request_in_sidebar();
+                        }
+                        view.show_toast(ToastIntent::Success, "Request saved.", cx);
+                        view.persist_session(cx);
+                        if view.pending_close.is_some() {
+                            let dirty = view
+                                .pending_close
+                                .as_ref()
+                                .map(|pending| view.pending_close_dirty_keys(pending))
+                                .unwrap_or_default();
+                            if let Some(next) = dirty
+                                .iter()
+                                .copied()
+                                .find(|key| view.detached_requests.contains(key))
+                            {
+                                view.open_save_detached_request_dialog(next, window, cx);
+                            } else {
+                                view.persistence.enqueue(dirty);
+                                view.start_next_request_save(window, cx);
+                            }
+                        }
+                    }
+                    Err((committed, error)) => {
+                        view.pending_close = None;
+                        if committed {
+                            view.committed_detached_requests.insert(key);
+                        }
+                        view.show_toast(
+                            ToastIntent::Error,
+                            if committed {
+                                format!("Request was written, but the collection could not refresh: {error}. Reopen the collection before saving it again.")
+                            } else {
+                                format!("Could not save request: {error}")
+                            },
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
 
     pub(super) fn start_next_request_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -458,8 +677,12 @@ impl ProbeApp {
                 matches!(request.protocol, probe_core::RequestProtocol::Graphql(_))
             });
         self.request_editor.ensure_available_section(is_graphql);
-        self.selected_tree_item = Some(WorkspaceItemRef::Request(key));
-        self.reveal_request_in_sidebar(key);
+        if self.detached_requests.contains(&key) {
+            self.selected_tree_item = None;
+        } else {
+            self.selected_tree_item = Some(WorkspaceItemRef::Request(key));
+            self.reveal_request_in_sidebar(key);
+        }
     }
 
     pub(super) fn scroll_active_tab_into_view(&self) {

@@ -315,6 +315,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
                     url: update.url,
                     protocol,
                     graphql: update.graphql,
+                    update: None,
                 }),
             })
         }

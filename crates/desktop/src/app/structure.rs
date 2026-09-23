@@ -1,6 +1,45 @@
 use super::*;
 
 impl ProbeApp {
+    pub(super) fn open_save_detached_request_dialog(
+        &mut self,
+        key: RequestKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.detached_requests.contains(&key) {
+            return;
+        }
+        if self.structure_task.is_some() {
+            self.pending_close = None;
+            self.show_toast(
+                ToastIntent::Warning,
+                "Wait for the current collection change to finish.",
+                cx,
+            );
+            return;
+        }
+        if self.committed_detached_requests.contains(&key) {
+            self.pending_close = None;
+            self.show_toast(ToastIntent::Warning, "This request was written, but the collection could not refresh. Reopen the collection before saving it again.", cx);
+            return;
+        }
+        let name = self
+            .loaded_workspace
+            .as_ref()
+            .and_then(|loaded| loaded.workspace().request(key))
+            .and_then(|request| request.metadata.name.clone())
+            .unwrap_or_else(|| "New Request".to_owned());
+        self.structure_dialog = Some(StructureDialog::save_detached_request(
+            key,
+            name,
+            self.selected_parent_selector(),
+        ));
+        self.expand_save_dialog_ancestors();
+        self.structure_dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
     pub(super) fn select_request(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         if self
             .loaded_workspace
@@ -15,12 +54,15 @@ impl ProbeApp {
                     matches!(request.protocol, probe_core::RequestProtocol::Graphql(_))
                 });
             self.request_editor.ensure_available_section(is_graphql);
-            self.selected_tree_item = Some(WorkspaceItemRef::Request(key));
+            self.selected_tree_item =
+                (!self.detached_requests.contains(&key)).then_some(WorkspaceItemRef::Request(key));
             self.shell.open_request(key);
             self.response_viewer.ensure_available_tab(key);
             self.start_base64_encoding(key, cx);
             self.reveal_active_tab();
-            self.reveal_request_in_sidebar(key);
+            if !self.detached_requests.contains(&key) {
+                self.reveal_request_in_sidebar(key);
+            }
             if self
                 .loaded_workspace
                 .as_mut()
@@ -267,6 +309,42 @@ impl ProbeApp {
         let Some(dialog) = self.structure_dialog.as_ref() else {
             return;
         };
+        if let StructureDialogMode::SaveDetachedRequest { key } = dialog.mode {
+            if self.structure_task.is_some() {
+                return;
+            }
+            let name = dialog.name.trim().to_owned();
+            if name.is_empty() {
+                self.show_toast(ToastIntent::Error, "Request name is required.", cx);
+                return;
+            }
+            if self.committed_detached_requests.contains(&key) {
+                self.pending_close = None;
+                self.show_toast(ToastIntent::Warning, "This request was written, but the collection could not refresh. Reopen the collection before saving it again.", cx);
+                return;
+            }
+            if self.request_save_task.is_some() || self.environment_save_task.is_some() {
+                self.show_toast(
+                    ToastIntent::Warning,
+                    "Wait for the current save to finish.",
+                    cx,
+                );
+                return;
+            }
+            if self
+                .loaded_workspace
+                .as_ref()
+                .and_then(|loaded| loaded.workspace().request(key))
+                .is_none()
+            {
+                return;
+            }
+            let parent = (!dialog.parent.is_empty()).then(|| dialog.parent.clone());
+            self.structure_dialog = None;
+            self.focus_handle.focus(window, cx);
+            self.persist_detached_request(key, name, parent, window, cx);
+            return;
+        }
         match dialog.operation() {
             Ok(operation) => {
                 self.structure_dialog = None;
@@ -277,6 +355,96 @@ impl ProbeApp {
                 self.show_toast(ToastIntent::Error, message, cx);
             }
         }
+    }
+
+    pub(super) fn open_save_folder_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.structure_task.is_some() {
+            return;
+        }
+        let Some(dialog) = self.structure_dialog.as_mut() else {
+            return;
+        };
+        if !matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+            return;
+        }
+        if dialog.new_folder_name.is_none() {
+            dialog.new_folder_name = Some(String::new());
+        }
+        self.save_folder_dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn close_save_folder_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.structure_dialog.as_mut() else {
+            return;
+        };
+        if dialog.new_folder_name.is_none() {
+            return;
+        }
+        dialog.new_folder_name = None;
+        self.structure_dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn select_save_dialog_parent(&mut self, parent: String, cx: &mut Context<Self>) {
+        let Some(dialog) = self.structure_dialog.as_mut() else {
+            return;
+        };
+        if !matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+            return;
+        }
+        dialog.parent = parent;
+        cx.notify();
+    }
+
+    pub(super) fn toggle_save_dialog_folder(&mut self, selector: String, cx: &mut Context<Self>) {
+        let Some(dialog) = self.structure_dialog.as_mut() else {
+            return;
+        };
+        if !matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+            return;
+        }
+        if !dialog.expanded_folders.remove(&selector) {
+            dialog.expanded_folders.insert(selector);
+        }
+        cx.notify();
+    }
+
+    /// Creates a folder under the save dialog's selected destination and leaves
+    /// that dialog, its request name, and the detached request in place.
+    pub(super) fn create_folder_from_save_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.structure_task.is_some() {
+            return;
+        }
+        let Some(dialog) = self.structure_dialog.as_ref() else {
+            return;
+        };
+        if !matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+            return;
+        }
+        let Some(name) = dialog.new_folder_name.as_deref() else {
+            return;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            self.show_toast(ToastIntent::Error, "Folder name is required.", cx);
+            return;
+        }
+        let parent = (!dialog.parent.is_empty()).then(|| dialog.parent.clone());
+        let name = name.to_owned();
+        self.apply_structure(
+            StructureOperation::CreateFolder {
+                parent,
+                index: None,
+                name,
+            },
+            window,
+            cx,
+        );
     }
 
     pub(super) fn submit_application_dialog_primary(
@@ -353,7 +521,7 @@ impl ProbeApp {
                             workspace,
                             disk_workspace,
                             result,
-                            &operation,
+                            (&operation, None),
                             window,
                             cx,
                         );
@@ -377,15 +545,22 @@ impl ProbeApp {
         mut workspace: LoadedWorkspace,
         disk_workspace: LoadedWorkspace,
         result: StructureResult,
-        operation: &StructureOperation,
+        origin: (&StructureOperation, Option<RequestKey>),
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> BTreeMap<RequestKey, RequestKey> {
+        let (operation, detached_key) = origin;
         let Some(old) = self.loaded_workspace.as_ref() else {
-            return;
+            return BTreeMap::new();
         };
         let selectors = self.snapshot_shell_selectors(old);
-        let key_remaps = request_key_remaps(old, &workspace, &result.selector_remaps);
+        let mut key_remaps = request_key_remaps(old, &workspace, &result.selector_remaps);
+        if let Some(old_key) = detached_key
+            && let Some(selector) = result.selector.as_deref()
+            && let Some(new_key) = workspace.request_key(selector)
+        {
+            key_remaps.insert(old_key, new_key);
+        }
         let current_requests = old
             .requests()
             .iter()
@@ -431,8 +606,17 @@ impl ProbeApp {
                 Some((located.key(), baseline))
             })
             .collect::<Vec<_>>();
-        self.install_reloaded_workspace(workspace, baselines, &key_remaps);
+        let key_remaps = self.install_reloaded_workspace(workspace, baselines, &key_remaps);
         self.restore_shell_selectors(&result.selector_remaps, selectors);
+        self.sync_save_dialog_after_structure(operation, &result);
+        if matches!(operation, StructureOperation::CreateFolder { .. })
+            && matches!(
+                self.structure_dialog.as_ref().map(|dialog| &dialog.mode),
+                Some(StructureDialogMode::SaveDetachedRequest { .. })
+            )
+        {
+            self.structure_dialog_focus.focus(window, cx);
+        }
         let should_select_result = matches!(
             operation,
             StructureOperation::CreateRequest { .. }
@@ -503,6 +687,99 @@ impl ProbeApp {
         }
         self.reveal_active_tab();
         self.persist_session(cx);
+        key_remaps
+    }
+
+    fn sync_save_dialog_after_structure(
+        &mut self,
+        operation: &StructureOperation,
+        result: &StructureResult,
+    ) {
+        let created_folder = matches!(operation, StructureOperation::CreateFolder { .. })
+            .then(|| result.selector.clone())
+            .flatten();
+        {
+            let Some(dialog) = self.structure_dialog.as_mut() else {
+                return;
+            };
+            if !matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+                return;
+            }
+            if !dialog.parent.is_empty()
+                && let Some(mapped) = result.selector_remaps.get(&dialog.parent)
+            {
+                dialog.parent.clone_from(mapped);
+            }
+            let expanded = std::mem::take(&mut dialog.expanded_folders);
+            dialog.expanded_folders = expanded
+                .into_iter()
+                .map(|selector| {
+                    result
+                        .selector_remaps
+                        .get(&selector)
+                        .cloned()
+                        .unwrap_or(selector)
+                })
+                .collect();
+            if let Some(selector) = created_folder {
+                if let Some(parent) = result.parent.clone() {
+                    dialog.expanded_folders.insert(parent);
+                }
+                dialog.parent = selector;
+                dialog.new_folder_name = None;
+            }
+        }
+        self.expand_save_dialog_ancestors();
+        self.drop_missing_save_dialog_folders();
+    }
+
+    fn expand_save_dialog_ancestors(&mut self) {
+        let Some(parent) = self.structure_dialog.as_ref().and_then(|dialog| {
+            matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. })
+                .then(|| dialog.parent.clone())
+                .filter(|parent| !parent.is_empty())
+        }) else {
+            return;
+        };
+        let Some(loaded) = self.loaded_workspace.as_ref() else {
+            return;
+        };
+        let ancestors = folder_ancestor_selectors(loaded, &parent);
+        let Some(dialog) = self.structure_dialog.as_mut() else {
+            return;
+        };
+        for ancestor in ancestors {
+            if ancestor != dialog.parent {
+                dialog.expanded_folders.insert(ancestor);
+            }
+        }
+    }
+
+    fn drop_missing_save_dialog_folders(&mut self) {
+        let Some(loaded) = self.loaded_workspace.as_ref() else {
+            return;
+        };
+        let Some(dialog) = self.structure_dialog.as_ref() else {
+            return;
+        };
+        if !matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+            return;
+        }
+        let parent_missing =
+            !dialog.parent.is_empty() && loaded.folder_key(&dialog.parent).is_none();
+        let expanded = dialog
+            .expanded_folders
+            .iter()
+            .filter(|selector| loaded.folder_key(selector).is_some())
+            .cloned()
+            .collect();
+        let Some(dialog) = self.structure_dialog.as_mut() else {
+            return;
+        };
+        dialog.expanded_folders = expanded;
+        if parent_missing {
+            dialog.parent.clear();
+        }
     }
 
     pub(super) fn scroll_selected_tree_item_into_view(&self) {

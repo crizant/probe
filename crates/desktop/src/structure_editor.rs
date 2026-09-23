@@ -1,5 +1,7 @@
-use probe_core::{FolderKey, Workspace, WorkspaceItemRef};
-use probe_opencollection::{ItemKind, StructureOperation};
+use std::collections::BTreeSet;
+
+use probe_core::{FolderKey, RequestKey, Workspace, WorkspaceItemRef};
+use probe_opencollection::{ItemKind, LoadedWorkspace, StructureOperation};
 
 pub(crate) const ROOT_PARENT: &str = "";
 
@@ -8,6 +10,7 @@ pub(crate) enum StructureDialogMode {
     CreateHttpRequest,
     CreateGraphqlRequest,
     CreateFolder,
+    SaveDetachedRequest { key: RequestKey },
     Rename { kind: ItemKind, selector: String },
     Move { kind: ItemKind, selector: String },
 }
@@ -18,15 +21,38 @@ pub(crate) struct StructureDialog {
     pub(crate) name: String,
     pub(crate) parent: String,
     pub(crate) index: String,
+    /// Folder selectors expanded in the save-dialog destination tree.
+    ///
+    /// This is independent of the sidebar so collapsing a destination does not
+    /// collapse the collection tree.
+    pub(crate) expanded_folders: BTreeSet<String>,
+    /// `Some` while the save dialog's New Folder sheet is open.
+    pub(crate) new_folder_name: Option<String>,
 }
 
 impl StructureDialog {
+    pub(crate) fn save_detached_request(
+        key: RequestKey,
+        name: String,
+        parent: Option<String>,
+    ) -> Self {
+        Self {
+            mode: StructureDialogMode::SaveDetachedRequest { key },
+            name,
+            parent: parent.unwrap_or_default(),
+            index: String::new(),
+            expanded_folders: BTreeSet::new(),
+            new_folder_name: None,
+        }
+    }
     pub(crate) fn create_http_request(parent: Option<String>) -> Self {
         Self {
             mode: StructureDialogMode::CreateHttpRequest,
             name: String::new(),
             parent: parent.unwrap_or_default(),
             index: String::new(),
+            expanded_folders: BTreeSet::new(),
+            new_folder_name: None,
         }
     }
 
@@ -36,6 +62,8 @@ impl StructureDialog {
             name: String::new(),
             parent: parent.unwrap_or_default(),
             index: String::new(),
+            expanded_folders: BTreeSet::new(),
+            new_folder_name: None,
         }
     }
 
@@ -45,6 +73,8 @@ impl StructureDialog {
             name: String::new(),
             parent: parent.unwrap_or_default(),
             index: String::new(),
+            expanded_folders: BTreeSet::new(),
+            new_folder_name: None,
         }
     }
 
@@ -54,6 +84,8 @@ impl StructureDialog {
             name,
             parent: String::new(),
             index: String::new(),
+            expanded_folders: BTreeSet::new(),
+            new_folder_name: None,
         }
     }
 
@@ -63,6 +95,8 @@ impl StructureDialog {
             name: String::new(),
             parent: parent.unwrap_or_default(),
             index: String::new(),
+            expanded_folders: BTreeSet::new(),
+            new_folder_name: None,
         }
     }
 
@@ -71,6 +105,7 @@ impl StructureDialog {
             StructureDialogMode::CreateHttpRequest => "New HTTP Request",
             StructureDialogMode::CreateGraphqlRequest => "New GraphQL Request",
             StructureDialogMode::CreateFolder => "New Folder",
+            StructureDialogMode::SaveDetachedRequest { .. } => "Save Request",
             StructureDialogMode::Rename { .. } => "Rename",
             StructureDialogMode::Move { .. } => "Move",
         }
@@ -81,6 +116,7 @@ impl StructureDialog {
             StructureDialogMode::CreateHttpRequest
             | StructureDialogMode::CreateGraphqlRequest
             | StructureDialogMode::CreateFolder => "Create",
+            StructureDialogMode::SaveDetachedRequest { .. } => "Save",
             StructureDialogMode::Rename { .. } => "Rename",
             StructureDialogMode::Move { .. } => "Move",
         }
@@ -91,7 +127,10 @@ impl StructureDialog {
     }
 
     pub(crate) const fn edits_destination(&self) -> bool {
-        matches!(self.mode, StructureDialogMode::Move { .. })
+        matches!(
+            self.mode,
+            StructureDialogMode::Move { .. } | StructureDialogMode::SaveDetachedRequest { .. }
+        )
     }
 
     pub(crate) fn operation(&self) -> Result<StructureOperation, String> {
@@ -109,6 +148,9 @@ impl StructureDialog {
         };
 
         match &self.mode {
+            StructureDialogMode::SaveDetachedRequest { .. } => {
+                Err("Request save is handled by the desktop editor.".to_owned())
+            }
             StructureDialogMode::CreateHttpRequest => {
                 if name.is_empty() {
                     return Err("Request name is required.".to_owned());
@@ -121,6 +163,7 @@ impl StructureDialog {
                     url: None,
                     protocol: probe_opencollection::CreatedRequestProtocol::Http,
                     graphql: None,
+                    update: None,
                 })
             }
             StructureDialogMode::CreateGraphqlRequest => {
@@ -135,6 +178,7 @@ impl StructureDialog {
                     url: None,
                     protocol: probe_opencollection::CreatedRequestProtocol::Graphql,
                     graphql: None,
+                    update: None,
                 })
             }
             StructureDialogMode::CreateFolder => {
@@ -176,6 +220,120 @@ impl StructureDialog {
             }),
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SaveDestinationRow {
+    pub(crate) selector: String,
+    pub(crate) name: String,
+    pub(crate) depth: usize,
+    pub(crate) expandable: bool,
+    pub(crate) expanded: bool,
+}
+
+pub(crate) fn save_destination_rows(
+    loaded: &LoadedWorkspace,
+    expanded: &BTreeSet<String>,
+) -> Vec<SaveDestinationRow> {
+    let mut rows = vec![SaveDestinationRow {
+        selector: ROOT_PARENT.to_owned(),
+        name: "Collection root".to_owned(),
+        depth: 0,
+        expandable: false,
+        expanded: true,
+    }];
+    let root = loaded.workspace().root_items().to_vec();
+    append_save_destination_folders(loaded, &root, 1, expanded, &mut rows);
+    rows
+}
+
+/// Selectors from the collection root down to `target`, including `target`.
+pub(crate) fn folder_ancestor_selectors(loaded: &LoadedWorkspace, target: &str) -> Vec<String> {
+    let root = loaded.workspace().root_items().to_vec();
+    let mut path = Vec::new();
+    if walk_folder_ancestors(loaded, &root, target, &mut path) {
+        path
+    } else {
+        Vec::new()
+    }
+}
+
+fn append_save_destination_folders(
+    loaded: &LoadedWorkspace,
+    items: &[WorkspaceItemRef],
+    depth: usize,
+    expanded: &BTreeSet<String>,
+    rows: &mut Vec<SaveDestinationRow>,
+) {
+    let folders = items
+        .iter()
+        .filter_map(|item| match *item {
+            WorkspaceItemRef::Folder(key) => Some(key),
+            WorkspaceItemRef::Request(_) => None,
+        })
+        .collect::<Vec<_>>();
+    for key in folders {
+        let Some(selector) = loaded.folder_selector(key).map(str::to_owned) else {
+            continue;
+        };
+        let children = folder_children(loaded, key);
+        let expandable = children
+            .iter()
+            .any(|child| matches!(child, WorkspaceItemRef::Folder(_)));
+        let is_expanded = expanded.contains(&selector);
+        rows.push(SaveDestinationRow {
+            selector: selector.clone(),
+            name: folder_label(loaded, key),
+            depth,
+            expandable,
+            expanded: is_expanded,
+        });
+        if is_expanded {
+            append_save_destination_folders(loaded, &children, depth + 1, expanded, rows);
+        }
+    }
+}
+
+fn walk_folder_ancestors(
+    loaded: &LoadedWorkspace,
+    items: &[WorkspaceItemRef],
+    target: &str,
+    path: &mut Vec<String>,
+) -> bool {
+    for item in items {
+        let WorkspaceItemRef::Folder(key) = *item else {
+            continue;
+        };
+        let Some(selector) = loaded.folder_selector(key).map(str::to_owned) else {
+            continue;
+        };
+        path.push(selector.clone());
+        if selector == target {
+            return true;
+        }
+        let children = folder_children(loaded, key);
+        if walk_folder_ancestors(loaded, &children, target, path) {
+            return true;
+        }
+        path.pop();
+    }
+    false
+}
+
+fn folder_children(loaded: &LoadedWorkspace, key: FolderKey) -> Vec<WorkspaceItemRef> {
+    loaded
+        .workspace()
+        .folder(key)
+        .map(|folder| folder.children.clone())
+        .unwrap_or_default()
+}
+
+fn folder_label(loaded: &LoadedWorkspace, key: FolderKey) -> String {
+    loaded
+        .workspace()
+        .folder(key)
+        .and_then(|folder| folder.metadata.name.clone())
+        .unwrap_or_else(|| "Untitled folder".to_owned())
 }
 
 pub(crate) fn item_position(

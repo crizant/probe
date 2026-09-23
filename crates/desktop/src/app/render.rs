@@ -194,7 +194,12 @@ impl Render for ProbeApp {
                 cx.listener(|view, _, _, cx| view.reset_caret_blink(cx)),
             )
             .on_action(cx.listener(|view, _: &SaveRequest, window, cx| {
-                if view.application_dialog.is_some() {
+                if view.application_dialog.is_some()
+                    || view
+                        .structure_dialog
+                        .as_ref()
+                        .is_some_and(|dialog| dialog.new_folder_name.is_some())
+                {
                     return;
                 }
                 if view.environment_manager_dialog.is_some() {
@@ -354,6 +359,12 @@ impl Render for ProbeApp {
             .on_action(cx.listener(|view, _: &SubmitStructureDialog, window, cx| {
                 view.submit_structure_dialog(window, cx);
             }))
+            .on_action(cx.listener(|view, _: &SubmitSaveFolderDialog, window, cx| {
+                view.create_folder_from_save_dialog(window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &CancelSaveFolderDialog, window, cx| {
+                view.close_save_folder_dialog(window, cx);
+            }))
             .on_action(
                 cx.listener(|view, _: &SubmitCreateEnvironmentDialog, window, cx| {
                     view.submit_create_environment_dialog(window, cx);
@@ -378,6 +389,12 @@ impl Render for ProbeApp {
                 }),
             )
             .on_action(cx.listener(|view, _: &CancelStructureDialog, window, cx| {
+                if matches!(
+                    view.structure_dialog.as_ref().map(|dialog| &dialog.mode),
+                    Some(StructureDialogMode::SaveDetachedRequest { .. })
+                ) {
+                    view.pending_close = None;
+                }
                 view.structure_dialog = None;
                 view.focus_handle.focus(window, cx);
                 cx.notify();
@@ -457,6 +474,7 @@ impl Render for ProbeApp {
                     ),
             )
             .child(self.render_structure_dialog(theme, window, cx))
+            .child(self.render_save_folder_dialog(theme, window, cx))
             .child(self.render_environment_manager_dialog(theme, window, cx))
             .child(self.render_environment_manager_context_menu(theme, window, cx))
             .child(self.render_create_environment_dialog(theme, window, cx))

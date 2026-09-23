@@ -130,11 +130,27 @@ pub(crate) fn hover_fill(color: gpui::Rgba) -> gpui::Rgba {
 }
 
 pub(crate) fn add_menu_button(theme: Theme, open: bool, enabled: bool) -> Button {
-    icon_button_base(
+    add_menu_button_with_id(
         theme,
         "tree-add-menu-trigger",
-        "tree-add-menu-trigger",
         "Add request or folder",
+        open,
+        enabled,
+    )
+}
+
+pub(crate) fn add_menu_button_with_id(
+    theme: Theme,
+    id: &'static str,
+    label: &'static str,
+    open: bool,
+    enabled: bool,
+) -> Button {
+    icon_button_base(
+        theme,
+        id,
+        id,
+        label,
         enabled,
         open && enabled,
         hover_fill(theme.colors.surfaces.window),
