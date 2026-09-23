@@ -1,6 +1,43 @@
 use super::*;
 
 #[gpui::test]
+fn reordered_tabs_are_captured_and_restored_in_session_order(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let keys: Vec<_> = workspace
+        .requests()
+        .iter()
+        .take(2)
+        .map(|request| request.key())
+        .collect();
+    assert_eq!(keys.len(), 2);
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.shell.open_request(keys[0]);
+            view.shell.open_request(keys[1]);
+            view.tab_drag_source = Some(keys[0]);
+            view.update_tab_drop_target(keys[0], keys[1], false, cx);
+            view.drop_tab(keys[0], cx);
+            assert_eq!(view.shell.tabs(), &[keys[1], keys[0]]);
+            assert_eq!(view.shell.active_tab(), Some(keys[1]));
+            let saved_order = view.session.open_tabs.clone();
+            view.shell.reset_for_workspace();
+            view.restore_shell_state(cx);
+            assert_eq!(view.shell.tabs(), &[keys[1], keys[0]]);
+            assert_eq!(view.session.open_tabs, saved_order);
+        })
+        .expect("test window should remain open");
+}
+
+#[gpui::test]
 fn add_menu_renders_compact_request_and_folder_markers(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {

@@ -154,6 +154,13 @@ impl Render for ProbeApp {
         {
             self.clear_tree_drag();
         }
+        if !cx.has_active_drag()
+            && (self.tab_drop_target.is_some() || self.tab_drag_source.is_some())
+        {
+            self.tab_drag_source = None;
+            self.tab_drop_target = None;
+            self.tab_auto_scroll.stop();
+        }
         if self.pending_tab_reveal {
             self.pending_tab_reveal = false;
             cx.on_next_frame(window, |this, _, cx| {

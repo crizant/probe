@@ -86,6 +86,29 @@ impl ShellState {
         }
     }
 
+    /// Moves an open tab to the side of another open tab without changing selection.
+    pub(crate) fn move_tab(
+        &mut self,
+        source: RequestKey,
+        target: RequestKey,
+        before: bool,
+    ) -> bool {
+        let Some(from) = self.tabs.iter().position(|key| *key == source) else {
+            return false;
+        };
+        let Some(target_index) = self.tabs.iter().position(|key| *key == target) else {
+            return false;
+        };
+        let insertion = target_index + usize::from(!before);
+        let destination = insertion.saturating_sub(usize::from(from < insertion));
+        if from == destination {
+            return false;
+        }
+        self.tabs.remove(from);
+        self.tabs.insert(destination, source);
+        true
+    }
+
     pub(crate) fn toggle_folder(&mut self, key: FolderKey) {
         if !self.collapsed_folders.remove(&key) {
             self.collapsed_folders.insert(key);
@@ -211,6 +234,23 @@ mod tests {
 
         assert_eq!(state.tabs(), &[first]);
         assert_eq!(state.active_tab(), Some(first));
+    }
+
+    #[test]
+    fn moving_tabs_preserves_the_active_request_and_rejects_missing_tabs() {
+        let (first, second, _) = keys();
+        let mut state = ShellState::default();
+        state.open_request(first);
+        state.open_request(second);
+        assert!(state.move_tab(second, first, true));
+        assert_eq!(state.tabs(), &[second, first]);
+        assert_eq!(state.active_tab(), Some(second));
+        assert!(!state.move_tab(second, first, true));
+        assert!(state.move_tab(second, first, false));
+        assert_eq!(state.tabs(), &[first, second]);
+        state.close_tab(first);
+        assert!(!state.move_tab(first, second, true));
+        assert!(!state.move_tab(second, first, true));
     }
 
     #[test]

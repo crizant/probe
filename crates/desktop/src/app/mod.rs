@@ -70,6 +70,7 @@ use presentation::{
     request_navigation_label, request_protocol_color, request_protocol_label,
     response_status_color,
 };
+use tabs::TabDrag;
 use transient::TransientSurfaces;
 use tree::{
     TreeDrag, TreeRow, TreeRowSpec, flatten_visible_tree_rows, tree_hierarchy_guides,
@@ -323,6 +324,9 @@ pub(crate) struct ProbeApp {
     pending_inspector_reveal: Cell<Option<InspectSelection>>,
     pretty_reveal: Cell<Option<PrettyRevealState>>,
     tab_bar_scroll: ScrollHandle,
+    tab_auto_scroll: AutoScroll,
+    tab_drag_source: Option<RequestKey>,
+    tab_drop_target: Option<(RequestKey, bool)>,
     pending_tab_reveal: bool,
     frame_variable_context: Option<components::VariableContext>,
     #[cfg(test)]
@@ -438,6 +442,9 @@ impl ProbeApp {
             pending_inspector_reveal: Cell::new(None),
             pretty_reveal: Cell::new(None),
             tab_bar_scroll: ScrollHandle::new(),
+            tab_auto_scroll: AutoScroll::default(),
+            tab_drag_source: None,
+            tab_drop_target: None,
             pending_tab_reveal: false,
             frame_variable_context: None,
             #[cfg(test)]

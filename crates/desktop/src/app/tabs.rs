@@ -1,6 +1,152 @@
 use super::*;
 
+#[derive(Clone)]
+pub(super) struct TabDrag {
+    pub(super) key: RequestKey,
+    pub(super) label: String,
+    pub(super) active: bool,
+}
+
+impl Render for TabDrag {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::for_window_appearance(window.appearance());
+        div()
+            .px(px(theme.metrics.spacing_2))
+            .py(px(theme.metrics.spacing_1))
+            .rounded(px(theme.metrics.radius_small))
+            .bg(theme.colors.surfaces.overlay)
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .font_family(theme.typography.interface_family)
+            .text_size(px(theme.typography.body_size))
+            .line_height(relative(theme.typography.body_line_height))
+            .text_color(if self.active {
+                theme.colors.actions.accent
+            } else {
+                theme.colors.text.secondary
+            })
+            .child(self.label.clone())
+    }
+}
+
 impl ProbeApp {
+    pub(super) fn on_tab_drag_move(
+        &mut self,
+        source: RequestKey,
+        pointer: Point<Pixels>,
+        bounds: Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.shell.tabs().contains(&source) || !bounds.contains(&pointer) {
+            self.tab_auto_scroll.stop();
+            self.tab_drop_target = None;
+            cx.notify();
+            return;
+        }
+        self.tab_auto_scroll.last_drag_position = Some(pointer);
+        self.recompute_tab_drop_from_pointer(source, pointer, bounds, cx);
+        let edge = 24.0;
+        let x = f32::from(pointer.x);
+        let left = f32::from(bounds.left());
+        let right = f32::from(bounds.right());
+        let delta = if x <= left + edge {
+            Some(px(16.0))
+        } else if x >= right - edge {
+            Some(px(-16.0))
+        } else {
+            None
+        };
+        self.tab_auto_scroll.set(delta, cx, |delta, view, cx| {
+            view.scroll_tab_strip_by(delta, cx);
+            if let Some(source) = view.tab_drag_source
+                && let Some(pointer) = view.tab_auto_scroll.last_drag_position
+            {
+                view.recompute_tab_drop_from_pointer(
+                    source,
+                    pointer,
+                    view.tab_bar_scroll.bounds(),
+                    cx,
+                );
+            }
+        });
+    }
+
+    fn scroll_tab_strip_by(&mut self, delta: Pixels, cx: &mut Context<Self>) {
+        let mut offset = self.tab_bar_scroll.offset();
+        let max = self.tab_bar_scroll.max_offset();
+        let next = (f32::from(offset.x) + f32::from(delta)).clamp(-f32::from(max.x), 0.0);
+        if next != f32::from(offset.x) {
+            offset.x = px(next);
+            self.tab_bar_scroll.set_offset(offset);
+            cx.notify();
+        } else {
+            self.tab_auto_scroll.stop();
+        }
+    }
+
+    fn recompute_tab_drop_from_pointer(
+        &mut self,
+        source: RequestKey,
+        pointer: Point<Pixels>,
+        viewport: Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !viewport.contains(&pointer) {
+            self.tab_drop_target = None;
+            cx.notify();
+            return;
+        }
+        let x = f32::from(pointer.x);
+        let offset = f32::from(self.tab_bar_scroll.offset().x);
+        let mut candidate = None;
+        for (index, key) in self.shell.tabs().iter().enumerate() {
+            let Some(bounds) = self.tab_bar_scroll.bounds_for_item(index) else {
+                continue;
+            };
+            let left = f32::from(bounds.left()) + offset;
+            let right = f32::from(bounds.right()) + offset;
+            if x < right {
+                candidate = Some((*key, x < (left + right) / 2.0));
+                break;
+            }
+            candidate = Some((*key, false));
+        }
+        if let Some((target, before)) = candidate {
+            self.update_tab_drop_target(source, target, before, cx);
+        } else if self.tab_drop_target.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn update_tab_drop_target(
+        &mut self,
+        source: RequestKey,
+        target: RequestKey,
+        before: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let next = (source != target
+            && self.shell.tabs().contains(&source)
+            && self.shell.tabs().contains(&target))
+        .then_some((target, before));
+        if self.tab_drop_target != next {
+            self.tab_drop_target = next;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn drop_tab(&mut self, source: RequestKey, cx: &mut Context<Self>) {
+        let target = self.tab_drop_target.take();
+        self.tab_drag_source = None;
+        self.tab_auto_scroll.stop();
+        if let Some((target, before)) = target
+            && self.shell.move_tab(source, target, before)
+        {
+            self.persist_session(cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn close_tab_now(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         let previous_active = self.shell.active_tab();
         self.shell.close_tab(key);

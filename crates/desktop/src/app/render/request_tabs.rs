@@ -12,6 +12,8 @@ impl ProbeApp {
         let mut active_tab_close_hover: Hsla = theme.colors.actions.accent.into();
         active_tab_close_hover.a = 0.18;
         let request_tab_bar_height = theme.metrics.tab_bar_height + 2.0;
+        let scroll_drag_view = cx.weak_entity();
+        let drop_view = cx.weak_entity();
         let mut tab_strip = Tabs::new("request-tabs-scroll")
             .flex_1()
             .min_w(px(0.0))
@@ -20,7 +22,17 @@ impl ProbeApp {
             .flex()
             .items_center()
             .overflow_x_scroll()
-            .track_scroll(&self.tab_bar_scroll);
+            .track_scroll(&self.tab_bar_scroll)
+            .on_drag_move(move |event: &DragMoveEvent<TabDrag>, _, cx| {
+                let source = event.drag(cx).key;
+                let _ = scroll_drag_view.update(cx, |view, cx| {
+                    view.on_tab_drag_move(source, event.event.position, event.bounds, cx);
+                });
+            })
+            .on_drop(move |drag: &TabDrag, _, cx| {
+                let _ = drop_view.update(cx, |view, cx| view.drop_tab(drag.key, cx));
+            })
+            .can_drop(|value, _, _| value.downcast_ref::<TabDrag>().is_some());
         let Some(loaded) = &self.loaded_workspace else {
             return div()
                 .id("request-tabs")
@@ -48,12 +60,15 @@ impl ProbeApp {
             let tooltip_move_view = cx.weak_entity();
             let tooltip_leave_view = cx.weak_entity();
             let middle_close_view = close_view.clone();
+            let drag_view = cx.weak_entity();
             let close_hover = if active {
                 active_tab_close_hover
             } else {
                 theme.colors.actions.disabled.into()
             };
             let tab_key = *key;
+            let drop_before = self.tab_drop_target == Some((tab_key, true));
+            let drop_after = self.tab_drop_target == Some((tab_key, false));
             let tab_index = self
                 .shell
                 .tabs()
@@ -62,6 +77,7 @@ impl ProbeApp {
                 .unwrap_or(0);
             tab_strip = tab_strip.child(
                 Tab::new(("request-tab", key.slot()))
+                    .debug_selector(move || format!("request-tab-{tab_index}"))
                     .selected(active)
                     .set_position(tab_index + 1, tab_count)
                     .h(px(request_tab_bar_height))
@@ -75,6 +91,16 @@ impl ProbeApp {
                     .overflow_hidden()
                     .rounded_tl(px(theme.metrics.radius_medium))
                     .rounded_tr(px(theme.metrics.radius_medium))
+                    .when(drop_before, |tab| {
+                        tab.rounded_tl(px(0.0))
+                            .border_l_2()
+                            .border_color(theme.colors.actions.accent)
+                    })
+                    .when(drop_after, |tab| {
+                        tab.rounded_tr(px(0.0))
+                            .border_r_2()
+                            .border_color(theme.colors.actions.accent)
+                    })
                     .when(active, |tab| {
                         tab.bg(active_tab_background)
                             .border_b_1()
@@ -86,6 +112,21 @@ impl ProbeApp {
                             .hover(move |tab| tab.bg(theme.colors.surfaces.sidebar))
                     })
                     .cursor_pointer()
+                    .on_drag(
+                        TabDrag {
+                            key: tab_key,
+                            label: label.to_owned(),
+                            active,
+                        },
+                        move |drag, _, _, cx| {
+                            let preview = drag.clone();
+                            let _ = drag_view.update(cx, |view, cx| {
+                                view.tab_drag_source = Some(drag.key);
+                                view.close_request_tab_tooltip(drag.key, cx);
+                            });
+                            cx.new(|_| preview)
+                        },
+                    )
                     .on_mouse_move(move |event, _, cx| {
                         let _ = tooltip_move_view.update(cx, |view, cx| {
                             view.update_request_tab_tooltip_position(tab_key, event.position, cx);

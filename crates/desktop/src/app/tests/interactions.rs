@@ -1,6 +1,85 @@
 use super::*;
 
 #[gpui::test]
+fn dragging_request_tabs_reorders_without_selecting_them(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let first = workspace.requests()[0].key();
+    let second = workspace.requests()[1].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(first, cx);
+            view.select_request(second, cx);
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let source = visual
+        .debug_bounds("request-tab-0")
+        .expect("first tab should render");
+    let target = visual
+        .debug_bounds("request-tab-1")
+        .expect("second tab should render");
+    let drop_point = point(target.right() - px(4.0), target.center().y);
+    visual.simulate_mouse_down(source.center(), MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_move(
+        point(source.center().x + px(8.0), source.center().y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    visual.simulate_mouse_move(drop_point, Some(MouseButton::Left), Modifiers::default());
+    visual.simulate_mouse_up(drop_point, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.shell.tabs(), &[second, first]);
+            assert_eq!(view.shell.active_tab(), Some(second));
+            assert_eq!(
+                view.selected_tree_item,
+                Some(WorkspaceItemRef::Request(second))
+            );
+        })
+        .expect("test window should remain open");
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let source = visual
+        .debug_bounds("request-tab-1")
+        .expect("moved tab should render");
+    let target = visual
+        .debug_bounds("request-tab-0")
+        .expect("leading tab should render");
+    let drop_point = point(target.left() + px(4.0), target.center().y);
+    visual.simulate_mouse_down(source.center(), MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_move(
+        point(source.center().x - px(8.0), source.center().y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    visual.simulate_mouse_move(drop_point, Some(MouseButton::Left), Modifiers::default());
+    visual.simulate_mouse_up(drop_point, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.shell.tabs(), &[first, second]);
+            assert_eq!(view.shell.active_tab(), Some(second));
+        })
+        .expect("test window should remain open");
+}
+
+#[gpui::test]
 fn middle_clicking_a_request_tab_closes_it(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
