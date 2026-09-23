@@ -99,6 +99,95 @@ fn saving_detached_request_preserves_edited_fields(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn saving_detached_request_keeps_the_persisted_sequence(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/opencollection/phase16-unbundled");
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture = std::env::temp_dir().join(format!(
+        "probe-desktop-unbundled-{}-{unique}-save-sequence",
+        std::process::id()
+    ));
+    copy_unbundled_fixture(&source, &fixture);
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.edit_request(
+                key,
+                |request| {
+                    request.method = Some("POST".to_owned());
+                    request.url = Some("https://example.test/create".to_owned());
+                },
+                cx,
+            );
+            view.persist_detached_request(key, "Created".to_owned(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let created = loaded
+        .requests()
+        .iter()
+        .find_map(|located| {
+            let request = loaded.workspace().request(located.key())?;
+            (request.metadata.name.as_deref() == Some("Created")).then_some(request)
+        })
+        .expect("request should be saved");
+    assert!(created.metadata.sequence.is_some());
+    window
+        .update(cx, |view, _, _| {
+            let saved_key = view
+                .shell
+                .tabs()
+                .iter()
+                .copied()
+                .find(|key| {
+                    view.loaded_workspace
+                        .as_ref()
+                        .and_then(|loaded| loaded.workspace().request(*key))
+                        .and_then(|request| request.metadata.name.clone())
+                        .as_deref()
+                        == Some("Created")
+                })
+                .expect("saved request should stay open");
+            let saved = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .workspace()
+                .request(saved_key)
+                .unwrap();
+            assert_eq!(saved.metadata.sequence, created.metadata.sequence);
+            assert!(!view.request_is_dirty(saved_key));
+        })
+        .unwrap();
+    let _ = fs::remove_dir_all(fixture);
+}
+
+fn copy_unbundled_fixture(source: &std::path::Path, destination: &std::path::Path) {
+    fs::create_dir(destination).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let target = destination.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_unbundled_fixture(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+#[gpui::test]
 fn saving_detached_graphql_request_preserves_query(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -352,6 +441,14 @@ fn save_dialog_records_the_selected_parent(cx: &mut TestAppContext) {
             assert_eq!(dialog_key, key);
             assert_eq!(dialog.parent, "items/1");
             assert!(view.detached_requests.contains(&key));
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            dialog.name = "Renamed".to_owned();
+            dialog.expanded_folders.insert("items/1".to_owned());
+            view.open_save_detached_request_dialog(key, window, cx);
+            let dialog = view.structure_dialog.as_ref().unwrap();
+            assert_eq!(dialog.name, "Renamed");
+            assert_eq!(dialog.parent, "items/1");
+            assert!(dialog.expanded_folders.contains("items/1"));
         })
         .unwrap();
 }

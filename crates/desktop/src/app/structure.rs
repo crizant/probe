@@ -24,6 +24,14 @@ impl ProbeApp {
             self.show_toast(ToastIntent::Warning, "This request was written, but the collection could not refresh. Reopen the collection before saving it again.", cx);
             return;
         }
+        if matches!(
+            self.structure_dialog.as_ref().map(|dialog| &dialog.mode),
+            Some(StructureDialogMode::SaveDetachedRequest { key: open }) if *open == key
+        ) {
+            self.structure_dialog_focus.focus(window, cx);
+            cx.notify();
+            return;
+        }
         let name = self
             .loaded_workspace
             .as_ref()
