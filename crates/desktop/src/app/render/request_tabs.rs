@@ -54,7 +54,7 @@ impl ProbeApp {
                     .url
                     .as_deref()
                     .filter(|url| !url.trim().is_empty())
-                    .unwrap_or("New Request")
+                    .unwrap_or("Untitled request")
             } else {
                 request
                     .metadata
