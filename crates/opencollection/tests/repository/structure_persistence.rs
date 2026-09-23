@@ -1,6 +1,100 @@
 use super::*;
 
 #[test]
+fn bundled_create_writes_complete_request_in_one_operation() {
+    let path = temporary_path("complete-create.yml");
+    fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let result = loaded
+        .apply_structure(StructureOperation::CreateRequest {
+            parent: None,
+            index: None,
+            name: "Complete".to_owned(),
+            method: Some("POST".to_owned()),
+            url: Some("https://example.test".to_owned()),
+            protocol: CreatedRequestProtocol::Http,
+            graphql: None,
+            update: Some(probe_core::RequestUpdate {
+                headers: Some(vec![probe_core::Header {
+                    name: "X-Test".to_owned(),
+                    value: "yes".to_owned(),
+                    disabled: false,
+                }]),
+                ..probe_core::RequestUpdate::default()
+            }),
+        })
+        .unwrap();
+    let reloaded = load_workspace(&path).unwrap();
+    let key = reloaded
+        .request_key(result.selector.as_deref().unwrap())
+        .unwrap();
+    assert_eq!(
+        reloaded.workspace().request(key).unwrap().headers[0].name,
+        "X-Test"
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn invalid_create_update_leaves_bundled_source_untouched() {
+    let path = temporary_path("invalid-complete-create.yml");
+    fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
+    let original = fs::read(&path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let result = loaded.apply_structure(StructureOperation::CreateRequest {
+        parent: None,
+        index: None,
+        name: "Invalid".to_owned(),
+        method: Some("POST".to_owned()),
+        url: None,
+        protocol: CreatedRequestProtocol::Graphql,
+        graphql: None,
+        update: Some(probe_core::RequestUpdate {
+            body: Some(None),
+            ..probe_core::RequestUpdate::default()
+        }),
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn unbundled_create_writes_complete_request_before_publishing_file() {
+    let root = temporary_path("complete-create-unbundled");
+    copy_directory(&fixture("phase16-unbundled"), &root);
+    let mut loaded = load_workspace(&root).unwrap();
+    let result = loaded
+        .apply_structure(StructureOperation::CreateRequest {
+            parent: Some("group".to_owned()),
+            index: None,
+            name: "Complete".to_owned(),
+            method: Some("POST".to_owned()),
+            url: Some("https://example.test".to_owned()),
+            protocol: CreatedRequestProtocol::Http,
+            graphql: None,
+            update: Some(probe_core::RequestUpdate {
+                headers: Some(vec![probe_core::Header {
+                    name: "X-Test".to_owned(),
+                    value: "yes".to_owned(),
+                    disabled: false,
+                }]),
+                ..probe_core::RequestUpdate::default()
+            }),
+        })
+        .unwrap();
+    let reloaded = load_workspace(&root).unwrap();
+    let key = reloaded
+        .request_key(result.selector.as_deref().unwrap())
+        .unwrap();
+    assert_eq!(
+        reloaded.workspace().request(key).unwrap().headers[0].value,
+        "yes"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn bundled_structure_edits_save_reload_and_preserve_unknown_fields() {
     let path = temporary_path("phase16-bundled.yml");
     fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
@@ -15,6 +109,7 @@ fn bundled_structure_edits_save_reload_and_preserve_unknown_fields() {
             url: Some("https://example.com/created".to_owned()),
             protocol: CreatedRequestProtocol::Http,
             graphql: None,
+            update: None,
         })
         .unwrap();
     assert_eq!(created.selector.as_deref(), Some("items/1/items/0"));
@@ -202,6 +297,7 @@ fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
             url: Some("https://example.com/created".to_owned()),
             protocol: CreatedRequestProtocol::Http,
             graphql: None,
+            update: None,
         })
         .unwrap();
     assert_eq!(
@@ -390,6 +486,7 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
             url: None,
             protocol: CreatedRequestProtocol::Http,
             graphql: None,
+            update: None,
         })
         .unwrap_err();
     assert!(matches!(
@@ -408,6 +505,7 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
             url: None,
             protocol: CreatedRequestProtocol::Http,
             graphql: None,
+            update: None,
         })
         .unwrap_err();
     assert!(matches!(duplicate, StructureError::DuplicateDestination(_)));
@@ -474,6 +572,7 @@ fn bundled_create_can_write_native_graphql_requests() {
                 operation_name: Some(Some("Viewer".to_owned())),
                 ..probe_core::GraphqlUpdate::default()
             }),
+            update: None,
         })
         .unwrap();
     let selector = created.selector.unwrap();

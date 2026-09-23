@@ -181,6 +181,12 @@ impl Workspace {
         key
     }
 
+    /// Retains an editor draft without adding it to the collection hierarchy.
+    /// The returned key is valid for the lifetime of this workspace only.
+    pub fn add_detached_request(&mut self, request: HttpRequest) -> RequestKey {
+        RequestKey::from(self.requests.insert(request))
+    }
+
     /// Inserts a request at an exact position under a parent.
     pub fn insert_request(
         &mut self,

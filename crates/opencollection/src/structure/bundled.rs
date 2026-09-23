@@ -13,12 +13,18 @@ pub(super) fn mutate_bundled(
             url,
             protocol,
             graphql,
+            update,
         } => {
             validate_name(&name)?;
             let parent_path = destination_path(document, parent.as_deref())?;
             let items = items_mut(document, &parent_path)?;
             let index = checked_index(index, items.len())?;
-            items.insert(index, request_value(&name, method, url, protocol, graphql));
+            let mut request = request_value(&name, method, url, protocol, graphql);
+            if let Some(update) = update {
+                apply_request_update(&mut request, &update)
+                    .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;
+            }
+            items.insert(index, request);
             Ok(result(ItemKind::Request, None, parent, index, &parent_path))
         }
         StructureOperation::CreateFolder {

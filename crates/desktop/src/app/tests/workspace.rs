@@ -1,6 +1,997 @@
 use super::*;
 
 #[gpui::test]
+fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            let original_count = view.loaded_workspace.as_ref().unwrap().requests().len();
+            view.new_detached_request(false, window, cx);
+            let http_key = view.shell.active_tab().unwrap();
+            assert_eq!(
+                view.active_request().unwrap().method.as_deref(),
+                Some("GET")
+            );
+            assert!(view.request_is_dirty(http_key));
+            view.edit_request(
+                http_key,
+                |request| request.url = Some("https://example.test".to_owned()),
+                cx,
+            );
+            assert_eq!(
+                view.active_request().unwrap().url.as_deref(),
+                Some("https://example.test")
+            );
+            view.new_detached_request(true, window, cx);
+            assert!(matches!(
+                view.active_request().unwrap().protocol,
+                probe_core::RequestProtocol::Graphql(_)
+            ));
+            assert_eq!(
+                view.loaded_workspace.as_ref().unwrap().requests().len(),
+                original_count
+            );
+            assert_eq!(view.dirty_keys().len(), 2);
+            view.close_tab_now(http_key, cx);
+            assert!(
+                view.loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .workspace()
+                    .request(http_key)
+                    .is_none()
+            );
+            assert_eq!(view.dirty_keys().len(), 1);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn saving_detached_request_preserves_edited_fields(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-detached-request");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.edit_request(
+                key,
+                |request| {
+                    request.method = Some("POST".to_owned());
+                    request.url = Some("https://example.test/create".to_owned());
+                    request.headers.push(probe_core::Header {
+                        name: "X-Test".to_owned(),
+                        value: "yes".to_owned(),
+                        disabled: false,
+                    });
+                },
+                cx,
+            );
+            view.persist_detached_request(key, "Created".to_owned(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let created = loaded
+        .requests()
+        .iter()
+        .find_map(|located| {
+            let request = loaded.workspace().request(located.key())?;
+            (request.metadata.name.as_deref() == Some("Created")).then_some(request)
+        })
+        .expect("request should be saved");
+    assert_eq!(created.method.as_deref(), Some("POST"));
+    assert_eq!(created.url.as_deref(), Some("https://example.test/create"));
+    assert_eq!(created.headers[0].name, "X-Test");
+}
+
+#[gpui::test]
+fn saving_detached_request_keeps_the_persisted_sequence(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/opencollection/phase16-unbundled");
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture = std::env::temp_dir().join(format!(
+        "probe-desktop-unbundled-{}-{unique}-save-sequence",
+        std::process::id()
+    ));
+    copy_unbundled_fixture(&source, &fixture);
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.edit_request(
+                key,
+                |request| {
+                    request.method = Some("POST".to_owned());
+                    request.url = Some("https://example.test/create".to_owned());
+                },
+                cx,
+            );
+            view.persist_detached_request(key, "Created".to_owned(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let created = loaded
+        .requests()
+        .iter()
+        .find_map(|located| {
+            let request = loaded.workspace().request(located.key())?;
+            (request.metadata.name.as_deref() == Some("Created")).then_some(request)
+        })
+        .expect("request should be saved");
+    assert!(created.metadata.sequence.is_some());
+    window
+        .update(cx, |view, _, _| {
+            let saved_key = view
+                .shell
+                .tabs()
+                .iter()
+                .copied()
+                .find(|key| {
+                    view.loaded_workspace
+                        .as_ref()
+                        .and_then(|loaded| loaded.workspace().request(*key))
+                        .and_then(|request| request.metadata.name.clone())
+                        .as_deref()
+                        == Some("Created")
+                })
+                .expect("saved request should stay open");
+            let saved = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .workspace()
+                .request(saved_key)
+                .unwrap();
+            assert_eq!(saved.metadata, created.metadata);
+            assert!(!view.request_is_dirty(saved_key));
+        })
+        .unwrap();
+    let _ = fs::remove_dir_all(fixture);
+}
+
+fn copy_unbundled_fixture(source: &std::path::Path, destination: &std::path::Path) {
+    fs::create_dir(destination).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let target = destination.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_unbundled_fixture(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+#[gpui::test]
+fn saving_detached_graphql_request_preserves_query(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-detached-graphql-request");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.new_detached_request(true, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.edit_request(
+                key,
+                |request| {
+                    request.url = Some("https://example.test/graphql".to_owned());
+                    request
+                        .apply_graphql_update(&probe_core::GraphqlUpdate {
+                            query: Some("query Viewer { viewer { id } }".to_owned()),
+                            ..probe_core::GraphqlUpdate::default()
+                        })
+                        .unwrap();
+                },
+                cx,
+            );
+            view.persist_detached_request(key, "Viewer".to_owned(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let created = loaded
+        .requests()
+        .iter()
+        .find_map(|located| {
+            let request = loaded.workspace().request(located.key())?;
+            (request.metadata.name.as_deref() == Some("Viewer")).then_some(request)
+        })
+        .expect("GraphQL request should be saved");
+    assert!(matches!(
+        created.protocol,
+        probe_core::RequestProtocol::Graphql(_)
+    ));
+    assert_eq!(
+        created
+            .selected_graphql()
+            .unwrap()
+            .unwrap()
+            .query
+            .as_deref(),
+        Some("query Viewer { viewer { id } }")
+    );
+}
+
+#[gpui::test]
+fn saving_background_draft_keeps_the_user_selected_tab(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-background-draft-selection");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let existing_selector = workspace.requests()[0].selector().to_owned();
+    let existing_key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.new_detached_request(false, window, cx);
+            let draft_key = view.shell.active_tab().unwrap();
+            view.persist_detached_request(draft_key, "Background".to_owned(), None, window, cx);
+            view.select_request(existing_key, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            assert_eq!(
+                view.shell.active_tab(),
+                loaded.request_key(&existing_selector)
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn saving_detached_request_keeps_unrelated_request_dirty(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-detached-keeps-dirty");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let existing_selector = workspace.requests()[0].selector().to_owned();
+    let existing_key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.edit_request(
+                existing_key,
+                |request| {
+                    request.url = Some("https://local.example/unsaved".to_owned());
+                },
+                cx,
+            );
+            view.new_detached_request(false, window, cx);
+            let draft_key = view.shell.active_tab().unwrap();
+            view.persist_detached_request(draft_key, "Saved Draft".to_owned(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let key = loaded.request_key(&existing_selector).unwrap();
+            let request = loaded.workspace().request(key).unwrap();
+            assert_eq!(
+                request.url.as_deref(),
+                Some("https://local.example/unsaved")
+            );
+            assert!(view.persistence.is_dirty(key, request));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn close_other_tabs_keeps_a_detached_tab_after_key_remap(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("keep-detached-after-save");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.new_detached_request(false, window, cx);
+            let keep = view.shell.active_tab().unwrap();
+            view.new_detached_request(false, window, cx);
+            let save = view.shell.active_tab().unwrap();
+            view.pending_close = Some(PendingClose::OtherTabs { keep });
+            view.persist_detached_request(save, "Saved".to_owned(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.pending_close.is_none());
+            assert_eq!(view.shell.tabs().len(), 1);
+            assert!(
+                view.detached_requests
+                    .contains(&view.shell.active_tab().unwrap())
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn save_dialog_survives_workspace_reload(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-dialog-reload");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.new_detached_request(false, window, cx);
+            let old_key = view.shell.active_tab().unwrap();
+            view.open_save_detached_request_dialog(old_key, window, cx);
+            let mut fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+            fresh
+                .apply_structure(probe_opencollection::StructureOperation::CreateRequest {
+                    parent: None,
+                    index: None,
+                    name: "External".to_owned(),
+                    method: Some("GET".to_owned()),
+                    url: None,
+                    protocol: probe_opencollection::CreatedRequestProtocol::Http,
+                    graphql: None,
+                    update: None,
+                })
+                .unwrap();
+            let baselines = fresh
+                .requests()
+                .iter()
+                .filter_map(|located| {
+                    fresh
+                        .workspace()
+                        .request(located.key())
+                        .cloned()
+                        .map(|request| (located.key(), request))
+                })
+                .collect();
+            view.install_reloaded_workspace(fresh, baselines, &BTreeMap::new());
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            let StructureDialogMode::SaveDetachedRequest { key } = dialog.mode else {
+                panic!("expected save dialog")
+            };
+            assert_ne!(key, old_key);
+            assert!(view.detached_requests.contains(&key));
+            dialog.name = "Reloaded Draft".to_owned();
+            view.submit_structure_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let reloaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    assert!(reloaded.requests().iter().any(|located| {
+        reloaded
+            .workspace()
+            .request(located.key())
+            .unwrap()
+            .metadata
+            .name
+            .as_deref()
+            == Some("Reloaded Draft")
+    }));
+}
+
+#[gpui::test]
+fn save_dialog_records_the_selected_parent(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-dialog-parent");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+            view.open_save_detached_request_dialog(key, window, cx);
+            let dialog = view.structure_dialog.as_ref().unwrap();
+            let StructureDialogMode::SaveDetachedRequest { key: dialog_key } = dialog.mode else {
+                panic!("expected save dialog");
+            };
+            assert_eq!(dialog_key, key);
+            assert_eq!(dialog.parent, "items/1");
+            assert!(view.detached_requests.contains(&key));
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            dialog.name = "Renamed".to_owned();
+            dialog.expanded_folders.insert("items/1".to_owned());
+            view.open_save_detached_request_dialog(key, window, cx);
+            let dialog = view.structure_dialog.as_ref().unwrap();
+            assert_eq!(dialog.name, "Renamed");
+            assert_eq!(dialog.parent, "items/1");
+            assert!(dialog.expanded_folders.contains("items/1"));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn creating_a_folder_from_the_save_dialog_keeps_the_draft_and_saves_into_it(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-dialog-new-folder");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.edit_request(
+                key,
+                |request| request.url = Some("https://example.test/placed".to_owned()),
+                cx,
+            );
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+            view.open_save_detached_request_dialog(key, window, cx);
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            assert!(matches!(
+                dialog.mode,
+                StructureDialogMode::SaveDetachedRequest { .. }
+            ));
+            assert_eq!(dialog.parent, "items/1");
+            dialog.name = "Placed".to_owned();
+            dialog.new_folder_name = Some("  ".to_owned());
+            view.create_folder_from_save_dialog(window, cx);
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Error,
+                "Folder name is required."
+            ));
+            assert!(matches!(
+                view.structure_dialog.as_ref().unwrap().mode,
+                StructureDialogMode::SaveDetachedRequest { .. }
+            ));
+            view.structure_dialog.as_mut().unwrap().new_folder_name = Some("Inbox".to_owned());
+            view.create_folder_from_save_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
+            let dialog = view.structure_dialog.as_ref().unwrap();
+            let StructureDialogMode::SaveDetachedRequest { key } = dialog.mode else {
+                panic!("save dialog should stay open");
+            };
+            assert_eq!(dialog.name, "Placed");
+            assert!(view.detached_requests.contains(&key));
+            assert!(view.shell.tabs().contains(&key));
+            assert_eq!(
+                view.loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .workspace()
+                    .request(key)
+                    .unwrap()
+                    .url
+                    .as_deref(),
+                Some("https://example.test/placed")
+            );
+            let inbox = folder_selector_named(view, "Inbox").expect("folder should be created");
+            assert_eq!(dialog.parent, inbox);
+            view.submit_structure_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let placed = loaded
+        .requests()
+        .iter()
+        .find(|located| {
+            loaded
+                .workspace()
+                .request(located.key())
+                .unwrap()
+                .metadata
+                .name
+                .as_deref()
+                == Some("Placed")
+        })
+        .expect("request should be saved");
+    let parent = loaded
+        .workspace()
+        .request_ancestor_folders(placed.key())
+        .and_then(|ancestors| ancestors.last().copied())
+        .expect("saved request should be inside the new folder");
+    assert_eq!(
+        loaded
+            .workspace()
+            .folder(parent)
+            .unwrap()
+            .metadata
+            .name
+            .as_deref(),
+        Some("Inbox")
+    );
+}
+
+#[gpui::test]
+fn enter_in_the_save_folder_field_creates_the_folder_without_saving(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-folder-enter");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.open_save_detached_request_dialog(key, window, cx);
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            dialog.name = "Placed".to_owned();
+            dialog.new_folder_name = Some("Inbox".to_owned());
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), "enter");
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
+            let dialog = view
+                .structure_dialog
+                .as_ref()
+                .expect("save dialog should stay open");
+            let StructureDialogMode::SaveDetachedRequest { key } = dialog.mode else {
+                panic!("save dialog should stay open");
+            };
+            assert_eq!(dialog.name, "Placed");
+            assert!(view.detached_requests.contains(&key));
+            assert!(view.shell.tabs().contains(&key));
+            let inbox = folder_selector_named(view, "Inbox").expect("folder should be created");
+            assert_eq!(dialog.parent, inbox);
+            assert!(dialog.new_folder_name.is_none());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn new_request_tab_accepts_save_shortcut(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let add = visual
+        .debug_bounds("request-tab-add-trigger")
+        .expect("new request control should render");
+    visual.simulate_click(add.center(), Modifiers::default());
+    visual.run_until_parked();
+    let http = visual
+        .debug_bounds("request-tab-new-http")
+        .expect("HTTP menu item should render");
+    visual.simulate_click(http.center(), Modifiers::default());
+    visual.run_until_parked();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            let key = view.shell.active_tab().expect("new tab should be active");
+            assert!(view.detached_requests.contains(&key));
+            assert_eq!(window.focused(cx), Some(view.focus_handle.clone()));
+        })
+        .unwrap();
+    cx.simulate_keystrokes(window.into(), super::save_shortcut());
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(matches!(
+                view.structure_dialog.as_ref().map(|dialog| &dialog.mode),
+                Some(StructureDialogMode::SaveDetachedRequest { .. })
+            ));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn enter_on_a_save_destination_selects_that_folder(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-destination-enter");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let folder = workspace.folder_key("items/1").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+            view.open_save_detached_request_dialog(key, window, cx);
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            dialog.name = "Placed".to_owned();
+            assert_eq!(dialog.parent, "items/1");
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let row = visual
+        .debug_bounds("save-destination-items/1")
+        .expect("folder row should render");
+    visual.simulate_click(row.center(), Modifiers::default());
+    visual.run_until_parked();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            assert_eq!(dialog.parent, "items/1");
+            dialog.parent.clear();
+            cx.notify();
+        })
+        .unwrap();
+    cx.simulate_keystrokes(window.into(), "enter");
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view
+                .structure_dialog
+                .as_ref()
+                .expect("save dialog should stay open");
+            let StructureDialogMode::SaveDetachedRequest { key } = dialog.mode else {
+                panic!("save dialog should stay open");
+            };
+            assert_eq!(dialog.name, "Placed");
+            assert_eq!(dialog.parent, "items/1");
+            assert!(view.detached_requests.contains(&key));
+            assert!(view.shell.tabs().contains(&key));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn creating_a_folder_keeps_open_tab_order(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-folder-tab-order");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let persisted = workspace.request_key("items/0").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(persisted, cx);
+            view.new_detached_request(false, window, cx);
+            assert_eq!(view.shell.tabs().len(), 2);
+            assert_eq!(view.shell.tabs()[0], persisted);
+            assert_eq!(view.shell.active_tab(), Some(view.shell.tabs()[1]));
+            let detached = view.shell.tabs()[1];
+            view.open_save_detached_request_dialog(detached, window, cx);
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            dialog.name = "Placed".to_owned();
+            dialog.new_folder_name = Some("Inbox".to_owned());
+            view.shell.activate_tab(persisted);
+            assert_eq!(view.shell.active_tab(), Some(persisted));
+            view.create_folder_from_save_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
+            let dialog = view
+                .structure_dialog
+                .as_ref()
+                .expect("save dialog should stay open");
+            let StructureDialogMode::SaveDetachedRequest { key } = dialog.mode else {
+                panic!("save dialog should stay open");
+            };
+            assert_eq!(dialog.name, "Placed");
+            assert_eq!(view.shell.tabs().len(), 2);
+            assert_eq!(view.shell.tabs()[1], key);
+            assert_eq!(view.shell.active_tab(), Some(view.shell.tabs()[0]));
+            assert!(view.detached_requests.contains(&key));
+            assert!(!view.detached_requests.contains(&view.shell.tabs()[0]));
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            assert_eq!(
+                loaded
+                    .workspace()
+                    .request(view.shell.tabs()[0])
+                    .unwrap()
+                    .metadata
+                    .name
+                    .as_deref(),
+                Some("Alpha")
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn save_dialog_stays_open_when_a_save_is_already_running(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-dialog-busy");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let persisted = workspace.request_key("items/0").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(persisted, cx);
+            view.edit_request(
+                persisted,
+                |request| request.url = Some("https://example.test/busy".to_owned()),
+                cx,
+            );
+            view.save_active_request(window, cx);
+            assert!(view.request_save_task.is_some());
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.open_save_detached_request_dialog(key, window, cx);
+            view.structure_dialog.as_mut().unwrap().name = "Placed".to_owned();
+            view.submit_structure_dialog(window, cx);
+            let dialog = view
+                .structure_dialog
+                .as_ref()
+                .expect("save dialog should stay open");
+            let StructureDialogMode::SaveDetachedRequest { key: dialog_key } = dialog.mode else {
+                panic!("save dialog should stay open");
+            };
+            assert_eq!(dialog_key, key);
+            assert_eq!(dialog.name, "Placed");
+            assert!(view.detached_requests.contains(&key));
+            assert!(view.structure_task.is_none());
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "Wait for the current save to finish."
+            ));
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    assert!(loaded.requests().iter().all(|located| {
+        loaded
+            .workspace()
+            .request(located.key())
+            .unwrap()
+            .metadata
+            .name
+            .as_deref()
+            != Some("Placed")
+    }));
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view
+                .structure_dialog
+                .as_ref()
+                .expect("save dialog should stay open");
+            assert_eq!(dialog.name, "Placed");
+            assert!(matches!(
+                dialog.mode,
+                StructureDialogMode::SaveDetachedRequest { .. }
+            ));
+            let StructureDialogMode::SaveDetachedRequest { key } = dialog.mode else {
+                panic!("save dialog should stay open");
+            };
+            assert!(view.detached_requests.contains(&key));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-dialog-missing-parent");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.open_save_detached_request_dialog(key, window, cx);
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            dialog.name = "Kept".to_owned();
+            dialog.parent = "not-a-folder".to_owned();
+            dialog.expanded_folders.insert("items/1".to_owned());
+            view.remap_structure_dialog(&BTreeMap::new());
+            let dialog = view
+                .structure_dialog
+                .as_ref()
+                .expect("save dialog should stay open");
+            let StructureDialogMode::SaveDetachedRequest { key: dialog_key } = dialog.mode else {
+                panic!("save dialog should stay open");
+            };
+            assert_eq!(dialog_key, key);
+            assert_eq!(dialog.name, "Kept");
+            assert!(dialog.parent.is_empty());
+            assert!(dialog.expanded_folders.contains("items/1"));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn move_dialog_keeps_a_destination_parent(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("move-dialog-parent");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request = workspace.request_key("items/0").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(request, cx);
+            view.open_move_dialog(window, cx);
+            let dialog = view.structure_dialog.as_ref().unwrap();
+            assert!(matches!(dialog.mode, StructureDialogMode::Move { .. }));
+            assert_eq!(dialog.parent, "");
+            view.structure_dialog.as_mut().unwrap().parent = "items/1".to_owned();
+            view.submit_structure_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let moved = loaded
+        .requests()
+        .iter()
+        .find(|located| {
+            loaded
+                .workspace()
+                .request(located.key())
+                .unwrap()
+                .metadata
+                .name
+                .as_deref()
+                == Some("Alpha")
+        })
+        .expect("moved request should remain");
+    let parent = loaded
+        .workspace()
+        .request_ancestor_folders(moved.key())
+        .and_then(|ancestors| ancestors.last().copied())
+        .expect("request should leave the collection root");
+    assert_eq!(
+        loaded
+            .workspace()
+            .folder(parent)
+            .unwrap()
+            .metadata
+            .name
+            .as_deref(),
+        Some("Folder")
+    );
+}
+
+#[gpui::test]
+fn request_tab_add_button_stays_with_the_open_tabs(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request, cx);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let tab = visual
+        .debug_bounds("request-tab-0")
+        .expect("open request should render a tab");
+    let add = visual
+        .debug_bounds("request-tab-add-trigger")
+        .expect("new request control should stay in the tab bar");
+    let environment = visual
+        .debug_bounds("request-environment-trigger")
+        .expect("environment dropdown should stay at the end of the tab bar");
+    let tab_gap = f32::from(add.left()) - f32::from(tab.right());
+    let trailing = f32::from(environment.left()) - f32::from(add.right());
+    assert!(f32::from(add.left()) >= f32::from(tab.left()));
+    assert!(trailing > tab_gap);
+}
+
+fn folder_selector_named(view: &ProbeApp, name: &str) -> Option<String> {
+    let loaded = view.loaded_workspace.as_ref()?;
+    loaded.folders().iter().find_map(|located| {
+        let folder = loaded.workspace().folder(located.key())?;
+        (folder.metadata.name.as_deref() == Some(name)).then(|| located.selector().to_owned())
+    })
+}
+
+#[gpui::test]
 fn reordered_tabs_are_captured_and_restored_in_session_order(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -223,6 +1214,7 @@ fn creating_root_request_without_selection_selects_opens_and_reveals_it(cx: &mut
                     url: None,
                     protocol: probe_opencollection::CreatedRequestProtocol::Http,
                     graphql: None,
+                    update: None,
                 },
                 window,
                 cx,
@@ -286,6 +1278,7 @@ fn creating_request_in_selected_folder_selects_child_and_expands_parent(cx: &mut
                     url: None,
                     protocol: probe_opencollection::CreatedRequestProtocol::Http,
                     graphql: None,
+                    update: None,
                 },
                 window,
                 cx,

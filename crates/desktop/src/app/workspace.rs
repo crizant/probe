@@ -202,24 +202,29 @@ impl ProbeApp {
             return;
         }
         if let Some(pending) = self.pending_close.take() {
-            let dirty = match &pending {
-                PendingClose::Tab(key) => self
-                    .request_is_dirty(*key)
-                    .then_some(vec![*key])
-                    .unwrap_or_default(),
-                PendingClose::OtherTabs { keep } => self.other_dirty_tab_keys(*keep),
-                PendingClose::Workspace
-                | PendingClose::Window
-                | PendingClose::Quit
-                | PendingClose::Open { .. }
-                | PendingClose::Create { .. }
-                | PendingClose::Import(_) => self.dirty_keys(),
-            };
+            let dirty = self.pending_close_dirty_keys(&pending);
             if dirty.is_empty() {
                 self.finish_pending_close(pending, window, cx);
             } else {
                 self.prompt_unsaved(dirty, pending, window, cx);
             }
+        }
+    }
+
+    pub(super) fn pending_close_dirty_keys(&self, pending: &PendingClose) -> Vec<RequestKey> {
+        match pending {
+            PendingClose::Tab(key) => self
+                .request_is_dirty(*key)
+                .then_some(*key)
+                .into_iter()
+                .collect(),
+            PendingClose::OtherTabs { keep } => self.other_dirty_tab_keys(*keep),
+            PendingClose::Workspace
+            | PendingClose::Window
+            | PendingClose::Quit
+            | PendingClose::Open { .. }
+            | PendingClose::Create { .. }
+            | PendingClose::Import(_) => self.dirty_keys(),
         }
     }
 
@@ -235,6 +240,8 @@ impl ProbeApp {
         self.execution.clear();
         self.response_viewer.clear();
         self.loaded_workspace = Some(workspace);
+        self.detached_requests.clear();
+        self.committed_detached_requests.clear();
         self.workspace_path = Some(path);
         self.shell.reset_for_workspace();
         self.reset_collection_ui();
@@ -464,6 +471,7 @@ impl ProbeApp {
         self.transient.sidebar_import_menu_open = false;
         self.transient.structure_add_menu_open = false;
         self.transient.request_execution_menu_open = false;
+        self.transient.request_tab_add_menu_open = false;
         self.transient.tree_context_menu = None;
         self.transient.tab_context_menu = None;
         self.transient.environment_manager_context_menu = None;
@@ -493,8 +501,16 @@ impl ProbeApp {
         match (dialog, action) {
             (ApplicationDialog::Unsaved { keys, pending }, ApplicationDialogAction::Save) => {
                 self.pending_close = Some(pending);
-                self.persistence.enqueue(keys);
-                self.start_next_request_save(window, cx);
+                if let Some(key) = keys
+                    .iter()
+                    .copied()
+                    .find(|key| self.detached_requests.contains(key))
+                {
+                    self.open_save_detached_request_dialog(key, window, cx);
+                } else {
+                    self.persistence.enqueue(keys);
+                    self.start_next_request_save(window, cx);
+                }
             }
             (ApplicationDialog::Unsaved { keys, pending }, ApplicationDialogAction::Discard) => {
                 self.discard_dirty_requests(&keys);
@@ -717,16 +733,74 @@ impl ProbeApp {
 
     pub(super) fn install_reloaded_workspace(
         &mut self,
-        workspace: LoadedWorkspace,
+        mut workspace: LoadedWorkspace,
         baselines: Vec<(RequestKey, HttpRequest)>,
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
-    ) {
+    ) -> BTreeMap<RequestKey, RequestKey> {
+        let detached = self
+            .detached_requests
+            .iter()
+            .copied()
+            .filter_map(|key| {
+                self.loaded_workspace
+                    .as_ref()?
+                    .workspace()
+                    .request(key)
+                    .cloned()
+                    .map(|request| (key, request))
+            })
+            .collect::<Vec<_>>();
+        let open_tabs = self.shell.tabs().to_vec();
+        let active_tab = self.shell.active_tab();
+        let mut remaps = key_remaps.clone();
+        self.detached_requests.clear();
+        for (old_key, request) in detached {
+            let new_key = workspace.add_detached_request(request);
+            remaps.insert(old_key, new_key);
+            self.detached_requests.insert(new_key);
+        }
+        self.committed_detached_requests = self
+            .committed_detached_requests
+            .iter()
+            .filter_map(|key| remaps.get(key).copied())
+            .collect();
         self.persistence.reset(baselines);
         self.loaded_workspace = Some(workspace);
         self.shell.reset_for_workspace();
-        self.execution.remap_requests(key_remaps);
-        self.response_viewer.remap_requests(key_remaps);
-        self.request_editor.remap_requests(key_remaps);
+        for old_key in open_tabs {
+            let Some(new_key) = remaps.get(&old_key).copied() else {
+                continue;
+            };
+            self.shell.insert_tab(new_key);
+        }
+        if let Some(new_key) = active_tab.and_then(|key| remaps.get(&key).copied()) {
+            self.shell.activate_tab(new_key);
+        }
+        self.execution.remap_requests(&remaps);
+        self.response_viewer.remap_requests(&remaps);
+        self.request_editor.remap_requests(&remaps);
+        if let Some(StructureDialog {
+            mode: StructureDialogMode::SaveDetachedRequest { key },
+            ..
+        }) = self.structure_dialog.as_mut()
+            && let Some(new_key) = remaps.get(key)
+        {
+            *key = *new_key;
+        }
+        match self.pending_close.as_mut() {
+            Some(PendingClose::Tab(key)) => {
+                if let Some(new_key) = remaps.get(key) {
+                    *key = *new_key;
+                }
+            }
+            Some(PendingClose::OtherTabs { keep }) => {
+                if let Some(new_key) = remaps.get(keep) {
+                    *keep = *new_key;
+                }
+            }
+            _ => {}
+        }
+        remaps
     }
 
     pub(super) fn remap_structure_dialog(&mut self, remaps: &BTreeMap<String, String>) {
@@ -742,6 +816,7 @@ impl ProbeApp {
         match &mut dialog.mode {
             StructureDialogMode::CreateHttpRequest
             | StructureDialogMode::CreateGraphqlRequest
+            | StructureDialogMode::SaveDetachedRequest { .. }
             | StructureDialogMode::CreateFolder => {}
             StructureDialogMode::Rename { kind, selector }
             | StructureDialogMode::Move { kind, selector } => {
@@ -760,12 +835,33 @@ impl ProbeApp {
             return;
         }
 
+        if matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+            let expanded = std::mem::take(&mut dialog.expanded_folders);
+            dialog.expanded_folders = expanded
+                .into_iter()
+                .filter_map(|selector| {
+                    let mapped = remaps
+                        .get(&selector)
+                        .map(String::as_str)
+                        .unwrap_or(selector.as_str());
+                    loaded
+                        .folder_key(mapped)
+                        .is_some()
+                        .then(|| mapped.to_owned())
+                })
+                .collect();
+        }
+
         if !dialog.parent.is_empty() {
             if let Some(mapped) = remaps.get(&dialog.parent) {
                 dialog.parent.clone_from(mapped);
             }
             if loaded.folder_key(&dialog.parent).is_none() {
-                self.structure_dialog = None;
+                if matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+                    dialog.parent.clear();
+                } else {
+                    self.structure_dialog = None;
+                }
             }
         }
     }
@@ -784,15 +880,17 @@ impl ProbeApp {
                 .get(&selector)
                 .and_then(|selector| loaded.request_key(selector))
             {
-                self.shell.open_request(key);
+                self.shell.insert_tab(key);
             }
         }
-        if let Some(selector) = selectors.active_selector
+        if self.shell.active_tab().is_none()
+            && let Some(selector) = selectors.active_selector
             && let Some(key) = remaps
                 .get(&selector)
                 .and_then(|selector| loaded.request_key(selector))
         {
-            self.shell.open_request(key);
+            self.shell.insert_tab(key);
+            self.shell.activate_tab(key);
         }
         for selector in selectors.folder_selectors {
             let selector = remaps
@@ -839,8 +937,15 @@ impl ProbeApp {
             })
             .collect::<Vec<_>>();
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
-        self.install_reloaded_workspace(reconciled.workspace, baselines, &key_remaps);
+        let active_detached = self
+            .shell
+            .active_tab()
+            .filter(|key| self.detached_requests.contains(key));
+        let remaps = self.install_reloaded_workspace(reconciled.workspace, baselines, &key_remaps);
         self.restore_shell_selectors(&reconciled.selector_remaps, selectors);
+        if let Some(key) = active_detached.and_then(|key| remaps.get(&key).copied()) {
+            self.shell.activate_tab(key);
+        }
         self.remap_structure_dialog(&reconciled.selector_remaps);
         self.create_environment_dialog = None;
         self.sync_environment_manager_after_reload(environment_manager_reload, cx);

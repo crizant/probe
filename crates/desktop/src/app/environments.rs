@@ -8,6 +8,8 @@ impl ProbeApp {
         self.pending_environment_saves.clear();
         self.environment_save_workspace_path = None;
         self.loaded_workspace = None;
+        self.detached_requests.clear();
+        self.committed_detached_requests.clear();
         self.workspace_path = None;
         self.shell.reset_for_workspace();
         self.shell.select_environment(None);

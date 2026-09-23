@@ -13,14 +13,20 @@ pub(super) fn mutate_unbundled(
             url,
             protocol,
             graphql,
+            update,
         } => {
             validate_name(&name)?;
             let directory = destination_directory(root, parent.as_deref())?;
             let path = directory.join(format!("{}.yml", slug(&name)?));
             ensure_absent(root, &path)?;
+            let mut request = request_value(&name, method, url, protocol, graphql);
+            if let Some(update) = update {
+                apply_request_update(&mut request, &update)
+                    .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;
+            }
             create_atomic(
                 &path,
-                serde_yaml_ng::to_string(&request_value(&name, method, url, protocol, graphql))
+                serde_yaml_ng::to_string(&request)
                     .map_err(|error| StructureError::InvalidDocument(error.to_string()))?
                     .as_bytes(),
             )?;

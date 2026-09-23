@@ -8,11 +8,11 @@ use std::{
 use atomic_write_file::AtomicWriteFile;
 use serde_yaml_ng::{Mapping, Value};
 
-use probe_core::GraphqlUpdate;
+use probe_core::{GraphqlUpdate, RequestUpdate};
 
 use crate::repository::{
-    LoadedWorkspace, SaveError, SaveLock, WorkspaceSource, atomic_write, load_workspace,
-    relative_selector,
+    LoadedWorkspace, SaveError, SaveLock, WorkspaceSource, apply_request_update, atomic_write,
+    load_workspace, relative_selector,
 };
 
 mod bundled;
@@ -86,6 +86,8 @@ pub enum StructureOperation {
         protocol: CreatedRequestProtocol,
         /// Initial native GraphQL body, when creating a GraphQL request.
         graphql: Option<GraphqlUpdate>,
+        /// Additional request fields written in the same atomic creation operation.
+        update: Option<RequestUpdate>,
     },
     /// Creates an empty folder.
     CreateFolder {
@@ -207,6 +209,26 @@ impl LoadedWorkspace {
         &mut self,
         operation: StructureOperation,
     ) -> Result<StructureResult, StructureError> {
+        self.apply_structure_internal(operation, false)
+            .map(|(result, _)| result)
+    }
+
+    /// Applies a structural edit and returns the reloaded on-disk workspace before
+    /// any in-memory request drafts are replayed. Desktop persistence uses this as
+    /// its conflict baseline after creating an unsaved request.
+    pub fn apply_structure_with_disk_snapshot(
+        &mut self,
+        operation: StructureOperation,
+    ) -> Result<(StructureResult, LoadedWorkspace), StructureError> {
+        let (result, disk) = self.apply_structure_internal(operation, true)?;
+        Ok((result, disk.expect("disk snapshot was requested")))
+    }
+
+    fn apply_structure_internal(
+        &mut self,
+        operation: StructureOperation,
+        capture_disk: bool,
+    ) -> Result<(StructureResult, Option<LoadedWorkspace>), StructureError> {
         validate_operation_selectors(self, &operation)?;
         let source = self.source.clone();
         let request_snapshots = self
@@ -245,6 +267,7 @@ impl LoadedWorkspace {
         let mut fresh = reload_committed_workspace(path, &result, |path| {
             load_workspace(path).map_err(|error| error.to_string())
         })?;
+        let disk = capture_disk.then(|| fresh.clone());
         for (old_selector, mut request) in request_snapshots {
             let Some(new_selector) = result.selector_remaps.get(&old_selector) else {
                 continue;
@@ -263,7 +286,7 @@ impl LoadedWorkspace {
             }
         }
         *self = fresh;
-        Ok(result)
+        Ok((result, disk))
     }
 
     fn apply_bundled(

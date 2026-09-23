@@ -15,7 +15,7 @@ impl ProbeApp {
         let scroll_drag_view = cx.weak_entity();
         let drop_view = cx.weak_entity();
         let mut tab_strip = Tabs::new("request-tabs-scroll")
-            .flex_1()
+            .flex_initial()
             .min_w(px(0.0))
             .h_full()
             .px(px(theme.metrics.spacing_1))
@@ -47,12 +47,21 @@ impl ProbeApp {
                 continue;
             };
             let active = self.shell.active_tab() == Some(*key);
-            let dirty = self.persistence.is_dirty(*key, request);
-            let label = request
-                .metadata
-                .name
-                .as_deref()
-                .unwrap_or("Untitled request");
+            let detached = self.detached_requests.contains(key);
+            let dirty = detached || self.persistence.is_dirty(*key, request);
+            let label = if detached {
+                request
+                    .url
+                    .as_deref()
+                    .filter(|url| !url.trim().is_empty())
+                    .unwrap_or("Untitled request")
+            } else {
+                request
+                    .metadata
+                    .name
+                    .as_deref()
+                    .unwrap_or("Untitled request")
+            };
             let select_view = cx.weak_entity();
             let close_view = cx.weak_entity();
             let context_menu_view = cx.weak_entity();
@@ -209,8 +218,61 @@ impl ProbeApp {
             .items_center()
             .bg(theme.colors.surfaces.raised)
             .border_b_1()
-            .border_color(theme.colors.borders.subtle)
-            .child(tab_strip);
+            .border_color(theme.colors.borders.subtle);
+        let menu_view = cx.weak_entity();
+        let http_view = cx.weak_entity();
+        let graphql_view = cx.weak_entity();
+        let add_popup = components::popup_surface(theme, "request-tab-add-popup", 160.0)
+            .child(components::menu_button(
+                theme,
+                "request-tab-new-http",
+                "HTTP",
+                None,
+                move |window, cx| {
+                    let _ = http_view.update(cx, |view, cx| {
+                        view.new_detached_request(false, window, cx);
+                    });
+                },
+            ))
+            .child(components::menu_button(
+                theme,
+                "request-tab-new-graphql",
+                "GraphQL",
+                None,
+                move |window, cx| {
+                    let _ = graphql_view.update(cx, |view, cx| {
+                        view.new_detached_request(true, window, cx);
+                    });
+                },
+            ));
+        let add_menu = div().flex_none().child(
+            Popover::new("request-tab-add-menu")
+                .open(self.transient.request_tab_add_menu_open)
+                .on_open_change(move |open, _, cx| {
+                    let _ = menu_view.update(cx, |view, cx| {
+                        view.transient.request_tab_add_menu_open = *open;
+                        cx.notify();
+                    });
+                })
+                .trigger(components::add_menu_button_with_id(
+                    theme,
+                    "request-tab-add-trigger",
+                    "New request tab",
+                    self.transient.request_tab_add_menu_open,
+                    true,
+                ))
+                .content(move |_, _, _| add_popup),
+        );
+        tabs = tabs.child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .flex()
+                .items_center()
+                .child(tab_strip)
+                .child(add_menu),
+        );
         let selected = self.shell.selected_environment().unwrap_or("").to_owned();
         let mut options = vec![(String::new(), "No environment".to_owned())];
         options.extend(

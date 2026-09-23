@@ -106,9 +106,10 @@ use crate::{
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
     structure_editor::{
-        DropIndicator, DropReject, ROOT_PARENT, StructureDialog, StructureDialogMode,
-        TreeDropIntent, descendant_requests, drop_intent, drop_zone, hovered_row_index,
-        item_position, structure_operation_for_drop, validate_tree_drop, would_duplicate_path,
+        DropIndicator, DropReject, ROOT_PARENT, SaveDestinationRow, StructureDialog,
+        StructureDialogMode, TreeDropIntent, descendant_requests, drop_intent, drop_zone,
+        folder_ancestor_selectors, hovered_row_index, item_position, save_destination_rows,
+        structure_operation_for_drop, validate_tree_drop, would_duplicate_path,
     },
     synchronization::{
         LocalRequestState, ReconcileResult, ReconciledWorkspace, SynchronizationConflict, reconcile,
@@ -172,6 +173,9 @@ gpui::actions!(
         CollapseTreeItem,
         ExpandTreeItem,
         ActivateTreeItem,
+        ActivateSaveDestination,
+        SubmitSaveFolderDialog,
+        CancelSaveFolderDialog,
         OpenImportSubmenu,
         CloseImportSubmenu,
         SubmitStructureDialog,
@@ -273,11 +277,14 @@ pub(crate) struct ProbeApp {
     focus_handle: FocusHandle,
     tree_focus_handle: FocusHandle,
     structure_dialog_focus: FocusHandle,
+    save_folder_dialog_focus: FocusHandle,
     create_environment_dialog_focus: FocusHandle,
     environment_manager_dialog_focus: FocusHandle,
     application_dialog_focus: FocusHandle,
     toast_focus_handle: FocusHandle,
     loaded_workspace: Option<LoadedWorkspace>,
+    detached_requests: BTreeSet<RequestKey>,
+    committed_detached_requests: BTreeSet<RequestKey>,
     workspace_path: Option<PathBuf>,
     shell: ShellState,
     loading: bool,
@@ -376,6 +383,7 @@ impl ProbeApp {
         focus_handle.focus(window, cx);
         let tree_focus_handle = cx.focus_handle();
         let structure_dialog_focus = cx.focus_handle();
+        let save_folder_dialog_focus = cx.focus_handle();
         let create_environment_dialog_focus = cx.focus_handle();
         let environment_manager_dialog_focus = cx.focus_handle();
         let application_dialog_focus = cx.focus_handle();
@@ -391,11 +399,14 @@ impl ProbeApp {
             focus_handle,
             tree_focus_handle,
             structure_dialog_focus,
+            save_folder_dialog_focus,
             create_environment_dialog_focus,
             environment_manager_dialog_focus,
             application_dialog_focus,
             toast_focus_handle,
             loaded_workspace: None,
+            detached_requests: BTreeSet::new(),
+            committed_detached_requests: BTreeSet::new(),
             workspace_path: None,
             shell: ShellState::default(),
             loading: false,
@@ -799,6 +810,9 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("alt-up", MoveTreeItemUp, Some("RequestTree")),
         KeyBinding::new("alt-down", MoveTreeItemDown, Some("RequestTree")),
         KeyBinding::new("enter", SubmitStructureDialog, Some("StructureDialog")),
+        KeyBinding::new("enter", ActivateSaveDestination, Some("SaveDestination")),
+        KeyBinding::new("enter", SubmitSaveFolderDialog, Some("SaveFolderDialog")),
+        KeyBinding::new("escape", CancelSaveFolderDialog, Some("SaveFolderDialog")),
         KeyBinding::new(
             "enter",
             SubmitCreateEnvironmentDialog,

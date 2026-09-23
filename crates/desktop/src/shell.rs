@@ -66,10 +66,22 @@ impl ShellState {
     }
 
     pub(crate) fn open_request(&mut self, key: RequestKey) {
+        self.insert_tab(key);
+        self.activate_tab(key);
+    }
+
+    /// Appends `key` when it is not already open, without changing the active tab.
+    pub(crate) fn insert_tab(&mut self, key: RequestKey) {
         if !self.tabs.contains(&key) {
             self.tabs.push(key);
         }
-        self.active_tab = Some(key);
+    }
+
+    /// Selects `key` when that tab is already open.
+    pub(crate) fn activate_tab(&mut self, key: RequestKey) {
+        if self.tabs.contains(&key) {
+            self.active_tab = Some(key);
+        }
     }
 
     pub(crate) fn close_tab(&mut self, key: RequestKey) {
