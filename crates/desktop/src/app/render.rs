@@ -451,7 +451,11 @@ impl Render for ProbeApp {
                             .flex()
                             .flex_col()
                             .child(self.render_tabs(theme, cx))
-                            .child(self.render_editor_response(theme, cx))
+                            .child(self.render_editor_response(
+                                theme,
+                                window.window_bounds().get_bounds().size.height.into(),
+                                cx,
+                            ))
                             .when(!self.shell.sidebar_collapsed, |column| {
                                 column.child(
                                     components::pane_splitter(

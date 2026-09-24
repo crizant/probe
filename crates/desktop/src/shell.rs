@@ -5,7 +5,10 @@ use probe_core::{FolderKey, RequestKey};
 const MIN_SIDEBAR_WIDTH: f32 = 180.0;
 const MAX_SIDEBAR_WIDTH: f32 = 520.0;
 const MIN_RESPONSE_HEIGHT: f32 = 120.0;
-const MAX_RESPONSE_HEIGHT: f32 = 560.0;
+/// Largest share of the window the response pane may occupy.
+const MAX_RESPONSE_HEIGHT_RATIO: f32 = 0.75;
+/// Title bar, request tabs, and the request editor's minimum height.
+const MIN_ABOVE_RESPONSE_HEIGHT: f32 = 190.0;
 const MIN_RESPONSE_WIDTH: f32 = 240.0;
 const MAX_RESPONSE_WIDTH: f32 = 760.0;
 pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 260.0;
@@ -54,6 +57,12 @@ impl Default for ShellState {
             resizing: None,
         }
     }
+}
+
+fn max_response_height(window_height: f32) -> f32 {
+    let ratio_limit = window_height * MAX_RESPONSE_HEIGHT_RATIO;
+    let above_limit = window_height - MIN_ABOVE_RESPONSE_HEIGHT;
+    ratio_limit.min(above_limit).max(MIN_RESPONSE_HEIGHT)
 }
 
 impl ShellState {
@@ -160,8 +169,14 @@ impl ShellState {
     }
 
     pub(crate) fn resize_response(&mut self, window_height: f32, position: f32) {
-        self.response_height =
-            (window_height - position).clamp(MIN_RESPONSE_HEIGHT, MAX_RESPONSE_HEIGHT);
+        self.response_height = (window_height - position)
+            .clamp(MIN_RESPONSE_HEIGHT, max_response_height(window_height));
+    }
+
+    /// Height to draw, limited to [`MAX_RESPONSE_HEIGHT_RATIO`] of `window_height`.
+    pub(crate) fn response_height_for_window(&self, window_height: f32) -> f32 {
+        self.response_height
+            .clamp(MIN_RESPONSE_HEIGHT, max_response_height(window_height))
     }
 
     pub(crate) fn resize_response_width(&mut self, window_width: f32, position: f32) {
@@ -180,7 +195,7 @@ impl ShellState {
         response_width: f32,
     ) {
         self.sidebar_width = sidebar_width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
-        self.response_height = response_height.clamp(MIN_RESPONSE_HEIGHT, MAX_RESPONSE_HEIGHT);
+        self.response_height = response_height.max(MIN_RESPONSE_HEIGHT);
         self.response_width = response_width.clamp(MIN_RESPONSE_WIDTH, MAX_RESPONSE_WIDTH);
     }
 
@@ -281,6 +296,12 @@ mod tests {
         state.resize_response(800.0, 790.0);
         assert_eq!(state.sidebar_width, 180.0);
         assert_eq!(state.response_height, 120.0);
+        state.resize_response(800.0, 0.0);
+        assert_eq!(state.response_height, 600.0);
+        state.resize_response(560.0, 0.0);
+        assert_eq!(state.response_height, 370.0);
+        state.response_height = 900.0;
+        assert_eq!(state.response_height_for_window(800.0), 600.0);
 
         state.resize_response_width(1000.0, 990.0);
         state.set_pane_layout(PaneLayout::Horizontal);

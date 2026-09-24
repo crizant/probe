@@ -1,7 +1,12 @@
 use super::*;
 
 impl ProbeApp {
-    pub(super) fn render_response_panel(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn render_response_panel(
+        &self,
+        theme: Theme,
+        window_height: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let active_key = self.shell.active_tab();
         let state = active_key.and_then(|key| self.execution.response(key));
         let shows_response_tabs = matches!(state, Some(ResponseState::Complete { .. }))
@@ -221,7 +226,9 @@ impl ProbeApp {
 
         div()
             .when(self.shell.pane_layout == PaneLayout::Vertical, |panel| {
-                panel.h(px(self.shell.response_height)).w_full()
+                panel
+                    .h(px(self.shell.response_height_for_window(window_height)))
+                    .w_full()
             })
             .when(self.shell.pane_layout == PaneLayout::Horizontal, |panel| {
                 panel.w(px(self.shell.response_width)).h_full()
@@ -1005,7 +1012,12 @@ impl ProbeApp {
         }
     }
 
-    pub(super) fn render_editor_response(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn render_editor_response(
+        &self,
+        theme: Theme,
+        window_height: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let response_view = cx.weak_entity();
         let horizontal = self.shell.pane_layout == PaneLayout::Horizontal;
         let splitter = components::pane_splitter(
@@ -1034,7 +1046,7 @@ impl ProbeApp {
             .when(!horizontal, |work_area| work_area.flex_col())
             .child(self.render_request_editor(theme, cx))
             .child(
-                self.render_response_panel(theme, cx)
+                self.render_response_panel(theme, window_height, cx)
                     .relative()
                     .child(splitter),
             )
