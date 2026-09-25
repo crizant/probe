@@ -442,9 +442,11 @@ impl ProbeApp {
                 .flatten()
                 .map(|operation| probe_core::GraphqlUpdate {
                     query: operation.query.clone(),
-                    variables: Some(operation.variables.clone()),
-                    operation_name: Some(operation.operation_name.clone()),
-                    extensions: Some(operation.extensions.clone()),
+                    variables: probe_core::FieldPatch::from_optional(operation.variables.clone()),
+                    operation_name: probe_core::FieldPatch::from_optional(
+                        operation.operation_name.clone(),
+                    ),
+                    extensions: probe_core::FieldPatch::from_optional(operation.extensions.clone()),
                 });
         let operation = StructureOperation::CreateRequest {
             parent,
@@ -462,8 +464,12 @@ impl ProbeApp {
                 headers: Some(draft.headers.clone()),
                 query_parameters: Some(draft.query_parameters.clone()),
                 path_parameters: Some(draft.path_parameters.clone()),
-                body: (!graphql).then(|| draft.body.clone()),
-                authentication: Some(draft.authentication.clone()),
+                body: if graphql {
+                    probe_core::FieldPatch::Unchanged
+                } else {
+                    probe_core::FieldPatch::from_optional(draft.body.clone())
+                },
+                authentication: probe_core::FieldPatch::from_optional(draft.authentication.clone()),
                 ..probe_core::RequestUpdate::default()
             }),
         };

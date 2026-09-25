@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use probe_core::{GraphqlUpdate, RequestUpdate, StatusExpectation};
+use probe_core::{FieldPatch, GraphqlUpdate, RequestUpdate, StatusExpectation};
 use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
 use serde_json::{Map, Value};
 
@@ -543,17 +543,23 @@ fn graphql_update(mut options: Options) -> Result<RequestUpdate, CliError> {
             .graphql_variables
             .as_deref()
             .map(|source| parse_graphql_object(source, "variables"))
-            .transpose()?,
+            .transpose()?
+            .map(FieldPatch::from_optional)
+            .unwrap_or_default(),
         operation_name: options
             .graphql_operation_name
             .as_deref()
             .map(|source| parse_graphql_string(source, "operation name"))
-            .transpose()?,
+            .transpose()?
+            .map(FieldPatch::from_optional)
+            .unwrap_or_default(),
         extensions: options
             .graphql_extensions
             .as_deref()
             .map(|source| parse_graphql_object(source, "extensions"))
-            .transpose()?,
+            .transpose()?
+            .map(FieldPatch::from_optional)
+            .unwrap_or_default(),
     };
     options.update.graphql = Some(graphql);
     Ok(options.update)

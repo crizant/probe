@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use probe_core::{
-    Authentication, AuthenticationKind, Body, GraphqlBody, GraphqlBodyVariant, GraphqlOperation,
-    GraphqlRequest, GraphqlRequestError, Header, HttpRequest, ItemMetadata, QueryParameter,
-    RawBody, RawBodyKind, RequestBody, RequestUpdate,
+    Authentication, AuthenticationKind, Body, FieldPatch, GraphqlBody, GraphqlBodyVariant,
+    GraphqlOperation, GraphqlRequest, GraphqlRequestError, Header, HttpRequest, ItemMetadata,
+    QueryParameter, RawBody, RawBodyKind, RequestBody, RequestUpdate,
 };
 use serde_json::{Map, Value, json};
 
@@ -104,8 +104,8 @@ fn diff_tracks_http_fields_and_applies_the_patch() {
         Some(current.query_parameters.clone())
     );
     assert_eq!(update.path_parameters, Some(Vec::new()));
-    assert_eq!(update.body, Some(current.body.clone()));
-    assert_eq!(update.authentication, Some(None));
+    assert_eq!(update.body, FieldPatch::Set(current.body.clone().unwrap()));
+    assert_eq!(update.authentication, FieldPatch::Clear);
     assert!(update.graphql.is_none());
     let mut patched = base;
     update.apply(&mut patched).unwrap();
@@ -121,8 +121,8 @@ fn diff_distinguishes_cleared_body_and_authentication() {
     };
     let current = HttpRequest::default();
     let update = RequestUpdate::between(Some(&base), &current).unwrap();
-    assert_eq!(update.body, Some(None));
-    assert_eq!(update.authentication, Some(None));
+    assert_eq!(update.body, FieldPatch::Clear);
+    assert_eq!(update.authentication, FieldPatch::Clear);
     let mut patched = base;
     update.apply(&mut patched).unwrap();
     assert_eq!(patched, current);
@@ -143,9 +143,9 @@ fn diff_tracks_graphql_operation_changes_and_optional_clears() {
     let update = RequestUpdate::between(Some(&base), &current).unwrap();
     let graphql = update.graphql.as_ref().unwrap();
     assert_eq!(graphql.query.as_deref(), Some("query New { new }"));
-    assert_eq!(graphql.variables, Some(None));
-    assert_eq!(graphql.operation_name, Some(None));
-    assert_eq!(graphql.extensions, Some(None));
+    assert_eq!(graphql.variables, FieldPatch::Clear);
+    assert_eq!(graphql.operation_name, FieldPatch::Clear);
+    assert_eq!(graphql.extensions, FieldPatch::Clear);
     let mut patched = base;
     update.apply(&mut patched).unwrap();
     assert_eq!(patched, current);

@@ -50,7 +50,7 @@ fn invalid_create_update_leaves_bundled_source_untouched() {
         protocol: CreatedRequestProtocol::Graphql,
         graphql: None,
         update: Some(probe_core::RequestUpdate {
-            body: Some(None),
+            body: FieldPatch::Clear,
             ..probe_core::RequestUpdate::default()
         }),
     });
@@ -569,7 +569,7 @@ fn bundled_create_can_write_native_graphql_requests() {
             protocol: CreatedRequestProtocol::Graphql,
             graphql: Some(probe_core::GraphqlUpdate {
                 query: Some("query Viewer { viewer { login } }".to_owned()),
-                operation_name: Some(Some("Viewer".to_owned())),
+                operation_name: FieldPatch::Set("Viewer".to_owned()),
                 ..probe_core::GraphqlUpdate::default()
             }),
             update: None,

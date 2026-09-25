@@ -191,8 +191,8 @@ fn bundled_graphql_update_save_reload_remains_native() {
             &RequestUpdate {
                 graphql: Some(probe_core::GraphqlUpdate {
                     query: Some("query Viewer { viewer { login } }".to_owned()),
-                    variables: Some(Some(variables.clone())),
-                    operation_name: Some(Some("Viewer".to_owned())),
+                    variables: FieldPatch::Set(variables.clone()),
+                    operation_name: FieldPatch::Set("Viewer".to_owned()),
                     ..probe_core::GraphqlUpdate::default()
                 }),
                 ..RequestUpdate::default()
@@ -244,8 +244,8 @@ fn unbundled_graphql_update_save_reload_preserves_extensions() {
             "viewer.yml",
             &RequestUpdate {
                 graphql: Some(probe_core::GraphqlUpdate {
-                    operation_name: Some(Some("Viewer".to_owned())),
-                    extensions: Some(Some(extensions.clone())),
+                    operation_name: FieldPatch::Set("Viewer".to_owned()),
+                    extensions: FieldPatch::Set(extensions.clone()),
                     ..probe_core::GraphqlUpdate::default()
                 }),
                 ..RequestUpdate::default()
@@ -295,17 +295,15 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
             value: "42".to_owned(),
             disabled: false,
         }]),
-        body: Some(Some(RequestBody::Single(Body::FormUrlEncoded(vec![
-            FormField {
-                name: "name".to_owned(),
-                value: "Milo".to_owned(),
-                disabled: false,
-            },
-        ])))),
-        authentication: Some(Some(Authentication {
+        body: FieldPatch::Set(RequestBody::Single(Body::FormUrlEncoded(vec![FormField {
+            name: "name".to_owned(),
+            value: "Milo".to_owned(),
+            disabled: false,
+        }]))),
+        authentication: FieldPatch::Set(Authentication {
             kind: AuthenticationKind::Basic,
             properties,
-        })),
+        }),
         ..RequestUpdate::default()
     };
 
@@ -342,6 +340,39 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
 }
 
 #[test]
+fn clearing_body_and_authentication_preserves_unrelated_yaml() {
+    let path = temporary_path("clear-body-auth.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let saved = loaded
+        .prepare_request_save(
+            "items/0",
+            RequestUpdate {
+                body: FieldPatch::Clear,
+                authentication: FieldPatch::Clear,
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap()
+        .execute()
+        .unwrap();
+    loaded.complete_request_save(saved);
+
+    let reloaded = load_workspace(&path).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("items/0").unwrap())
+        .unwrap();
+    assert!(request.body.is_none());
+    assert!(request.authentication.is_none());
+    let yaml = fs::read_to_string(&path).unwrap();
+    assert!(yaml.contains("vendor.example"));
+    assert!(yaml.contains("Request origin"));
+    assert!(yaml.contains("expect(res.status)"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn every_supported_body_and_authentication_shape_survives_desktop_style_saves() {
     let path = temporary_path("desktop-body-shapes.yml");
     fs::copy(fixture("phase1-bodies-auth-environments.yml"), &path).unwrap();
@@ -364,8 +395,8 @@ fn every_supported_body_and_authentication_shape_survives_desktop_style_saves() 
             headers: Some(request.headers.clone()),
             query_parameters: Some(request.query_parameters.clone()),
             path_parameters: Some(request.path_parameters.clone()),
-            body: Some(request.body.clone()),
-            authentication: Some(request.authentication.clone()),
+            body: FieldPatch::from_optional(request.body.clone()),
+            authentication: FieldPatch::from_optional(request.authentication.clone()),
             ..RequestUpdate::default()
         };
         let saved = loaded

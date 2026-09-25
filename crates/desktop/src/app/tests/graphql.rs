@@ -1,4 +1,4 @@
-use probe_core::{GraphqlUpdate, RequestProtocol};
+use probe_core::{FieldPatch, GraphqlUpdate, RequestProtocol};
 use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
 
 use super::*;
@@ -26,9 +26,9 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
                     protocol: CreatedRequestProtocol::Graphql,
                     graphql: Some(GraphqlUpdate {
                         query: Some("query { viewer { login } }".to_owned()),
-                        variables: None,
-                        operation_name: None,
-                        extensions: None,
+                        variables: FieldPatch::Unchanged,
+                        operation_name: FieldPatch::Unchanged,
+                        extensions: FieldPatch::Unchanged,
                     }),
                     update: None,
                 },
@@ -154,11 +154,11 @@ fn graphql_variables_extensions_and_operation_name_persist(cx: &mut TestAppConte
                         query: Some(
                             "query GetUser($id: Int!) { user(id: $id) { name } }".to_owned(),
                         ),
-                        variables: Some(Some(serde_json::from_str(r#"{"id": 1}"#).unwrap())),
-                        operation_name: Some(Some("GetUser".to_owned())),
-                        extensions: Some(Some(
+                        variables: FieldPatch::Set(serde_json::from_str(r#"{"id": 1}"#).unwrap()),
+                        operation_name: FieldPatch::Set("GetUser".to_owned()),
+                        extensions: FieldPatch::Set(
                             serde_json::from_str(r#"{"persistedQuery":{"version":1}}"#).unwrap(),
-                        )),
+                        ),
                     }),
                     update: None,
                 },

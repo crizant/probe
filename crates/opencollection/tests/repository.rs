@@ -2,8 +2,8 @@ use std::fs;
 
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, Collection, CollectionItem,
-    CollectionMetadata, EnvironmentResolutionError, FormField, Header, HttpRequest, ItemMetadata,
-    QueryParameter, RequestBody, RequestUpdate, resolve_environment,
+    CollectionMetadata, EnvironmentResolutionError, FieldPatch, FormField, Header, HttpRequest,
+    ItemMetadata, QueryParameter, RequestBody, RequestUpdate, resolve_environment,
 };
 use probe_opencollection::{
     CreateError, CreatedRequestProtocol, SaveError, StructureError, StructureOperation,

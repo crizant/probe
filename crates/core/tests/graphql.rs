@@ -1,8 +1,8 @@
 use probe_core::{
-    Body, BodyVariant, Environment, EnvironmentVariable, GraphqlBody, GraphqlBodyVariant,
-    GraphqlOperation, GraphqlRequest, GraphqlRequestError, GraphqlUpdate, HttpRequest,
-    QueryParameter, RawBody, RawBodyKind, RequestBody, RequestProtocol, RequestUpdate, Variable,
-    VariableValue, VariableValueSet, resolve_environment, resolve_request,
+    Body, BodyVariant, Environment, EnvironmentVariable, FieldPatch, GraphqlBody,
+    GraphqlBodyVariant, GraphqlOperation, GraphqlRequest, GraphqlRequestError, GraphqlUpdate,
+    HttpRequest, QueryParameter, RawBody, RawBodyKind, RequestBody, RequestProtocol, RequestUpdate,
+    Variable, VariableValue, VariableValueSet, resolve_environment, resolve_request,
 };
 use serde_json::{Map, Value, json};
 
@@ -277,7 +277,7 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
     let mut request = native_request("POST");
     RequestUpdate {
         graphql: Some(GraphqlUpdate {
-            variables: Some(Some(object(json!({ "page": 1 })))),
+            variables: FieldPatch::Set(object(json!({ "page": 1 }))),
             ..GraphqlUpdate::default()
         }),
         ..RequestUpdate::default()
@@ -314,7 +314,7 @@ fn graphql_updates_are_partial_and_http_json_is_not_reclassified() {
     let mut request = native_request("POST");
     request
         .apply_graphql_update(&GraphqlUpdate {
-            variables: Some(Some(object(json!({ "page": 1 })))),
+            variables: FieldPatch::Set(object(json!({ "page": 1 }))),
             ..GraphqlUpdate::default()
         })
         .unwrap();

@@ -31,6 +31,44 @@ pub struct HttpRequest {
     pub protocol: RequestProtocol,
 }
 
+/// A change to an optional request field.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum FieldPatch<T> {
+    /// Keep the current value.
+    #[default]
+    Unchanged,
+    /// Replace the current value.
+    Set(T),
+    /// Remove the current value.
+    Clear,
+}
+
+impl<T> FieldPatch<T> {
+    /// Converts a replacement optional value into a set or clear patch.
+    pub fn from_optional(value: Option<T>) -> Self {
+        match value {
+            Some(value) => Self::Set(value),
+            None => Self::Clear,
+        }
+    }
+
+    /// Returns whether this patch leaves the field unchanged.
+    pub const fn is_unchanged(&self) -> bool {
+        matches!(self, Self::Unchanged)
+    }
+
+    fn apply_to(&self, target: &mut Option<T>)
+    where
+        T: Clone,
+    {
+        match self {
+            Self::Unchanged => {}
+            Self::Set(value) => *target = Some(value.clone()),
+            Self::Clear => *target = None,
+        }
+    }
+}
+
 /// A non-interactive partial update to an HTTP request.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RequestUpdate {
@@ -46,10 +84,10 @@ pub struct RequestUpdate {
     pub query_parameters: Option<Vec<QueryParameter>>,
     /// Replacement path parameters.
     pub path_parameters: Option<Vec<QueryParameter>>,
-    /// Replacement body; inner `None` removes it.
-    pub body: Option<Option<RequestBody>>,
-    /// Replacement authentication; inner `None` removes it.
-    pub authentication: Option<Option<Authentication>>,
+    /// Request body change.
+    pub body: FieldPatch<RequestBody>,
+    /// Authentication change.
+    pub authentication: FieldPatch<Authentication>,
     /// Partial native GraphQL body update.
     pub graphql: Option<GraphqlUpdate>,
 }
@@ -85,21 +123,37 @@ impl RequestUpdate {
             path_parameters: (base.map(|request| &request.path_parameters)
                 != Some(&current.path_parameters))
             .then(|| current.path_parameters.clone()),
-            body: (base.and_then(|request| request.body.as_ref()) != current.body.as_ref())
-                .then(|| current.body.clone()),
-            authentication: (base.and_then(|request| request.authentication.as_ref())
-                != current.authentication.as_ref())
-            .then(|| current.authentication.clone()),
+            body: if base.and_then(|request| request.body.as_ref()) != current.body.as_ref() {
+                FieldPatch::from_optional(current.body.clone())
+            } else {
+                FieldPatch::Unchanged
+            },
+            authentication: if base.and_then(|request| request.authentication.as_ref())
+                != current.authentication.as_ref()
+            {
+                FieldPatch::from_optional(current.authentication.clone())
+            } else {
+                FieldPatch::Unchanged
+            },
             graphql: match (base.map(|request| &request.protocol), &current.protocol) {
                 (None | Some(RequestProtocol::Graphql(_)), RequestProtocol::Graphql(_))
                     if base_operation != current_operation =>
                 {
                     Some(GraphqlUpdate {
                         query: current_operation.and_then(|operation| operation.query.clone()),
-                        variables: current_operation.map(|operation| operation.variables.clone()),
+                        variables: current_operation
+                            .map(|operation| FieldPatch::from_optional(operation.variables.clone()))
+                            .unwrap_or_default(),
                         operation_name: current_operation
-                            .map(|operation| operation.operation_name.clone()),
-                        extensions: current_operation.map(|operation| operation.extensions.clone()),
+                            .map(|operation| {
+                                FieldPatch::from_optional(operation.operation_name.clone())
+                            })
+                            .unwrap_or_default(),
+                        extensions: current_operation
+                            .map(|operation| {
+                                FieldPatch::from_optional(operation.extensions.clone())
+                            })
+                            .unwrap_or_default(),
                     })
                 }
                 _ => None,
@@ -116,8 +170,8 @@ impl RequestUpdate {
             && self.headers.is_none()
             && self.query_parameters.is_none()
             && self.path_parameters.is_none()
-            && self.body.is_none()
-            && self.authentication.is_none()
+            && self.body.is_unchanged()
+            && self.authentication.is_unchanged()
             && self.graphql.as_ref().is_none_or(GraphqlUpdate::is_empty)
     }
 
@@ -141,12 +195,8 @@ impl RequestUpdate {
         if let Some(parameters) = &self.path_parameters {
             request.path_parameters.clone_from(parameters);
         }
-        if let Some(body) = &self.body {
-            request.body.clone_from(body);
-        }
-        if let Some(authentication) = &self.authentication {
-            request.authentication.clone_from(authentication);
-        }
+        self.body.apply_to(&mut request.body);
+        self.authentication.apply_to(&mut request.authentication);
         if let Some(graphql) = self.graphql.as_ref().filter(|update| !update.is_empty()) {
             request.apply_graphql_update(graphql)?;
         }
@@ -302,12 +352,12 @@ pub struct GraphqlBodyVariant {
 pub struct GraphqlUpdate {
     /// Replacement query.
     pub query: Option<String>,
-    /// Replacement variables; inner `None` clears them.
-    pub variables: Option<Option<Map<String, Value>>>,
-    /// Replacement operation name; inner `None` clears it.
-    pub operation_name: Option<Option<String>>,
-    /// Replacement extensions; inner `None` clears them.
-    pub extensions: Option<Option<Map<String, Value>>>,
+    /// Variables change.
+    pub variables: FieldPatch<Map<String, Value>>,
+    /// Operation name change.
+    pub operation_name: FieldPatch<String>,
+    /// Extensions change.
+    pub extensions: FieldPatch<Map<String, Value>>,
 }
 
 impl GraphqlUpdate {
@@ -315,9 +365,9 @@ impl GraphqlUpdate {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.query.is_none()
-            && self.variables.is_none()
-            && self.operation_name.is_none()
-            && self.extensions.is_none()
+            && self.variables.is_unchanged()
+            && self.operation_name.is_unchanged()
+            && self.extensions.is_unchanged()
     }
 
     /// Applies this update to one operation.
@@ -325,15 +375,9 @@ impl GraphqlUpdate {
         if let Some(query) = &self.query {
             operation.query = Some(query.clone());
         }
-        if let Some(variables) = &self.variables {
-            operation.variables.clone_from(variables);
-        }
-        if let Some(operation_name) = &self.operation_name {
-            operation.operation_name.clone_from(operation_name);
-        }
-        if let Some(extensions) = &self.extensions {
-            operation.extensions.clone_from(extensions);
-        }
+        self.variables.apply_to(&mut operation.variables);
+        self.operation_name.apply_to(&mut operation.operation_name);
+        self.extensions.apply_to(&mut operation.extensions);
     }
 }
 

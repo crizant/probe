@@ -44,8 +44,8 @@ pub use path_parameters::{
     synchronize_path_parameters,
 };
 pub use request::{
-    Authentication, AuthenticationKind, AuthenticationValue, Body, BodyVariant, FileReference,
-    FormField, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, GraphqlRequest,
+    Authentication, AuthenticationKind, AuthenticationValue, Body, BodyVariant, FieldPatch,
+    FileReference, FormField, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, GraphqlRequest,
     GraphqlRequestError, GraphqlUpdate, Header, HttpRequest, MultipartPart, MultipartPartKind,
     MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody, RequestProtocol,
     RequestSettings, RequestUpdate,
