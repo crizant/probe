@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use probe_core::{HttpRequest, RequestKey, RequestUpdate};
+use probe_core::{GraphqlRequestError, HttpRequest, RequestKey, RequestUpdate};
 
 #[derive(Debug, Default)]
 pub(crate) struct PersistenceState {
@@ -72,9 +72,14 @@ impl PersistenceState {
         &self,
         key: RequestKey,
         request: &HttpRequest,
-    ) -> (u64, HttpRequest, RequestUpdate) {
+    ) -> Result<(u64, HttpRequest, RequestUpdate), GraphqlRequestError> {
         let snapshot = request.clone();
         let baseline = self.saved.get(&key);
+        let baseline_op = baseline
+            .map(HttpRequest::selected_graphql)
+            .transpose()?
+            .flatten();
+        let snapshot_op = snapshot.selected_graphql()?;
         let update = RequestUpdate {
             name: (baseline.and_then(|request| request.metadata.name.as_ref())
                 != snapshot.metadata.name.as_ref())
@@ -105,8 +110,6 @@ impl PersistenceState {
                     Some(probe_core::RequestProtocol::Graphql(b)),
                     probe_core::RequestProtocol::Graphql(s),
                 ) if b != s => {
-                    let baseline_op = baseline.and_then(|r| r.selected_graphql().ok().flatten());
-                    let snapshot_op = snapshot.selected_graphql().ok().flatten();
                     if baseline_op != snapshot_op {
                         Some(probe_core::GraphqlUpdate {
                             query: snapshot_op.and_then(|op| op.query.clone()),
@@ -121,11 +124,11 @@ impl PersistenceState {
                 _ => None,
             },
         };
-        (
+        Ok((
             self.revisions.get(&key).copied().unwrap_or_default(),
             snapshot,
             update,
-        )
+        ))
     }
 
     pub(crate) fn complete(&mut self, key: RequestKey, snapshot: HttpRequest) {
@@ -141,7 +144,10 @@ impl PersistenceState {
 
 #[cfg(test)]
 mod tests {
-    use probe_core::{Collection, CollectionItem, HttpRequest, Workspace, WorkspaceItemRef};
+    use probe_core::{
+        Collection, CollectionItem, GraphqlBody, GraphqlBodyVariant, GraphqlOperation,
+        GraphqlRequest, GraphqlRequestError, HttpRequest, Workspace, WorkspaceItemRef,
+    };
 
     use super::PersistenceState;
 
@@ -156,6 +162,35 @@ mod tests {
         *key
     }
 
+    fn graphql_request(body: GraphqlBody) -> HttpRequest {
+        GraphqlRequest {
+            body: Some(body),
+            ..GraphqlRequest::default()
+        }
+        .into_request()
+    }
+
+    fn variants(first_selected: bool, second_selected: bool) -> GraphqlBody {
+        GraphqlBody::Variants(vec![
+            GraphqlBodyVariant {
+                title: "first".to_owned(),
+                selected: first_selected,
+                body: GraphqlOperation {
+                    query: Some("query First { first }".to_owned()),
+                    ..GraphqlOperation::default()
+                },
+            },
+            GraphqlBodyVariant {
+                title: "second".to_owned(),
+                selected: second_selected,
+                body: GraphqlOperation {
+                    query: Some("query Second { second }".to_owned()),
+                    ..GraphqlOperation::default()
+                },
+            },
+        ])
+    }
+
     #[test]
     fn completion_tracks_the_saved_snapshot_not_newer_edits() {
         let key = request_key();
@@ -166,7 +201,7 @@ mod tests {
         let mut request = original;
         request.url = Some("https://saved.example".to_owned());
         state.edited(key);
-        let (_, saved_snapshot, _) = state.begin(key, &request);
+        let (_, saved_snapshot, _) = state.begin(key, &request).unwrap();
         request.url = Some("https://newer.example".to_owned());
         state.edited(key);
         state.complete(key, saved_snapshot);
@@ -186,7 +221,7 @@ mod tests {
         state.reset([(key, original.clone())]);
         original.url = Some("https://new.example".to_owned());
 
-        let (_, _, update) = state.begin(key, &original);
+        let (_, _, update) = state.begin(key, &original).unwrap();
 
         assert_eq!(update.url.as_deref(), Some("https://new.example"));
         assert!(update.method.is_none());
@@ -206,5 +241,61 @@ mod tests {
         state.complete(key, HttpRequest::default());
 
         assert_eq!(state.next(), Some(key));
+    }
+
+    #[test]
+    fn save_diff_accepts_single_and_exactly_one_selected_graphql_body() {
+        let key = request_key();
+        let mut state = PersistenceState::default();
+        let original = graphql_request(GraphqlBody::Single(GraphqlOperation::default()));
+        state.reset([(key, original)]);
+        let current = graphql_request(GraphqlBody::Single(GraphqlOperation {
+            query: Some("query Viewer { viewer }".to_owned()),
+            ..GraphqlOperation::default()
+        }));
+        let (_, _, update) = state.begin(key, &current).unwrap();
+        assert_eq!(
+            update.graphql.unwrap().query.as_deref(),
+            Some("query Viewer { viewer }")
+        );
+
+        let original = graphql_request(variants(true, false));
+        let mut current = original.clone();
+        let probe_core::RequestProtocol::Graphql(Some(GraphqlBody::Variants(variants))) =
+            &mut current.protocol
+        else {
+            unreachable!()
+        };
+        variants[0].body.query = Some("query Changed { changed }".to_owned());
+        state.reset([(key, original)]);
+        let (_, _, update) = state.begin(key, &current).unwrap();
+        assert_eq!(
+            update.graphql.unwrap().query.as_deref(),
+            Some("query Changed { changed }")
+        );
+    }
+
+    #[test]
+    fn invalid_graphql_selection_rejects_diff_without_advancing_saved_baseline() {
+        let key = request_key();
+        for (body, message) in [
+            (variants(false, false), "no selected value"),
+            (variants(true, true), "multiple selected values"),
+        ] {
+            let baseline = graphql_request(variants(true, false));
+            let draft = graphql_request(body);
+            let mut state = PersistenceState::default();
+            state.reset([(key, baseline.clone())]);
+            state.edited(key);
+            state.enqueue([key]);
+            assert_eq!(state.next(), Some(key));
+            assert!(
+                matches!(state.begin(key, &draft), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+            );
+            state.fail(key);
+            assert!(state.is_dirty(key, &draft));
+            assert_eq!(state.saved_request(key), Some(&baseline));
+            assert!(!state.has_outstanding_saves());
+        }
     }
 }

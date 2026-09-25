@@ -594,7 +594,19 @@ impl ProbeApp {
             self.persistence.fail(key);
             return;
         };
-        let (_revision, snapshot, update) = self.persistence.begin(key, request);
+        let (_revision, snapshot, update) = match self.persistence.begin(key, request) {
+            Ok(save) => save,
+            Err(error) => {
+                self.persistence.fail(key);
+                self.pending_close = None;
+                self.show_toast(
+                    ToastIntent::Error,
+                    format!("Could not save request: {error}"),
+                    cx,
+                );
+                return;
+            }
+        };
         let prepared = match loaded.prepare_request_save(&selector, update) {
             Ok(prepared) => prepared,
             Err(error) => {
