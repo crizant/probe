@@ -369,8 +369,10 @@ refresh the retained baseline. Symlinked workspaces update their canonical targe
 without replacing the symlink.
 
 Desktop dirty state compares the live request with its last loaded or successfully
-saved snapshot. Save completion acknowledges the captured revision, so edits made
-while I/O is running remain dirty. Failures and external-change conflicts retain the
+saved snapshot. `probe-core` builds the request patch between those snapshots;
+the desktop owns save queue and revision tracking. Save completion acknowledges the
+captured revision, so edits made while I/O is running remain dirty. Failures and
+external-change conflicts retain the
 in-memory draft. Closing dirty work requires an explicit save, discard, or cancel
 decision.
 

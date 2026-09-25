@@ -55,6 +55,58 @@ pub struct RequestUpdate {
 }
 
 impl RequestUpdate {
+    /// Builds the supported field changes from a saved request to its current draft.
+    /// A missing `base` treats the request as new.
+    pub fn between(
+        base: Option<&HttpRequest>,
+        current: &HttpRequest,
+    ) -> Result<Self, GraphqlRequestError> {
+        let base_operation = base
+            .map(HttpRequest::selected_graphql)
+            .transpose()?
+            .flatten();
+        let current_operation = current.selected_graphql()?;
+        Ok(Self {
+            name: (base.and_then(|request| request.metadata.name.as_ref())
+                != current.metadata.name.as_ref())
+            .then(|| current.metadata.name.clone())
+            .flatten(),
+            method: (base.and_then(|request| request.method.as_ref()) != current.method.as_ref())
+                .then(|| current.method.clone())
+                .flatten(),
+            url: (base.and_then(|request| request.url.as_ref()) != current.url.as_ref())
+                .then(|| current.url.clone())
+                .flatten(),
+            headers: (base.map(|request| &request.headers) != Some(&current.headers))
+                .then(|| current.headers.clone()),
+            query_parameters: (base.map(|request| &request.query_parameters)
+                != Some(&current.query_parameters))
+            .then(|| current.query_parameters.clone()),
+            path_parameters: (base.map(|request| &request.path_parameters)
+                != Some(&current.path_parameters))
+            .then(|| current.path_parameters.clone()),
+            body: (base.and_then(|request| request.body.as_ref()) != current.body.as_ref())
+                .then(|| current.body.clone()),
+            authentication: (base.and_then(|request| request.authentication.as_ref())
+                != current.authentication.as_ref())
+            .then(|| current.authentication.clone()),
+            graphql: match (base.map(|request| &request.protocol), &current.protocol) {
+                (None | Some(RequestProtocol::Graphql(_)), RequestProtocol::Graphql(_))
+                    if base_operation != current_operation =>
+                {
+                    Some(GraphqlUpdate {
+                        query: current_operation.and_then(|operation| operation.query.clone()),
+                        variables: current_operation.map(|operation| operation.variables.clone()),
+                        operation_name: current_operation
+                            .map(|operation| operation.operation_name.clone()),
+                        extensions: current_operation.map(|operation| operation.extensions.clone()),
+                    })
+                }
+                _ => None,
+            },
+        })
+    }
+
     /// Returns whether every field is unchanged.
     #[must_use]
     pub fn is_empty(&self) -> bool {

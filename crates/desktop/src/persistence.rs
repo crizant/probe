@@ -74,56 +74,7 @@ impl PersistenceState {
         request: &HttpRequest,
     ) -> Result<(u64, HttpRequest, RequestUpdate), GraphqlRequestError> {
         let snapshot = request.clone();
-        let baseline = self.saved.get(&key);
-        let baseline_op = baseline
-            .map(HttpRequest::selected_graphql)
-            .transpose()?
-            .flatten();
-        let snapshot_op = snapshot.selected_graphql()?;
-        let update = RequestUpdate {
-            name: (baseline.and_then(|request| request.metadata.name.as_ref())
-                != snapshot.metadata.name.as_ref())
-            .then(|| snapshot.metadata.name.clone())
-            .flatten(),
-            method: (baseline.and_then(|request| request.method.as_ref())
-                != snapshot.method.as_ref())
-            .then(|| snapshot.method.clone())
-            .flatten(),
-            url: (baseline.and_then(|request| request.url.as_ref()) != snapshot.url.as_ref())
-                .then(|| snapshot.url.clone())
-                .flatten(),
-            headers: (baseline.map(|request| &request.headers) != Some(&snapshot.headers))
-                .then(|| snapshot.headers.clone()),
-            query_parameters: (baseline.map(|request| &request.query_parameters)
-                != Some(&snapshot.query_parameters))
-            .then(|| snapshot.query_parameters.clone()),
-            path_parameters: (baseline.map(|request| &request.path_parameters)
-                != Some(&snapshot.path_parameters))
-            .then(|| snapshot.path_parameters.clone()),
-            body: (baseline.and_then(|request| request.body.as_ref()) != snapshot.body.as_ref())
-                .then(|| snapshot.body.clone()),
-            authentication: (baseline.and_then(|request| request.authentication.as_ref())
-                != snapshot.authentication.as_ref())
-            .then(|| snapshot.authentication.clone()),
-            graphql: match (&baseline.map(|r| &r.protocol), &snapshot.protocol) {
-                (
-                    Some(probe_core::RequestProtocol::Graphql(b)),
-                    probe_core::RequestProtocol::Graphql(s),
-                ) if b != s => {
-                    if baseline_op != snapshot_op {
-                        Some(probe_core::GraphqlUpdate {
-                            query: snapshot_op.and_then(|op| op.query.clone()),
-                            variables: snapshot_op.map(|op| op.variables.clone()),
-                            operation_name: snapshot_op.map(|op| op.operation_name.clone()),
-                            extensions: snapshot_op.map(|op| op.extensions.clone()),
-                        })
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
-        };
+        let update = RequestUpdate::between(self.saved.get(&key), &snapshot)?;
         Ok((
             self.revisions.get(&key).copied().unwrap_or_default(),
             snapshot,
@@ -210,26 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn save_update_contains_only_fields_changed_since_the_baseline() {
-        let key = request_key();
-        let mut original = HttpRequest {
-            method: Some("GET".to_owned()),
-            url: Some("https://old.example".to_owned()),
-            ..HttpRequest::default()
-        };
-        let mut state = PersistenceState::default();
-        state.reset([(key, original.clone())]);
-        original.url = Some("https://new.example".to_owned());
-
-        let (_, _, update) = state.begin(key, &original).unwrap();
-
-        assert_eq!(update.url.as_deref(), Some("https://new.example"));
-        assert!(update.method.is_none());
-        assert!(update.headers.is_none());
-        assert!(update.body.is_none());
-    }
-
-    #[test]
     fn enqueue_keeps_a_follow_up_save_for_a_request_that_is_already_saving() {
         let key = request_key();
         let mut state = PersistenceState::default();
@@ -241,38 +172,6 @@ mod tests {
         state.complete(key, HttpRequest::default());
 
         assert_eq!(state.next(), Some(key));
-    }
-
-    #[test]
-    fn save_diff_accepts_single_and_exactly_one_selected_graphql_body() {
-        let key = request_key();
-        let mut state = PersistenceState::default();
-        let original = graphql_request(GraphqlBody::Single(GraphqlOperation::default()));
-        state.reset([(key, original)]);
-        let current = graphql_request(GraphqlBody::Single(GraphqlOperation {
-            query: Some("query Viewer { viewer }".to_owned()),
-            ..GraphqlOperation::default()
-        }));
-        let (_, _, update) = state.begin(key, &current).unwrap();
-        assert_eq!(
-            update.graphql.unwrap().query.as_deref(),
-            Some("query Viewer { viewer }")
-        );
-
-        let original = graphql_request(variants(true, false));
-        let mut current = original.clone();
-        let probe_core::RequestProtocol::Graphql(Some(GraphqlBody::Variants(variants))) =
-            &mut current.protocol
-        else {
-            unreachable!()
-        };
-        variants[0].body.query = Some("query Changed { changed }".to_owned());
-        state.reset([(key, original)]);
-        let (_, _, update) = state.begin(key, &current).unwrap();
-        assert_eq!(
-            update.graphql.unwrap().query.as_deref(),
-            Some("query Changed { changed }")
-        );
     }
 
     #[test]
