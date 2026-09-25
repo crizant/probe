@@ -355,6 +355,26 @@ mod tests {
     }
 
     #[test]
+    fn apply_path_parameters_ignores_disabled_and_unrelated_rows() {
+        let url = apply_path_parameters(
+            "https://api.example.com/users/:userId",
+            &[
+                QueryParameter {
+                    name: "userId".to_owned(),
+                    value: "disabled".to_owned(),
+                    disabled: true,
+                },
+                QueryParameter {
+                    name: "otherId".to_owned(),
+                    value: "unrelated".to_owned(),
+                    disabled: false,
+                },
+            ],
+        );
+        assert_eq!(url, "https://api.example.com/users/:userId");
+    }
+
+    #[test]
     fn rewriting_path_parameters_preserves_unicode() {
         let url = apply_path_parameters(
             "https://api.example.com/café/:userId",

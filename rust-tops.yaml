@@ -1,0 +1,66 @@
+# Probe's Rust-TOPS 1.0.0 instance. The executable gates are documented in
+# docs/DEVELOPMENT.md; cargo-tops 0.1.3 does not enforce these numeric fields.
+protocol:
+  id: rust-tops
+  version: "1.0.0"
+  spec_uri: https://github.com/Hedronite/rust-tops/blob/v0.1.3/RUST_TOPS.md
+
+crate:
+  name: probe
+  class: workspace-root
+  edition: "2024"
+  msrv: "1.95"
+  unsafe_policy: forbid
+
+goals:
+  correctness: behavior matches specified invariants under all applicable layers
+  density: fewest necessary production lines that preserve clarity and performance
+  performance: no unexplained regression on gated hot paths; prefer algorithmic then codegen then micro
+  notes: Shared core and adapters carry behavior; the desktop also contains platform-specific GPUI glue.
+
+layers:
+  - { id: static-lint, enabled: true, tier: 0, runner: "cargo fmt/clippy", scope: workspace }
+  - { id: unit, enabled: true, tier: 0, runner: "cargo test", scope: workspace }
+  - { id: coverage, enabled: true, tier: 1, runner: cargo-llvm-cov, scope: workspace }
+  - { id: crap, enabled: true, tier: 1, runner: cargo-crap, scope: workspace }
+  - { id: mutation, enabled: true, tier: 2, runner: cargo-mutants, scope: diff }
+  - { id: security-advisory, enabled: true, tier: 0, runner: cargo-deny, scope: workspace }
+
+gates:
+  lint:
+    clippy_deny: [warnings]
+    fmt_check: true
+  unit:
+    must_pass: true
+  coverage:
+    tool: cargo-llvm-cov
+  crap:
+    tool: cargo-crap
+    formula: "CC^2 * (1 - cov)^3 + CC"
+    threshold_production: 30
+    threshold_agent: 30
+    threshold_human: 30
+    classic_crappy: 30
+    scar_guard: true
+  mutation:
+    tool: cargo-mutants
+    scope: diff
+    unexplained_survivors_max: 0
+    timeout_multiplier: 2
+
+density:
+  production_sloc_policy: minimum necessary lines that preserve named invariants, performance, and reviewability
+  rules:
+    - Never split a function solely to lower CRAP.
+    - Tests assert behavior and contracts, not the current implementation.
+
+performance: {}
+
+agent:
+  guidelines_file: AGENTS.md
+  may_run_tools: true
+  must_not_write_tests_from_impl: true
+  must_not_split_for_crap_alone: true
+  required_before_pr: [fmt, clippy, test, security-advisory, coverage, crap, mutants-diff]
+
+exemptions: []

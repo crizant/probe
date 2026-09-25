@@ -1,0 +1,10 @@
+# CRAP is a review signal for existing code; a single score is not a design target.
+threshold = 30.0
+exclude = [
+  "**/tests/**",
+  "**/tests.rs",
+  "**/*_tests.rs",
+  "**/benches/**",
+  "**/examples/**",
+  "**/build.rs",
+]
