@@ -212,14 +212,23 @@ impl RequestUpdate {
     }
 
     /// Applies the update to a domain request, including native GraphQL fields.
+    ///
+    /// On error the request is left unchanged.
     pub fn apply(&self, request: &mut Request) -> Result<(), GraphqlRequestError> {
-        let http_body = match &mut request.kind {
-            RequestKind::Http { body } => Some(body),
-            RequestKind::Graphql { .. } if self.body.is_unchanged() => None,
-            RequestKind::Graphql { .. } => return Err(GraphqlRequestError::NotHttp),
-        };
-        if let Some(body) = http_body {
-            self.body.apply_to(body);
+        let graphql = self.graphql.as_ref().filter(|update| !update.is_empty());
+        match &mut request.kind {
+            RequestKind::Http { .. } if graphql.is_some() => {
+                return Err(GraphqlRequestError::NotGraphql);
+            }
+            RequestKind::Http { body } => self.body.apply_to(body),
+            RequestKind::Graphql { .. } if !self.body.is_unchanged() => {
+                return Err(GraphqlRequestError::NotHttp);
+            }
+            RequestKind::Graphql { .. } => {}
+        }
+        // Must precede common fields: variant selection can still fail here.
+        if let Some(graphql) = graphql {
+            request.apply_graphql_update(graphql)?;
         }
         if let Some(name) = &self.name {
             request.metadata.name = Some(name.clone());
@@ -236,9 +245,6 @@ impl RequestUpdate {
             request.path_parameters.clone_from(parameters);
         }
         self.authentication.apply_to(&mut request.authentication);
-        if let Some(graphql) = self.graphql.as_ref().filter(|update| !update.is_empty()) {
-            request.apply_graphql_update(graphql)?;
-        }
         Ok(())
     }
 }

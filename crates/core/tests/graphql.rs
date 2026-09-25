@@ -318,3 +318,57 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
     );
     assert_eq!(graphql, original_graphql);
 }
+
+#[test]
+fn rejected_request_update_leaves_common_fields_unchanged() {
+    let common = || RequestUpdate {
+        name: Some("renamed".to_owned()),
+        method: FieldPatch::Set("PUT".to_owned()),
+        url: FieldPatch::Set("https://changed.example".to_owned()),
+        headers: Some(Vec::new()),
+        ..RequestUpdate::default()
+    };
+    let graphql_patch = || {
+        Some(GraphqlUpdate {
+            query: FieldPatch::Set("query { viewer }".to_owned()),
+            ..GraphqlUpdate::default()
+        })
+    };
+    let unselected_variants = GraphqlBody::Variants(vec![GraphqlBodyVariant {
+        title: "only".to_owned(),
+        selected: false,
+        body: GraphqlOperation::default(),
+    }]);
+    let cases = [
+        (
+            Request {
+                method: Some("GET".to_owned()),
+                ..Request::default()
+            },
+            RequestUpdate {
+                graphql: graphql_patch(),
+                ..common()
+            },
+        ),
+        (
+            native_request("POST"),
+            RequestUpdate {
+                body: FieldPatch::Clear,
+                ..common()
+            },
+        ),
+        (
+            graphql_request(Some(unselected_variants)),
+            RequestUpdate {
+                graphql: graphql_patch(),
+                ..common()
+            },
+        ),
+    ];
+
+    for (mut request, update) in cases {
+        let original = request.clone();
+        assert!(update.apply(&mut request).is_err());
+        assert_eq!(request, original);
+    }
+}
