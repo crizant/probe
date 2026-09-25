@@ -4,7 +4,7 @@ impl ProbeApp {
     pub(super) fn render_parameter_editor(
         &self,
         key: RequestKey,
-        request: &HttpRequest,
+        request: &Request,
         kind: ParameterEditorKind,
         theme: Theme,
         cx: &mut Context<Self>,

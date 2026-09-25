@@ -1,4 +1,4 @@
-use probe_core::{FieldPatch, GraphqlUpdate, RequestProtocol};
+use probe_core::{FieldPatch, GraphqlUpdate};
 use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
 
 use super::*;
@@ -59,7 +59,7 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
         .update(cx, |view, _, _| {
             let loaded = view.loaded_workspace.as_ref().unwrap();
             let request = loaded.workspace().request(key).unwrap();
-            assert!(matches!(request.protocol, RequestProtocol::Graphql(_)));
+            assert!(request.kind.is_graphql());
             let operation = request.selected_graphql().unwrap().unwrap();
             assert_eq!(
                 operation.query.as_deref(),
@@ -119,7 +119,7 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
         .workspace()
         .request(reloaded.requests().last().unwrap().key())
         .unwrap();
-    assert!(matches!(request.protocol, RequestProtocol::Graphql(_)));
+    assert!(request.kind.is_graphql());
     let operation = request.selected_graphql().unwrap().unwrap();
     assert_eq!(
         operation.query.as_deref(),

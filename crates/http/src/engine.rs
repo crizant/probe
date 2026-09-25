@@ -1,6 +1,6 @@
 use std::{future::Future, future::pending, path::Path, time::Instant};
 
-use probe_core::{HttpRequest, RequestSettings};
+use probe_core::{PreparedHttpRequest, RequestSettings};
 use reqwest::{Client, header::HeaderMap, redirect::Policy};
 
 use crate::{
@@ -56,7 +56,7 @@ impl HttpEngine {
     /// Executes a request until completion.
     pub async fn execute(
         &self,
-        request: &HttpRequest,
+        request: &PreparedHttpRequest,
         options: &ExecutionOptions,
     ) -> Result<HttpResponse, HttpError> {
         self.execute_cancellable(request, options, pending::<()>())
@@ -68,7 +68,7 @@ impl HttpEngine {
     /// The destination is replaced only after the full response body has been written.
     pub async fn execute_to_file(
         &self,
-        request: &HttpRequest,
+        request: &PreparedHttpRequest,
         options: &ExecutionOptions,
         output: &Path,
     ) -> Result<HttpResponse, HttpError> {
@@ -81,7 +81,7 @@ impl HttpEngine {
     /// Dropping the execution future also cancels the underlying reqwest request.
     pub async fn execute_cancellable<C>(
         &self,
-        request: &HttpRequest,
+        request: &PreparedHttpRequest,
         options: &ExecutionOptions,
         cancellation: C,
     ) -> Result<HttpResponse, HttpError>
@@ -96,7 +96,7 @@ impl HttpEngine {
     /// Executes a cancellable request and reports response-header and body progress.
     pub async fn execute_cancellable_with_progress<C, P>(
         &self,
-        request: &HttpRequest,
+        request: &PreparedHttpRequest,
         options: &ExecutionOptions,
         cancellation: C,
         progress: P,
@@ -113,7 +113,7 @@ impl HttpEngine {
     /// Executes a cancellable request while streaming its response body to a file.
     pub async fn execute_cancellable_to_file<C>(
         &self,
-        request: &HttpRequest,
+        request: &PreparedHttpRequest,
         options: &ExecutionOptions,
         output: &Path,
         cancellation: C,
@@ -129,7 +129,7 @@ impl HttpEngine {
     /// Executes a cancellable request, streams its body to a file, and reports progress.
     pub async fn execute_cancellable_to_file_with_progress<C, P>(
         &self,
-        request: &HttpRequest,
+        request: &PreparedHttpRequest,
         options: &ExecutionOptions,
         output: &Path,
         cancellation: C,
@@ -152,7 +152,7 @@ impl HttpEngine {
 
     async fn execute_with_cancellation<C, P>(
         &self,
-        request: &HttpRequest,
+        request: &PreparedHttpRequest,
         options: &ExecutionOptions,
         output: Option<&Path>,
         cancellation: C,
@@ -172,7 +172,7 @@ impl HttpEngine {
 
     async fn execute_inner<P>(
         &self,
-        request: &HttpRequest,
+        request: &PreparedHttpRequest,
         options: &ExecutionOptions,
         output: Option<&Path>,
         progress: &mut P,
@@ -180,7 +180,7 @@ impl HttpEngine {
     where
         P: FnMut(HttpProgress),
     {
-        let client = self.client_for(&request.settings)?;
+        let client = self.client_for(&request.request().settings)?;
         let builder = build_request(&client, request, options).await?;
         let started = Instant::now();
         let mut response = builder.send().await.map_err(map_reqwest_error)?;

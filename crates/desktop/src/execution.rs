@@ -9,7 +9,7 @@ use std::{
 use crate::filesystem::workspace_base_directory;
 use atomic_write_file::AtomicWriteFile;
 use directories::{ProjectDirs, UserDirs};
-use probe_core::{HttpRequest, RequestKey};
+use probe_core::{Request, RequestKey};
 use probe_http::{
     ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse, ResponseBodyFile,
     ResponseCache,
@@ -311,7 +311,7 @@ impl ExecutionService {
 
     pub(crate) fn execute(
         &self,
-        request: HttpRequest,
+        request: Request,
         options: ExecutionOptions,
         output: Option<PathBuf>,
         cancellation: oneshot::Receiver<()>,
@@ -342,7 +342,7 @@ impl ExecutionService {
 
 pub(crate) async fn execute_http_request<P>(
     engine: &HttpEngine,
-    request: HttpRequest,
+    request: Request,
     options: ExecutionOptions,
     output: Option<PathBuf>,
     cancellation: oneshot::Receiver<()>,
@@ -447,7 +447,7 @@ pub(crate) fn download_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-pub(crate) fn suggested_request_filename(request: &HttpRequest) -> String {
+pub(crate) fn suggested_request_filename(request: &Request) -> String {
     suggested_filename(request.url.as_deref(), None, None)
 }
 
@@ -639,7 +639,7 @@ mod tests {
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
-    use probe_core::HttpRequest;
+    use probe_core::Request;
     use probe_http::ExecutionOptions;
     use probe_http::{HttpError, HttpProgress, HttpResponse, ResponseHeader};
     use sha2::{Digest, Sha256};
@@ -653,8 +653,8 @@ mod tests {
 
     fn key() -> probe_core::RequestKey {
         let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
-            items: vec![probe_core::CollectionItem::HttpRequest(
-                probe_core::HttpRequest::default(),
+            items: vec![probe_core::CollectionItem::Request(
+                probe_core::Request::default(),
             )],
             ..probe_core::Collection::default()
         });
@@ -667,8 +667,8 @@ mod tests {
     fn two_keys() -> (probe_core::RequestKey, probe_core::RequestKey) {
         let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
             items: vec![
-                probe_core::CollectionItem::HttpRequest(probe_core::HttpRequest::default()),
-                probe_core::CollectionItem::HttpRequest(probe_core::HttpRequest::default()),
+                probe_core::CollectionItem::Request(probe_core::Request::default()),
+                probe_core::CollectionItem::Request(probe_core::Request::default()),
             ],
             ..probe_core::Collection::default()
         });
@@ -874,15 +874,15 @@ mod tests {
 
     #[test]
     fn download_filenames_prefer_headers_then_url_and_are_sanitized() {
-        let request = HttpRequest {
+        let request = Request {
             url: Some("https://example.test/files/monthly%20report.csv?token=secret".to_owned()),
-            ..HttpRequest::default()
+            ..Request::default()
         };
         assert_eq!(suggested_request_filename(&request), "monthly report.csv");
         assert_eq!(
-            suggested_request_filename(&HttpRequest {
+            suggested_request_filename(&Request {
                 url: Some("https://example.test".to_owned()),
-                ..HttpRequest::default()
+                ..Request::default()
             }),
             "response.bin"
         );
@@ -957,10 +957,10 @@ mod tests {
         cancel.send(()).expect("cancellation should be delivered");
         let service = ExecutionService::new().expect("execution service should start");
         let (result, _) = service.execute(
-            HttpRequest {
+            Request {
                 method: Some("GET".to_owned()),
                 url: Some("http://127.0.0.1:1/phase-12".to_owned()),
-                ..HttpRequest::default()
+                ..Request::default()
             },
             ExecutionOptions::default(),
             None,

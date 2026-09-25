@@ -4,7 +4,7 @@ impl ProbeApp {
     pub(super) fn render_authentication_editor(
         &self,
         key: RequestKey,
-        request: &HttpRequest,
+        request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {

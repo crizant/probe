@@ -319,7 +319,7 @@ impl ProbeApp {
     pub(in crate::app) fn edit_request(
         &mut self,
         key: RequestKey,
-        edit: impl FnOnce(&mut HttpRequest),
+        edit: impl FnOnce(&mut Request),
         cx: &mut Context<Self>,
     ) {
         let Some(request) = self

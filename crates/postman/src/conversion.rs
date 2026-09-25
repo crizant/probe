@@ -5,17 +5,14 @@ mod url;
 mod variables;
 
 use probe_core::{
-    Collection, CollectionItem, CollectionMetadata, Folder, GraphqlRequest, Header, HttpRequest,
-    ImportDiagnostic, ItemMetadata, RequestSettings, lossy_import_diagnostic_count,
-    sort_import_diagnostics,
+    Collection, CollectionItem, CollectionMetadata, Folder, Header, ImportDiagnostic, ItemMetadata,
+    Request, RequestSettings, lossy_import_diagnostic_count, sort_import_diagnostics,
 };
 use serde::Deserialize;
 use serde_json::Value;
 
 use self::{
-    authentication::convert_authentication,
-    body::{ConvertedRequestBody, convert_body},
-    url::convert_url,
+    authentication::convert_authentication, body::convert_body, url::convert_url,
     variables::convert_collection_variables,
 };
 use crate::{
@@ -185,7 +182,7 @@ fn convert_request(
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> Result<CollectionItem, PostmanImportError> {
     match request {
-        PostmanRequest::Url(url) => Ok(CollectionItem::HttpRequest(HttpRequest {
+        PostmanRequest::Url(url) => Ok(CollectionItem::Request(Request {
             metadata: item_metadata(item, index),
             method: Some("GET".to_owned()),
             url: Some(convert_string(
@@ -202,7 +199,7 @@ fn convert_request(
                 diagnostics,
             )?,
             settings: RequestSettings::default(),
-            ..HttpRequest::default()
+            ..Request::default()
         })),
         PostmanRequest::Object(request) => {
             diagnose_extra_fields("request", Some(resource_id), &request.extra, diagnostics);
@@ -237,36 +234,18 @@ fn convert_request(
             let method = nonempty(&request.method);
             let headers = convert_headers(&request.header, resource_id, diagnostics)?;
             let authentication = convert_authentication(auth, format, resource_id, diagnostics)?;
-            let settings = RequestSettings::default();
-            Ok(
-                match convert_body(&request.body, resource_id, diagnostics)? {
-                    ConvertedRequestBody::Http(body) => CollectionItem::HttpRequest(HttpRequest {
-                        metadata,
-                        method,
-                        url: Some(url),
-                        headers,
-                        query_parameters,
-                        path_parameters,
-                        body,
-                        authentication,
-                        settings,
-                        protocol: probe_core::RequestProtocol::Http,
-                    }),
-                    ConvertedRequestBody::Graphql(body) => {
-                        CollectionItem::GraphqlRequest(GraphqlRequest {
-                            metadata,
-                            method,
-                            url: Some(url),
-                            headers,
-                            query_parameters,
-                            path_parameters,
-                            body,
-                            authentication,
-                            settings,
-                        })
-                    }
-                },
-            )
+            let kind = convert_body(&request.body, resource_id, diagnostics)?;
+            Ok(CollectionItem::Request(Request {
+                metadata,
+                method,
+                url: Some(url),
+                headers,
+                query_parameters,
+                path_parameters,
+                authentication,
+                settings: RequestSettings::default(),
+                kind,
+            }))
         }
     }
 }

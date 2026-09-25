@@ -555,7 +555,7 @@ impl ProbeApp {
         key: RequestKey,
         window: &mut Window,
         cx: &mut Context<Self>,
-        apply: impl FnOnce(&mut HttpRequest, String) + Send + 'static,
+        apply: impl FnOnce(&mut Request, String) + Send + 'static,
     ) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -602,7 +602,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         self.choose_file_path(key, window, cx, move |request, stored| {
-            if let Some(RequestBody::Single(Body::File(files))) = request.body.as_mut()
+            if let Some(RequestBody::Single(Body::File(files))) = request.http_body_mut()
                 && let Some(file) = files.get_mut(index)
             {
                 file.file_path = stored;
@@ -618,7 +618,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         self.choose_file_path(key, window, cx, move |request, stored| {
-            if let Some(RequestBody::Single(Body::Multipart(parts))) = request.body.as_mut()
+            if let Some(RequestBody::Single(Body::Multipart(parts))) = request.http_body_mut()
                 && let Some(part) = parts.get_mut(index)
             {
                 part.value = MultipartValue::Single(stored);

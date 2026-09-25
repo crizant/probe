@@ -100,8 +100,8 @@ impl ProbeApp {
             .child(
                 components::protocol_marker(
                     theme,
-                    request_protocol_label(&request.protocol),
-                    request_protocol_color(theme, &request.protocol),
+                    request_protocol_label(&request.kind),
+                    request_protocol_color(theme, &request.kind),
                 )
                 .id("request-protocol-label")
                 .debug_selector(|| "request-protocol-label".into())
@@ -151,7 +151,7 @@ impl ProbeApp {
             .execution
             .response(key)
             .is_some_and(ResponseState::is_running);
-        let is_graphql = matches!(request.protocol, probe_core::RequestProtocol::Graphql(_));
+        let is_graphql = request.kind.is_graphql();
         let sections = if is_graphql {
             EditorSection::ALL_GRAPHQL.as_slice()
         } else {

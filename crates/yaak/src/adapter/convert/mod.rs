@@ -7,8 +7,8 @@ use std::{
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, Collection, CollectionItem,
     CollectionMetadata, Environment, EnvironmentVariable, FileReference, Folder, FormField, Header,
-    HttpRequest, ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter,
-    RawBody, RawBodyKind, RequestBody, RequestSettings, Variable, VariableValue, VariableValueSet,
+    ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBody,
+    RawBodyKind, RequestBody, RequestSettings, Variable, VariableValue, VariableValueSet,
     lossy_import_diagnostic_count, sort_import_diagnostics,
 };
 use serde_json::Value;

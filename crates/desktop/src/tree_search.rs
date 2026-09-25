@@ -136,18 +136,18 @@ fn item_name(workspace: &Workspace, item: WorkspaceItemRef) -> &str {
 #[cfg(test)]
 mod tests {
     use probe_core::{
-        Collection, CollectionItem, Folder, HttpRequest, ItemMetadata, Workspace, WorkspaceItemRef,
+        Collection, CollectionItem, Folder, ItemMetadata, Request, Workspace, WorkspaceItemRef,
     };
 
     use super::{TreeSearchMatches, matching_tree_items};
 
     fn named_request(name: &str) -> CollectionItem {
-        CollectionItem::HttpRequest(HttpRequest {
+        CollectionItem::Request(Request {
             metadata: ItemMetadata {
                 name: Some(name.to_owned()),
                 ..ItemMetadata::default()
             },
-            ..HttpRequest::default()
+            ..Request::default()
         })
     }
 

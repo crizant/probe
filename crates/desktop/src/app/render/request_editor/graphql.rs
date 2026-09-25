@@ -4,7 +4,7 @@ impl ProbeApp {
     pub(in crate::app) fn render_graphql_query_editor(
         &self,
         key: RequestKey,
-        request: &HttpRequest,
+        request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -51,7 +51,7 @@ impl ProbeApp {
     pub(in crate::app) fn render_graphql_variables_editor(
         &self,
         key: RequestKey,
-        request: &HttpRequest,
+        request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -101,7 +101,7 @@ impl ProbeApp {
     pub(in crate::app) fn render_graphql_operation_name_editor(
         &self,
         key: RequestKey,
-        request: &HttpRequest,
+        request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -154,7 +154,7 @@ impl ProbeApp {
     pub(in crate::app) fn render_graphql_extensions_editor(
         &self,
         key: RequestKey,
-        request: &HttpRequest,
+        request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -206,7 +206,7 @@ impl ProbeApp {
     pub(in crate::app) fn edit_graphql_request(
         &mut self,
         key: RequestKey,
-        update_fn: impl FnOnce(&HttpRequest) -> probe_core::GraphqlUpdate,
+        update_fn: impl FnOnce(&Request) -> probe_core::GraphqlUpdate,
         cx: &mut Context<Self>,
     ) {
         let Some(request) = self

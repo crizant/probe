@@ -8,14 +8,14 @@ fn creates_a_bundled_workspace_from_a_domain_collection_without_overwriting() {
             name: Some("Imported Pets".to_owned()),
             ..CollectionMetadata::default()
         },
-        items: vec![CollectionItem::HttpRequest(HttpRequest {
+        items: vec![CollectionItem::Request(Request {
             metadata: ItemMetadata {
                 name: Some("List pets".to_owned()),
                 ..ItemMetadata::default()
             },
             method: Some("GET".to_owned()),
             url: Some("https://example.com/pets".to_owned()),
-            ..HttpRequest::default()
+            ..Request::default()
         })],
         ..Collection::default()
     };
@@ -475,7 +475,7 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
     assert_eq!(request.path_parameters[0].name, "petId");
     assert_eq!(request.path_parameters[0].value, "42");
     assert!(matches!(
-        request.body,
+        request.http_body(),
         Some(RequestBody::Single(Body::FormUrlEncoded(_)))
     ));
     assert_eq!(
@@ -513,7 +513,7 @@ fn clearing_body_and_authentication_preserves_unrelated_yaml() {
         .workspace()
         .request(reloaded.request_key("items/0").unwrap())
         .unwrap();
-    assert!(request.body.is_none());
+    assert!(request.http_body().is_none());
     assert!(request.authentication.is_none());
     let yaml = fs::read_to_string(&path).unwrap();
     assert!(yaml.contains("vendor.example"));
@@ -545,7 +545,7 @@ fn every_supported_body_and_authentication_shape_survives_desktop_style_saves() 
             headers: Some(request.headers.clone()),
             query_parameters: Some(request.query_parameters.clone()),
             path_parameters: Some(request.path_parameters.clone()),
-            body: FieldPatch::from_optional(request.body.clone()),
+            body: FieldPatch::from_optional(request.http_body().cloned()),
             authentication: FieldPatch::from_optional(request.authentication.clone()),
             ..RequestUpdate::default()
         };

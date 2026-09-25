@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, BodyVariant, Environment,
     EnvironmentResolutionError, EnvironmentVariable, FileReference, FormField, GraphqlBody,
-    GraphqlOperation, GraphqlRequest, Header, HttpRequest, MultipartPart, MultipartPartKind,
-    MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody, SecretVariable, Variable,
+    GraphqlOperation, Header, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter,
+    RawBody, RawBodyKind, Request, RequestBody, RequestKind, SecretVariable, Variable,
     VariableUsage, VariableValue, VariableValueSet, discover_request_variables,
 };
 
@@ -48,8 +48,8 @@ fn environment(
     }
 }
 
-fn comprehensive_request() -> HttpRequest {
-    HttpRequest {
+fn comprehensive_request() -> Request {
+    Request {
         method: Some("{{ method }}".to_owned()),
         url: Some("{{baseUrl}}/users/{{userId}}?again={{baseUrl}}".to_owned()),
         headers: vec![Header {
@@ -67,48 +67,50 @@ fn comprehensive_request() -> HttpRequest {
             value: "{{pathValue}}/{{shared}}".to_owned(),
             disabled: false,
         }],
-        body: Some(RequestBody::Variants(vec![
-            BodyVariant {
-                title: "raw".to_owned(),
-                selected: true,
-                body: Body::Raw(RawBody {
-                    kind: RawBodyKind::Json,
-                    data: "{{rawValue}} {{shared}}".to_owned(),
-                }),
-            },
-            BodyVariant {
-                title: "form".to_owned(),
-                selected: false,
-                body: Body::FormUrlEncoded(vec![FormField {
-                    name: "{{formName}}".to_owned(),
-                    value: "{{formValue}}".to_owned(),
-                    disabled: false,
-                }]),
-            },
-            BodyVariant {
-                title: "multipart".to_owned(),
-                selected: false,
-                body: Body::Multipart(vec![MultipartPart {
-                    name: "{{multipartName}}".to_owned(),
-                    kind: MultipartPartKind::File,
-                    value: MultipartValue::Multiple(vec![
-                        "{{multipartValue}}".to_owned(),
-                        "{{multipartValue}}".to_owned(),
-                    ]),
-                    content_type: Some("{{multipartType}}".to_owned()),
-                    disabled: false,
-                }]),
-            },
-            BodyVariant {
-                title: "file".to_owned(),
-                selected: false,
-                body: Body::File(vec![FileReference {
-                    file_path: "{{filePath}}".to_owned(),
-                    content_type: "{{fileType}}".to_owned(),
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Variants(vec![
+                BodyVariant {
+                    title: "raw".to_owned(),
                     selected: true,
-                }]),
-            },
-        ])),
+                    body: Body::Raw(RawBody {
+                        kind: RawBodyKind::Json,
+                        data: "{{rawValue}} {{shared}}".to_owned(),
+                    }),
+                },
+                BodyVariant {
+                    title: "form".to_owned(),
+                    selected: false,
+                    body: Body::FormUrlEncoded(vec![FormField {
+                        name: "{{formName}}".to_owned(),
+                        value: "{{formValue}}".to_owned(),
+                        disabled: false,
+                    }]),
+                },
+                BodyVariant {
+                    title: "multipart".to_owned(),
+                    selected: false,
+                    body: Body::Multipart(vec![MultipartPart {
+                        name: "{{multipartName}}".to_owned(),
+                        kind: MultipartPartKind::File,
+                        value: MultipartValue::Multiple(vec![
+                            "{{multipartValue}}".to_owned(),
+                            "{{multipartValue}}".to_owned(),
+                        ]),
+                        content_type: Some("{{multipartType}}".to_owned()),
+                        disabled: false,
+                    }]),
+                },
+                BodyVariant {
+                    title: "file".to_owned(),
+                    selected: false,
+                    body: Body::File(vec![FileReference {
+                        file_path: "{{filePath}}".to_owned(),
+                        content_type: "{{fileType}}".to_owned(),
+                        selected: true,
+                    }]),
+                },
+            ])),
+        },
         authentication: Some(Authentication {
             kind: AuthenticationKind::OAuth2,
             properties: BTreeMap::from([
@@ -127,7 +129,7 @@ fn comprehensive_request() -> HttpRequest {
                 ),
             ]),
         }),
-        ..HttpRequest::default()
+        ..Request::default()
     }
 }
 
@@ -254,12 +256,12 @@ fn discovers_every_resolved_request_field_and_deduplicates_deterministically() {
 
 #[test]
 fn effective_declarations_respect_inheritance_kind_overrides_and_disabled_shadowing() {
-    let request = HttpRequest {
+    let request = Request {
         url: Some(
             "{{inheritedPlain}}/{{inheritedSecret}}/{{plainToSecret}}/{{secretToPlain}}/{{disabledByChild}}"
                 .to_owned(),
         ),
-        ..HttpRequest::default()
+        ..Request::default()
     };
     let environments = vec![
         environment(
@@ -305,9 +307,9 @@ fn effective_declarations_respect_inheritance_kind_overrides_and_disabled_shadow
 
 #[test]
 fn missing_and_unavailable_secrets_do_not_block_discovery() {
-    let request = HttpRequest {
+    let request = Request {
         url: Some("{{missing}}/{{secret}}".to_owned()),
-        ..HttpRequest::default()
+        ..Request::default()
     };
     let variables = discover_request_variables(
         &request,
@@ -326,9 +328,9 @@ fn missing_and_unavailable_secrets_do_not_block_discovery() {
 #[test]
 fn malformed_and_empty_interpolation_match_resolution_parser_semantics() {
     for malformed in ["{{", "{{ }}", "{{outer{{inner}}"] {
-        let request = HttpRequest {
+        let request = Request {
             url: Some(malformed.to_owned()),
-            ..HttpRequest::default()
+            ..Request::default()
         };
         assert_eq!(
             discover_request_variables(&request, &[], None).unwrap_err(),
@@ -337,7 +339,7 @@ fn malformed_and_empty_interpolation_match_resolution_parser_semantics() {
     }
 
     assert!(
-        discover_request_variables(&HttpRequest::default(), &[], None)
+        discover_request_variables(&Request::default(), &[], None)
             .unwrap()
             .is_empty()
     );
@@ -345,27 +347,28 @@ fn malformed_and_empty_interpolation_match_resolution_parser_semantics() {
 
 #[test]
 fn discovers_native_graphql_interpolation_locations() {
-    let request = GraphqlRequest {
+    let request = Request {
         url: Some("{{baseUrl}}/graphql".to_owned()),
-        body: Some(GraphqlBody::Single(GraphqlOperation {
-            query: Some("query {{operation}} { viewer }".to_owned()),
-            variables: Some(
-                serde_json::json!({ "nested": ["{{login}}", {"id": "{{id}}"}] })
-                    .as_object()
-                    .cloned()
-                    .unwrap(),
-            ),
-            operation_name: Some("{{operation}}".to_owned()),
-            extensions: Some(
-                serde_json::json!({ "trace": "{{trace}}" })
-                    .as_object()
-                    .cloned()
-                    .unwrap(),
-            ),
-        })),
-        ..GraphqlRequest::default()
-    }
-    .into_request();
+        kind: RequestKind::Graphql {
+            body: Some(GraphqlBody::Single(GraphqlOperation {
+                query: Some("query {{operation}} { viewer }".to_owned()),
+                variables: Some(
+                    serde_json::json!({ "nested": ["{{login}}", {"id": "{{id}}"}] })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                ),
+                operation_name: Some("{{operation}}".to_owned()),
+                extensions: Some(
+                    serde_json::json!({ "trace": "{{trace}}" })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                ),
+            })),
+        },
+        ..Request::default()
+    };
     let variables = discover_request_variables(&request, &[], None).unwrap();
     let find = |name: &str| {
         variables

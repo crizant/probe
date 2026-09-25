@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use probe_core::HttpRequest;
+use probe_core::Request;
 use probe_opencollection::LoadedWorkspace;
 
 #[derive(Clone, Debug)]
 pub(crate) struct LocalRequestState {
     pub(crate) selector: String,
-    pub(crate) baseline: HttpRequest,
-    pub(crate) local: HttpRequest,
+    pub(crate) baseline: Request,
+    pub(crate) local: Request,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,7 +45,7 @@ impl SynchronizationConflict {
 
 pub(crate) struct ReconciledWorkspace {
     pub(crate) workspace: LoadedWorkspace,
-    pub(crate) disk_baselines: BTreeMap<String, HttpRequest>,
+    pub(crate) disk_baselines: BTreeMap<String, Request>,
     pub(crate) selector_remaps: BTreeMap<String, String>,
 }
 
@@ -130,7 +130,7 @@ pub(crate) fn reconcile(
 fn find_target_selector(
     state: &LocalRequestState,
     local: &[LocalRequestState],
-    disk: &BTreeMap<String, HttpRequest>,
+    disk: &BTreeMap<String, Request>,
     rename_hints: &BTreeMap<String, String>,
     claimed: &BTreeSet<String>,
     conflicts: &mut Vec<SynchronizationConflict>,
@@ -182,10 +182,10 @@ fn hinted_selector(selector: &str, rename_hints: &BTreeMap<String, String>) -> O
 }
 
 fn merge_request(
-    baseline: &HttpRequest,
-    local: &HttpRequest,
-    disk: &HttpRequest,
-) -> (HttpRequest, Vec<&'static str>) {
+    baseline: &Request,
+    local: &Request,
+    disk: &Request,
+) -> (Request, Vec<&'static str>) {
     let mut merged = baseline.clone();
     let mut conflicts = Vec::new();
 
@@ -246,10 +246,10 @@ fn merge_request(
         &mut conflicts,
     );
     merge_field(
-        &baseline.body,
-        &local.body,
-        &disk.body,
-        &mut merged.body,
+        &baseline.kind,
+        &local.kind,
+        &disk.kind,
+        &mut merged.kind,
         "body",
         &mut conflicts,
     );
@@ -304,10 +304,15 @@ mod tests {
     };
 
     fn fixture_copy() -> PathBuf {
+        named_fixture_copy("phase1-bundled.yml")
+    }
+
+    fn named_fixture_copy(name: &str) -> PathBuf {
         static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/opencollection/phase1-bundled.yml");
+            .join("../../tests/fixtures/opencollection")
+            .join(name);
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -360,6 +365,45 @@ mod tests {
             .unwrap();
         assert_eq!(request.url.as_deref(), Some("https://local.example"));
         assert_eq!(request.method.as_deref(), Some("PATCH"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn merges_local_graphql_body_with_disk_changes() {
+        let path = named_fixture_copy("graphql-http.yml");
+        let original = probe_opencollection::load_workspace(&path).unwrap();
+        let mut state = request_state(&original, 0);
+        state
+            .local
+            .apply_graphql_update(&probe_core::GraphqlUpdate {
+                query: probe_core::FieldPatch::Set("query Local { viewer { id } }".to_owned()),
+                ..probe_core::GraphqlUpdate::default()
+            })
+            .unwrap();
+
+        let mut source = fs::read_to_string(&path).unwrap();
+        source = source.replacen("method: POST", "method: GET", 1);
+        fs::write(&path, source).unwrap();
+        let fresh = probe_opencollection::load_workspace(&path).unwrap();
+        let ReconcileResult::Applied(result) = reconcile(vec![state], fresh, &BTreeMap::new())
+        else {
+            panic!("a local GraphQL body change should merge with a disk method change")
+        };
+        let request = result
+            .workspace
+            .workspace()
+            .request(result.workspace.requests()[0].key())
+            .unwrap();
+        assert_eq!(request.method.as_deref(), Some("GET"));
+        assert_eq!(
+            request
+                .selected_graphql()
+                .unwrap()
+                .unwrap()
+                .query
+                .as_deref(),
+            Some("query Local { viewer { id } }")
+        );
         fs::remove_file(path).unwrap();
     }
 

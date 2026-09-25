@@ -39,7 +39,7 @@ impl ProbeApp {
                                                     |request| {
                                                         if let Some(RequestBody::Single(
                                                             Body::File(files),
-                                                        )) = request.body.as_mut()
+                                                        )) = request.http_body_mut()
                                                             && let Some(file) = files.get_mut(index)
                                                         {
                                                             file.file_path = value.to_string();
@@ -75,7 +75,7 @@ impl ProbeApp {
                                     key,
                                     |request| {
                                         if let Some(RequestBody::Single(Body::File(files))) =
-                                            request.body.as_mut()
+                                            request.http_body_mut()
                                             && let Some(file) = files.get_mut(index)
                                         {
                                             file.content_type = value.to_string();
@@ -99,7 +99,7 @@ impl ProbeApp {
                                         key,
                                         |request| {
                                             if let Some(RequestBody::Single(Body::File(files))) =
-                                                request.body.as_mut()
+                                                request.http_body_mut()
                                                 && let Some(file) = files.get_mut(index)
                                             {
                                                 file.selected = selected;
@@ -120,7 +120,7 @@ impl ProbeApp {
                                         key,
                                         |request| {
                                             if let Some(RequestBody::Single(Body::File(files))) =
-                                                request.body.as_mut()
+                                                request.http_body_mut()
                                                 && index < files.len()
                                             {
                                                 files.remove(index);
@@ -145,7 +145,7 @@ impl ProbeApp {
                         key,
                         |request| {
                             if let Some(RequestBody::Single(Body::File(files))) =
-                                request.body.as_mut()
+                                request.http_body_mut()
                             {
                                 files.push(FileReference {
                                     file_path: String::new(),

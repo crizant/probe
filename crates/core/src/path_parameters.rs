@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::{HttpRequest, QueryParameter};
+use crate::{QueryParameter, Request};
 
 enum PathSegmentAction {
     Keep,
@@ -87,17 +87,17 @@ pub fn apply_path_parameters(url: &str, parameters: &[QueryParameter]) -> String
 /// Aligns `path_parameters` with URL placeholders after the URL changes.
 ///
 /// Enabled rows that no longer appear in the URL are removed.
-pub fn synchronize_path_parameters(request: &mut HttpRequest) -> bool {
+pub fn synchronize_path_parameters(request: &mut Request) -> bool {
     synchronize_path_parameters_with_options(request, true)
 }
 
 /// Adds missing path-parameter rows for URL placeholders without removing extras.
-pub fn ensure_path_parameters_from_url(request: &mut HttpRequest) -> bool {
+pub fn ensure_path_parameters_from_url(request: &mut Request) -> bool {
     synchronize_path_parameters_with_options(request, false)
 }
 
 /// Renames a path parameter and updates matching URL placeholders.
-pub fn rename_path_parameter_at(request: &mut HttpRequest, index: usize, new_name: &str) -> bool {
+pub fn rename_path_parameter_at(request: &mut Request, index: usize, new_name: &str) -> bool {
     let Some(old_name) = request
         .path_parameters
         .get(index)
@@ -122,7 +122,7 @@ pub fn rename_path_parameter_at(request: &mut HttpRequest, index: usize, new_nam
 }
 
 /// Removes a path parameter and, when active, its URL placeholders.
-pub fn remove_path_parameter_at(request: &mut HttpRequest, index: usize) -> bool {
+pub fn remove_path_parameter_at(request: &mut Request, index: usize) -> bool {
     let Some(parameter) = request.path_parameters.get(index).cloned() else {
         return false;
     };
@@ -143,7 +143,7 @@ pub fn remove_path_parameter_at(request: &mut HttpRequest, index: usize) -> bool
 }
 
 /// Appends a new `:param` placeholder to the URL and creates a matching row.
-pub fn add_path_parameter(request: &mut HttpRequest) {
+pub fn add_path_parameter(request: &mut Request) {
     let name = unique_path_parameter_name(request);
     if let Some(url) = request.url.as_mut() {
         *url = append_path_variable(url, &name);
@@ -153,7 +153,7 @@ pub fn add_path_parameter(request: &mut HttpRequest) {
     synchronize_path_parameters_with_options(request, false);
 }
 
-fn synchronize_path_parameters_with_options(request: &mut HttpRequest, remove_stale: bool) -> bool {
+fn synchronize_path_parameters_with_options(request: &mut Request, remove_stale: bool) -> bool {
     let before = request.path_parameters.clone();
     let names = request
         .url
@@ -200,7 +200,7 @@ fn is_valid_path_variable_name(name: &str) -> bool {
             .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
 }
 
-fn unique_path_parameter_name(request: &HttpRequest) -> String {
+fn unique_path_parameter_name(request: &Request) -> String {
     let url_names = request
         .url
         .as_deref()
@@ -318,7 +318,7 @@ fn encode_path_segment(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::{HttpRequest, QueryParameter};
+    use crate::{QueryParameter, Request};
 
     use super::{
         add_path_parameter, apply_path_parameters, ensure_path_parameters_from_url,
@@ -369,13 +369,13 @@ mod tests {
 
     #[test]
     fn synchronize_path_parameters_removes_stale_enabled_rows() {
-        let mut request = HttpRequest {
+        let mut request = Request {
             path_parameters: vec![QueryParameter {
                 name: "stale".to_owned(),
                 value: "old".to_owned(),
                 disabled: false,
             }],
-            ..HttpRequest::default()
+            ..Request::default()
         };
         request.url = Some("https://api.example.com/users/:userId".to_owned());
         synchronize_path_parameters(&mut request);
@@ -385,14 +385,14 @@ mod tests {
 
     #[test]
     fn ensure_path_parameters_from_url_adds_placeholders_and_preserves_extra_yaml_rows() {
-        let mut request = HttpRequest {
+        let mut request = Request {
             url: Some("https://api.example.com/users/:userId".to_owned()),
             path_parameters: vec![QueryParameter {
                 name: "ownerId".to_owned(),
                 value: "42".to_owned(),
                 disabled: false,
             }],
-            ..HttpRequest::default()
+            ..Request::default()
         };
         ensure_path_parameters_from_url(&mut request);
         assert_eq!(request.path_parameters.len(), 2);
@@ -403,14 +403,14 @@ mod tests {
 
     #[test]
     fn rename_path_parameter_at_updates_the_url_and_row() {
-        let mut request = HttpRequest {
+        let mut request = Request {
             url: Some("https://api.example.com/users/:userId/posts/:userId".to_owned()),
             path_parameters: vec![QueryParameter {
                 name: "userId".to_owned(),
                 value: "42".to_owned(),
                 disabled: false,
             }],
-            ..HttpRequest::default()
+            ..Request::default()
         };
         rename_path_parameter_at(&mut request, 0, "accountId");
         assert_eq!(
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn remove_path_parameter_at_removes_url_segments() {
-        let mut request = HttpRequest {
+        let mut request = Request {
             url: Some("https://api.example.com/users/:userId/posts/:postId".to_owned()),
             path_parameters: vec![
                 QueryParameter {
@@ -436,7 +436,7 @@ mod tests {
                     disabled: false,
                 },
             ],
-            ..HttpRequest::default()
+            ..Request::default()
         };
         remove_path_parameter_at(&mut request, 0);
         assert_eq!(
@@ -449,9 +449,9 @@ mod tests {
 
     #[test]
     fn add_path_parameter_appends_a_unique_placeholder() {
-        let mut request = HttpRequest {
+        let mut request = Request {
             url: Some("https://api.example.com/users".to_owned()),
-            ..HttpRequest::default()
+            ..Request::default()
         };
         add_path_parameter(&mut request);
         assert_eq!(

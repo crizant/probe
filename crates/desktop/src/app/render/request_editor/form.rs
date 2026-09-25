@@ -31,7 +31,7 @@ impl ProbeApp {
                                             |request| {
                                                 if let Some(RequestBody::Single(
                                                     Body::FormUrlEncoded(fields),
-                                                )) = request.body.as_mut()
+                                                )) = request.http_body_mut()
                                                     && let Some(field) = fields.get_mut(index)
                                                 {
                                                     field.name = value.to_string();
@@ -57,7 +57,7 @@ impl ProbeApp {
                                             |request| {
                                                 if let Some(RequestBody::Single(
                                                     Body::FormUrlEncoded(fields),
-                                                )) = request.body.as_mut()
+                                                )) = request.http_body_mut()
                                                     && let Some(field) = fields.get_mut(index)
                                                 {
                                                     field.value = value.to_string();
@@ -82,7 +82,7 @@ impl ProbeApp {
                                         |request| {
                                             if let Some(RequestBody::Single(Body::FormUrlEncoded(
                                                 fields,
-                                            ))) = request.body.as_mut()
+                                            ))) = request.http_body_mut()
                                                 && let Some(field) = fields.get_mut(index)
                                             {
                                                 field.disabled = !enabled;
@@ -104,7 +104,7 @@ impl ProbeApp {
                                         |request| {
                                             if let Some(RequestBody::Single(Body::FormUrlEncoded(
                                                 fields,
-                                            ))) = request.body.as_mut()
+                                            ))) = request.http_body_mut()
                                                 && index < fields.len()
                                             {
                                                 fields.remove(index);
@@ -129,7 +129,7 @@ impl ProbeApp {
                         key,
                         |request| {
                             if let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) =
-                                request.body.as_mut()
+                                request.http_body_mut()
                             {
                                 fields.push(FormField {
                                     name: String::new(),

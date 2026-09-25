@@ -1,4 +1,4 @@
-use probe_core::{CollectionItem, Folder, GraphqlRequest, HttpRequest, QueryParameter};
+use probe_core::{CollectionItem, Folder, QueryParameter, Request, RequestKind};
 use serde_yaml_ng::Value;
 
 use super::{
@@ -82,7 +82,7 @@ pub(crate) fn project_item(
                 .transpose()?;
             let (query_parameters, path_parameters) =
                 project_parameters(http.params, &format!("{path}/http/params"), diagnostics)?;
-            Ok(Some(CollectionItem::HttpRequest(HttpRequest {
+            Ok(Some(CollectionItem::Request(Request {
                 metadata: item.info.into_domain(),
                 method: http.method,
                 url: http.url,
@@ -93,10 +93,9 @@ pub(crate) fn project_item(
                     .collect(),
                 query_parameters,
                 path_parameters,
-                body,
                 authentication,
                 settings,
-                protocol: probe_core::RequestProtocol::Http,
+                kind: RequestKind::Http { body },
             })))
         }
         Some("graphql") => {
@@ -115,7 +114,7 @@ pub(crate) fn project_item(
                 &format!("{path}/graphql/params"),
                 diagnostics,
             )?;
-            Ok(Some(CollectionItem::GraphqlRequest(GraphqlRequest {
+            Ok(Some(CollectionItem::Request(Request {
                 metadata: item.info.into_domain(),
                 method: graphql.method,
                 url: graphql.url,
@@ -126,9 +125,9 @@ pub(crate) fn project_item(
                     .collect(),
                 query_parameters,
                 path_parameters,
-                body,
                 authentication,
                 settings,
+                kind: RequestKind::Graphql { body },
             })))
         }
         other => {

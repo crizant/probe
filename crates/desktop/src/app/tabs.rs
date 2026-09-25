@@ -39,14 +39,14 @@ impl ProbeApp {
         let Some(loaded) = self.loaded_workspace.as_mut() else {
             return;
         };
-        let request = HttpRequest {
+        let request = Request {
             method: Some(if graphql { "POST" } else { "GET" }.to_owned()),
-            protocol: if graphql {
-                probe_core::RequestProtocol::Graphql(None)
+            kind: if graphql {
+                probe_core::RequestKind::Graphql { body: None }
             } else {
-                probe_core::RequestProtocol::Http
+                probe_core::RequestKind::Http { body: None }
             },
-            ..HttpRequest::default()
+            ..Request::default()
         };
         let key = loaded.add_detached_request(request);
         self.detached_requests.insert(key);
@@ -434,7 +434,7 @@ impl ProbeApp {
             return;
         };
         draft.metadata.name = Some(name.clone());
-        let graphql = matches!(draft.protocol, probe_core::RequestProtocol::Graphql(_));
+        let graphql = draft.kind.is_graphql();
         let mut update = match probe_core::RequestUpdate::between(None, &draft) {
             Ok(update) => update,
             Err(error) => {
@@ -680,9 +680,7 @@ impl ProbeApp {
             .loaded_workspace
             .as_ref()
             .and_then(|loaded| loaded.workspace().request(key))
-            .is_some_and(|request| {
-                matches!(request.protocol, probe_core::RequestProtocol::Graphql(_))
-            });
+            .is_some_and(|request| request.kind.is_graphql());
         self.request_editor.ensure_available_section(is_graphql);
         if self.detached_requests.contains(&key) {
             self.selected_tree_item = None;

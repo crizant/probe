@@ -1,8 +1,8 @@
 use probe_core::{
     Body, BodyVariant, Environment, EnvironmentVariable, FieldPatch, GraphqlBody,
-    GraphqlBodyVariant, GraphqlOperation, GraphqlRequest, GraphqlRequestError, GraphqlUpdate,
-    HttpRequest, QueryParameter, RawBody, RawBodyKind, RequestBody, RequestProtocol, RequestUpdate,
-    Variable, VariableValue, VariableValueSet, resolve_environment, resolve_request,
+    GraphqlBodyVariant, GraphqlOperation, GraphqlRequestError, GraphqlUpdate, QueryParameter,
+    RawBody, RawBodyKind, Request, RequestBody, RequestKind, RequestUpdate, Variable,
+    VariableValue, VariableValueSet, resolve_environment, resolve_request,
 };
 use serde_json::{Map, Value, json};
 
@@ -29,22 +29,30 @@ fn environment() -> Environment {
     }
 }
 
-fn native_request(method: &str) -> HttpRequest {
-    GraphqlRequest {
+fn graphql_request(body: Option<GraphqlBody>) -> Request {
+    Request {
+        kind: RequestKind::Graphql { body },
+        ..Request::default()
+    }
+}
+
+fn native_request(method: &str) -> Request {
+    Request {
         method: Some(method.to_owned()),
         url: Some("https://example.com/graphql".to_owned()),
-        body: Some(GraphqlBody::Single(GraphqlOperation {
-            query: Some(
-                "query {{operation}}($login: String!) { viewer(login: $login) { login } }"
-                    .to_owned(),
-            ),
-            variables: Some(object(json!({ "login": "{{login}}" }))),
-            operation_name: Some("{{operation}}".to_owned()),
-            extensions: Some(object(json!({ "trace": "{{login}}" }))),
-        })),
-        ..GraphqlRequest::default()
+        kind: RequestKind::Graphql {
+            body: Some(GraphqlBody::Single(GraphqlOperation {
+                query: Some(
+                    "query {{operation}}($login: String!) { viewer(login: $login) { login } }"
+                        .to_owned(),
+                ),
+                variables: Some(object(json!({ "login": "{{login}}" }))),
+                operation_name: Some("{{operation}}".to_owned()),
+                extensions: Some(object(json!({ "trace": "{{login}}" }))),
+            })),
+        },
+        ..Request::default()
     }
-    .into_request()
 }
 
 #[test]
@@ -70,8 +78,8 @@ fn native_graphql_fields_interpolate_and_prepare_post_through_http() {
     assert_eq!(graphql.extensions.as_ref().unwrap()["trace"], "octocat");
 
     let prepared = resolved.into_http().unwrap();
-    assert_eq!(prepared.protocol, RequestProtocol::Http);
-    let Some(RequestBody::Single(Body::Raw(body))) = prepared.body else {
+    assert_eq!(prepared.request().kind.as_str(), "http");
+    let Some(RequestBody::Single(Body::Raw(body))) = prepared.body() else {
         panic!("POST GraphQL request should prepare a raw JSON body");
     };
     let envelope: Value = serde_json::from_str(&body.data).unwrap();
@@ -83,7 +91,8 @@ fn native_graphql_fields_interpolate_and_prepare_post_through_http() {
 #[test]
 fn native_graphql_get_prepares_graphql_query_parameters() {
     let prepared = native_request("GET").into_http().unwrap();
-    assert!(prepared.body.is_none());
+    assert!(prepared.body().is_none());
+    let prepared = prepared.request();
     assert_eq!(prepared.query_parameters[0].name, "query");
     assert_eq!(prepared.query_parameters[1].name, "variables");
     assert_eq!(prepared.query_parameters[2].name, "operationName");
@@ -106,6 +115,7 @@ fn native_graphql_get_replaces_existing_graphql_query_parameters() {
         },
     ];
     let prepared = request.into_http().unwrap();
+    let prepared = prepared.request();
     assert_eq!(prepared.query_parameters[0].name, "keep");
     assert_eq!(prepared.query_parameters[1].name, "query");
     assert_ne!(prepared.query_parameters[1].value, "stale");
@@ -116,19 +126,21 @@ fn native_graphql_get_replaces_existing_graphql_query_parameters() {
 
 #[test]
 fn owned_http_preparation_preserves_existing_body_variants() {
-    let request = HttpRequest {
+    let request = Request {
         method: Some("POST".to_owned()),
-        body: Some(RequestBody::Variants(vec![BodyVariant {
-            title: "ordinary HTTP".to_owned(),
-            selected: true,
-            body: Body::Raw(RawBody {
-                kind: RawBodyKind::Json,
-                data: "{\"query\":\"ordinary HTTP\"}".to_owned(),
-            }),
-        }])),
-        ..HttpRequest::default()
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Variants(vec![BodyVariant {
+                title: "ordinary HTTP".to_owned(),
+                selected: true,
+                body: Body::Raw(RawBody {
+                    kind: RawBodyKind::Json,
+                    data: "{\"query\":\"ordinary HTTP\"}".to_owned(),
+                }),
+            }])),
+        },
+        ..Request::default()
     };
-    assert_eq!(request.clone().into_http().unwrap(), request);
+    assert_eq!(request.clone().into_http().unwrap().request(), &request);
 }
 
 #[test]
@@ -151,14 +163,12 @@ fn owned_graphql_preparation_selects_one_body_variant() {
             },
         },
     ];
-    let request = GraphqlRequest {
+    let request = Request {
         method: Some("POST".to_owned()),
-        body: Some(GraphqlBody::Variants(variants.clone())),
-        ..GraphqlRequest::default()
-    }
-    .into_request();
+        ..graphql_request(Some(GraphqlBody::Variants(variants.clone())))
+    };
     let prepared = request.into_http().unwrap();
-    let Some(RequestBody::Single(Body::Raw(body))) = prepared.body else {
+    let Some(RequestBody::Single(Body::Raw(body))) = prepared.body() else {
         panic!("expected JSON body")
     };
     let envelope: Value = serde_json::from_str(&body.data).unwrap();
@@ -172,11 +182,7 @@ fn owned_graphql_preparation_selects_one_body_variant() {
         for (variant, selected) in variants.iter_mut().zip(selected) {
             variant.selected = selected;
         }
-        let request = GraphqlRequest {
-            body: Some(GraphqlBody::Variants(variants)),
-            ..GraphqlRequest::default()
-        }
-        .into_request();
+        let request = graphql_request(Some(GraphqlBody::Variants(variants)));
         assert!(
             matches!(request.into_http(), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
         );
@@ -205,11 +211,7 @@ fn graphql_variant_selection_is_shared_by_read_and_update() {
             },
         ])
     };
-    let mut request = GraphqlRequest {
-        body: Some(variants(false, true)),
-        ..GraphqlRequest::default()
-    }
-    .into_request();
+    let mut request = graphql_request(Some(variants(false, true)));
     assert_eq!(
         request
             .selected_graphql()
@@ -234,9 +236,7 @@ fn graphql_variant_selection_is_shared_by_read_and_update() {
             .as_deref(),
         Some("changed")
     );
-    let RequestProtocol::Graphql(Some(GraphqlBody::Variants(selected_variants))) =
-        &request.protocol
-    else {
+    let Some(GraphqlBody::Variants(selected_variants)) = request.graphql() else {
         unreachable!()
     };
     assert_eq!(selected_variants[0].body.query.as_deref(), Some("first"));
@@ -245,11 +245,7 @@ fn graphql_variant_selection_is_shared_by_read_and_update() {
         (false, false, "no selected value"),
         (true, true, "multiple selected values"),
     ] {
-        let mut request = GraphqlRequest {
-            body: Some(variants(first, second)),
-            ..GraphqlRequest::default()
-        }
-        .into_request();
+        let mut request = graphql_request(Some(variants(first, second)));
         assert!(
             matches!(request.selected_graphql(), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
         );
@@ -258,7 +254,7 @@ fn graphql_variant_selection_is_shared_by_read_and_update() {
         );
     }
 
-    let mut empty = GraphqlRequest::default().into_request();
+    let mut empty = graphql_request(None);
     empty
         .apply_graphql_update(&GraphqlUpdate {
             query: FieldPatch::Set("initialized".to_owned()),
@@ -287,13 +283,16 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
     assert!(graphql.query.as_ref().unwrap().starts_with("query"));
     assert_eq!(graphql.variables.as_ref().unwrap()["page"], 1);
 
-    let mut ordinary_http = HttpRequest {
-        body: Some(RequestBody::Single(Body::Raw(RawBody {
-            kind: RawBodyKind::Json,
-            data: r#"{"query":"search term"}"#.to_owned(),
-        }))),
-        ..HttpRequest::default()
+    let mut ordinary_http = Request {
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Single(Body::Raw(RawBody {
+                kind: RawBodyKind::Json,
+                data: r#"{"query":"search term"}"#.to_owned(),
+            }))),
+        },
+        ..Request::default()
     };
+    let original_http = ordinary_http.clone();
     assert_eq!(
         RequestUpdate {
             graphql: Some(GraphqlUpdate {
@@ -305,5 +304,17 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
         .apply(&mut ordinary_http),
         Err(GraphqlRequestError::NotGraphql)
     );
-    assert_eq!(ordinary_http.protocol, RequestProtocol::Http);
+    assert_eq!(ordinary_http, original_http);
+
+    let mut graphql = native_request("POST");
+    let original_graphql = graphql.clone();
+    assert_eq!(
+        RequestUpdate {
+            body: FieldPatch::Clear,
+            ..RequestUpdate::default()
+        }
+        .apply(&mut graphql),
+        Err(GraphqlRequestError::NotHttp)
+    );
+    assert_eq!(graphql, original_graphql);
 }

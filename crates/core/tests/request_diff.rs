@@ -1,20 +1,21 @@
 use probe_core::{
-    FieldPatch, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, GraphqlRequest, HttpRequest,
-    RequestDiffError, RequestProtocol, RequestUpdate,
+    FieldPatch, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, Request, RequestDiffError,
+    RequestKind, RequestUpdate,
 };
 
 #[test]
 fn diff_round_trips_optional_field_clears() {
-    let base = GraphqlRequest {
+    let base = Request {
         method: Some("POST".into()),
         url: Some("https://example.test/graphql".into()),
-        body: Some(GraphqlBody::Single(GraphqlOperation {
-            query: Some("query { viewer }".into()),
-            ..GraphqlOperation::default()
-        })),
-        ..GraphqlRequest::default()
-    }
-    .into_request();
+        kind: RequestKind::Graphql {
+            body: Some(GraphqlBody::Single(GraphqlOperation {
+                query: Some("query { viewer }".into()),
+                ..GraphqlOperation::default()
+            })),
+        },
+        ..Request::default()
+    };
     assert!(
         RequestUpdate::between(Some(&base), &base)
             .unwrap()
@@ -23,7 +24,10 @@ fn diff_round_trips_optional_field_clears() {
     let mut current = base.clone();
     current.method = None;
     current.url = None;
-    if let RequestProtocol::Graphql(Some(GraphqlBody::Single(operation))) = &mut current.protocol {
+    if let RequestKind::Graphql {
+        body: Some(GraphqlBody::Single(operation)),
+    } = &mut current.kind
+    {
         operation.query = None;
     } else {
         unreachable!();
@@ -40,18 +44,18 @@ fn diff_round_trips_optional_field_clears() {
 
 #[test]
 fn diff_rejects_changes_without_persistence_support() {
-    let base = HttpRequest::default();
+    let base = Request::default();
     let cases = [
         (
             "request protocol",
-            HttpRequest {
-                protocol: RequestProtocol::Graphql(None),
+            Request {
+                kind: RequestKind::Graphql { body: None },
                 ..base.clone()
             },
         ),
         (
             "request settings",
-            HttpRequest {
+            Request {
                 settings: probe_core::RequestSettings {
                     follow_redirects: Some(false),
                     ..Default::default()
@@ -61,7 +65,7 @@ fn diff_rejects_changes_without_persistence_support() {
         ),
         (
             "request sequence",
-            HttpRequest {
+            Request {
                 metadata: probe_core::ItemMetadata {
                     sequence: Some(2.0),
                     ..Default::default()
@@ -86,27 +90,34 @@ fn diff_rejects_changes_without_persistence_support() {
 
 #[test]
 fn diff_rejects_graphql_variant_metadata_changes() {
-    let base = GraphqlRequest {
-        body: Some(GraphqlBody::Variants(vec![GraphqlBodyVariant {
-            title: "first".into(),
-            selected: true,
-            body: GraphqlOperation {
-                query: Some("query { viewer }".into()),
-                ..Default::default()
-            },
-        }])),
+    let base = Request {
+        kind: RequestKind::Graphql {
+            body: Some(GraphqlBody::Variants(vec![GraphqlBodyVariant {
+                title: "first".into(),
+                selected: true,
+                body: GraphqlOperation {
+                    query: Some("query { viewer }".into()),
+                    ..Default::default()
+                },
+            }])),
+        },
         ..Default::default()
-    }
-    .into_request();
+    };
     let mut current = base.clone();
-    if let RequestProtocol::Graphql(Some(GraphqlBody::Variants(variants))) = &mut current.protocol {
+    if let RequestKind::Graphql {
+        body: Some(GraphqlBody::Variants(variants)),
+    } = &mut current.kind
+    {
         variants[0].title = "renamed".into();
     }
     assert_eq!(
         RequestUpdate::between(Some(&base), &current),
         Err(RequestDiffError::UnsupportedChange("GraphQL body variants"))
     );
-    if let RequestProtocol::Graphql(Some(GraphqlBody::Variants(variants))) = &mut current.protocol {
+    if let RequestKind::Graphql {
+        body: Some(GraphqlBody::Variants(variants)),
+    } = &mut current.kind
+    {
         variants[0].selected = false;
     }
     assert!(matches!(

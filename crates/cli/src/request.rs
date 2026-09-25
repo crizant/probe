@@ -1,7 +1,7 @@
 use std::{borrow::Cow, io::Read, path::PathBuf};
 
 use probe_core::{
-    ExpectationOutcome, HttpRequest, RequestUpdate, RequestVariableInfo, StatusExpectation,
+    ExpectationOutcome, Request, RequestUpdate, RequestVariableInfo, StatusExpectation,
     VariableUsage, discover_request_variables, evaluate_expectations,
     resolve_environment_with_overrides, resolve_request, resolve_request_strict,
 };
@@ -31,7 +31,7 @@ pub(crate) fn list(
             .request(located.key())
             .expect("repository request key must resolve");
         let name = request.metadata.name.as_deref().unwrap_or("");
-        let request_type = request.protocol.as_str();
+        let request_type = request.kind.as_str();
         let method = request.method.as_deref().unwrap_or("");
         let url = request.url.as_deref().unwrap_or("");
         lines.push(format!(
@@ -277,7 +277,7 @@ fn selected_request<'a>(
     environment: Option<&str>,
     variables: &[(String, String)],
     strict_variables: bool,
-) -> Result<Cow<'a, HttpRequest>, CliError> {
+) -> Result<Cow<'a, Request>, CliError> {
     let key = loaded
         .request_key(selector)
         .ok_or_else(|| CliError::request_not_found(selector))?;

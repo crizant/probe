@@ -2,8 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     AuthenticationValue, Body, Environment, EnvironmentResolutionError, GraphqlBody,
-    GraphqlOperation, HttpRequest, MultipartValue, RequestBody, RequestProtocol,
-    ResolvedEnvironment,
+    GraphqlOperation, MultipartValue, Request, RequestBody, RequestKind, ResolvedEnvironment,
     environment::{EffectiveVariableDeclaration, effective_variable_declarations},
 };
 
@@ -59,7 +58,7 @@ pub struct RequestVariableInfo {
 /// normal resolution. Disabled declarations shadow inherited declarations but are not defined.
 /// No variable values (including secrets) are read or interpolated.
 pub fn discover_request_variables(
-    request: &HttpRequest,
+    request: &Request,
     environments: &[Environment],
     selected: Option<&str>,
 ) -> Result<Vec<RequestVariableInfo>, EnvironmentResolutionError> {
@@ -96,25 +95,25 @@ pub fn discover_request_variables(
 
 /// Clones a request and interpolates every currently supported request-value field.
 pub fn resolve_request(
-    request: &HttpRequest,
+    request: &Request,
     environment: &ResolvedEnvironment,
-) -> Result<HttpRequest, EnvironmentResolutionError> {
+) -> Result<Request, EnvironmentResolutionError> {
     resolve_request_with(request, |value| environment.interpolate(value))
 }
 
 /// Clones a request and interpolates every supported request-value field, rejecting
 /// references that do not have an available value.
 pub fn resolve_request_strict(
-    request: &HttpRequest,
+    request: &Request,
     environment: &ResolvedEnvironment,
-) -> Result<HttpRequest, EnvironmentResolutionError> {
+) -> Result<Request, EnvironmentResolutionError> {
     resolve_request_with(request, |value| environment.interpolate_strict(value))
 }
 
 fn resolve_request_with(
-    request: &HttpRequest,
+    request: &Request,
     interpolate: impl Fn(&str) -> Result<String, EnvironmentResolutionError>,
-) -> Result<HttpRequest, EnvironmentResolutionError> {
+) -> Result<Request, EnvironmentResolutionError> {
     let mut request = request.clone();
     transform_request_strings(&mut request, |value, _usage| {
         *value = interpolate(value)?;
@@ -124,7 +123,7 @@ fn resolve_request_with(
 }
 
 fn transform_request_strings<E>(
-    request: &mut HttpRequest,
+    request: &mut Request,
     mut transform: impl FnMut(&mut String, &VariableUsage) -> Result<(), E>,
 ) -> Result<(), E> {
     if let Some(method) = &mut request.method {
@@ -154,11 +153,10 @@ fn transform_request_strings<E>(
         transform(&mut parameter.name, &usage)?;
         transform(&mut parameter.value, &usage)?;
     }
-    if let Some(body) = &mut request.body {
-        transform_body(body, &mut transform)?;
-    }
-    if let RequestProtocol::Graphql(Some(body)) = &mut request.protocol {
-        transform_graphql_body(body, &mut transform)?;
+    match &mut request.kind {
+        RequestKind::Http { body: Some(body) } => transform_body(body, &mut transform)?,
+        RequestKind::Graphql { body: Some(body) } => transform_graphql_body(body, &mut transform)?,
+        RequestKind::Http { body: None } | RequestKind::Graphql { body: None } => {}
     }
     if let Some(authentication) = &mut request.authentication {
         for (name, value) in &mut authentication.properties {

@@ -39,7 +39,7 @@ fn parses_collection_folders_and_http_requests() {
     assert_eq!(folder.metadata.sequence, Some(1.0));
     assert_eq!(folder.items.len(), 1);
 
-    let CollectionItem::HttpRequest(request) = &folder.items[0] else {
+    let CollectionItem::Request(request) = &folder.items[0] else {
         panic!("folder child should be an HTTP request");
     };
     assert_eq!(request.metadata.name.as_deref(), Some("List pets"));
@@ -149,13 +149,13 @@ fn unsupported_projection_is_reported_and_retained() {
 fn parses_and_interpolates_native_graphql_requests() {
     let parsed = parse(&fixture("graphql-http.yml")).expect("GraphQL fixture should parse");
     let collection = parsed.collection();
-    let CollectionItem::GraphqlRequest(request) = &collection.items[0] else {
+    let CollectionItem::Request(request) = &collection.items[0] else {
         panic!("fixture should contain a native GraphQL request");
     };
 
     assert_eq!(request.method.as_deref(), Some("POST"));
     assert_eq!(request.url.as_deref(), Some("{{serverUrl}}/graphql"));
-    let probe_core::GraphqlBody::Single(graphql) = request.body.as_ref().unwrap() else {
+    let probe_core::GraphqlBody::Single(graphql) = request.graphql().unwrap() else {
         panic!("fixture should contain one GraphQL body");
     };
     assert_eq!(graphql.operation_name.as_deref(), Some("Viewer"));
@@ -167,7 +167,7 @@ fn parses_and_interpolates_native_graphql_requests() {
 
     let environment = resolve_environment(&collection.environments, "local")
         .expect("fixture environment should resolve");
-    let resolved = resolve_request(&request.clone().into_request(), &environment)
+    let resolved = resolve_request(request, &environment)
         .expect("GraphQL request variables should interpolate");
     assert_eq!(resolved.url.as_deref(), Some("__SERVER_URL__/graphql"));
     assert_eq!(
@@ -232,15 +232,15 @@ fn parses_bodies_authentication_and_environments() {
         .items
         .iter()
         .map(|item| match item {
-            CollectionItem::HttpRequest(request) => request,
-            CollectionItem::Folder(_) | CollectionItem::GraphqlRequest(_) => {
+            CollectionItem::Request(request) if !request.kind.is_graphql() => request,
+            CollectionItem::Folder(_) | CollectionItem::Request(_) => {
                 panic!("fixture should contain only HTTP requests")
             }
         })
         .collect();
     assert_eq!(requests.len(), 5);
 
-    let Some(RequestBody::Single(Body::Raw(raw))) = &requests[0].body else {
+    let Some(RequestBody::Single(Body::Raw(raw))) = requests[0].http_body() else {
         panic!("first request should have a raw body");
     };
     assert_eq!(raw.kind, RawBodyKind::Json);
@@ -255,7 +255,7 @@ fn parses_bodies_authentication_and_environments() {
         Some(&AuthenticationValue::String("{{apiToken}}".to_owned()))
     );
 
-    let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) = &requests[1].body else {
+    let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) = requests[1].http_body() else {
         panic!("second request should have a form body");
     };
     assert_eq!(fields.len(), 2);
@@ -265,7 +265,7 @@ fn parses_bodies_authentication_and_environments() {
         Some(&AuthenticationKind::Basic)
     );
 
-    let Some(RequestBody::Single(Body::Multipart(parts))) = &requests[2].body else {
+    let Some(RequestBody::Single(Body::Multipart(parts))) = requests[2].http_body() else {
         panic!("third request should have a multipart body");
     };
     assert_eq!(parts.len(), 2);
@@ -277,7 +277,7 @@ fn parses_bodies_authentication_and_environments() {
         ])
     );
 
-    let Some(RequestBody::Single(Body::File(files))) = &requests[3].body else {
+    let Some(RequestBody::Single(Body::File(files))) = requests[3].http_body() else {
         panic!("fourth request should have a file body");
     };
     assert_eq!(files[0].file_path, "./archive.zip");
@@ -287,7 +287,7 @@ fn parses_bodies_authentication_and_environments() {
         Some(&AuthenticationKind::Inherit)
     );
 
-    let Some(RequestBody::Variants(variants)) = &requests[4].body else {
+    let Some(RequestBody::Variants(variants)) = requests[4].http_body() else {
         panic!("fifth request should have body variants");
     };
     assert_eq!(variants.len(), 2);

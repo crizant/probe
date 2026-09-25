@@ -30,7 +30,7 @@ async fn reports_timeout_and_cancellation_separately() {
     };
     let error = HttpEngine::new()
         .unwrap()
-        .execute(&timed, &ExecutionOptions::default())
+        .execute(&timed.into_http().unwrap(), &ExecutionOptions::default())
         .await
         .unwrap_err();
     assert_eq!(error, HttpError::Timeout);
@@ -40,7 +40,7 @@ async fn reports_timeout_and_cancellation_separately() {
     let error = HttpEngine::new()
         .unwrap()
         .execute_cancellable(
-            &request("GET", cancel_url),
+            &request("GET", cancel_url).into_http().unwrap(),
             &ExecutionOptions::default(),
             tokio::time::sleep(Duration::from_millis(20)),
         )
@@ -58,7 +58,9 @@ async fn reports_headers_and_received_body_bytes_before_completion() {
     let response = HttpEngine::new()
         .unwrap()
         .execute_cancellable_with_progress(
-            &request("GET", format!("{base_url}/progress")),
+            &request("GET", format!("{base_url}/progress"))
+                .into_http()
+                .unwrap(),
             &ExecutionOptions::default(),
             std::future::pending::<()>(),
             |update| progress.push(update),
@@ -96,7 +98,9 @@ async fn bounds_in_memory_responses_and_streams_file_output() {
     let response = HttpEngine::new()
         .unwrap()
         .execute(
-            &request("GET", format!("{base_url}/bounded")),
+            &request("GET", format!("{base_url}/bounded"))
+                .into_http()
+                .unwrap(),
             &ExecutionOptions {
                 response_cache: Some(response_cache),
                 ..ExecutionOptions::default()
@@ -126,7 +130,9 @@ async fn bounds_in_memory_responses_and_streams_file_output() {
     let response = HttpEngine::new()
         .unwrap()
         .execute(
-            &request("GET", format!("{base_url}/bounded-without-retention")),
+            &request("GET", format!("{base_url}/bounded-without-retention"))
+                .into_http()
+                .unwrap(),
             &ExecutionOptions::default(),
         )
         .await
@@ -144,7 +150,9 @@ async fn bounds_in_memory_responses_and_streams_file_output() {
     let streamed = HttpEngine::new()
         .unwrap()
         .execute_cancellable_to_file_with_progress(
-            &request("GET", format!("{base_url}/file")),
+            &request("GET", format!("{base_url}/file"))
+                .into_http()
+                .unwrap(),
             &ExecutionOptions::default(),
             &output,
             std::future::pending::<()>(),
@@ -191,7 +199,9 @@ async fn response_cache_enforces_the_global_quota_and_recovers_orphaned_sessions
     let first = HttpEngine::new()
         .unwrap()
         .execute(
-            &request("GET", format!("{base_url}/first-retained")),
+            &request("GET", format!("{base_url}/first-retained"))
+                .into_http()
+                .unwrap(),
             &ExecutionOptions {
                 response_cache: Some(first_cache.clone()),
                 ..ExecutionOptions::default()
@@ -208,7 +218,9 @@ async fn response_cache_enforces_the_global_quota_and_recovers_orphaned_sessions
     let second = HttpEngine::new()
         .unwrap()
         .execute(
-            &request("GET", format!("{base_url}/quota-exceeded")),
+            &request("GET", format!("{base_url}/quota-exceeded"))
+                .into_http()
+                .unwrap(),
             &ExecutionOptions {
                 response_cache: Some(second_cache.clone()),
                 ..ExecutionOptions::default()
@@ -237,7 +249,9 @@ async fn response_cache_enforces_the_global_quota_and_recovers_orphaned_sessions
     let third = HttpEngine::new()
         .unwrap()
         .execute(
-            &request("GET", format!("{base_url}/space-reclaimed")),
+            &request("GET", format!("{base_url}/space-reclaimed"))
+                .into_http()
+                .unwrap(),
             &ExecutionOptions {
                 response_cache: Some(second_cache.clone()),
                 ..ExecutionOptions::default()

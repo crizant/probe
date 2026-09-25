@@ -11,7 +11,7 @@ use tokio::net::TcpListener;
 #[path = "execution/support.rs"]
 mod support;
 
-use support::{read_request, request, serve_once, temporary_path, write_response};
+use support::{http_body, read_request, request, serve_once, temporary_path, write_response};
 #[tokio::test]
 async fn ignores_enabled_parameters_without_names() {
     let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
@@ -55,7 +55,7 @@ async fn ignores_enabled_parameters_without_names() {
             disabled: false,
         },
     ];
-    request.body = Some(RequestBody::Single(Body::FormUrlEncoded(vec![
+    request.kind = http_body(RequestBody::Single(Body::FormUrlEncoded(vec![
         FormField {
             name: String::new(),
             value: "ignored".to_owned(),
@@ -70,7 +70,7 @@ async fn ignores_enabled_parameters_without_names() {
 
     HttpEngine::new()
         .unwrap()
-        .execute(&request, &ExecutionOptions::default())
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
         .await
         .unwrap();
     let captured = captured.await.unwrap().unwrap();
@@ -93,7 +93,7 @@ async fn ignores_enabled_parameters_without_names() {
 async fn ignores_multipart_parts_without_names() {
     let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
     let mut request = request("POST", format!("{base_url}/upload"));
-    request.body = Some(RequestBody::Single(Body::Multipart(vec![
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![
         MultipartPart {
             name: String::new(),
             kind: MultipartPartKind::Text,
@@ -112,7 +112,7 @@ async fn ignores_multipart_parts_without_names() {
 
     HttpEngine::new()
         .unwrap()
-        .execute(&request, &ExecutionOptions::default())
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
         .await
         .unwrap();
     let captured = captured.await.unwrap().unwrap();
@@ -155,7 +155,7 @@ async fn executes_json_with_headers_query_bearer_auth_and_response_metadata() {
         value: "probe/user".to_owned(),
         disabled: false,
     }];
-    request.body = Some(RequestBody::Single(Body::Raw(RawBody {
+    request.kind = http_body(RequestBody::Single(Body::Raw(RawBody {
         kind: RawBodyKind::Json,
         data: "{\"name\":\"Milo\"}".to_owned(),
     })));
@@ -169,7 +169,7 @@ async fn executes_json_with_headers_query_bearer_auth_and_response_metadata() {
 
     let response = HttpEngine::new()
         .unwrap()
-        .execute(&request, &ExecutionOptions::default())
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
         .await
         .unwrap();
     let captured = captured.await.unwrap().unwrap();
@@ -195,7 +195,7 @@ async fn executes_json_with_headers_query_bearer_auth_and_response_metadata() {
 async fn strips_json_body_comments_before_sending() {
     let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
     let mut request = request("POST", format!("{base_url}/comments"));
-    request.body = Some(RequestBody::Single(Body::Raw(RawBody {
+    request.kind = http_body(RequestBody::Single(Body::Raw(RawBody {
         kind: RawBodyKind::Json,
         data: r#"{
   // editor-only line comment
@@ -210,7 +210,7 @@ async fn strips_json_body_comments_before_sending() {
 
     HttpEngine::new()
         .unwrap()
-        .execute(&request, &ExecutionOptions::default())
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
         .await
         .unwrap();
     let captured = captured.await.unwrap().unwrap();
@@ -230,7 +230,9 @@ async fn supports_all_phase_five_methods() {
         let response = HttpEngine::new()
             .unwrap()
             .execute(
-                &request(method, format!("{base_url}/method")),
+                &request(method, format!("{base_url}/method"))
+                    .into_http()
+                    .unwrap(),
                 &ExecutionOptions::default(),
             )
             .await
@@ -247,7 +249,7 @@ async fn supports_all_phase_five_methods() {
 async fn sends_urlencoded_forms_and_basic_auth() {
     let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
     let mut request = request("POST", format!("{base_url}/form"));
-    request.body = Some(RequestBody::Single(Body::FormUrlEncoded(vec![
+    request.kind = http_body(RequestBody::Single(Body::FormUrlEncoded(vec![
         FormField {
             name: "name".to_owned(),
             value: "Probe Client".to_owned(),
@@ -275,7 +277,7 @@ async fn sends_urlencoded_forms_and_basic_auth() {
 
     HttpEngine::new()
         .unwrap()
-        .execute(&request, &ExecutionOptions::default())
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
         .await
         .unwrap();
     let captured = captured.await.unwrap().unwrap();
@@ -294,14 +296,14 @@ async fn sends_urlencoded_forms_and_basic_auth() {
 async fn sends_text_body_with_default_content_type() {
     let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
     let mut request = request("PATCH", format!("{base_url}/text"));
-    request.body = Some(RequestBody::Single(Body::Raw(RawBody {
+    request.kind = http_body(RequestBody::Single(Body::Raw(RawBody {
         kind: RawBodyKind::Text,
         data: "plain text // keep this".to_owned(),
     })));
 
     HttpEngine::new()
         .unwrap()
-        .execute(&request, &ExecutionOptions::default())
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
         .await
         .unwrap();
     let captured = captured.await.unwrap().unwrap();
@@ -320,7 +322,7 @@ async fn sends_multipart_text_and_file_parts_from_the_execution_base_directory()
     let filename = path.file_name().unwrap().to_string_lossy().into_owned();
     let (base_url, captured) = serve_once("200 OK", &[], b"uploaded").await.unwrap();
     let mut request = request("POST", format!("{base_url}/upload"));
-    request.body = Some(RequestBody::Single(Body::Multipart(vec![
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![
         MultipartPart {
             name: "caption".to_owned(),
             kind: MultipartPartKind::Text,
@@ -340,7 +342,7 @@ async fn sends_multipart_text_and_file_parts_from_the_execution_base_directory()
     HttpEngine::new()
         .unwrap()
         .execute(
-            &request,
+            &request.into_http().unwrap(),
             &ExecutionOptions {
                 base_directory: Some(directory),
                 ..ExecutionOptions::default()
@@ -371,7 +373,7 @@ async fn streams_selected_file_body() {
     let filename = path.file_name().unwrap().to_string_lossy().into_owned();
     let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
     let mut request = request("PUT", format!("{base_url}/file"));
-    request.body = Some(RequestBody::Single(Body::File(vec![FileReference {
+    request.kind = http_body(RequestBody::Single(Body::File(vec![FileReference {
         file_path: filename,
         content_type: "text/plain".to_owned(),
         selected: true,
@@ -380,7 +382,7 @@ async fn streams_selected_file_body() {
     HttpEngine::new()
         .unwrap()
         .execute(
-            &request,
+            &request.into_http().unwrap(),
             &ExecutionOptions {
                 base_directory: Some(directory),
                 ..ExecutionOptions::default()
@@ -417,7 +419,10 @@ async fn follows_or_returns_redirects_according_to_request_settings() {
     following.settings.max_redirects = Some(3);
     let response = HttpEngine::new()
         .unwrap()
-        .execute(&following, &ExecutionOptions::default())
+        .execute(
+            &following.into_http().unwrap(),
+            &ExecutionOptions::default(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status, 200);
@@ -438,7 +443,10 @@ async fn follows_or_returns_redirects_according_to_request_settings() {
     not_following.settings.follow_redirects = Some(false);
     let response = HttpEngine::new()
         .unwrap()
-        .execute(&not_following, &ExecutionOptions::default())
+        .execute(
+            &not_following.into_http().unwrap(),
+            &ExecutionOptions::default(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status, 302);

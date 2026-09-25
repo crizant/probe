@@ -31,8 +31,8 @@ fn response(body: &[u8], content_type: &str) -> HttpResponse {
 
 fn request_key() -> probe_core::RequestKey {
     let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
-        items: vec![probe_core::CollectionItem::HttpRequest(
-            probe_core::HttpRequest::default(),
+        items: vec![probe_core::CollectionItem::Request(
+            probe_core::Request::default(),
         )],
         ..probe_core::Collection::default()
     });

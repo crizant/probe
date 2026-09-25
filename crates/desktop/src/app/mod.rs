@@ -25,8 +25,8 @@ use gpui_base::{
 };
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, Collection, Environment, EnvironmentVariable,
-    FileReference, FormField, Header, HttpRequest, MultipartPart, MultipartPartKind,
-    MultipartValue, QueryParameter, RawBodyKind, RequestBody, RequestKey, Variable, VariableValue,
+    FileReference, FormField, Header, MultipartPart, MultipartPartKind, MultipartValue,
+    QueryParameter, RawBodyKind, Request, RequestBody, RequestKey, Variable, VariableValue,
     VariableValueSet, WorkspaceItemRef, add_path_parameter, ensure_path_parameters_from_url,
     remove_path_parameter_at, rename_path_parameter_at, resolve_environment, resolve_request,
 };
@@ -317,8 +317,6 @@ pub(crate) struct ProbeApp {
     application_dialog: Option<ApplicationDialog>,
     pending_application_dialogs: VecDeque<ApplicationDialog>,
     toasts: ToastCenter,
-    toast_lifecycle_generation: u64,
-    toast_paused: bool,
     request_editor: RequestEditorState,
     execution: ExecutionState,
     execution_service: Option<ExecutionService>,
@@ -440,8 +438,6 @@ impl ProbeApp {
             application_dialog: None,
             pending_application_dialogs: VecDeque::new(),
             toasts: ToastCenter::default(),
-            toast_lifecycle_generation: 0,
-            toast_paused: false,
             request_editor: RequestEditorState::default(),
             execution: ExecutionState::default(),
             execution_service: None,
@@ -553,34 +549,24 @@ impl ProbeApp {
 
     fn clear_toasts(&mut self) {
         self.toasts.clear();
-        self.toast_lifecycle_generation = self.toast_lifecycle_generation.wrapping_add(1);
-        self.toast_paused = false;
     }
 
     fn schedule_toast_lifecycle(&mut self, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
-        let paused = self.toasts.stack_state.is_expanded();
-        if paused != self.toast_paused {
-            let changed = self.toasts.advance(now, !paused);
-            self.toast_paused = paused;
-            if changed {
-                cx.notify();
-            }
+        if self.toasts.sync_pause(now) {
+            cx.notify();
         }
-        self.toast_lifecycle_generation = self.toast_lifecycle_generation.wrapping_add(1);
-        let generation = self.toast_lifecycle_generation;
-        let Some(delay) = self.toasts.next_wake(now, paused) else {
+        let Some((delay, generation)) = self.toasts.schedule_wake(now) else {
             return;
         };
         cx.spawn(async move |view, cx| {
             cx.background_executor().timer(delay).await;
             let _ = view.update(cx, |view, cx| {
-                if view.toast_lifecycle_generation != generation {
-                    return;
-                }
-                let paused = view.toasts.stack_state.is_expanded();
                 let now = cx.background_executor().now();
-                if view.toasts.advance(now, paused) {
+                let Some(changed) = view.toasts.wake(generation, now) else {
+                    return;
+                };
+                if changed {
                     cx.notify();
                 }
                 view.schedule_toast_lifecycle(cx);

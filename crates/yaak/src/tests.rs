@@ -30,7 +30,7 @@ fn converts_export_http_hierarchy_and_environment() {
     let CollectionItem::Folder(folder) = &imported.collection.items[0] else {
         panic!("expected folder");
     };
-    let CollectionItem::HttpRequest(request) = &folder.items[0] else {
+    let CollectionItem::Request(request) = &folder.items[0] else {
         panic!("expected request");
     };
     assert_eq!(request.path_parameters[0].name, "id");
@@ -40,7 +40,7 @@ fn converts_export_http_hierarchy_and_environment() {
         request.authentication.as_ref().unwrap().kind,
         AuthenticationKind::Bearer
     );
-    let Some(RequestBody::Single(Body::Raw(body))) = &request.body else {
+    let Some(RequestBody::Single(Body::Raw(body))) = request.http_body() else {
         panic!("expected raw body");
     };
     assert!(body.data.contains("{{TOKEN}}"));
@@ -256,12 +256,12 @@ fn imports_native_graphql_requests_and_round_trips() {
     assert!(!imported.partial);
     assert_eq!(imported.collection.items.len(), 2);
 
-    let CollectionItem::GraphqlRequest(viewer) = &imported.collection.items[0] else {
+    let CollectionItem::Request(viewer) = &imported.collection.items[0] else {
         panic!("first item should be a GraphQL request");
     };
     assert_eq!(viewer.metadata.name.as_deref(), Some("Viewer"));
     assert_eq!(viewer.headers[0].value, "{{TRACE}}");
-    let Some(GraphqlBody::Single(operation)) = &viewer.body else {
+    let Some(GraphqlBody::Single(operation)) = viewer.graphql() else {
         panic!("Viewer should have a single GraphQL operation");
     };
     assert_eq!(
@@ -287,10 +287,10 @@ fn imports_native_graphql_requests_and_round_trips() {
         Some(&serde_json::Value::Bool(true))
     );
 
-    let CollectionItem::GraphqlRequest(legacy) = &imported.collection.items[1] else {
+    let CollectionItem::Request(legacy) = &imported.collection.items[1] else {
         panic!("second item should be a GraphQL request");
     };
-    let Some(GraphqlBody::Single(operation)) = &legacy.body else {
+    let Some(GraphqlBody::Single(operation)) = legacy.graphql() else {
         panic!("legacy envelope should have a single GraphQL operation");
     };
     assert_eq!(operation.query.as_deref(), Some("query Pet { pet { id } }"));
@@ -313,7 +313,7 @@ fn imports_native_graphql_requests_and_round_trips() {
         panic!("round-tripped root item should be a request");
     };
     let request = workspace.request(request_key).unwrap();
-    assert_eq!(request.protocol.as_str(), "graphql");
+    assert_eq!(request.kind.as_str(), "graphql");
     assert_eq!(
         request
             .selected_graphql()
@@ -406,10 +406,10 @@ fn ignores_whitespace_only_inactive_graphql_text() {
             .iter()
             .all(|diagnostic| { diagnostic.code != "inactive_body_data" })
     );
-    let CollectionItem::GraphqlRequest(request) = &imported.collection.items[0] else {
+    let CollectionItem::Request(request) = &imported.collection.items[0] else {
         panic!("item should be a GraphQL request");
     };
-    let Some(GraphqlBody::Single(operation)) = &request.body else {
+    let Some(GraphqlBody::Single(operation)) = request.graphql() else {
         panic!("request should have a single GraphQL operation");
     };
     assert_eq!(operation.query.as_deref(), Some("{ pet { id } }"));

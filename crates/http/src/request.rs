@@ -1,8 +1,9 @@
 use std::{path::Path, time::Duration};
 
 use probe_core::{
-    Authentication, AuthenticationKind, AuthenticationValue, Body, HttpRequest, MultipartPart,
-    MultipartPartKind, MultipartValue, RawBody, RawBodyKind, RequestBody,
+    Authentication, AuthenticationKind, AuthenticationValue, Body, MultipartPart,
+    MultipartPartKind, MultipartValue, PreparedHttpRequest, RawBody, RawBodyKind, Request,
+    RequestBody,
 };
 use reqwest::{
     Client, Method, RequestBuilder,
@@ -14,9 +15,10 @@ use crate::{ExecutionOptions, HttpError};
 
 pub(crate) async fn build_request(
     client: &Client,
-    request: &HttpRequest,
+    prepared: &PreparedHttpRequest,
     options: &ExecutionOptions,
 ) -> Result<RequestBuilder, HttpError> {
+    let request = prepared.request();
     let method = supported_method(request.method.as_deref())?;
     let url = request.url.as_deref().ok_or(HttpError::MissingUrl)?;
     let url = probe_core::apply_path_parameters(url, &request.path_parameters);
@@ -40,7 +42,7 @@ pub(crate) async fn build_request(
     {
         builder = builder.timeout(timeout);
     }
-    if let Some(body) = selected_body(request.body.as_ref())? {
+    if let Some(body) = selected_body(prepared.body())? {
         builder = apply_body(builder, body, has_content_type, options).await?;
     }
     if let Some(authentication) = request.authentication.as_ref() {
@@ -70,7 +72,7 @@ fn supported_method(method: Option<&str>) -> Result<Method, HttpError> {
     }
 }
 
-fn request_headers(request: &HttpRequest) -> Result<HeaderMap, HttpError> {
+fn request_headers(request: &Request) -> Result<HeaderMap, HttpError> {
     let mut headers = HeaderMap::new();
     for header in request
         .headers

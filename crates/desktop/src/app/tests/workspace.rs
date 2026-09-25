@@ -30,10 +30,7 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
                 Some("https://example.test")
             );
             view.new_detached_request(true, window, cx);
-            assert!(matches!(
-                view.active_request().unwrap().protocol,
-                probe_core::RequestProtocol::Graphql(_)
-            ));
+            assert!(view.active_request().unwrap().kind.is_graphql());
             assert_eq!(
                 view.loaded_workspace.as_ref().unwrap().requests().len(),
                 original_count
@@ -229,10 +226,7 @@ fn saving_detached_graphql_request_preserves_query(cx: &mut TestAppContext) {
             (request.metadata.name.as_deref() == Some("Viewer")).then_some(request)
         })
         .expect("GraphQL request should be saved");
-    assert!(matches!(
-        created.protocol,
-        probe_core::RequestProtocol::Graphql(_)
-    ));
+    assert!(created.kind.is_graphql());
     assert_eq!(
         created
             .selected_graphql()

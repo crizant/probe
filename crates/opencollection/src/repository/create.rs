@@ -1,4 +1,5 @@
 use super::*;
+use probe_core::RequestKind;
 use serde::Serialize;
 
 /// Creates an empty bundled OpenCollection YAML file at `path` and loads it.
@@ -213,17 +214,18 @@ fn collection_item_value(item: &CollectionItem) -> Value {
             );
             Value::Mapping(item)
         }
-        CollectionItem::HttpRequest(request) => {
-            let mut item = item_info_value(&request.metadata, "http");
-            let mut http = serde_yaml_ng::Mapping::new();
+        CollectionItem::Request(request) => {
+            let section = request.kind.as_str();
+            let mut item = item_info_value(&request.metadata, section);
+            let mut details = serde_yaml_ng::Mapping::new();
             if let Some(method) = &request.method {
-                http.insert(string_key("method"), Value::String(method.clone()));
+                details.insert(string_key("method"), Value::String(method.clone()));
             }
             if let Some(url) = &request.url {
-                http.insert(string_key("url"), Value::String(url.clone()));
+                details.insert(string_key("url"), Value::String(url.clone()));
             }
             if !request.headers.is_empty() {
-                http.insert(
+                details.insert(
                     string_key("headers"),
                     Value::Sequence(request.headers.iter().map(header_value).collect()),
                 );
@@ -235,51 +237,19 @@ fn collection_item_value(item: &CollectionItem) -> Value {
                 .chain(request.path_parameters.iter().map(path_parameter_value))
                 .collect::<Vec<_>>();
             if !parameters.is_empty() {
-                http.insert(string_key("params"), Value::Sequence(parameters));
+                details.insert(string_key("params"), Value::Sequence(parameters));
             }
-            if let Some(body) = &request.body {
-                http.insert(string_key("body"), request_body_value(body));
-            }
-            if let Some(authentication) = &request.authentication {
-                http.insert(string_key("auth"), authentication_value(authentication));
-            }
-            item.insert(string_key("http"), Value::Mapping(http));
-            if let Some(settings) = request_settings_value(&request.settings) {
-                item.insert(string_key("settings"), settings);
-            }
-            Value::Mapping(item)
-        }
-        CollectionItem::GraphqlRequest(request) => {
-            let mut item = item_info_value(&request.metadata, "graphql");
-            let mut graphql = serde_yaml_ng::Mapping::new();
-            if let Some(method) = &request.method {
-                graphql.insert(string_key("method"), Value::String(method.clone()));
-            }
-            if let Some(url) = &request.url {
-                graphql.insert(string_key("url"), Value::String(url.clone()));
-            }
-            if !request.headers.is_empty() {
-                graphql.insert(
-                    string_key("headers"),
-                    Value::Sequence(request.headers.iter().map(header_value).collect()),
-                );
-            }
-            let parameters = request
-                .query_parameters
-                .iter()
-                .map(query_parameter_value)
-                .chain(request.path_parameters.iter().map(path_parameter_value))
-                .collect::<Vec<_>>();
-            if !parameters.is_empty() {
-                graphql.insert(string_key("params"), Value::Sequence(parameters));
-            }
-            if let Some(body) = &request.body {
-                graphql.insert(string_key("body"), graphql_body_value(body));
+            let body = match &request.kind {
+                RequestKind::Http { body } => body.as_ref().map(request_body_value),
+                RequestKind::Graphql { body } => body.as_ref().map(graphql_body_value),
+            };
+            if let Some(body) = body {
+                details.insert(string_key("body"), body);
             }
             if let Some(authentication) = &request.authentication {
-                graphql.insert(string_key("auth"), authentication_value(authentication));
+                details.insert(string_key("auth"), authentication_value(authentication));
             }
-            item.insert(string_key("graphql"), Value::Mapping(graphql));
+            item.insert(string_key(section), Value::Mapping(details));
             if let Some(settings) = request_settings_value(&request.settings) {
                 item.insert(string_key("settings"), settings);
             }
