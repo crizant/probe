@@ -335,12 +335,14 @@ impl HttpRequest {
     }
 
     /// Finds the single selected operation in a GraphQL variant list.
-    fn selected_graphql_variant<'a, T>(
-        variants: &'a [GraphqlBodyVariant],
-        extractor: impl Fn(&'a GraphqlBodyVariant) -> T,
-    ) -> Result<T, GraphqlRequestError> {
-        let mut selected = variants.iter().filter(|variant| variant.selected);
-        let operation = selected.next().ok_or_else(|| {
+    fn selected_graphql_variant_index(
+        variants: &[GraphqlBodyVariant],
+    ) -> Result<usize, GraphqlRequestError> {
+        let mut selected = variants
+            .iter()
+            .enumerate()
+            .filter(|(_, variant)| variant.selected);
+        let (index, _) = selected.next().ok_or_else(|| {
             GraphqlRequestError::InvalidBodySelection(
                 "GraphQL body variants have no selected value".to_owned(),
             )
@@ -350,26 +352,7 @@ impl HttpRequest {
                 "GraphQL body variants have multiple selected values".to_owned(),
             ));
         }
-        Ok(extractor(operation))
-    }
-
-    /// Finds the single selected operation in a mutable GraphQL variant list.
-    fn selected_graphql_variant_mut<'a, T>(
-        variants: &'a mut [GraphqlBodyVariant],
-        extractor: impl Fn(&'a mut GraphqlBodyVariant) -> T,
-    ) -> Result<T, GraphqlRequestError> {
-        let mut selected = variants.iter_mut().filter(|variant| variant.selected);
-        let operation = selected.next().ok_or_else(|| {
-            GraphqlRequestError::InvalidBodySelection(
-                "GraphQL body variants have no selected value".to_owned(),
-            )
-        })?;
-        if selected.next().is_some() {
-            return Err(GraphqlRequestError::InvalidBodySelection(
-                "GraphQL body variants have multiple selected values".to_owned(),
-            ));
-        }
-        Ok(extractor(operation))
+        Ok(index)
     }
 
     /// Returns the selected native GraphQL operation.
@@ -377,9 +360,8 @@ impl HttpRequest {
         match self.graphql() {
             None => Ok(None),
             Some(GraphqlBody::Single(operation)) => Ok(Some(operation)),
-            Some(GraphqlBody::Variants(variants)) => {
-                Self::selected_graphql_variant(variants, |variant| &variant.body).map(Some)
-            }
+            Some(GraphqlBody::Variants(variants)) => Self::selected_graphql_variant_index(variants)
+                .map(|index| Some(&variants[index].body)),
         }
     }
 
@@ -391,15 +373,14 @@ impl HttpRequest {
         let RequestProtocol::Graphql(body) = &mut self.protocol else {
             return Err(GraphqlRequestError::NotGraphql);
         };
-        if body.is_none() {
-            *body = Some(GraphqlBody::Single(GraphqlOperation::default()));
-        }
-        let operation = match body.as_mut().expect("GraphQL body was initialized") {
-            GraphqlBody::Single(operation) => operation,
-            GraphqlBody::Variants(variants) => {
-                Self::selected_graphql_variant_mut(variants, |variant| &mut variant.body)?
-            }
-        };
+        let operation =
+            match body.get_or_insert_with(|| GraphqlBody::Single(GraphqlOperation::default())) {
+                GraphqlBody::Single(operation) => operation,
+                GraphqlBody::Variants(variants) => {
+                    let index = Self::selected_graphql_variant_index(variants)?;
+                    &mut variants[index].body
+                }
+            };
         update.apply(operation);
         Ok(())
     }
@@ -410,19 +391,9 @@ impl HttpRequest {
             RequestProtocol::Http => return Ok(self),
             RequestProtocol::Graphql(None) => GraphqlOperation::default(),
             RequestProtocol::Graphql(Some(GraphqlBody::Single(operation))) => operation,
-            RequestProtocol::Graphql(Some(GraphqlBody::Variants(variants))) => {
-                let mut selected = variants.into_iter().filter(|variant| variant.selected);
-                let operation = selected.next().ok_or_else(|| {
-                    GraphqlRequestError::InvalidBodySelection(
-                        "GraphQL body variants have no selected value".to_owned(),
-                    )
-                })?;
-                if selected.next().is_some() {
-                    return Err(GraphqlRequestError::InvalidBodySelection(
-                        "GraphQL body variants have multiple selected values".to_owned(),
-                    ));
-                }
-                operation.body
+            RequestProtocol::Graphql(Some(GraphqlBody::Variants(mut variants))) => {
+                let index = Self::selected_graphql_variant_index(&variants)?;
+                variants.swap_remove(index).body
             }
         };
         if self

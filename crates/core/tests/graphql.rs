@@ -185,6 +185,94 @@ fn owned_graphql_preparation_selects_one_body_variant() {
 }
 
 #[test]
+fn graphql_variant_selection_is_shared_by_read_and_update() {
+    let variants = |first_selected, second_selected| {
+        GraphqlBody::Variants(vec![
+            GraphqlBodyVariant {
+                title: "first".to_owned(),
+                selected: first_selected,
+                body: GraphqlOperation {
+                    query: Some("first".to_owned()),
+                    ..GraphqlOperation::default()
+                },
+            },
+            GraphqlBodyVariant {
+                title: "second".to_owned(),
+                selected: second_selected,
+                body: GraphqlOperation {
+                    query: Some("second".to_owned()),
+                    ..GraphqlOperation::default()
+                },
+            },
+        ])
+    };
+    let mut request = GraphqlRequest {
+        body: Some(variants(false, true)),
+        ..GraphqlRequest::default()
+    }
+    .into_request();
+    assert_eq!(
+        request
+            .selected_graphql()
+            .unwrap()
+            .unwrap()
+            .query
+            .as_deref(),
+        Some("second")
+    );
+    request
+        .apply_graphql_update(&GraphqlUpdate {
+            query: Some("changed".to_owned()),
+            ..GraphqlUpdate::default()
+        })
+        .unwrap();
+    assert_eq!(
+        request
+            .selected_graphql()
+            .unwrap()
+            .unwrap()
+            .query
+            .as_deref(),
+        Some("changed")
+    );
+    let RequestProtocol::Graphql(Some(GraphqlBody::Variants(selected_variants))) =
+        &request.protocol
+    else {
+        unreachable!()
+    };
+    assert_eq!(selected_variants[0].body.query.as_deref(), Some("first"));
+
+    for (first, second, message) in [
+        (false, false, "no selected value"),
+        (true, true, "multiple selected values"),
+    ] {
+        let mut request = GraphqlRequest {
+            body: Some(variants(first, second)),
+            ..GraphqlRequest::default()
+        }
+        .into_request();
+        assert!(
+            matches!(request.selected_graphql(), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+        );
+        assert!(
+            matches!(request.apply_graphql_update(&GraphqlUpdate::default()), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+        );
+    }
+
+    let mut empty = GraphqlRequest::default().into_request();
+    empty
+        .apply_graphql_update(&GraphqlUpdate {
+            query: Some("initialized".to_owned()),
+            ..GraphqlUpdate::default()
+        })
+        .unwrap();
+    assert_eq!(
+        empty.selected_graphql().unwrap().unwrap().query.as_deref(),
+        Some("initialized")
+    );
+}
+
+#[test]
 fn request_update_applies_graphql_fields_and_rejects_http_targets() {
     let mut request = native_request("POST");
     RequestUpdate {
