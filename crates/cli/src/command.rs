@@ -6,58 +6,6 @@ use serde_json::{Map, Value};
 
 use crate::{CliError, WorkspaceInput};
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum OptionName {
-    Environment,
-    Output,
-    Name,
-    Method,
-    Url,
-    Parent,
-    Index,
-    Value,
-    Extends,
-    Workspace,
-    AllowPartial,
-    Var,
-    StrictVariables,
-    GraphqlQuery,
-    GraphqlVariables,
-    GraphqlOperationName,
-    GraphqlExtensions,
-    Type,
-    DryRun,
-    Expect,
-}
-
-impl OptionName {
-    fn parse(argument: &str) -> Option<Self> {
-        Some(match argument {
-            "--environment" => Self::Environment,
-            "--output" => Self::Output,
-            "--name" => Self::Name,
-            "--method" => Self::Method,
-            "--url" => Self::Url,
-            "--parent" => Self::Parent,
-            "--index" => Self::Index,
-            "--value" => Self::Value,
-            "--extends" => Self::Extends,
-            "--workspace" => Self::Workspace,
-            "--allow-partial" => Self::AllowPartial,
-            "--var" => Self::Var,
-            "--strict-variables" => Self::StrictVariables,
-            "--graphql-query" => Self::GraphqlQuery,
-            "--graphql-variables" => Self::GraphqlVariables,
-            "--graphql-operation-name" => Self::GraphqlOperationName,
-            "--graphql-extensions" => Self::GraphqlExtensions,
-            "--type" => Self::Type,
-            "--dry-run" => Self::DryRun,
-            "--expect" => Self::Expect,
-            _ => return None,
-        })
-    }
-}
-
 #[derive(Debug)]
 pub(crate) enum Command {
     CreateCollection {
@@ -145,402 +93,542 @@ pub(crate) enum Command {
     },
 }
 
-struct Options {
-    present: Vec<OptionName>,
-    environment: Option<String>,
-    output: Option<PathBuf>,
-    update: RequestUpdate,
-    parent: Option<String>,
-    index: Option<usize>,
-    value: Option<String>,
-    extends: Option<String>,
-    workspace: Option<String>,
-    allow_partial: bool,
-    variables: Vec<(String, String)>,
-    strict_variables: bool,
-    graphql_query: Option<String>,
-    graphql_variables: Option<String>,
-    graphql_operation_name: Option<String>,
-    graphql_extensions: Option<String>,
-    request_type: Option<String>,
-    dry_run: bool,
-    expectations: Vec<StatusExpectation>,
-}
-
-impl Options {
-    fn allow(&self, allowed: &[OptionName]) -> Result<(), CliError> {
-        if self.present.iter().all(|option| allowed.contains(option)) {
-            Ok(())
-        } else {
-            Err(invalid_command())
+pub(crate) fn parse(args: Vec<String>) -> Result<Command, CliError> {
+    let mut parser = Parser::new(args);
+    let group = parser.command_word()?;
+    let action = parser.command_word()?;
+    match (group.as_str(), action.as_str()) {
+        ("collection", "create") => parse_collection_create(parser),
+        ("collection", "import") => parse_import(parser),
+        ("collection", "validate") => Ok(Command::Validate {
+            input: workspace(parser)?,
+        }),
+        ("request", "list") => Ok(Command::ListRequests {
+            input: workspace(parser)?,
+        }),
+        ("folder", "list") => Ok(Command::ListFolders {
+            input: workspace(parser)?,
+        }),
+        ("environment", "list") => Ok(Command::ListEnvironments {
+            input: workspace(parser)?,
+        }),
+        ("request", "get") => parse_get(parser),
+        ("request", "variables") => parse_variables(parser),
+        ("request", "run") => parse_run(parser),
+        ("request", "set") => parse_request_set(parser),
+        ("request", "create") => parse_request_create(parser),
+        ("folder", "create") => parse_folder_create(parser),
+        ("request" | "folder", "rename" | "delete" | "move" | "reorder") => {
+            parse_item(parser, group == "request", &action)
         }
-    }
-}
-
-pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
-    use OptionName as Opt;
-
-    let options = extract_options(&mut args)?;
-    validate_scoped_options(&args, &options)?;
-
-    match args.as_slice() {
-        [group, action, path] if group == "collection" && action == "create" && path != "-" => {
-            options.allow(&[Opt::Name])?;
-            Ok(Command::CreateCollection {
-                path: PathBuf::from(path),
-                name: options.update.name,
-            })
-        }
-        [group, action, format, source, destination]
-            if group == "collection"
-                && action == "import"
-                && format == "yaak"
-                && source != "-"
-                && destination != "-" =>
-        {
-            options.allow(&[Opt::Workspace, Opt::AllowPartial])?;
-            Ok(Command::ImportYaak {
-                source: PathBuf::from(source),
-                destination: PathBuf::from(destination),
-                workspace: options.workspace,
-                allow_partial: options.allow_partial,
-            })
-        }
-        [group, action, format, source, destination]
-            if group == "collection"
-                && action == "import"
-                && format == "postman"
-                && source != "-"
-                && destination != "-" =>
-        {
-            options.allow(&[Opt::AllowPartial])?;
-            Ok(Command::ImportPostman {
-                source: PathBuf::from(source),
-                destination: PathBuf::from(destination),
-                allow_partial: options.allow_partial,
-            })
-        }
-        [group, action, path] if group == "collection" && action == "validate" => {
-            options.allow(&[])?;
-            Ok(Command::Validate { input: input(path) })
-        }
-        [group, action, path] if group == "request" && action == "list" => {
-            options.allow(&[])?;
-            Ok(Command::ListRequests { input: input(path) })
-        }
-        [group, action, path] if group == "folder" && action == "list" => {
-            options.allow(&[])?;
-            Ok(Command::ListFolders { input: input(path) })
-        }
-        [group, action, path, selector] if group == "request" && action == "get" => {
-            options.allow(&[Opt::Environment, Opt::StrictVariables])?;
-            Ok(Command::Get {
-                input: input(path),
-                selector: selector.clone(),
-                environment: options.environment,
-                strict_variables: options.strict_variables,
-            })
-        }
-        [group, action, path, selector] if group == "request" && action == "variables" => {
-            options.allow(&[Opt::Environment])?;
-            Ok(Command::Variables {
-                input: input(path),
-                selector: selector.clone(),
-                environment: options.environment,
-            })
-        }
-        [group, action, path, selector] if group == "request" && action == "run" => {
-            options.allow(&[
-                Opt::Environment,
-                Opt::Output,
-                Opt::Var,
-                Opt::StrictVariables,
-                Opt::DryRun,
-                Opt::Expect,
-            ])?;
-            if options.dry_run && options.output.is_some() {
-                return Err(CliError::invalid_arguments(
-                    "--dry-run cannot be combined with --output",
-                ));
-            }
-            if options.dry_run && !options.expectations.is_empty() {
-                return Err(CliError::invalid_arguments(
-                    "--expect cannot be combined with --dry-run",
-                ));
-            }
-            Ok(Command::Run {
-                input: input(path),
-                selector: selector.clone(),
-                environment: options.environment,
-                variables: options.variables,
-                output: options.output,
-                strict_variables: options.strict_variables,
-                dry_run: options.dry_run,
-                expectations: options.expectations,
-            })
-        }
-        [group, action, path, selector] if group == "request" && action == "set" => {
-            options.allow(&[
-                Opt::Name,
-                Opt::Method,
-                Opt::Url,
-                Opt::GraphqlQuery,
-                Opt::GraphqlVariables,
-                Opt::GraphqlOperationName,
-                Opt::GraphqlExtensions,
-            ])?;
-            let update = graphql_update(options)?;
-            if update.is_empty() {
-                return Err(invalid_command());
-            }
-            Ok(Command::Set {
-                input: input(path),
-                selector: selector.clone(),
-                update: Box::new(update),
-            })
-        }
-        [group, action, path] if group == "request" && action == "create" => {
-            options.allow(&[
-                Opt::Name,
-                Opt::Method,
-                Opt::Url,
-                Opt::Parent,
-                Opt::Index,
-                Opt::Type,
-                Opt::GraphqlQuery,
-                Opt::GraphqlVariables,
-                Opt::GraphqlOperationName,
-                Opt::GraphqlExtensions,
-            ])?;
-            let protocol = created_request_protocol(&options)?;
-            let parent = options.parent.clone();
-            let index = options.index;
-            let update = graphql_update(options)?;
-            let name = update.name.ok_or_else(invalid_command)?;
-            Ok(Command::Structure {
-                input: input(path),
-                operation_name: "create",
-                operation: Box::new(StructureOperation::CreateRequest {
-                    parent,
-                    index,
-                    name,
-                    method: update.method.into_set(),
-                    url: update.url.into_set(),
-                    protocol,
-                    graphql: update.graphql,
-                    update: None,
-                }),
-            })
-        }
-        [group, action, path] if group == "folder" && action == "create" => {
-            options.allow(&[Opt::Name, Opt::Parent, Opt::Index])?;
-            Ok(Command::Structure {
-                input: input(path),
-                operation_name: "create",
-                operation: Box::new(StructureOperation::CreateFolder {
-                    parent: options.parent,
-                    index: options.index,
-                    name: options.update.name.ok_or_else(invalid_command)?,
-                }),
-            })
-        }
-        [group, action, path, selector]
-            if matches!(group.as_str(), "request" | "folder") && action == "rename" =>
-        {
-            options.allow(&[Opt::Name])?;
-            let name = options.update.name.ok_or_else(invalid_command)?;
-            let operation = if group == "request" {
-                StructureOperation::RenameRequest {
-                    selector: selector.clone(),
-                    name,
-                }
-            } else {
-                StructureOperation::RenameFolder {
-                    selector: selector.clone(),
-                    name,
-                }
-            };
-            Ok(structure(input(path), "rename", operation))
-        }
-        [group, action, path, selector]
-            if matches!(group.as_str(), "request" | "folder") && action == "delete" =>
-        {
-            options.allow(&[])?;
-            let operation = if group == "request" {
-                StructureOperation::DeleteRequest {
-                    selector: selector.clone(),
-                }
-            } else {
-                StructureOperation::DeleteFolder {
-                    selector: selector.clone(),
-                }
-            };
-            Ok(structure(input(path), "delete", operation))
-        }
-        [group, action, path, selector]
-            if matches!(group.as_str(), "request" | "folder") && action == "move" =>
-        {
-            options.allow(&[Opt::Parent, Opt::Index])?;
-            let operation = if group == "request" {
-                StructureOperation::MoveRequest {
-                    selector: selector.clone(),
-                    parent: options.parent,
-                    index: options.index,
-                }
-            } else {
-                StructureOperation::MoveFolder {
-                    selector: selector.clone(),
-                    parent: options.parent,
-                    index: options.index,
-                }
-            };
-            Ok(structure(input(path), "move", operation))
-        }
-        [group, action, path, selector]
-            if matches!(group.as_str(), "request" | "folder") && action == "reorder" =>
-        {
-            options.allow(&[Opt::Index])?;
-            let index = options.index.ok_or_else(invalid_command)?;
-            let operation = if group == "request" {
-                StructureOperation::ReorderRequest {
-                    selector: selector.clone(),
-                    index,
-                }
-            } else {
-                StructureOperation::ReorderFolder {
-                    selector: selector.clone(),
-                    index,
-                }
-            };
-            Ok(structure(input(path), "reorder", operation))
-        }
-        [group, action, path] if group == "environment" && action == "list" => {
-            options.allow(&[])?;
-            Ok(Command::ListEnvironments { input: input(path) })
-        }
-        [group, action, path] if group == "environment" && action == "create" => {
-            options.allow(&[Opt::Name, Opt::Extends])?;
-            Ok(Command::EnvironmentCreate {
-                input: input(path),
-                name: options.update.name.ok_or_else(invalid_command)?,
-                extends: options.extends,
-            })
-        }
-        [group, action, path] if group == "environment" && action == "set" => {
-            options.allow(&[Opt::Environment, Opt::Name, Opt::Value])?;
-            Ok(Command::EnvironmentSet {
-                input: input(path),
-                environment: options.environment.ok_or_else(invalid_command)?,
-                name: options.update.name.ok_or_else(invalid_command)?,
-                value: options.value.ok_or_else(invalid_command)?,
-            })
-        }
-        [group, action, path] if group == "environment" && action == "unset" => {
-            options.allow(&[Opt::Environment, Opt::Name])?;
-            Ok(Command::EnvironmentUnset {
-                input: input(path),
-                environment: options.environment.ok_or_else(invalid_command)?,
-                name: options.update.name.ok_or_else(invalid_command)?,
-            })
-        }
-        [group, action, path] if group == "environment" && action == "delete" => {
-            options.allow(&[Opt::Environment])?;
-            Ok(Command::EnvironmentDelete {
-                input: input(path),
-                environment: options.environment.ok_or_else(invalid_command)?,
-            })
-        }
-        [group, action, path] if group == "environment" && action == "rename" => {
-            options.allow(&[Opt::Environment, Opt::Name])?;
-            Ok(Command::EnvironmentRename {
-                input: input(path),
-                environment: options.environment.ok_or_else(invalid_command)?,
-                name: options.update.name.ok_or_else(invalid_command)?,
-            })
-        }
+        ("environment", "create") => parse_environment_create(parser),
+        ("environment", "set") => parse_environment_set(parser),
+        ("environment", "unset") => parse_environment_unset(parser),
+        ("environment", "delete") => parse_environment_delete(parser),
+        ("environment", "rename") => parse_environment_rename(parser),
         _ => Err(invalid_command()),
     }
 }
 
-fn validate_scoped_options(args: &[String], options: &Options) -> Result<(), CliError> {
-    let is_environment_create =
-        matches!(args, [group, action, _] if group == "environment" && action == "create");
-    if options.extends.is_some() && !is_environment_create {
-        return Err(CliError::invalid_arguments(
-            "--extends is only valid for environment create",
-        ));
+fn parse_collection_create(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut name = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--name" => parser.once(&mut name, "--name")?,
+            other => push_positional(&mut path, other, 1)?,
+        }
     }
-    let is_yaak_import = matches!(args, [group, action, format, _, _] if group == "collection" && action == "import" && format == "yaak");
-    let is_postman_import = matches!(args, [group, action, format, _, _] if group == "collection" && action == "import" && format == "postman");
-    if options.workspace.is_some() && !is_yaak_import {
-        return Err(CliError::invalid_arguments(
-            "--workspace is only valid for Yaak import",
-        ));
-    }
-    if options.allow_partial && !(is_yaak_import || is_postman_import) {
-        return Err(CliError::invalid_arguments(
-            "--allow-partial is only valid for collection import",
-        ));
-    }
-    let is_request_create =
-        matches!(args, [group, action, _] if group == "request" && action == "create");
-    if options.request_type.is_some() && !is_request_create {
-        return Err(CliError::invalid_arguments(
-            "--type is only valid for request create",
-        ));
-    }
-    Ok(())
-}
-
-fn extract_options(args: &mut Vec<String>) -> Result<Options, CliError> {
-    let present = args
-        .iter()
-        .filter_map(|argument| OptionName::parse(argument))
-        .collect();
-    Ok(Options {
-        present,
-        environment: extract_string_option(args, "--environment")?,
-        output: extract_string_option(args, "--output")?.map(PathBuf::from),
-        update: RequestUpdate {
-            name: extract_string_option(args, "--name")?,
-            method: extract_string_option(args, "--method")?
-                .map(FieldPatch::Set)
-                .unwrap_or_default(),
-            url: extract_string_option(args, "--url")?
-                .map(FieldPatch::Set)
-                .unwrap_or_default(),
-            ..RequestUpdate::default()
-        },
-        parent: extract_string_option(args, "--parent")?,
-        index: extract_index(args)?,
-        value: extract_string_option(args, "--value")?,
-        extends: extract_string_option(args, "--extends")?,
-        workspace: extract_string_option(args, "--workspace")?,
-        allow_partial: extract_flag(args, "--allow-partial")?,
-        variables: extract_variables(args)?,
-        strict_variables: extract_flag(args, "--strict-variables")?,
-        graphql_query: extract_string_option(args, "--graphql-query")?,
-        graphql_variables: extract_string_option(args, "--graphql-variables")?,
-        graphql_operation_name: extract_string_option(args, "--graphql-operation-name")?,
-        graphql_extensions: extract_string_option(args, "--graphql-extensions")?,
-        request_type: extract_string_option(args, "--type")?,
-        dry_run: extract_flag(args, "--dry-run")?,
-        expectations: extract_expectations(args)?,
+    let path = one_path(&path)?;
+    reject_stdin(&path)?;
+    Ok(Command::CreateCollection {
+        path: PathBuf::from(path),
+        name,
     })
 }
 
-fn graphql_requested(options: &Options) -> bool {
-    options.graphql_query.is_some()
-        || options.graphql_variables.is_some()
-        || options.graphql_operation_name.is_some()
-        || options.graphql_extensions.is_some()
+fn parse_import(mut parser: Parser) -> Result<Command, CliError> {
+    let format = parser.command_word()?;
+    match format.as_str() {
+        "yaak" => parse_yaak_import(parser),
+        "postman" => parse_postman_import(parser),
+        _ => Err(invalid_command()),
+    }
 }
 
-fn created_request_protocol(options: &Options) -> Result<CreatedRequestProtocol, CliError> {
-    match options.request_type.as_deref() {
-        None if graphql_requested(options) => Ok(CreatedRequestProtocol::Graphql),
+fn parse_yaak_import(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut workspace = None;
+    let mut allow_partial = false;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--workspace" => parser.once(&mut workspace, "--workspace")?,
+            "--allow-partial" => parser.flag(&mut allow_partial, "--allow-partial")?,
+            other => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    let (source, destination) = two_paths(&positionals)?;
+    reject_stdin(&source)?;
+    reject_stdin(&destination)?;
+    Ok(Command::ImportYaak {
+        source: PathBuf::from(source),
+        destination: PathBuf::from(destination),
+        workspace,
+        allow_partial,
+    })
+}
+
+fn parse_postman_import(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut allow_partial = false;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--allow-partial" => parser.flag(&mut allow_partial, "--allow-partial")?,
+            other => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    let (source, destination) = two_paths(&positionals)?;
+    reject_stdin(&source)?;
+    reject_stdin(&destination)?;
+    Ok(Command::ImportPostman {
+        source: PathBuf::from(source),
+        destination: PathBuf::from(destination),
+        allow_partial,
+    })
+}
+
+fn parse_get(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut environment = None;
+    let mut strict_variables = false;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--environment" => parser.once(&mut environment, "--environment")?,
+            "--strict-variables" => parser.flag(&mut strict_variables, "--strict-variables")?,
+            other => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    let (path, selector) = two_paths(&positionals)?;
+    Ok(Command::Get {
+        input: input(&path),
+        selector,
+        environment,
+        strict_variables,
+    })
+}
+
+fn parse_variables(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut environment = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--environment" => parser.once(&mut environment, "--environment")?,
+            other => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    let (path, selector) = two_paths(&positionals)?;
+    Ok(Command::Variables {
+        input: input(&path),
+        selector,
+        environment,
+    })
+}
+
+struct RunOptions {
+    environment: Option<String>,
+    output: Option<PathBuf>,
+    variables: Vec<(String, String)>,
+    strict_variables: bool,
+    dry_run: bool,
+    expectations: Vec<StatusExpectation>,
+}
+
+fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut options = RunOptions {
+        environment: None,
+        output: None,
+        variables: Vec::new(),
+        strict_variables: false,
+        dry_run: false,
+        expectations: Vec::new(),
+    };
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--environment" => parser.once(&mut options.environment, "--environment")?,
+            "--output" => parser.once_path(&mut options.output, "--output")?,
+            "--var" => options.variables.push(parser.variable()?),
+            "--strict-variables" => {
+                parser.flag(&mut options.strict_variables, "--strict-variables")?
+            }
+            "--dry-run" => parser.flag(&mut options.dry_run, "--dry-run")?,
+            "--expect" => options.expectations.push(parser.expectation()?),
+            other => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    if options.dry_run && options.output.is_some() {
+        return Err(CliError::invalid_arguments(
+            "--dry-run cannot be combined with --output",
+        ));
+    }
+    if options.dry_run && !options.expectations.is_empty() {
+        return Err(CliError::invalid_arguments(
+            "--expect cannot be combined with --dry-run",
+        ));
+    }
+    let (path, selector) = two_paths(&positionals)?;
+    Ok(Command::Run {
+        input: input(&path),
+        selector,
+        environment: options.environment,
+        variables: options.variables,
+        output: options.output,
+        strict_variables: options.strict_variables,
+        dry_run: options.dry_run,
+        expectations: options.expectations,
+    })
+}
+
+fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut fields = RequestFields::default();
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--name"
+            | "--method"
+            | "--url"
+            | "--graphql-query"
+            | "--graphql-variables"
+            | "--graphql-operation-name"
+            | "--graphql-extensions" => {
+                fields.take(&argument, &mut parser)?;
+            }
+            other => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    let (path, selector) = two_paths(&positionals)?;
+    let update = fields.update()?;
+    if update.is_empty() {
+        return Err(invalid_command());
+    }
+    Ok(Command::Set {
+        input: input(&path),
+        selector,
+        update: Box::new(update),
+    })
+}
+
+struct RequestCreateOptions {
+    parent: Option<String>,
+    index: Option<usize>,
+    request_type: Option<String>,
+    fields: RequestFields,
+}
+
+fn parse_request_create(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut options = RequestCreateOptions {
+        parent: None,
+        index: None,
+        request_type: None,
+        fields: RequestFields::default(),
+    };
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--name"
+            | "--method"
+            | "--url"
+            | "--graphql-query"
+            | "--graphql-variables"
+            | "--graphql-operation-name"
+            | "--graphql-extensions" => {
+                options.fields.take(&argument, &mut parser)?;
+            }
+            "--parent" => parser.once(&mut options.parent, "--parent")?,
+            "--index" => parser.once_index(&mut options.index)?,
+            "--type" => parser.once(&mut options.request_type, "--type")?,
+            other => push_positional(&mut path, other, 1)?,
+        }
+    }
+    let path = one_path(&path)?;
+    let protocol = created_request_protocol(options.request_type.as_deref(), &options.fields)?;
+    let update = options.fields.update()?;
+    let name = update.name.ok_or_else(invalid_command)?;
+    Ok(structure(
+        input(&path),
+        "create",
+        StructureOperation::CreateRequest {
+            parent: options.parent,
+            index: options.index,
+            name,
+            method: update.method.into_set(),
+            url: update.url.into_set(),
+            protocol,
+            graphql: update.graphql,
+            update: None,
+        },
+    ))
+}
+
+fn parse_folder_create(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut name = None;
+    let mut parent = None;
+    let mut index = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--name" => parser.once(&mut name, "--name")?,
+            "--parent" => parser.once(&mut parent, "--parent")?,
+            "--index" => parser.once_index(&mut index)?,
+            other => push_positional(&mut path, other, 1)?,
+        }
+    }
+    Ok(structure(
+        input(&one_path(&path)?),
+        "create",
+        StructureOperation::CreateFolder {
+            parent,
+            index,
+            name: name.ok_or_else(invalid_command)?,
+        },
+    ))
+}
+
+fn parse_item(mut parser: Parser, request: bool, action: &str) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut name = None;
+    let mut parent = None;
+    let mut index = None;
+    while let Some(argument) = parser.bump() {
+        match (action, argument.as_str()) {
+            ("rename", "--name") => parser.once(&mut name, "--name")?,
+            ("move", "--parent") => parser.once(&mut parent, "--parent")?,
+            ("move" | "reorder", "--index") => parser.once_index(&mut index)?,
+            (_, other) => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    let (path, selector) = two_paths(&positionals)?;
+    let name = name.ok_or_else(invalid_command);
+    let index = index.ok_or_else(invalid_command);
+    let operation = match (request, action) {
+        (true, "rename") => StructureOperation::RenameRequest {
+            selector,
+            name: name?,
+        },
+        (false, "rename") => StructureOperation::RenameFolder {
+            selector,
+            name: name?,
+        },
+        (true, "delete") => StructureOperation::DeleteRequest { selector },
+        (false, "delete") => StructureOperation::DeleteFolder { selector },
+        (true, "move") => StructureOperation::MoveRequest {
+            selector,
+            parent,
+            index: index.ok(),
+        },
+        (false, "move") => StructureOperation::MoveFolder {
+            selector,
+            parent,
+            index: index.ok(),
+        },
+        (true, "reorder") => StructureOperation::ReorderRequest {
+            selector,
+            index: index?,
+        },
+        (false, "reorder") => StructureOperation::ReorderFolder {
+            selector,
+            index: index?,
+        },
+        _ => return Err(invalid_command()),
+    };
+    let operation_name = match action {
+        "rename" => "rename",
+        "delete" => "delete",
+        "move" => "move",
+        "reorder" => "reorder",
+        _ => return Err(invalid_command()),
+    };
+    Ok(structure(input(&path), operation_name, operation))
+}
+
+fn parse_environment_create(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut name = None;
+    let mut extends = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--name" => parser.once(&mut name, "--name")?,
+            "--extends" => parser.once(&mut extends, "--extends")?,
+            other => push_positional(&mut path, other, 1)?,
+        }
+    }
+    Ok(Command::EnvironmentCreate {
+        input: input(&one_path(&path)?),
+        name: name.ok_or_else(invalid_command)?,
+        extends,
+    })
+}
+
+struct EnvironmentSetOptions {
+    environment: Option<String>,
+    name: Option<String>,
+    value: Option<String>,
+}
+
+fn parse_environment_set(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut options = EnvironmentSetOptions {
+        environment: None,
+        name: None,
+        value: None,
+    };
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--environment" => parser.once(&mut options.environment, "--environment")?,
+            "--name" => parser.once(&mut options.name, "--name")?,
+            "--value" => parser.once(&mut options.value, "--value")?,
+            other => push_positional(&mut path, other, 1)?,
+        }
+    }
+    Ok(Command::EnvironmentSet {
+        input: input(&one_path(&path)?),
+        environment: options.environment.ok_or_else(invalid_command)?,
+        name: options.name.ok_or_else(invalid_command)?,
+        value: options.value.ok_or_else(invalid_command)?,
+    })
+}
+
+fn parse_environment_unset(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut environment = None;
+    let mut name = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--environment" => parser.once(&mut environment, "--environment")?,
+            "--name" => parser.once(&mut name, "--name")?,
+            other => push_positional(&mut path, other, 1)?,
+        }
+    }
+    Ok(Command::EnvironmentUnset {
+        input: input(&one_path(&path)?),
+        environment: environment.ok_or_else(invalid_command)?,
+        name: name.ok_or_else(invalid_command)?,
+    })
+}
+
+fn parse_environment_delete(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut environment = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--environment" => parser.once(&mut environment, "--environment")?,
+            other => push_positional(&mut path, other, 1)?,
+        }
+    }
+    Ok(Command::EnvironmentDelete {
+        input: input(&one_path(&path)?),
+        environment: environment.ok_or_else(invalid_command)?,
+    })
+}
+
+fn parse_environment_rename(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut environment = None;
+    let mut name = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--environment" => parser.once(&mut environment, "--environment")?,
+            "--name" => parser.once(&mut name, "--name")?,
+            other => push_positional(&mut path, other, 1)?,
+        }
+    }
+    Ok(Command::EnvironmentRename {
+        input: input(&one_path(&path)?),
+        environment: environment.ok_or_else(invalid_command)?,
+        name: name.ok_or_else(invalid_command)?,
+    })
+}
+
+#[derive(Default)]
+struct RequestFields {
+    name: Option<String>,
+    method: Option<String>,
+    url: Option<String>,
+    graphql_query: Option<String>,
+    graphql_variables: Option<String>,
+    graphql_operation_name: Option<String>,
+    graphql_extensions: Option<String>,
+}
+
+impl RequestFields {
+    fn take(&mut self, option: &str, parser: &mut Parser) -> Result<(), CliError> {
+        let slot = match option {
+            "--name" => &mut self.name,
+            "--method" => &mut self.method,
+            "--url" => &mut self.url,
+            "--graphql-query" => &mut self.graphql_query,
+            "--graphql-variables" => &mut self.graphql_variables,
+            "--graphql-operation-name" => &mut self.graphql_operation_name,
+            "--graphql-extensions" => &mut self.graphql_extensions,
+            _ => return Err(invalid_command()),
+        };
+        parser.once(slot, option)
+    }
+
+    fn graphql_requested(&self) -> bool {
+        self.graphql_query.is_some()
+            || self.graphql_variables.is_some()
+            || self.graphql_operation_name.is_some()
+            || self.graphql_extensions.is_some()
+    }
+
+    fn update(self) -> Result<RequestUpdate, CliError> {
+        let graphql_requested = self.graphql_requested();
+        let mut update = RequestUpdate {
+            name: self.name,
+            method: self.method.map(FieldPatch::Set).unwrap_or_default(),
+            url: self.url.map(FieldPatch::Set).unwrap_or_default(),
+            ..RequestUpdate::default()
+        };
+        if !graphql_requested {
+            return Ok(update);
+        }
+        update.graphql = Some(GraphqlUpdate {
+            query: self.graphql_query.map(FieldPatch::Set).unwrap_or_default(),
+            variables: self
+                .graphql_variables
+                .as_deref()
+                .map(|source| parse_graphql_object(source, "variables"))
+                .transpose()?
+                .map(FieldPatch::from_optional)
+                .unwrap_or_default(),
+            operation_name: self
+                .graphql_operation_name
+                .as_deref()
+                .map(|source| parse_graphql_string(source, "operation name"))
+                .transpose()?
+                .map(FieldPatch::from_optional)
+                .unwrap_or_default(),
+            extensions: self
+                .graphql_extensions
+                .as_deref()
+                .map(|source| parse_graphql_object(source, "extensions"))
+                .transpose()?
+                .map(FieldPatch::from_optional)
+                .unwrap_or_default(),
+        });
+        Ok(update)
+    }
+}
+
+fn created_request_protocol(
+    request_type: Option<&str>,
+    fields: &RequestFields,
+) -> Result<CreatedRequestProtocol, CliError> {
+    match request_type {
+        None if fields.graphql_requested() => Ok(CreatedRequestProtocol::Graphql),
         None | Some("http") => {
-            if graphql_requested(options) {
+            if fields.graphql_requested() {
                 Err(CliError::invalid_arguments(
                     "GraphQL fields cannot be applied to an HTTP request",
                 ))
@@ -553,42 +641,6 @@ fn created_request_protocol(options: &Options) -> Result<CreatedRequestProtocol,
             "--type must be http or graphql",
         )),
     }
-}
-
-fn graphql_update(mut options: Options) -> Result<RequestUpdate, CliError> {
-    if !graphql_requested(&options) {
-        return Ok(options.update);
-    }
-    let graphql = GraphqlUpdate {
-        query: options
-            .graphql_query
-            .take()
-            .map(FieldPatch::Set)
-            .unwrap_or_default(),
-        variables: options
-            .graphql_variables
-            .as_deref()
-            .map(|source| parse_graphql_object(source, "variables"))
-            .transpose()?
-            .map(FieldPatch::from_optional)
-            .unwrap_or_default(),
-        operation_name: options
-            .graphql_operation_name
-            .as_deref()
-            .map(|source| parse_graphql_string(source, "operation name"))
-            .transpose()?
-            .map(FieldPatch::from_optional)
-            .unwrap_or_default(),
-        extensions: options
-            .graphql_extensions
-            .as_deref()
-            .map(|source| parse_graphql_object(source, "extensions"))
-            .transpose()?
-            .map(FieldPatch::from_optional)
-            .unwrap_or_default(),
-    };
-    options.update.graphql = Some(graphql);
-    Ok(options.update)
 }
 
 fn parse_graphql_object(source: &str, field: &str) -> Result<Option<Map<String, Value>>, CliError> {
@@ -617,102 +669,193 @@ fn parse_graphql_string(source: &str, field: &str) -> Result<Option<String>, Cli
     }
 }
 
-fn extract_expectations(args: &mut Vec<String>) -> Result<Vec<StatusExpectation>, CliError> {
-    let mut expectations = Vec::new();
-    while let Some(position) = args.iter().position(|argument| argument == "--expect") {
-        if position + 1 >= args.len()
-            || args[position + 1].is_empty()
-            || is_option_name(&args[position + 1])
-        {
-            return Err(invalid_expectation());
-        }
-        let argument = args.remove(position + 1);
-        args.remove(position);
-        expectations.push(StatusExpectation::parse(&argument).map_err(CliError::expectation)?);
+struct Parser {
+    args: Vec<String>,
+    index: usize,
+}
+
+impl Parser {
+    fn new(args: Vec<String>) -> Self {
+        Self { args, index: 0 }
     }
-    Ok(expectations)
-}
 
-fn invalid_expectation() -> CliError {
-    CliError::invalid_arguments("--expect requires status=<code> or status=<code|code>")
-}
+    fn peek(&self) -> Option<&str> {
+        self.args.get(self.index).map(String::as_str)
+    }
 
-fn extract_variables(args: &mut Vec<String>) -> Result<Vec<(String, String)>, CliError> {
-    let mut variables = Vec::new();
-    while let Some(position) = args.iter().position(|argument| argument == "--var") {
-        if position + 1 >= args.len() {
-            return Err(invalid_variable());
+    fn bump(&mut self) -> Option<String> {
+        let argument = self.args.get(self.index)?.clone();
+        self.index += 1;
+        Some(argument)
+    }
+
+    fn command_word(&mut self) -> Result<String, CliError> {
+        match self.peek() {
+            Some(word) if !is_known_option(word) => Ok(self.bump().expect("peeked argument")),
+            _ => Err(invalid_command()),
         }
-        let argument = args.remove(position + 1);
-        args.remove(position);
+    }
+
+    /// Reads the next token as an option value.
+    ///
+    /// A known Probe option is left unconsumed and reported as a missing value.
+    /// An unknown dash-prefixed token is a literal value.
+    fn value(&mut self, option: &str) -> Result<String, CliError> {
+        match self.peek() {
+            Some(next) if next.is_empty() || is_known_option(next) => Err(missing_value(option)),
+            Some(_) => Ok(self.bump().expect("peeked argument")),
+            None => Err(missing_value(option)),
+        }
+    }
+
+    fn index_value(&mut self) -> Result<usize, CliError> {
+        self.value("--index")?
+            .parse()
+            .map_err(|_| CliError::invalid_arguments("--index requires a non-negative integer"))
+    }
+
+    /// `--var` consumes the next token even when that token is a known option.
+    fn variable(&mut self) -> Result<(String, String), CliError> {
+        let argument = self.bump().ok_or_else(invalid_variable)?;
         let Some((name, value)) = argument.split_once('=') else {
             return Err(invalid_variable());
         };
         if name.is_empty() {
             return Err(invalid_variable());
         }
-        variables.push((name.to_owned(), value.to_owned()));
+        Ok((name.to_owned(), value.to_owned()))
     }
-    Ok(variables)
+
+    fn expectation(&mut self) -> Result<StatusExpectation, CliError> {
+        let argument = self.value("--expect").map_err(|_| invalid_expectation())?;
+        StatusExpectation::parse(&argument).map_err(CliError::expectation)
+    }
+
+    fn once(&mut self, slot: &mut Option<String>, option: &str) -> Result<(), CliError> {
+        assign(slot, self.value(option)?, option)
+    }
+
+    fn once_path(&mut self, slot: &mut Option<PathBuf>, option: &str) -> Result<(), CliError> {
+        assign(slot, PathBuf::from(self.value(option)?), option)
+    }
+
+    fn once_index(&mut self, slot: &mut Option<usize>) -> Result<(), CliError> {
+        assign(slot, self.index_value()?, "--index")
+    }
+
+    fn flag(&mut self, slot: &mut bool, option: &str) -> Result<(), CliError> {
+        enable(slot, option)
+    }
 }
 
-fn invalid_variable() -> CliError {
-    CliError::invalid_arguments("--var requires NAME=VALUE with a non-empty name")
+fn workspace(mut parser: Parser) -> Result<WorkspaceInput, CliError> {
+    let mut path = Vec::new();
+    while let Some(argument) = parser.bump() {
+        push_positional(&mut path, &argument, 1)?;
+    }
+    Ok(input(&one_path(&path)?))
 }
 
-fn extract_flag(args: &mut Vec<String>, option: &'static str) -> Result<bool, CliError> {
-    let count = args.iter().filter(|argument| argument == &option).count();
-    if count > 1 {
+fn push_positional(
+    positionals: &mut Vec<String>,
+    argument: &str,
+    expected: usize,
+) -> Result<(), CliError> {
+    if is_known_option(argument) {
+        return Err(unexpected_option(argument));
+    }
+    if positionals.len() >= expected {
+        return Err(invalid_command());
+    }
+    positionals.push(argument.to_owned());
+    Ok(())
+}
+
+fn one_path(positionals: &[String]) -> Result<String, CliError> {
+    match positionals {
+        [path] => Ok(path.clone()),
+        _ => Err(invalid_command()),
+    }
+}
+
+fn two_paths(positionals: &[String]) -> Result<(String, String), CliError> {
+    match positionals {
+        [path, selector] => Ok((path.clone(), selector.clone())),
+        _ => Err(invalid_command()),
+    }
+}
+
+fn reject_stdin(path: &str) -> Result<(), CliError> {
+    if path == "-" {
+        Err(invalid_command())
+    } else {
+        Ok(())
+    }
+}
+
+fn assign<T>(slot: &mut Option<T>, value: T, option: &str) -> Result<(), CliError> {
+    if slot.is_some() {
         return Err(duplicate_option(option));
     }
-    args.retain(|argument| argument != option);
-    Ok(count == 1)
+    *slot = Some(value);
+    Ok(())
 }
 
-fn extract_string_option(
-    args: &mut Vec<String>,
-    option: &'static str,
-) -> Result<Option<String>, CliError> {
-    let positions: Vec<_> = args
-        .iter()
-        .enumerate()
-        .filter_map(|(index, argument)| (argument == option).then_some(index))
-        .collect();
-    match positions.as_slice() {
-        [] => Ok(None),
-        [_, _, ..] => Err(duplicate_option(option)),
-        [position] => {
-            if *position + 1 >= args.len()
-                || args[*position + 1].is_empty()
-                || is_option_name(&args[*position + 1])
-            {
-                return Err(CliError::invalid_arguments(format!(
-                    "{option} requires a non-empty value"
-                )));
-            }
-            let value = args.remove(*position + 1);
-            args.remove(*position);
-            Ok(Some(value))
-        }
+fn enable(slot: &mut bool, option: &str) -> Result<(), CliError> {
+    if *slot {
+        return Err(duplicate_option(option));
     }
+    *slot = true;
+    Ok(())
 }
 
-fn is_option_name(argument: &str) -> bool {
-    OptionName::parse(argument).is_some()
-        || matches!(
-            argument,
-            "--json" | "-q" | "--quiet" | "-h" | "--help" | "-V" | "--version"
-        )
+/// Probe option names. Used only to keep a value reader from consuming an option token.
+/// Unknown dash-prefixed tokens are literal values or positionals, not options.
+fn is_known_option(argument: &str) -> bool {
+    matches!(
+        argument,
+        "--environment"
+            | "--output"
+            | "--name"
+            | "--method"
+            | "--url"
+            | "--parent"
+            | "--index"
+            | "--value"
+            | "--extends"
+            | "--workspace"
+            | "--allow-partial"
+            | "--var"
+            | "--strict-variables"
+            | "--graphql-query"
+            | "--graphql-variables"
+            | "--graphql-operation-name"
+            | "--graphql-extensions"
+            | "--type"
+            | "--dry-run"
+            | "--expect"
+            | "--json"
+            | "-q"
+            | "--quiet"
+            | "-h"
+            | "--help"
+            | "-V"
+            | "--version"
+    )
 }
 
-fn extract_index(args: &mut Vec<String>) -> Result<Option<usize>, CliError> {
-    extract_string_option(args, "--index")?
-        .map(|value| {
-            value
-                .parse()
-                .map_err(|_| CliError::invalid_arguments("--index requires a non-negative integer"))
-        })
-        .transpose()
+fn unexpected_option(option: &str) -> CliError {
+    match option {
+        "--extends" => {
+            CliError::invalid_arguments("--extends is only valid for environment create")
+        }
+        "--workspace" => CliError::invalid_arguments("--workspace is only valid for Yaak import"),
+        "--allow-partial" => {
+            CliError::invalid_arguments("--allow-partial is only valid for collection import")
+        }
+        "--type" => CliError::invalid_arguments("--type is only valid for request create"),
+        _ => invalid_command(),
+    }
 }
 
 fn input(path: &str) -> WorkspaceInput {
@@ -729,6 +872,18 @@ fn structure(
         operation_name,
         operation: Box::new(operation),
     }
+}
+
+fn missing_value(option: &str) -> CliError {
+    CliError::invalid_arguments(format!("{option} requires a non-empty value"))
+}
+
+fn invalid_expectation() -> CliError {
+    CliError::invalid_arguments("--expect requires status=<code> or status=<code|code>")
+}
+
+fn invalid_variable() -> CliError {
+    CliError::invalid_arguments("--var requires NAME=VALUE with a non-empty name")
 }
 
 fn duplicate_option(option: &str) -> CliError {
