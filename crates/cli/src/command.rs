@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{iter::Peekable, path::PathBuf, vec::IntoIter};
 
 use probe_core::{FieldPatch, GraphqlUpdate, RequestUpdate, StatusExpectation};
 use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
@@ -670,29 +670,30 @@ fn parse_graphql_string(source: &str, field: &str) -> Result<Option<String>, Cli
 }
 
 struct Parser {
-    args: Vec<String>,
-    index: usize,
+    args: Peekable<IntoIter<String>>,
 }
 
 impl Parser {
     fn new(args: Vec<String>) -> Self {
-        Self { args, index: 0 }
+        Self {
+            args: args.into_iter().peekable(),
+        }
     }
 
-    fn peek(&self) -> Option<&str> {
-        self.args.get(self.index).map(String::as_str)
+    fn peek(&mut self) -> Option<&str> {
+        self.args.peek().map(String::as_str)
     }
 
     fn bump(&mut self) -> Option<String> {
-        let argument = self.args.get(self.index)?.clone();
-        self.index += 1;
-        Some(argument)
+        self.args.next()
     }
 
     fn command_word(&mut self) -> Result<String, CliError> {
-        match self.peek() {
-            Some(word) if !is_known_option(word) => Ok(self.bump().expect("peeked argument")),
-            _ => Err(invalid_command()),
+        let accept = self.peek().is_some_and(|word| !is_known_option(word));
+        if accept {
+            Ok(self.bump().expect("peeked argument"))
+        } else {
+            Err(invalid_command())
         }
     }
 
@@ -701,10 +702,15 @@ impl Parser {
     /// A known Probe option is left unconsumed and reported as a missing value.
     /// An unknown dash-prefixed token is a literal value.
     fn value(&mut self, option: &str) -> Result<String, CliError> {
-        match self.peek() {
-            Some(next) if next.is_empty() || is_known_option(next) => Err(missing_value(option)),
-            Some(_) => Ok(self.bump().expect("peeked argument")),
-            None => Err(missing_value(option)),
+        let missing = match self.peek() {
+            Some(next) if next.is_empty() || is_known_option(next) => true,
+            Some(_) => false,
+            None => true,
+        };
+        if missing {
+            Err(missing_value(option))
+        } else {
+            Ok(self.bump().expect("peeked argument"))
         }
     }
 
@@ -732,19 +738,35 @@ impl Parser {
     }
 
     fn once(&mut self, slot: &mut Option<String>, option: &str) -> Result<(), CliError> {
-        assign(slot, self.value(option)?, option)
+        if slot.is_some() {
+            return Err(duplicate_option(option));
+        }
+        *slot = Some(self.value(option)?);
+        Ok(())
     }
 
     fn once_path(&mut self, slot: &mut Option<PathBuf>, option: &str) -> Result<(), CliError> {
-        assign(slot, PathBuf::from(self.value(option)?), option)
+        if slot.is_some() {
+            return Err(duplicate_option(option));
+        }
+        *slot = Some(PathBuf::from(self.value(option)?));
+        Ok(())
     }
 
     fn once_index(&mut self, slot: &mut Option<usize>) -> Result<(), CliError> {
-        assign(slot, self.index_value()?, "--index")
+        if slot.is_some() {
+            return Err(duplicate_option("--index"));
+        }
+        *slot = Some(self.index_value()?);
+        Ok(())
     }
 
     fn flag(&mut self, slot: &mut bool, option: &str) -> Result<(), CliError> {
-        enable(slot, option)
+        if *slot {
+            return Err(duplicate_option(option));
+        }
+        *slot = true;
+        Ok(())
     }
 }
 
@@ -791,22 +813,6 @@ fn reject_stdin(path: &str) -> Result<(), CliError> {
     } else {
         Ok(())
     }
-}
-
-fn assign<T>(slot: &mut Option<T>, value: T, option: &str) -> Result<(), CliError> {
-    if slot.is_some() {
-        return Err(duplicate_option(option));
-    }
-    *slot = Some(value);
-    Ok(())
-}
-
-fn enable(slot: &mut bool, option: &str) -> Result<(), CliError> {
-    if *slot {
-        return Err(duplicate_option(option));
-    }
-    *slot = true;
-    Ok(())
 }
 
 /// Probe option names. Used only to keep a value reader from consuming an option token.
@@ -892,4 +898,25 @@ fn duplicate_option(option: &str) -> CliError {
 
 fn invalid_command() -> CliError {
     CliError::invalid_arguments("invalid command; run 'probe --help' for usage")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+
+    #[test]
+    fn duplicate_index_is_reported_before_the_second_value_is_parsed() {
+        let error = parse(vec![
+            "request".into(),
+            "reorder".into(),
+            "collection.yml".into(),
+            "items/0".into(),
+            "--index".into(),
+            "1".into(),
+            "--index".into(),
+            "nope".into(),
+        ])
+        .expect_err("duplicate --index should be rejected");
+        assert_eq!(error.message, "--index may only be specified once");
+    }
 }

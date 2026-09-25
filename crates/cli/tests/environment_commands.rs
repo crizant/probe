@@ -114,6 +114,10 @@ fn option_errors_remain_stable_when_values_can_start_with_a_dash() {
             "--value may only be specified once",
         ),
         (
+            vec!["--value", "one", "--value", "--output", "file"],
+            "--value may only be specified once",
+        ),
+        (
             vec!["--value", "--name", "token"],
             "--value requires a non-empty value",
         ),
