@@ -72,16 +72,17 @@ inherited `CARGO_TARGET_DIR`, especially for macOS GPUI/Metal builds.
 ```bash
 unset CARGO_TARGET_DIR
 cargo llvm-cov --workspace --all-features --json --output-path target/coverage.json
-python3 scripts/check-coverage.py target/coverage.json
 cargo llvm-cov report --lcov --output-path target/coverage.lcov
+python3 scripts/check-coverage.py target/coverage.json target/coverage.lcov
 cargo crap --workspace --lcov target/coverage.lcov --format json --output target/crap.json
 test -s target/crap.json
 ```
 
-The coverage job is CI-blocking. It checks each behavior crate's line coverage
-against a floor set roughly two to three points below its measured baseline.
-It reports region coverage and desktop coverage without setting floors for them. This
-keeps UI rendering and visual constants from driving test design. Inspect the
+The coverage job is CI-blocking. It checks each behavior crate's production
+line coverage against a floor set below its measured baseline. Inline
+`#[cfg(test)]` modules are excluded from these floors. It reports raw region
+coverage and desktop coverage without setting floors for them. This keeps UI
+rendering and visual constants from driving test design. Inspect the
 CRAP report for newly added or changed functions and investigate scores above
 30. The report must be nonempty in CI; the score is a review signal, not an
 automatic reason to split code or add a tautological test. Existing high scores
@@ -90,7 +91,9 @@ and a few complex desktop interaction handlers.
 
 For a change with production lines in `crates/{cli,core,http,opencollection,postman,yaak}/src`,
 run diff-scoped mutation testing. The diff file must include the changed
-production lines. For uncommitted local changes:
+production lines. For uncommitted local changes, first run
+`git add -N path/to/new.rs` for each new production file so it appears in the
+diff. Then:
 
 ```bash
 git diff --unified=0 HEAD > target/mutants.diff

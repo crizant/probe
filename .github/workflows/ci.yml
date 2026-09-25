@@ -61,8 +61,8 @@ jobs:
       - run: cargo install cargo-llvm-cov --locked --version 0.9.1
       - run: cargo install cargo-crap --locked --version 0.5.0
       - run: cargo llvm-cov --workspace --all-features --json --output-path target/coverage.json
-      - run: python3 scripts/check-coverage.py target/coverage.json
       - run: cargo llvm-cov report --lcov --output-path target/coverage.lcov
+      - run: python3 scripts/check-coverage.py target/coverage.json target/coverage.lcov
       - run: cargo crap --workspace --lcov target/coverage.lcov --format json --output target/crap.json
       - run: test -s target/crap.json
       - uses: actions/upload-artifact@v4
