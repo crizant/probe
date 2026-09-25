@@ -54,8 +54,10 @@ fn load_bundled_source(
         });
     }
     let nodes = bundled_locator_nodes(parsed.document(), "items", document_path);
+    let diagnostics = parsed.diagnostics().to_vec();
     let workspace = Workspace::from_collection(parsed.into_collection());
     let mut loaded = index_locators(workspace, &nodes);
+    loaded.diagnostics = diagnostics;
     if let Some(path) = document_path {
         loaded.environment_persistence =
             bundled_environment_persistences(loaded.workspace.environments(), path);
@@ -84,6 +86,7 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
             expected_bundled: false,
         });
     }
+    let mut diagnostics = parsed.diagnostics().to_vec();
     let mut collection = parsed.into_collection();
     let mut documents = BTreeMap::new();
     documents.insert(
@@ -92,7 +95,13 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
             original_source: source.as_bytes().to_vec(),
         },
     );
-    let loaded_items = read_items(root, root, "opencollection", &mut documents)?;
+    let loaded_items = read_items(
+        root,
+        root,
+        "opencollection",
+        &mut documents,
+        &mut diagnostics,
+    )?;
     let (items, nodes): (Vec<_>, Vec<_>) = loaded_items.into_iter().unzip();
     collection.items = items;
     let mut environment_persistence =
@@ -115,6 +124,8 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
 
     let workspace = Workspace::from_collection(collection);
     let mut loaded = index_locators(workspace, &nodes);
+    sort_diagnostics(&mut diagnostics);
+    loaded.diagnostics = diagnostics;
     loaded.environment_persistence = environment_persistence;
     loaded.documents = documents;
     loaded.source = WorkspaceSource::Unbundled(root.to_owned());
@@ -126,6 +137,7 @@ fn read_items(
     root: &Path,
     reserved_stem: &str,
     documents: &mut BTreeMap<PathBuf, SourceDocument>,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
 ) -> Result<Vec<(CollectionItem, LocatorNode)>, LoadError> {
     let mut entries = read_directory(directory)?;
     entries.sort_by_key(|entry| entry.file_name());
@@ -146,6 +158,14 @@ fn read_items(
                 continue;
             };
             let read = read_item(&folder_config)?;
+            diagnostics.extend(read.diagnostics.into_iter().map(|mut diagnostic| {
+                diagnostic.path = format!(
+                    "{}/{}",
+                    relative_selector(root, &folder_config),
+                    diagnostic.path
+                );
+                diagnostic
+            }));
             documents.insert(
                 folder_config.clone(),
                 SourceDocument {
@@ -162,7 +182,7 @@ fn read_items(
                 }
                 None => continue,
             };
-            let children = read_items(&path, root, "folder", documents)?;
+            let children = read_items(&path, root, "folder", documents, diagnostics)?;
             let (child_items, child_nodes): (Vec<_>, Vec<_>) = children.into_iter().unzip();
             folder.items = child_items;
             items.push((
@@ -176,6 +196,10 @@ fn read_items(
             && path.file_stem().and_then(|stem| stem.to_str()) != Some(reserved_stem)
         {
             let read = read_item(&path)?;
+            diagnostics.extend(read.diagnostics.into_iter().map(|mut diagnostic| {
+                diagnostic.path = format!("{}/{}", relative_selector(root, &path), diagnostic.path);
+                diagnostic
+            }));
             documents.insert(
                 path.clone(),
                 SourceDocument {
@@ -232,6 +256,7 @@ fn read_items(
 
 struct ReadItem {
     item: Option<CollectionItem>,
+    diagnostics: Vec<ProjectionDiagnostic>,
     original_source: Vec<u8>,
 }
 
@@ -241,12 +266,15 @@ fn read_item(path: &Path) -> Result<ReadItem, LoadError> {
         path: path.to_owned(),
         source: ParseError::new(source),
     })?;
-    let item = project_item(value).map_err(|source| LoadError::Parse {
-        path: path.to_owned(),
-        source: ParseError::new(source),
-    })?;
+    let mut diagnostics = Vec::new();
+    let item =
+        project_item(value, "item", &mut diagnostics).map_err(|source| LoadError::Parse {
+            path: path.to_owned(),
+            source: ParseError::new(source),
+        })?;
     Ok(ReadItem {
         item,
+        diagnostics,
         original_source: source.into_bytes(),
     })
 }
@@ -401,6 +429,7 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
         .collect();
     LoadedWorkspace {
         workspace,
+        diagnostics: Vec::new(),
         requests,
         folders,
         request_indices_by_selector,

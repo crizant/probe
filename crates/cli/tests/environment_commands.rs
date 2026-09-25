@@ -75,6 +75,88 @@ fn sets_and_unsets_environment_variables_as_json() {
 }
 
 #[test]
+fn environment_values_may_start_with_a_dash() {
+    for (index, expected) in ["-1", "--literal-looking-value"].into_iter().enumerate() {
+        let workspace = temporary_path(&format!("dash-value-{index}.yml"));
+        fs::copy(fixture("phase4-environments.yml"), &workspace).unwrap();
+
+        let output = probe()
+            .args(["environment", "set"])
+            .arg(&workspace)
+            .args([
+                "--environment",
+                "development",
+                "--name",
+                "token",
+                "--value",
+                expected,
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["value"], expected);
+
+        fs::remove_file(workspace).unwrap();
+    }
+}
+
+#[test]
+fn option_errors_remain_stable_when_values_can_start_with_a_dash() {
+    for (arguments, message) in [
+        (
+            vec!["--name", "token", "--value", "one", "--value", "two"],
+            "--value may only be specified once",
+        ),
+        (
+            vec!["--value", "one", "--value", "--output", "file"],
+            "--value may only be specified once",
+        ),
+        (
+            vec!["--value", "--name", "token"],
+            "--value requires a non-empty value",
+        ),
+    ] {
+        let output = probe()
+            .args(["environment", "set"])
+            .arg(fixture("phase4-environments.yml"))
+            .args(["--environment", "development"])
+            .args(arguments)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments");
+        assert_eq!(value["error"]["message"], message);
+    }
+
+    let unknown = probe()
+        .args(["environment", "set"])
+        .arg(fixture("phase4-environments.yml"))
+        .args([
+            "--environment",
+            "development",
+            "--name",
+            "token",
+            "--value",
+            "valid",
+            "--unknown",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(unknown.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&unknown.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+}
+
+#[test]
 fn environment_commands_have_stable_errors() {
     let missing = probe()
         .args(["environment", "set"])

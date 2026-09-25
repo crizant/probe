@@ -413,7 +413,11 @@ impl ProbeApp {
                     view.loading = false;
                     match result {
                         Ok((path, workspace)) => {
+                            let projection_warning = workspace::projection_warning(&workspace);
                             view.set_workspace(path, workspace);
+                            if let Some(message) = projection_warning {
+                                view.show_toast(ToastIntent::Warning, message, cx);
+                            }
                             if let Some(environment) = selected_environment {
                                 view.shell.select_environment(Some(environment));
                                 view.capture_selected_environment();

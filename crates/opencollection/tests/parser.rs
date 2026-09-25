@@ -5,7 +5,7 @@ use probe_core::{
     MultipartValue, RawBodyKind, RequestBody, VariableValue, VariableValueSet, VariableValueType,
     Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
 };
-use probe_opencollection::parse;
+use probe_opencollection::{ProjectionDiagnosticKind, parse};
 
 fn fixture(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -86,6 +86,63 @@ fn fixtures_round_trip_without_data_loss() {
             serde_yaml_ng::from_str(&serialized).expect("serialized output should be YAML");
         assert_eq!(before, after, "{name}");
     }
+}
+
+#[test]
+fn unsupported_projection_is_reported_and_retained() {
+    let source = fixture("unsupported-projection.yml");
+    let parsed = parse(&source).unwrap();
+    assert_eq!(parsed.collection().items.len(), 2);
+    let diagnostics = parsed
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.path.as_str(),
+                diagnostic.kind,
+                diagnostic.value.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 5);
+    for expected in [
+        (
+            "items/0/http/params/0/type",
+            ProjectionDiagnosticKind::ParameterType,
+            "matrix",
+        ),
+        (
+            "items/0/http/auth/futureProperty",
+            ProjectionDiagnosticKind::AuthenticationProperty,
+            "futureProperty",
+        ),
+        (
+            "items/0/http/auth",
+            ProjectionDiagnosticKind::AuthenticationProperty,
+            "Number(7)",
+        ),
+        (
+            "items/1/http/body/type",
+            ProjectionDiagnosticKind::BodyType,
+            "binary-stream",
+        ),
+        (
+            "items/2/info/type",
+            ProjectionDiagnosticKind::ItemType,
+            "websocket",
+        ),
+    ] {
+        assert!(diagnostics.contains(&expected), "missing {expected:?}");
+    }
+
+    let serialized = parsed.to_yaml().unwrap();
+    let before: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source).unwrap();
+    let after: serde_yaml_ng::Value = serde_yaml_ng::from_str(&serialized).unwrap();
+    assert_eq!(before, after);
+    assert_eq!(
+        parse(&serialized).unwrap().diagnostics(),
+        parsed.diagnostics()
+    );
 }
 
 #[test]

@@ -350,7 +350,7 @@ fn discovers_native_graphql_interpolation_locations() {
         body: Some(GraphqlBody::Single(GraphqlOperation {
             query: Some("query {{operation}} { viewer }".to_owned()),
             variables: Some(
-                serde_json::json!({ "login": "{{login}}" })
+                serde_json::json!({ "nested": ["{{login}}", {"id": "{{id}}"}] })
                     .as_object()
                     .cloned()
                     .unwrap(),
@@ -383,5 +383,6 @@ fn discovers_native_graphql_interpolation_locations() {
         ]
     );
     assert_eq!(find("login").usages, vec![VariableUsage::GraphqlVariables]);
+    assert_eq!(find("id").usages, vec![VariableUsage::GraphqlVariables]);
     assert_eq!(find("trace").usages, vec![VariableUsage::GraphqlExtensions]);
 }

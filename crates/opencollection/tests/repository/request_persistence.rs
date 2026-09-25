@@ -176,6 +176,126 @@ fn bundled_update_save_reload_preserves_unknown_fields() {
 }
 
 #[test]
+fn supported_edit_preserves_unsupported_projection_and_diagnostics() {
+    let path = temporary_path("unsupported-projection.yml");
+    fs::copy(fixture("unsupported-projection.yml"), &path).unwrap();
+    let mut expected: serde_yaml_ng::Value =
+        serde_yaml_ng::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let diagnostics = loaded.diagnostics().to_vec();
+    assert_eq!(diagnostics.len(), 5);
+
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                url: FieldPatch::Set("https://example.com/new".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(loaded.diagnostics(), diagnostics);
+
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(reloaded.diagnostics(), diagnostics);
+    assert_eq!(reloaded.workspace().request_count(), 2);
+    let key = reloaded.request_key("items/0").unwrap();
+    assert_eq!(
+        reloaded.workspace().request(key).unwrap().url.as_deref(),
+        Some("https://example.com/new")
+    );
+    let saved: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&fs::read(&path).unwrap()).unwrap();
+    expected["items"][0]["http"]["url"] =
+        serde_yaml_ng::Value::String("https://example.com/new".to_owned());
+    assert_eq!(saved, expected);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn request_saves_refresh_diagnostics_before_reloading() {
+    let bundled = temporary_path("unsupported-body-bundled.yml");
+    fs::copy(fixture("unsupported-projection.yml"), &bundled).unwrap();
+    let mut loaded = load_workspace(&bundled).unwrap();
+    assert!(
+        loaded
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.path == "items/1/http/body/type")
+    );
+    loaded
+        .update_request(
+            "items/1",
+            &RequestUpdate {
+                body: FieldPatch::Clear,
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        !loaded
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.path == "items/1/http/body/type")
+    );
+    assert_eq!(
+        loaded.diagnostics(),
+        load_workspace(&bundled).unwrap().diagnostics()
+    );
+    fs::remove_file(bundled).unwrap();
+
+    let root = temporary_path("unsupported-prepared-unbundled");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("opencollection.yml"),
+        "opencollection: 1.0.0\ninfo:\n  name: Future collection\nbundled: false\n",
+    )
+    .unwrap();
+    fs::write(root.join("future.yml"), "info:\n  name: Future request\n  type: http\nhttp:\n  method: POST\n  url: https://example.com\n  body:\n    type: binary-stream\n    data: opaque\n  auth:\n    type: bearer\n    token: available\n    futureProperty: retained\n").unwrap();
+    let mut loaded = load_workspace(&root).unwrap();
+    assert_eq!(loaded.diagnostics().len(), 2);
+    let prepared = loaded
+        .prepare_request_save(
+            "future.yml",
+            RequestUpdate {
+                body: FieldPatch::Clear,
+                authentication: FieldPatch::Clear,
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    loaded.complete_request_save(prepared.execute().unwrap());
+    assert!(loaded.diagnostics().is_empty());
+    assert_eq!(
+        loaded.diagnostics(),
+        load_workspace(&root).unwrap().diagnostics()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn unbundled_diagnostics_use_workspace_relative_paths() {
+    let root = temporary_path("unsupported-unbundled");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("opencollection.yml"),
+        "opencollection: 1.0.0\ninfo:\n  name: Future collection\nbundled: false\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("future.yml"),
+        "info:\n  name: Future item\n  type: websocket\nwebsocket:\n  url: wss://example.com\n",
+    )
+    .unwrap();
+
+    let loaded = load_workspace(&root).unwrap();
+    assert_eq!(loaded.workspace().request_count(), 0);
+    assert_eq!(loaded.diagnostics().len(), 1);
+    assert_eq!(loaded.diagnostics()[0].path, "future.yml/item/info/type");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn bundled_graphql_update_save_reload_remains_native() {
     let path = temporary_path("graphql-bundled.yml");
     fs::copy(fixture("graphql-http.yml"), &path).unwrap();

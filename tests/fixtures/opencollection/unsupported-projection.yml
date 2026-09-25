@@ -1,0 +1,34 @@
+opencollection: 1.0.0
+info:
+  name: Forward compatible collection
+bundled: true
+items:
+  - info:
+      name: Supported request with future fields
+      type: http
+    http:
+      method: GET
+      url: https://example.com/old
+      params:
+        - type: matrix
+          futureShape:
+            segments: [next]
+      auth:
+        type: bearer
+        token: available
+        futureProperty: retained
+        7: non-string-key
+  - info:
+      name: Future body
+      type: http
+    http:
+      method: POST
+      url: https://example.com/body
+      body:
+        type: binary-stream
+        data: opaque
+  - info:
+      name: Future item
+      type: websocket
+    websocket:
+      url: wss://example.com/socket
