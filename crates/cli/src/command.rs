@@ -6,26 +6,57 @@ use serde_json::{Map, Value};
 
 use crate::{CliError, WorkspaceInput};
 
-const ENVIRONMENT: u32 = 1 << 0;
-const OUTPUT: u32 = 1 << 1;
-const NAME: u32 = 1 << 2;
-const METHOD: u32 = 1 << 3;
-const URL: u32 = 1 << 4;
-const PARENT: u32 = 1 << 5;
-const INDEX: u32 = 1 << 6;
-const VALUE: u32 = 1 << 7;
-const EXTENDS: u32 = 1 << 8;
-const WORKSPACE: u32 = 1 << 9;
-const ALLOW_PARTIAL: u32 = 1 << 10;
-const VAR: u32 = 1 << 11;
-const STRICT_VARIABLES: u32 = 1 << 12;
-const GRAPHQL_QUERY: u32 = 1 << 13;
-const GRAPHQL_VARIABLES: u32 = 1 << 14;
-const GRAPHQL_OPERATION_NAME: u32 = 1 << 15;
-const GRAPHQL_EXTENSIONS: u32 = 1 << 16;
-const TYPE: u32 = 1 << 17;
-const DRY_RUN: u32 = 1 << 18;
-const EXPECT: u32 = 1 << 19;
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum OptionName {
+    Environment,
+    Output,
+    Name,
+    Method,
+    Url,
+    Parent,
+    Index,
+    Value,
+    Extends,
+    Workspace,
+    AllowPartial,
+    Var,
+    StrictVariables,
+    GraphqlQuery,
+    GraphqlVariables,
+    GraphqlOperationName,
+    GraphqlExtensions,
+    Type,
+    DryRun,
+    Expect,
+}
+
+impl OptionName {
+    fn parse(argument: &str) -> Option<Self> {
+        Some(match argument {
+            "--environment" => Self::Environment,
+            "--output" => Self::Output,
+            "--name" => Self::Name,
+            "--method" => Self::Method,
+            "--url" => Self::Url,
+            "--parent" => Self::Parent,
+            "--index" => Self::Index,
+            "--value" => Self::Value,
+            "--extends" => Self::Extends,
+            "--workspace" => Self::Workspace,
+            "--allow-partial" => Self::AllowPartial,
+            "--var" => Self::Var,
+            "--strict-variables" => Self::StrictVariables,
+            "--graphql-query" => Self::GraphqlQuery,
+            "--graphql-variables" => Self::GraphqlVariables,
+            "--graphql-operation-name" => Self::GraphqlOperationName,
+            "--graphql-extensions" => Self::GraphqlExtensions,
+            "--type" => Self::Type,
+            "--dry-run" => Self::DryRun,
+            "--expect" => Self::Expect,
+            _ => return None,
+        })
+    }
+}
 
 #[derive(Debug)]
 pub(crate) enum Command {
@@ -115,6 +146,7 @@ pub(crate) enum Command {
 }
 
 struct Options {
+    present: Vec<OptionName>,
     environment: Option<String>,
     output: Option<PathBuf>,
     update: RequestUpdate,
@@ -136,34 +168,8 @@ struct Options {
 }
 
 impl Options {
-    fn present(&self) -> u32 {
-        option_bit(self.environment.is_some(), ENVIRONMENT)
-            | option_bit(self.output.is_some(), OUTPUT)
-            | option_bit(self.update.name.is_some(), NAME)
-            | option_bit(!self.update.method.is_unchanged(), METHOD)
-            | option_bit(!self.update.url.is_unchanged(), URL)
-            | option_bit(self.parent.is_some(), PARENT)
-            | option_bit(self.index.is_some(), INDEX)
-            | option_bit(self.value.is_some(), VALUE)
-            | option_bit(self.extends.is_some(), EXTENDS)
-            | option_bit(self.workspace.is_some(), WORKSPACE)
-            | option_bit(self.allow_partial, ALLOW_PARTIAL)
-            | option_bit(!self.variables.is_empty(), VAR)
-            | option_bit(self.strict_variables, STRICT_VARIABLES)
-            | option_bit(self.graphql_query.is_some(), GRAPHQL_QUERY)
-            | option_bit(self.graphql_variables.is_some(), GRAPHQL_VARIABLES)
-            | option_bit(
-                self.graphql_operation_name.is_some(),
-                GRAPHQL_OPERATION_NAME,
-            )
-            | option_bit(self.graphql_extensions.is_some(), GRAPHQL_EXTENSIONS)
-            | option_bit(self.request_type.is_some(), TYPE)
-            | option_bit(self.dry_run, DRY_RUN)
-            | option_bit(!self.expectations.is_empty(), EXPECT)
-    }
-
-    fn allow(&self, allowed: u32) -> Result<(), CliError> {
-        if self.present() & !allowed == 0 {
+    fn allow(&self, allowed: &[OptionName]) -> Result<(), CliError> {
+        if self.present.iter().all(|option| allowed.contains(option)) {
             Ok(())
         } else {
             Err(invalid_command())
@@ -171,17 +177,15 @@ impl Options {
     }
 }
 
-const fn option_bit(present: bool, bit: u32) -> u32 {
-    if present { bit } else { 0 }
-}
-
 pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
+    use OptionName as Opt;
+
     let options = extract_options(&mut args)?;
     validate_scoped_options(&args, &options)?;
 
     match args.as_slice() {
         [group, action, path] if group == "collection" && action == "create" && path != "-" => {
-            options.allow(NAME)?;
+            options.allow(&[Opt::Name])?;
             Ok(Command::CreateCollection {
                 path: PathBuf::from(path),
                 name: options.update.name,
@@ -194,7 +198,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
                 && source != "-"
                 && destination != "-" =>
         {
-            options.allow(WORKSPACE | ALLOW_PARTIAL)?;
+            options.allow(&[Opt::Workspace, Opt::AllowPartial])?;
             Ok(Command::ImportYaak {
                 source: PathBuf::from(source),
                 destination: PathBuf::from(destination),
@@ -209,7 +213,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
                 && source != "-"
                 && destination != "-" =>
         {
-            options.allow(ALLOW_PARTIAL)?;
+            options.allow(&[Opt::AllowPartial])?;
             Ok(Command::ImportPostman {
                 source: PathBuf::from(source),
                 destination: PathBuf::from(destination),
@@ -217,19 +221,19 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path] if group == "collection" && action == "validate" => {
-            options.allow(0)?;
+            options.allow(&[])?;
             Ok(Command::Validate { input: input(path) })
         }
         [group, action, path] if group == "request" && action == "list" => {
-            options.allow(0)?;
+            options.allow(&[])?;
             Ok(Command::ListRequests { input: input(path) })
         }
         [group, action, path] if group == "folder" && action == "list" => {
-            options.allow(0)?;
+            options.allow(&[])?;
             Ok(Command::ListFolders { input: input(path) })
         }
         [group, action, path, selector] if group == "request" && action == "get" => {
-            options.allow(ENVIRONMENT | STRICT_VARIABLES)?;
+            options.allow(&[Opt::Environment, Opt::StrictVariables])?;
             Ok(Command::Get {
                 input: input(path),
                 selector: selector.clone(),
@@ -238,7 +242,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path, selector] if group == "request" && action == "variables" => {
-            options.allow(ENVIRONMENT)?;
+            options.allow(&[Opt::Environment])?;
             Ok(Command::Variables {
                 input: input(path),
                 selector: selector.clone(),
@@ -246,7 +250,14 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path, selector] if group == "request" && action == "run" => {
-            options.allow(ENVIRONMENT | OUTPUT | VAR | STRICT_VARIABLES | DRY_RUN | EXPECT)?;
+            options.allow(&[
+                Opt::Environment,
+                Opt::Output,
+                Opt::Var,
+                Opt::StrictVariables,
+                Opt::DryRun,
+                Opt::Expect,
+            ])?;
             if options.dry_run && options.output.is_some() {
                 return Err(CliError::invalid_arguments(
                     "--dry-run cannot be combined with --output",
@@ -269,14 +280,15 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path, selector] if group == "request" && action == "set" => {
-            options.allow(
-                NAME | METHOD
-                    | URL
-                    | GRAPHQL_QUERY
-                    | GRAPHQL_VARIABLES
-                    | GRAPHQL_OPERATION_NAME
-                    | GRAPHQL_EXTENSIONS,
-            )?;
+            options.allow(&[
+                Opt::Name,
+                Opt::Method,
+                Opt::Url,
+                Opt::GraphqlQuery,
+                Opt::GraphqlVariables,
+                Opt::GraphqlOperationName,
+                Opt::GraphqlExtensions,
+            ])?;
             let update = graphql_update(options)?;
             if update.is_empty() {
                 return Err(invalid_command());
@@ -288,17 +300,18 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path] if group == "request" && action == "create" => {
-            options.allow(
-                NAME | METHOD
-                    | URL
-                    | PARENT
-                    | INDEX
-                    | TYPE
-                    | GRAPHQL_QUERY
-                    | GRAPHQL_VARIABLES
-                    | GRAPHQL_OPERATION_NAME
-                    | GRAPHQL_EXTENSIONS,
-            )?;
+            options.allow(&[
+                Opt::Name,
+                Opt::Method,
+                Opt::Url,
+                Opt::Parent,
+                Opt::Index,
+                Opt::Type,
+                Opt::GraphqlQuery,
+                Opt::GraphqlVariables,
+                Opt::GraphqlOperationName,
+                Opt::GraphqlExtensions,
+            ])?;
             let protocol = created_request_protocol(&options)?;
             let parent = options.parent.clone();
             let index = options.index;
@@ -320,7 +333,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path] if group == "folder" && action == "create" => {
-            options.allow(NAME | PARENT | INDEX)?;
+            options.allow(&[Opt::Name, Opt::Parent, Opt::Index])?;
             Ok(Command::Structure {
                 input: input(path),
                 operation_name: "create",
@@ -334,7 +347,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
         [group, action, path, selector]
             if matches!(group.as_str(), "request" | "folder") && action == "rename" =>
         {
-            options.allow(NAME)?;
+            options.allow(&[Opt::Name])?;
             let name = options.update.name.ok_or_else(invalid_command)?;
             let operation = if group == "request" {
                 StructureOperation::RenameRequest {
@@ -352,7 +365,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
         [group, action, path, selector]
             if matches!(group.as_str(), "request" | "folder") && action == "delete" =>
         {
-            options.allow(0)?;
+            options.allow(&[])?;
             let operation = if group == "request" {
                 StructureOperation::DeleteRequest {
                     selector: selector.clone(),
@@ -367,7 +380,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
         [group, action, path, selector]
             if matches!(group.as_str(), "request" | "folder") && action == "move" =>
         {
-            options.allow(PARENT | INDEX)?;
+            options.allow(&[Opt::Parent, Opt::Index])?;
             let operation = if group == "request" {
                 StructureOperation::MoveRequest {
                     selector: selector.clone(),
@@ -386,7 +399,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
         [group, action, path, selector]
             if matches!(group.as_str(), "request" | "folder") && action == "reorder" =>
         {
-            options.allow(INDEX)?;
+            options.allow(&[Opt::Index])?;
             let index = options.index.ok_or_else(invalid_command)?;
             let operation = if group == "request" {
                 StructureOperation::ReorderRequest {
@@ -402,11 +415,11 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             Ok(structure(input(path), "reorder", operation))
         }
         [group, action, path] if group == "environment" && action == "list" => {
-            options.allow(0)?;
+            options.allow(&[])?;
             Ok(Command::ListEnvironments { input: input(path) })
         }
         [group, action, path] if group == "environment" && action == "create" => {
-            options.allow(NAME | EXTENDS)?;
+            options.allow(&[Opt::Name, Opt::Extends])?;
             Ok(Command::EnvironmentCreate {
                 input: input(path),
                 name: options.update.name.ok_or_else(invalid_command)?,
@@ -414,7 +427,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path] if group == "environment" && action == "set" => {
-            options.allow(ENVIRONMENT | NAME | VALUE)?;
+            options.allow(&[Opt::Environment, Opt::Name, Opt::Value])?;
             Ok(Command::EnvironmentSet {
                 input: input(path),
                 environment: options.environment.ok_or_else(invalid_command)?,
@@ -423,7 +436,7 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path] if group == "environment" && action == "unset" => {
-            options.allow(ENVIRONMENT | NAME)?;
+            options.allow(&[Opt::Environment, Opt::Name])?;
             Ok(Command::EnvironmentUnset {
                 input: input(path),
                 environment: options.environment.ok_or_else(invalid_command)?,
@@ -431,14 +444,14 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
             })
         }
         [group, action, path] if group == "environment" && action == "delete" => {
-            options.allow(ENVIRONMENT)?;
+            options.allow(&[Opt::Environment])?;
             Ok(Command::EnvironmentDelete {
                 input: input(path),
                 environment: options.environment.ok_or_else(invalid_command)?,
             })
         }
         [group, action, path] if group == "environment" && action == "rename" => {
-            options.allow(ENVIRONMENT | NAME)?;
+            options.allow(&[Opt::Environment, Opt::Name])?;
             Ok(Command::EnvironmentRename {
                 input: input(path),
                 environment: options.environment.ok_or_else(invalid_command)?,
@@ -480,7 +493,12 @@ fn validate_scoped_options(args: &[String], options: &Options) -> Result<(), Cli
 }
 
 fn extract_options(args: &mut Vec<String>) -> Result<Options, CliError> {
+    let present = args
+        .iter()
+        .filter_map(|argument| OptionName::parse(argument))
+        .collect();
     Ok(Options {
+        present,
         environment: extract_string_option(args, "--environment")?,
         output: extract_string_option(args, "--output")?.map(PathBuf::from),
         update: RequestUpdate {
@@ -680,36 +698,11 @@ fn extract_string_option(
 }
 
 fn is_option_name(argument: &str) -> bool {
-    matches!(
-        argument,
-        "--environment"
-            | "--output"
-            | "--name"
-            | "--method"
-            | "--url"
-            | "--parent"
-            | "--index"
-            | "--value"
-            | "--extends"
-            | "--workspace"
-            | "--allow-partial"
-            | "--var"
-            | "--strict-variables"
-            | "--graphql-query"
-            | "--graphql-variables"
-            | "--graphql-operation-name"
-            | "--graphql-extensions"
-            | "--type"
-            | "--dry-run"
-            | "--expect"
-            | "--json"
-            | "-q"
-            | "--quiet"
-            | "-h"
-            | "--help"
-            | "-V"
-            | "--version"
-    )
+    OptionName::parse(argument).is_some()
+        || matches!(
+            argument,
+            "--json" | "-q" | "--quiet" | "-h" | "--help" | "-V" | "--version"
+        )
 }
 
 fn extract_index(args: &mut Vec<String>) -> Result<Option<usize>, CliError> {
