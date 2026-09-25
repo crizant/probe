@@ -16,7 +16,8 @@ use probe_core::{
 use serde_yaml_ng::Value;
 
 use super::{
-    EnvironmentDocument, ParseError, ProjectionDiagnostic, parse, project_item, scan_item,
+    EnvironmentDocument, ParseError, ProjectionDiagnostic, parse, project_item, project_items,
+    sort_diagnostics,
 };
 
 mod create;
@@ -623,15 +624,26 @@ impl LoadedWorkspace {
             .documents
             .get(&persistence.document_path)
             .expect("filesystem request must retain its source document");
+        let diagnostic_prefix = self.request_diagnostic_prefix(&persistence.document_path);
+        let mut refreshed_diagnostics = None;
         let serialized = mutate_existing_document(
             &persistence.document_path,
             &source.original_source,
             |document| {
                 let request_document = request_document_mut(document, &persistence.item_path)?;
-                apply_request_update(request_document, update)
+                apply_request_update(request_document, update)?;
+                refreshed_diagnostics = Some(diagnostics_for_request_document(
+                    document,
+                    diagnostic_prefix.as_deref(),
+                )?);
+                Ok(())
             },
         )?;
 
+        self.refresh_request_diagnostics(
+            diagnostic_prefix.as_deref(),
+            refreshed_diagnostics.unwrap(),
+        );
         self.documents.insert(
             persistence.document_path,
             SourceDocument {
@@ -668,6 +680,7 @@ impl LoadedWorkspace {
             .original_source
             .clone();
         Ok(PreparedRequestSave {
+            diagnostic_prefix: self.request_diagnostic_prefix(&persistence.document_path),
             persistence,
             original_source,
             update,
@@ -676,6 +689,7 @@ impl LoadedWorkspace {
 
     /// Refreshes the retained conflict baseline after a prepared save succeeds.
     pub fn complete_request_save(&mut self, saved: CompletedRequestSave) {
+        self.refresh_request_diagnostics(saved.diagnostic_prefix.as_deref(), saved.diagnostics);
         self.documents.insert(
             saved.document_path,
             SourceDocument {
@@ -683,11 +697,37 @@ impl LoadedWorkspace {
             },
         );
     }
+
+    fn request_diagnostic_prefix(&self, document_path: &Path) -> Option<String> {
+        match &self.source {
+            WorkspaceSource::Unbundled(root) => {
+                Some(loading::relative_selector(root, document_path))
+            }
+            WorkspaceSource::Bundled(_) | WorkspaceSource::Memory => None,
+        }
+    }
+
+    fn refresh_request_diagnostics(
+        &mut self,
+        prefix: Option<&str>,
+        refreshed: Vec<ProjectionDiagnostic>,
+    ) {
+        if let Some(prefix) = prefix {
+            let document_prefix = format!("{prefix}/");
+            self.diagnostics
+                .retain(|diagnostic| !diagnostic.path.starts_with(&document_prefix));
+            self.diagnostics.extend(refreshed);
+            sort_diagnostics(&mut self.diagnostics);
+        } else {
+            self.diagnostics = refreshed;
+        }
+    }
 }
 
 /// A filesystem save captured from a loaded workspace for background execution.
 #[derive(Debug)]
 pub struct PreparedRequestSave {
+    diagnostic_prefix: Option<String>,
     persistence: RequestPersistence,
     original_source: Vec<u8>,
     update: RequestUpdate,
@@ -696,17 +736,25 @@ pub struct PreparedRequestSave {
 impl PreparedRequestSave {
     /// Performs the exact-source check and atomic write.
     pub fn execute(self) -> Result<CompletedRequestSave, SaveError> {
+        let mut refreshed_diagnostics = None;
         let serialized = mutate_existing_document(
             &self.persistence.document_path,
             &self.original_source,
             |document| {
                 let request = request_document_mut(document, &self.persistence.item_path)?;
-                apply_request_update(request, &self.update)
+                apply_request_update(request, &self.update)?;
+                refreshed_diagnostics = Some(diagnostics_for_request_document(
+                    document,
+                    self.diagnostic_prefix.as_deref(),
+                )?);
+                Ok(())
             },
         )?;
         Ok(CompletedRequestSave {
             document_path: self.persistence.document_path,
             serialized_source: serialized,
+            diagnostic_prefix: self.diagnostic_prefix,
+            diagnostics: refreshed_diagnostics.unwrap(),
         })
     }
 }
@@ -716,6 +764,8 @@ impl PreparedRequestSave {
 pub struct CompletedRequestSave {
     document_path: PathBuf,
     serialized_source: Vec<u8>,
+    diagnostic_prefix: Option<String>,
+    diagnostics: Vec<ProjectionDiagnostic>,
 }
 
 /// A filesystem environment-variable save captured for background execution.
@@ -1154,6 +1204,25 @@ fn mapping_child<'a>(
         .get_mut(&key)
         .and_then(Value::as_mapping_mut)
         .ok_or_else(|| SaveError::InvalidDocument(format!("'{name}' is not a mapping")))
+}
+
+fn diagnostics_for_request_document(
+    document: &Value,
+    prefix: Option<&str>,
+) -> Result<Vec<ProjectionDiagnostic>, SaveError> {
+    let mut diagnostics = Vec::new();
+    if let Some(prefix) = prefix {
+        project_item(document.clone(), "item", &mut diagnostics)
+            .map_err(|error| SaveError::InvalidDocument(error.to_string()))?;
+        for diagnostic in &mut diagnostics {
+            diagnostic.path = format!("{prefix}/{}", diagnostic.path);
+        }
+    } else if let Some(items) = document.get("items").and_then(Value::as_sequence) {
+        project_items(items.clone(), "items", &mut diagnostics)
+            .map_err(|error| SaveError::InvalidDocument(error.to_string()))?;
+    }
+    sort_diagnostics(&mut diagnostics);
+    Ok(diagnostics)
 }
 
 fn mutate_existing_document(

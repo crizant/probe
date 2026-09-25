@@ -205,6 +205,8 @@ identity.
 Validation succeeds when a valid collection contains future item, body, or parameter
 types or unsupported authentication fields. `warnings` identifies each retained YAML
 location with a structural `path`, a stable `code`, and the unsupported `value`.
+Authentication warnings can describe values retained in the projected request but
+ignored by Probe's HTTP execution engine.
 The human output lists up to 20 warnings and the total count. Unknown source values
 remain in the YAML when supported fields are edited and saved.
 

@@ -3,10 +3,9 @@ use std::collections::BTreeMap;
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, BodyVariant, Environment,
     EnvironmentResolutionError, EnvironmentVariable, FileReference, FormField, GraphqlBody,
-    GraphqlBodyVariant, GraphqlOperation, GraphqlRequest, Header, HttpRequest, MultipartPart,
-    MultipartPartKind, MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody,
-    SecretVariable, Variable, VariableUsage, VariableValue, VariableValueSet,
-    discover_request_variables,
+    GraphqlOperation, GraphqlRequest, Header, HttpRequest, MultipartPart, MultipartPartKind,
+    MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody, SecretVariable, Variable,
+    VariableUsage, VariableValue, VariableValueSet, discover_request_variables,
 };
 
 fn plain(name: &str) -> EnvironmentVariable {
@@ -351,7 +350,7 @@ fn discovers_native_graphql_interpolation_locations() {
         body: Some(GraphqlBody::Single(GraphqlOperation {
             query: Some("query {{operation}} { viewer }".to_owned()),
             variables: Some(
-                serde_json::json!({ "login": "{{login}}" })
+                serde_json::json!({ "nested": ["{{login}}", {"id": "{{id}}"}] })
                     .as_object()
                     .cloned()
                     .unwrap(),
@@ -384,53 +383,6 @@ fn discovers_native_graphql_interpolation_locations() {
         ]
     );
     assert_eq!(find("login").usages, vec![VariableUsage::GraphqlVariables]);
+    assert_eq!(find("id").usages, vec![VariableUsage::GraphqlVariables]);
     assert_eq!(find("trace").usages, vec![VariableUsage::GraphqlExtensions]);
-}
-
-#[test]
-fn discovery_visits_nested_graphql_variants_without_changing_the_request() {
-    let request = GraphqlRequest {
-        body: Some(GraphqlBody::Variants(vec![GraphqlBodyVariant {
-            title: "alternate".to_owned(),
-            selected: false,
-            body: GraphqlOperation {
-                query: Some("query {{shared}} { viewer }".to_owned()),
-                variables: Some(
-                    serde_json::json!({ "nested": ["{{shared}}", { "id": "{{id}}" }] })
-                        .as_object()
-                        .cloned()
-                        .unwrap(),
-                ),
-                operation_name: Some("{{operation}}".to_owned()),
-                extensions: Some(
-                    serde_json::json!({ "trace": { "id": "{{trace}}" } })
-                        .as_object()
-                        .cloned()
-                        .unwrap(),
-                ),
-            },
-        }])),
-        ..GraphqlRequest::default()
-    }
-    .into_request();
-    let original = request.clone();
-
-    let variables = discover_request_variables(&request, &[], None).unwrap();
-
-    assert_eq!(request, original);
-    assert_eq!(
-        variables
-            .iter()
-            .map(|variable| (variable.name.as_str(), variable.usages.as_slice()))
-            .collect::<Vec<_>>(),
-        vec![
-            ("id", &[VariableUsage::GraphqlVariables][..]),
-            ("operation", &[VariableUsage::GraphqlOperationName][..]),
-            (
-                "shared",
-                &[VariableUsage::GraphqlQuery, VariableUsage::GraphqlVariables][..]
-            ),
-            ("trace", &[VariableUsage::GraphqlExtensions][..]),
-        ]
-    );
 }

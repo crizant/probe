@@ -124,6 +124,7 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
 
     let workspace = Workspace::from_collection(collection);
     let mut loaded = index_locators(workspace, &nodes);
+    sort_diagnostics(&mut diagnostics);
     loaded.diagnostics = diagnostics;
     loaded.environment_persistence = environment_persistence;
     loaded.documents = documents;
@@ -266,11 +267,11 @@ fn read_item(path: &Path) -> Result<ReadItem, LoadError> {
         source: ParseError::new(source),
     })?;
     let mut diagnostics = Vec::new();
-    scan_item(&value, "item", &mut diagnostics);
-    let item = project_item(value).map_err(|source| LoadError::Parse {
-        path: path.to_owned(),
-        source: ParseError::new(source),
-    })?;
+    let item =
+        project_item(value, "item", &mut diagnostics).map_err(|source| LoadError::Parse {
+            path: path.to_owned(),
+            source: ParseError::new(source),
+        })?;
     Ok(ReadItem {
         item,
         diagnostics,

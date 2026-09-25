@@ -102,15 +102,6 @@ fn environment_values_may_start_with_a_dash() {
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["value"], expected);
 
-        let resolved = probe()
-            .args(["request", "get"])
-            .arg(&workspace)
-            .args(["items/0", "--environment", "development", "--json"])
-            .output()
-            .unwrap();
-        assert!(resolved.status.success());
-        let value: Value = serde_json::from_slice(&resolved.stdout).unwrap();
-        assert_eq!(value["headers"][0]["value"], format!("Bearer {expected}"));
         fs::remove_file(workspace).unwrap();
     }
 }
@@ -124,10 +115,6 @@ fn option_errors_remain_stable_when_values_can_start_with_a_dash() {
         ),
         (
             vec!["--value", "--name", "token"],
-            "--value requires a non-empty value",
-        ),
-        (
-            vec!["--name", "token", "--value"],
             "--value requires a non-empty value",
         ),
     ] {

@@ -57,7 +57,7 @@ impl ParsedCollection {
         &self.collection
     }
 
-    /// Unsupported source values retained in YAML but absent from Probe's runtime behavior.
+    /// Source values Probe cannot project or execute, while retaining their YAML.
     #[must_use]
     pub fn diagnostics(&self) -> &[ProjectionDiagnostic] {
         &self.diagnostics
@@ -78,7 +78,9 @@ impl ParsedCollection {
     }
 }
 
-/// A source value preserved in YAML that Probe cannot currently project or execute.
+/// A retained source value that Probe cannot project, or projects but cannot execute.
+/// Authentication kinds and properties may remain in the domain while the HTTP
+/// engine ignores them. The public diagnostic codes cover both limitations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectionDiagnostic {
     /// Structural path within a bundled document, or a workspace-relative file path.
@@ -89,7 +91,7 @@ pub struct ProjectionDiagnostic {
     pub value: String,
 }
 
-/// Categories of unsupported OpenCollection projection.
+/// Categories of unsupported OpenCollection projection or execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProjectionDiagnosticKind {
     ItemType,
@@ -154,11 +156,11 @@ pub fn parse(source: &str) -> Result<ParsedCollection, ParseError> {
         ));
     }
     let bundled = wire.bundled;
-    let collection = wire.into_domain().map_err(ParseError::new)?;
     let mut diagnostics = Vec::new();
-    if let Some(items) = document.get("items").and_then(Value::as_sequence) {
-        scan_items(items, "items", &mut diagnostics);
-    }
+    let collection = wire
+        .into_domain(&mut diagnostics)
+        .map_err(ParseError::new)?;
+    sort_diagnostics(&mut diagnostics);
     validate_environments(&collection.environments).map_err(|error| {
         ParseError::new(<serde_yaml_ng::Error as serde::de::Error>::custom(
             error.to_string(),
@@ -186,10 +188,13 @@ struct CollectionDocument {
 }
 
 impl CollectionDocument {
-    fn into_domain(self) -> Result<Collection, serde_yaml_ng::Error> {
+    fn into_domain(
+        self,
+        diagnostics: &mut Vec<ProjectionDiagnostic>,
+    ) -> Result<Collection, serde_yaml_ng::Error> {
         Ok(Collection {
             metadata: self.info.into_domain(),
-            items: project_items(self.items)?,
+            items: project_items(self.items, "items", diagnostics)?,
             environments: self
                 .config
                 .environments
@@ -710,170 +715,6 @@ struct BodyVariantDocument {
     body: Value,
 }
 
-fn scan_items(items: &[Value], prefix: &str, diagnostics: &mut Vec<ProjectionDiagnostic>) {
-    for (index, item) in items.iter().enumerate() {
-        scan_item(item, &format!("{prefix}/{index}"), diagnostics);
-    }
-}
-
-fn scan_item(item: &Value, path: &str, diagnostics: &mut Vec<ProjectionDiagnostic>) {
-    let item_type = item
-        .get("info")
-        .and_then(|info| info.get("type"))
-        .and_then(Value::as_str);
-    match item_type {
-        Some("folder") => {
-            if let Some(items) = item.get("items").and_then(Value::as_sequence) {
-                scan_items(items, &format!("{path}/items"), diagnostics);
-            }
-        }
-        Some("http" | "graphql") => {
-            let section = item_type.unwrap();
-            let Some(details) = item.get(section) else {
-                return;
-            };
-            let prefix = format!("{path}/{section}");
-            if section == "http"
-                && let Some(body) = details.get("body")
-            {
-                if let Some(variants) = body.as_sequence() {
-                    for (index, variant) in variants.iter().enumerate() {
-                        if let Some(body) = variant.get("body") {
-                            scan_body(body, &format!("{prefix}/body/{index}/body"), diagnostics);
-                        }
-                    }
-                } else {
-                    scan_body(body, &format!("{prefix}/body"), diagnostics);
-                }
-            }
-            if let Some(parameters) = details.get("params").and_then(Value::as_sequence) {
-                for (index, parameter) in parameters.iter().enumerate() {
-                    let kind = parameter.get("type").and_then(Value::as_str);
-                    if !matches!(kind, Some("query" | "path")) {
-                        diagnostic(
-                            diagnostics,
-                            format!("{prefix}/params/{index}/type"),
-                            ProjectionDiagnosticKind::ParameterType,
-                            kind.unwrap_or("<missing>"),
-                        );
-                    }
-                }
-            }
-            if let Some(auth) = details.get("auth") {
-                scan_authentication(auth, &format!("{prefix}/auth"), diagnostics);
-            }
-        }
-        _ => diagnostic(
-            diagnostics,
-            format!("{path}/info/type"),
-            ProjectionDiagnosticKind::ItemType,
-            item_type.unwrap_or("<missing>"),
-        ),
-    }
-}
-
-fn scan_body(body: &Value, path: &str, diagnostics: &mut Vec<ProjectionDiagnostic>) {
-    let kind = body.get("type").and_then(Value::as_str);
-    if !matches!(
-        kind,
-        Some("json" | "text" | "xml" | "sparql" | "form-urlencoded" | "multipart-form" | "file")
-    ) {
-        diagnostic(
-            diagnostics,
-            format!("{path}/type"),
-            ProjectionDiagnosticKind::BodyType,
-            kind.unwrap_or("<missing>"),
-        );
-    }
-}
-
-fn scan_authentication(auth: &Value, path: &str, diagnostics: &mut Vec<ProjectionDiagnostic>) {
-    if let Some(kind) = auth.as_str() {
-        if kind != "inherit" {
-            diagnostic(
-                diagnostics,
-                path.to_owned(),
-                ProjectionDiagnosticKind::AuthenticationKind,
-                kind,
-            );
-        }
-        return;
-    }
-    let Some(properties) = auth.as_mapping() else {
-        return;
-    };
-    let kind = auth
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("<missing>");
-    if !matches!(kind, "basic" | "bearer") {
-        diagnostic(
-            diagnostics,
-            format!("{path}/type"),
-            ProjectionDiagnosticKind::AuthenticationKind,
-            kind,
-        );
-    }
-    for (name, value) in properties {
-        let Some(name) = name.as_str() else {
-            diagnostic(
-                diagnostics,
-                path.to_owned(),
-                ProjectionDiagnosticKind::AuthenticationProperty,
-                format!("{name:?}"),
-            );
-            continue;
-        };
-        if name == "type" {
-            continue;
-        }
-        let supported = match kind {
-            "basic" => matches!(name, "username" | "password"),
-            "bearer" => name == "token",
-            _ => true,
-        };
-        if !supported || (matches!(kind, "basic" | "bearer") && !value.is_string()) {
-            diagnostic(
-                diagnostics,
-                format!("{path}/{name}"),
-                ProjectionDiagnosticKind::AuthenticationProperty,
-                name,
-            );
-        }
-        scan_authentication_keys(value, &format!("{path}/{name}"), diagnostics);
-    }
-}
-
-fn scan_authentication_keys(
-    value: &Value,
-    path: &str,
-    diagnostics: &mut Vec<ProjectionDiagnostic>,
-) {
-    match value {
-        Value::Mapping(entries) => {
-            for (name, value) in entries {
-                if let Some(name) = name.as_str() {
-                    scan_authentication_keys(value, &format!("{path}/{name}"), diagnostics);
-                } else {
-                    diagnostic(
-                        diagnostics,
-                        path.to_owned(),
-                        ProjectionDiagnosticKind::AuthenticationProperty,
-                        format!("{name:?}"),
-                    );
-                }
-            }
-        }
-        Value::Sequence(values) => {
-            for (index, value) in values.iter().enumerate() {
-                scan_authentication_keys(value, &format!("{path}/{index}"), diagnostics);
-            }
-        }
-        Value::Tagged(tagged) => scan_authentication_keys(&tagged.value, path, diagnostics),
-        _ => {}
-    }
-}
-
 fn diagnostic(
     diagnostics: &mut Vec<ProjectionDiagnostic>,
     path: String,
@@ -887,13 +728,28 @@ fn diagnostic(
     });
 }
 
-fn project_request_body(value: Value) -> Result<Option<RequestBody>, serde_yaml_ng::Error> {
+fn sort_diagnostics(diagnostics: &mut [ProjectionDiagnostic]) {
+    diagnostics.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.kind.as_str().cmp(right.kind.as_str()))
+            .then_with(|| left.value.cmp(&right.value))
+    });
+}
+
+fn project_request_body(
+    value: Value,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) -> Result<Option<RequestBody>, serde_yaml_ng::Error> {
     if value.is_sequence() {
         let variants: Vec<BodyVariantDocument> = serde_yaml_ng::from_value(value)?;
         let mut projected = Vec::with_capacity(variants.len());
 
-        for variant in variants {
-            if let Some(body) = project_body(variant.body)? {
+        for (index, variant) in variants.into_iter().enumerate() {
+            if let Some(body) =
+                project_body(variant.body, &format!("{path}/{index}/body"), diagnostics)?
+            {
                 projected.push(BodyVariant {
                     title: variant.title,
                     selected: variant.selected,
@@ -904,7 +760,7 @@ fn project_request_body(value: Value) -> Result<Option<RequestBody>, serde_yaml_
 
         Ok(Some(RequestBody::Variants(projected)))
     } else {
-        Ok(project_body(value)?.map(RequestBody::Single))
+        Ok(project_body(value, path, diagnostics)?.map(RequestBody::Single))
     }
 }
 
@@ -969,7 +825,11 @@ fn project_graphql_object(
     })
 }
 
-fn project_body(value: Value) -> Result<Option<Body>, serde_yaml_ng::Error> {
+fn project_body(
+    value: Value,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) -> Result<Option<Body>, serde_yaml_ng::Error> {
     let kind: BodyKindDocument = serde_yaml_ng::from_value(value.clone())?;
 
     match kind.body_type.as_str() {
@@ -1007,16 +867,26 @@ fn project_body(value: Value) -> Result<Option<Body>, serde_yaml_ng::Error> {
                     .collect(),
             )))
         }
-        _ => Ok(None),
+        other => {
+            diagnostic(
+                diagnostics,
+                format!("{path}/type"),
+                ProjectionDiagnosticKind::BodyType,
+                other,
+            );
+            Ok(None)
+        }
     }
 }
 
 fn project_parameters(
     parameters: Vec<Value>,
+    location: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
 ) -> Result<(Vec<QueryParameter>, Vec<QueryParameter>), serde_yaml_ng::Error> {
     let mut query = Vec::new();
-    let mut path = Vec::new();
-    for value in parameters {
+    let mut path_parameters = Vec::new();
+    for (index, value) in parameters.into_iter().enumerate() {
         let kind = value.get("type").and_then(Value::as_str);
         match kind {
             Some("query") => {
@@ -1025,24 +895,43 @@ fn project_parameters(
             }
             Some("path") => {
                 let parameter: ParameterDocument = serde_yaml_ng::from_value(value)?;
-                path.push(parameter.into_domain());
+                path_parameters.push(parameter.into_domain());
             }
-            _ => {}
+            _ => diagnostic(
+                diagnostics,
+                format!("{location}/{index}/type"),
+                ProjectionDiagnosticKind::ParameterType,
+                kind.unwrap_or("<missing>"),
+            ),
         }
     }
-    Ok((query, path))
+    Ok((query, path_parameters))
 }
 
-fn project_authentication(value: Value) -> Result<Authentication, serde_yaml_ng::Error> {
+fn project_authentication(
+    value: Value,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) -> Result<Authentication, serde_yaml_ng::Error> {
     Ok(match value {
-        Value::String(value) => Authentication {
-            kind: if value == "inherit" {
-                AuthenticationKind::Inherit
-            } else {
-                AuthenticationKind::Other(value)
-            },
-            properties: BTreeMap::new(),
-        },
+        Value::String(value) => {
+            if value != "inherit" {
+                diagnostic(
+                    diagnostics,
+                    path.to_owned(),
+                    ProjectionDiagnosticKind::AuthenticationKind,
+                    &value,
+                );
+            }
+            Authentication {
+                kind: if value == "inherit" {
+                    AuthenticationKind::Inherit
+                } else {
+                    AuthenticationKind::Other(value)
+                },
+                properties: BTreeMap::new(),
+            }
+        }
         Value::Mapping(properties) => {
             let kind = properties
                 .get(Value::String("type".to_owned()))
@@ -1053,6 +942,47 @@ fn project_authentication(value: Value) -> Result<Authentication, serde_yaml_ng:
                     )
                 })?
                 .to_owned();
+            if !matches!(kind.as_str(), "basic" | "bearer") {
+                diagnostic(
+                    diagnostics,
+                    format!("{path}/type"),
+                    ProjectionDiagnosticKind::AuthenticationKind,
+                    &kind,
+                );
+            }
+            let mut projected_properties = BTreeMap::new();
+            for (name, value) in properties {
+                let Some(name) = name.as_str() else {
+                    diagnostic(
+                        diagnostics,
+                        path.to_owned(),
+                        ProjectionDiagnosticKind::AuthenticationProperty,
+                        format!("{name:?}"),
+                    );
+                    continue;
+                };
+                if name == "type" {
+                    continue;
+                }
+                let supported = match kind.as_str() {
+                    "basic" => matches!(name, "username" | "password"),
+                    "bearer" => name == "token",
+                    _ => true,
+                };
+                if !supported || (matches!(kind.as_str(), "basic" | "bearer") && !value.is_string())
+                {
+                    diagnostic(
+                        diagnostics,
+                        format!("{path}/{name}"),
+                        ProjectionDiagnosticKind::AuthenticationProperty,
+                        name,
+                    );
+                }
+                projected_properties.insert(
+                    name.to_owned(),
+                    authentication_value(value, &format!("{path}/{name}"), diagnostics),
+                );
+            }
             Authentication {
                 kind: match kind.as_str() {
                     "awsv4" => AuthenticationKind::AwsV4,
@@ -1066,15 +996,7 @@ fn project_authentication(value: Value) -> Result<Authentication, serde_yaml_ng:
                     "oauth2" => AuthenticationKind::OAuth2,
                     other => AuthenticationKind::Other(other.to_owned()),
                 },
-                properties: properties
-                    .into_iter()
-                    .filter_map(|(name, value)| {
-                        name.as_str()
-                            .filter(|name| *name != "type")
-                            .map(str::to_owned)
-                            .map(|name| (name, authentication_value(value)))
-                    })
-                    .collect(),
+                properties: projected_properties,
             }
         }
         _ => {
@@ -1085,38 +1007,66 @@ fn project_authentication(value: Value) -> Result<Authentication, serde_yaml_ng:
     })
 }
 
-fn authentication_value(value: Value) -> AuthenticationValue {
+fn authentication_value(
+    value: Value,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) -> AuthenticationValue {
     match value {
         Value::Null => AuthenticationValue::Null,
         Value::Bool(value) => AuthenticationValue::Boolean(value),
         Value::Number(value) => AuthenticationValue::Number(value.to_string()),
         Value::String(value) => AuthenticationValue::String(value),
-        Value::Sequence(values) => {
-            AuthenticationValue::Sequence(values.into_iter().map(authentication_value).collect())
-        }
-        Value::Mapping(values) => AuthenticationValue::Object(
+        Value::Sequence(values) => AuthenticationValue::Sequence(
             values
                 .into_iter()
-                .filter_map(|(name, value)| {
-                    name.as_str()
-                        .map(str::to_owned)
-                        .map(|name| (name, authentication_value(value)))
+                .enumerate()
+                .map(|(index, value)| {
+                    authentication_value(value, &format!("{path}/{index}"), diagnostics)
                 })
                 .collect(),
         ),
-        Value::Tagged(value) => authentication_value(value.value),
+        Value::Mapping(values) => {
+            let mut projected = BTreeMap::new();
+            for (name, value) in values {
+                if let Some(name) = name.as_str() {
+                    projected.insert(
+                        name.to_owned(),
+                        authentication_value(value, &format!("{path}/{name}"), diagnostics),
+                    );
+                } else {
+                    diagnostic(
+                        diagnostics,
+                        path.to_owned(),
+                        ProjectionDiagnosticKind::AuthenticationProperty,
+                        format!("{name:?}"),
+                    );
+                }
+            }
+            AuthenticationValue::Object(projected)
+        }
+        Value::Tagged(value) => authentication_value(value.value, path, diagnostics),
     }
 }
 
-fn project_items(items: Vec<Value>) -> Result<Vec<CollectionItem>, serde_yaml_ng::Error> {
+fn project_items(
+    items: Vec<Value>,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) -> Result<Vec<CollectionItem>, serde_yaml_ng::Error> {
     items
         .into_iter()
-        .map(project_item)
+        .enumerate()
+        .map(|(index, value)| project_item(value, &format!("{path}/{index}"), diagnostics))
         .filter_map(Result::transpose)
         .collect()
 }
 
-fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::Error> {
+fn project_item(
+    value: Value,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) -> Result<Option<CollectionItem>, serde_yaml_ng::Error> {
     let kind: ItemKindDocument = serde_yaml_ng::from_value(value.clone())?;
 
     match kind.info.item_type.as_deref() {
@@ -1124,16 +1074,26 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             Ok(Some(CollectionItem::Folder(Folder {
                 metadata: item.info.into_domain(),
-                items: project_items(item.items)?,
+                items: project_items(item.items, &format!("{path}/items"), diagnostics)?,
             })))
         }
         Some("http") => {
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_domain()?;
             let http = item.http.unwrap_or_default();
-            let body = http.body.map(project_request_body).transpose()?.flatten();
-            let authentication = http.auth.map(project_authentication).transpose()?;
-            let (query_parameters, path_parameters) = project_parameters(http.params)?;
+            let body = http
+                .body
+                .map(|value| project_request_body(value, &format!("{path}/http/body"), diagnostics))
+                .transpose()?
+                .flatten();
+            let authentication = http
+                .auth
+                .map(|value| {
+                    project_authentication(value, &format!("{path}/http/auth"), diagnostics)
+                })
+                .transpose()?;
+            let (query_parameters, path_parameters) =
+                project_parameters(http.params, &format!("{path}/http/params"), diagnostics)?;
             Ok(Some(CollectionItem::HttpRequest(HttpRequest {
                 metadata: item.info.into_domain(),
                 method: http.method,
@@ -1156,8 +1116,17 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
             let settings = item.settings.into_domain()?;
             let graphql = item.graphql.unwrap_or_default();
             let body = graphql.body.map(project_graphql_body).transpose()?;
-            let authentication = graphql.auth.map(project_authentication).transpose()?;
-            let (query_parameters, path_parameters) = project_parameters(graphql.params)?;
+            let authentication = graphql
+                .auth
+                .map(|value| {
+                    project_authentication(value, &format!("{path}/graphql/auth"), diagnostics)
+                })
+                .transpose()?;
+            let (query_parameters, path_parameters) = project_parameters(
+                graphql.params,
+                &format!("{path}/graphql/params"),
+                diagnostics,
+            )?;
             Ok(Some(CollectionItem::GraphqlRequest(GraphqlRequest {
                 metadata: item.info.into_domain(),
                 method: graphql.method,
@@ -1174,6 +1143,14 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
                 settings,
             })))
         }
-        _ => Ok(None),
+        other => {
+            diagnostic(
+                diagnostics,
+                format!("{path}/info/type"),
+                ProjectionDiagnosticKind::ItemType,
+                other.unwrap_or("<missing>"),
+            );
+            Ok(None)
+        }
     }
 }

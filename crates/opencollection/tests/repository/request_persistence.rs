@@ -179,7 +179,7 @@ fn bundled_update_save_reload_preserves_unknown_fields() {
 fn supported_edit_preserves_unsupported_projection_and_diagnostics() {
     let path = temporary_path("unsupported-projection.yml");
     fs::copy(fixture("unsupported-projection.yml"), &path).unwrap();
-    let original: serde_yaml_ng::Value =
+    let mut expected: serde_yaml_ng::Value =
         serde_yaml_ng::from_slice(&fs::read(&path).unwrap()).unwrap();
     let mut loaded = load_workspace(&path).unwrap();
     let diagnostics = loaded.diagnostics().to_vec();
@@ -194,6 +194,7 @@ fn supported_edit_preserves_unsupported_projection_and_diagnostics() {
             },
         )
         .unwrap();
+    assert_eq!(loaded.diagnostics(), diagnostics);
 
     let reloaded = load_workspace(&path).unwrap();
     assert_eq!(reloaded.diagnostics(), diagnostics);
@@ -204,17 +205,71 @@ fn supported_edit_preserves_unsupported_projection_and_diagnostics() {
         Some("https://example.com/new")
     );
     let saved: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert_eq!(
-        saved["items"][0]["http"]["params"],
-        original["items"][0]["http"]["params"]
-    );
-    assert_eq!(
-        saved["items"][0]["http"]["auth"],
-        original["items"][0]["http"]["auth"]
-    );
-    assert_eq!(saved["items"][1], original["items"][1]);
-    assert_eq!(saved["items"][2], original["items"][2]);
+    expected["items"][0]["http"]["url"] =
+        serde_yaml_ng::Value::String("https://example.com/new".to_owned());
+    assert_eq!(saved, expected);
     fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn request_saves_refresh_diagnostics_before_reloading() {
+    let bundled = temporary_path("unsupported-body-bundled.yml");
+    fs::copy(fixture("unsupported-projection.yml"), &bundled).unwrap();
+    let mut loaded = load_workspace(&bundled).unwrap();
+    assert!(
+        loaded
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.path == "items/1/http/body/type")
+    );
+    loaded
+        .update_request(
+            "items/1",
+            &RequestUpdate {
+                body: FieldPatch::Clear,
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        !loaded
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.path == "items/1/http/body/type")
+    );
+    assert_eq!(
+        loaded.diagnostics(),
+        load_workspace(&bundled).unwrap().diagnostics()
+    );
+    fs::remove_file(bundled).unwrap();
+
+    let root = temporary_path("unsupported-prepared-unbundled");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("opencollection.yml"),
+        "opencollection: 1.0.0\ninfo:\n  name: Future collection\nbundled: false\n",
+    )
+    .unwrap();
+    fs::write(root.join("future.yml"), "info:\n  name: Future request\n  type: http\nhttp:\n  method: POST\n  url: https://example.com\n  body:\n    type: binary-stream\n    data: opaque\n  auth:\n    type: bearer\n    token: available\n    futureProperty: retained\n").unwrap();
+    let mut loaded = load_workspace(&root).unwrap();
+    assert_eq!(loaded.diagnostics().len(), 2);
+    let prepared = loaded
+        .prepare_request_save(
+            "future.yml",
+            RequestUpdate {
+                body: FieldPatch::Clear,
+                authentication: FieldPatch::Clear,
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    loaded.complete_request_save(prepared.execute().unwrap());
+    assert!(loaded.diagnostics().is_empty());
+    assert_eq!(
+        loaded.diagnostics(),
+        load_workspace(&root).unwrap().diagnostics()
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

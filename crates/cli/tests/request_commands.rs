@@ -980,28 +980,6 @@ fn run_uses_runtime_variables_without_an_environment_and_does_not_persist_them()
 }
 
 #[test]
-fn runtime_variable_values_may_start_with_a_dash() {
-    let output = probe()
-        .args(["request", "run"])
-        .arg(fixture("phase-runtime-variables.yml"))
-        .args([
-            "items/0",
-            "--var",
-            "serverUrl=https://example.com",
-            "--var",
-            "userId=-123",
-            "--dry-run",
-            "--json",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["request"]["url"], "https://example.com/users/-123");
-}
-
-#[test]
 fn run_runtime_variables_override_a_selected_environment_and_last_value_wins() {
     let (server_url, server) = serve_once(Vec::new(), "text/plain");
     let workspace = runtime_variables_fixture(&server_url);

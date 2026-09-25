@@ -93,31 +93,56 @@ fn unsupported_projection_is_reported_and_retained() {
     let source = fixture("unsupported-projection.yml");
     let parsed = parse(&source).unwrap();
     assert_eq!(parsed.collection().items.len(), 2);
-    assert_eq!(parsed.diagnostics().len(), 5);
-    let diagnostics = parsed.diagnostics();
-    assert_eq!(diagnostics[0].path, "items/0/http/params/0/type");
-    assert_eq!(diagnostics[0].kind, ProjectionDiagnosticKind::ParameterType);
-    assert_eq!(diagnostics[0].value, "matrix");
-    assert_eq!(diagnostics[1].path, "items/0/http/auth/futureProperty");
-    assert_eq!(
-        diagnostics[1].kind,
-        ProjectionDiagnosticKind::AuthenticationProperty
-    );
-    assert_eq!(diagnostics[2].path, "items/0/http/auth");
-    assert_eq!(
-        diagnostics[2].kind,
-        ProjectionDiagnosticKind::AuthenticationProperty
-    );
-    assert_eq!(diagnostics[3].path, "items/1/http/body/type");
-    assert_eq!(diagnostics[3].kind, ProjectionDiagnosticKind::BodyType);
-    assert_eq!(diagnostics[4].path, "items/2/info/type");
-    assert_eq!(diagnostics[4].kind, ProjectionDiagnosticKind::ItemType);
+    let diagnostics = parsed
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.path.as_str(),
+                diagnostic.kind,
+                diagnostic.value.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 5);
+    for expected in [
+        (
+            "items/0/http/params/0/type",
+            ProjectionDiagnosticKind::ParameterType,
+            "matrix",
+        ),
+        (
+            "items/0/http/auth/futureProperty",
+            ProjectionDiagnosticKind::AuthenticationProperty,
+            "futureProperty",
+        ),
+        (
+            "items/0/http/auth",
+            ProjectionDiagnosticKind::AuthenticationProperty,
+            "Number(7)",
+        ),
+        (
+            "items/1/http/body/type",
+            ProjectionDiagnosticKind::BodyType,
+            "binary-stream",
+        ),
+        (
+            "items/2/info/type",
+            ProjectionDiagnosticKind::ItemType,
+            "websocket",
+        ),
+    ] {
+        assert!(diagnostics.contains(&expected), "missing {expected:?}");
+    }
 
     let serialized = parsed.to_yaml().unwrap();
     let before: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source).unwrap();
     let after: serde_yaml_ng::Value = serde_yaml_ng::from_str(&serialized).unwrap();
     assert_eq!(before, after);
-    assert_eq!(parse(&serialized).unwrap().diagnostics(), diagnostics);
+    assert_eq!(
+        parse(&serialized).unwrap().diagnostics(),
+        parsed.diagnostics()
+    );
 }
 
 #[test]
