@@ -1,0 +1,5 @@
+# Vulnerabilities block CI. Unmaintained direct dependencies also block;
+# transitive maintenance notices are reviewed with their upstream owners.
+[advisories]
+unmaintained = "workspace"
+yanked = "warn"
