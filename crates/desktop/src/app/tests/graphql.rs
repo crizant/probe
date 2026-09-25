@@ -268,18 +268,6 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
         .unwrap();
     cx.run_until_parked();
 
-    let http_key = window
-        .update(cx, |view, _, _| {
-            view.loaded_workspace
-                .as_ref()
-                .unwrap()
-                .requests()
-                .last()
-                .unwrap()
-                .key()
-        })
-        .unwrap();
-
     window
         .update(cx, |view, window, cx| {
             view.apply_structure(
@@ -300,15 +288,13 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
         .unwrap();
     cx.run_until_parked();
 
-    let graphql_key = window
+    let (http_key, graphql_key) = window
         .update(cx, |view, _, _| {
-            view.loaded_workspace
-                .as_ref()
-                .unwrap()
-                .requests()
-                .last()
-                .unwrap()
-                .key()
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            (
+                requests[requests.len() - 2].key(),
+                requests.last().unwrap().key(),
+            )
         })
         .unwrap();
 
@@ -358,18 +344,6 @@ fn closing_graphql_tab_resets_unavailable_editor_section(cx: &mut TestAppContext
         .unwrap();
     cx.run_until_parked();
 
-    let http_key = window
-        .update(cx, |view, _, _| {
-            view.loaded_workspace
-                .as_ref()
-                .unwrap()
-                .requests()
-                .last()
-                .unwrap()
-                .key()
-        })
-        .unwrap();
-
     window
         .update(cx, |view, window, cx| {
             view.apply_structure(
@@ -390,15 +364,13 @@ fn closing_graphql_tab_resets_unavailable_editor_section(cx: &mut TestAppContext
         .unwrap();
     cx.run_until_parked();
 
-    let graphql_key = window
+    let (http_key, graphql_key) = window
         .update(cx, |view, _, _| {
-            view.loaded_workspace
-                .as_ref()
-                .unwrap()
-                .requests()
-                .last()
-                .unwrap()
-                .key()
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            (
+                requests[requests.len() - 2].key(),
+                requests.last().unwrap().key(),
+            )
         })
         .unwrap();
 

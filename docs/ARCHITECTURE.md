@@ -262,8 +262,10 @@ Closing a collection clears active session state without deleting collection fil
 ### Runtime Identity and Persistence Locators
 
 OpenCollection does not define durable request or folder IDs. Each loaded workspace
-therefore assigns generational RequestKey and FolderKey values for fast, stale-safe
-in-memory lookup. These keys are never serialized and are rebuilt on reload.
+therefore assigns session-only RequestKey and FolderKey values for fast, stale-safe
+in-memory lookup. RequestKey includes a workspace generation as well as the arena
+slot generation, so a key from an earlier load cannot resolve in a new workspace.
+These keys are never serialized and are rebuilt on reload.
 
 Repository adapters separately own persistence locators: workspace-relative paths for
 unbundled collections and structural item paths for bundled collections. CLI selectors

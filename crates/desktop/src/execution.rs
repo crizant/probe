@@ -745,6 +745,57 @@ mod tests {
     }
 
     #[test]
+    fn swapped_requests_keep_their_own_in_flight_executions() {
+        let (old_a, old_b) = two_keys();
+        let (new_b, new_a) = two_keys();
+        assert_eq!(
+            (old_a.slot(), old_a.generation()),
+            (new_b.slot(), new_b.generation())
+        );
+        assert_ne!(old_a, new_b);
+        let mut state = ExecutionState::default();
+        let (sender_a, mut receiver_a) = oneshot::channel();
+        let (sender_b, mut receiver_b) = oneshot::channel();
+        let generation_a = state.begin(old_a, sender_a);
+        let generation_b = state.begin(old_b, sender_b);
+
+        state.remap_requests(&BTreeMap::from([(old_a, new_a), (old_b, new_b)]));
+        assert!(receiver_a.try_recv().is_err());
+        assert!(receiver_b.try_recv().is_err());
+        state.finish(old_a, generation_a, Ok(response(201)), None);
+        state.finish(old_b, generation_b, Ok(response(202)), None);
+
+        assert!(
+            matches!(state.response(new_a), Some(ResponseState::Complete { response, .. }) if response.status == 201)
+        );
+        assert!(
+            matches!(state.response(new_b), Some(ResponseState::Complete { response, .. }) if response.status == 202)
+        );
+        assert!(state.response(old_a).is_none());
+        assert!(state.response(old_b).is_none());
+    }
+
+    #[test]
+    fn removed_request_cannot_attach_to_a_reused_arena_position() {
+        let (removed, retained) = two_keys();
+        let (replacement, new_retained) = two_keys();
+        let mut state = ExecutionState::default();
+        let (removed_sender, mut removed_receiver) = oneshot::channel();
+        let (retained_sender, _) = oneshot::channel();
+        let removed_generation = state.begin(removed, removed_sender);
+        let retained_generation = state.begin(retained, retained_sender);
+
+        state.remap_requests(&BTreeMap::from([(retained, new_retained)]));
+        assert!(removed_receiver.try_recv().is_ok());
+        state.finish(removed, removed_generation, Ok(response(201)), None);
+        assert!(state.response(replacement).is_none());
+        state.finish(retained, retained_generation, Ok(response(202)), None);
+        assert!(
+            matches!(state.response(new_retained), Some(ResponseState::Complete { response, .. }) if response.status == 202)
+        );
+    }
+
+    #[test]
     fn metadata_units_are_readable() {
         assert_eq!(format_duration(Duration::from_millis(83)), "83 ms");
         assert_eq!(format_duration(Duration::from_millis(1250)), "1.25 s");
