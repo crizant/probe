@@ -36,7 +36,7 @@ impl ProbeApp {
                                 view.edit_graphql_request(
                                     key,
                                     |_| probe_core::GraphqlUpdate {
-                                        query: Some(value.to_string()),
+                                        query: probe_core::FieldPatch::Set(value.to_string()),
                                         ..probe_core::GraphqlUpdate::default()
                                     },
                                     cx,
@@ -86,7 +86,7 @@ impl ProbeApp {
                                 view.edit_graphql_request(
                                     key,
                                     |_| probe_core::GraphqlUpdate {
-                                        variables: Some(variables),
+                                        variables: probe_core::FieldPatch::from_optional(variables),
                                         ..probe_core::GraphqlUpdate::default()
                                     },
                                     cx,
@@ -134,11 +134,13 @@ impl ProbeApp {
                         view.edit_graphql_request(
                             key,
                             |_| probe_core::GraphqlUpdate {
-                                operation_name: Some(if value.trim().is_empty() {
-                                    None
-                                } else {
-                                    Some(value.to_string())
-                                }),
+                                operation_name: probe_core::FieldPatch::from_optional(
+                                    if value.trim().is_empty() {
+                                        None
+                                    } else {
+                                        Some(value.to_string())
+                                    },
+                                ),
                                 ..probe_core::GraphqlUpdate::default()
                             },
                             cx,
@@ -187,7 +189,9 @@ impl ProbeApp {
                                 view.edit_graphql_request(
                                     key,
                                     |_| probe_core::GraphqlUpdate {
-                                        extensions: Some(extensions),
+                                        extensions: probe_core::FieldPatch::from_optional(
+                                            extensions,
+                                        ),
                                         ..probe_core::GraphqlUpdate::default()
                                     },
                                     cx,

@@ -8,12 +8,11 @@ use probe_http::{HttpResponse, MAX_IN_MEMORY_RESPONSE_BYTES};
 use serde_json::{Map, Value, json};
 
 pub(super) fn response_human(
-    request: &HttpRequest,
+    method: &str,
+    url: &str,
     response: &HttpResponse,
     output: Option<&Path>,
 ) -> String {
-    let method = request.method.as_deref().unwrap_or("<unset>");
-    let url = request.url.as_deref().unwrap_or("<unset>");
     let mut rendered = format!(
         "{method} {url}\n\n{} {}\n{} ms\n{}\nFinal URL: {}\nHeaders:\n",
         response.status,
@@ -49,10 +48,10 @@ pub(super) fn response_human(
 }
 
 pub(super) fn response_json(
-    request: &HttpRequest,
+    request: Value,
     response: &HttpResponse,
     output: Option<&Path>,
-) -> Result<Value, GraphqlRequestError> {
+) -> Value {
     let output_path = output.map(|path| path.to_string_lossy().into_owned());
     let (content, encoding, omitted, omission_reason) = if output.is_some() {
         (None, None, false, None)
@@ -63,8 +62,8 @@ pub(super) fn response_json(
     } else {
         (None, None, true, Some("binary"))
     };
-    Ok(json!({
-        "request": run_request_json(request)?,
+    json!({
+        "request": request,
         "response": {
             "body": {
                 "content": content,
@@ -83,7 +82,7 @@ pub(super) fn response_json(
             "status": response.status,
             "url": response.url,
         }
-    }))
+    })
 }
 
 pub(super) fn dry_run_human(request: &HttpRequest) -> String {
@@ -101,7 +100,7 @@ pub(super) fn dry_run_json(request: &HttpRequest) -> Result<Value, GraphqlReques
     }))
 }
 
-fn run_request_json(request: &HttpRequest) -> Result<Value, GraphqlRequestError> {
+pub(super) fn run_request_json(request: &HttpRequest) -> Result<Value, GraphqlRequestError> {
     Ok(json!({
         "type": request.protocol.as_str(),
         "graphql": request.selected_graphql()?.map(graphql_json),

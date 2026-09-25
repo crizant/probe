@@ -141,8 +141,8 @@ fn bundled_update_save_reload_preserves_unknown_fields() {
         .update_request(
             "items/0",
             &RequestUpdate {
-                method: Some("PUT".to_owned()),
-                url: Some("https://api.example.com/pets/42".to_owned()),
+                method: FieldPatch::Set("PUT".to_owned()),
+                url: FieldPatch::Set("https://api.example.com/pets/42".to_owned()),
                 ..RequestUpdate::default()
             },
         )
@@ -190,9 +190,9 @@ fn bundled_graphql_update_save_reload_remains_native() {
             "items/0",
             &RequestUpdate {
                 graphql: Some(probe_core::GraphqlUpdate {
-                    query: Some("query Viewer { viewer { login } }".to_owned()),
-                    variables: Some(Some(variables.clone())),
-                    operation_name: Some(Some("Viewer".to_owned())),
+                    query: FieldPatch::Set("query Viewer { viewer { login } }".to_owned()),
+                    variables: FieldPatch::Set(variables.clone()),
+                    operation_name: FieldPatch::Set("Viewer".to_owned()),
                     ..probe_core::GraphqlUpdate::default()
                 }),
                 ..RequestUpdate::default()
@@ -212,6 +212,36 @@ fn bundled_graphql_update_save_reload_remains_native() {
     assert!(saved.contains("type: graphql"));
     assert!(saved.contains("graphql:"));
     assert!(!saved.contains("type: http"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn bundled_graphql_optional_fields_clear_on_save_and_reload() {
+    let path = temporary_path("graphql-clears.yml");
+    fs::copy(fixture("graphql-http.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                method: FieldPatch::Clear,
+                url: FieldPatch::Clear,
+                graphql: Some(probe_core::GraphqlUpdate {
+                    query: FieldPatch::Clear,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let reloaded = load_workspace(&path).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("items/0").unwrap())
+        .unwrap();
+    assert_eq!(request.method, None);
+    assert_eq!(request.url, None);
+    assert_eq!(request.selected_graphql().unwrap().unwrap().query, None);
     fs::remove_file(path).unwrap();
 }
 
@@ -244,8 +274,8 @@ fn unbundled_graphql_update_save_reload_preserves_extensions() {
             "viewer.yml",
             &RequestUpdate {
                 graphql: Some(probe_core::GraphqlUpdate {
-                    operation_name: Some(Some("Viewer".to_owned())),
-                    extensions: Some(Some(extensions.clone())),
+                    operation_name: FieldPatch::Set("Viewer".to_owned()),
+                    extensions: FieldPatch::Set(extensions.clone()),
                     ..probe_core::GraphqlUpdate::default()
                 }),
                 ..RequestUpdate::default()
@@ -278,8 +308,8 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
         AuthenticationValue::String("probe".to_owned()),
     );
     let update = RequestUpdate {
-        method: Some("PATCH".to_owned()),
-        url: Some("https://api.example.com/pets/42".to_owned()),
+        method: FieldPatch::Set("PATCH".to_owned()),
+        url: FieldPatch::Set("https://api.example.com/pets/42".to_owned()),
         headers: Some(vec![Header {
             name: "X-Probe".to_owned(),
             value: "desktop".to_owned(),
@@ -295,17 +325,15 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
             value: "42".to_owned(),
             disabled: false,
         }]),
-        body: Some(Some(RequestBody::Single(Body::FormUrlEncoded(vec![
-            FormField {
-                name: "name".to_owned(),
-                value: "Milo".to_owned(),
-                disabled: false,
-            },
-        ])))),
-        authentication: Some(Some(Authentication {
+        body: FieldPatch::Set(RequestBody::Single(Body::FormUrlEncoded(vec![FormField {
+            name: "name".to_owned(),
+            value: "Milo".to_owned(),
+            disabled: false,
+        }]))),
+        authentication: FieldPatch::Set(Authentication {
             kind: AuthenticationKind::Basic,
             properties,
-        })),
+        }),
         ..RequestUpdate::default()
     };
 
@@ -342,6 +370,39 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
 }
 
 #[test]
+fn clearing_body_and_authentication_preserves_unrelated_yaml() {
+    let path = temporary_path("clear-body-auth.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let saved = loaded
+        .prepare_request_save(
+            "items/0",
+            RequestUpdate {
+                body: FieldPatch::Clear,
+                authentication: FieldPatch::Clear,
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap()
+        .execute()
+        .unwrap();
+    loaded.complete_request_save(saved);
+
+    let reloaded = load_workspace(&path).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("items/0").unwrap())
+        .unwrap();
+    assert!(request.body.is_none());
+    assert!(request.authentication.is_none());
+    let yaml = fs::read_to_string(&path).unwrap();
+    assert!(yaml.contains("vendor.example"));
+    assert!(yaml.contains("Request origin"));
+    assert!(yaml.contains("expect(res.status)"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn every_supported_body_and_authentication_shape_survives_desktop_style_saves() {
     let path = temporary_path("desktop-body-shapes.yml");
     fs::copy(fixture("phase1-bodies-auth-environments.yml"), &path).unwrap();
@@ -359,13 +420,13 @@ fn every_supported_body_and_authentication_shape_survives_desktop_style_saves() 
 
     for (selector, request) in &snapshots {
         let update = RequestUpdate {
-            method: request.method.clone(),
-            url: request.url.clone(),
+            method: FieldPatch::from_optional(request.method.clone()),
+            url: FieldPatch::from_optional(request.url.clone()),
             headers: Some(request.headers.clone()),
             query_parameters: Some(request.query_parameters.clone()),
             path_parameters: Some(request.path_parameters.clone()),
-            body: Some(request.body.clone()),
-            authentication: Some(request.authentication.clone()),
+            body: FieldPatch::from_optional(request.body.clone()),
+            authentication: FieldPatch::from_optional(request.authentication.clone()),
             ..RequestUpdate::default()
         };
         let saved = loaded
@@ -397,7 +458,7 @@ fn updates_a_nested_bundled_request_by_structural_locator() {
         .update_request(
             "items/0/items/0",
             &RequestUpdate {
-                url: Some("https://api.example.com/v2/pets".to_owned()),
+                url: FieldPatch::Set("https://api.example.com/v2/pets".to_owned()),
                 ..RequestUpdate::default()
             },
         )
@@ -442,7 +503,7 @@ fn unbundled_update_preserves_request_extensions() {
         .update_request(
             "health.yml",
             &RequestUpdate {
-                url: Some("https://example.com/ready".to_owned()),
+                url: FieldPatch::Set("https://example.com/ready".to_owned()),
                 ..RequestUpdate::default()
             },
         )
@@ -476,7 +537,7 @@ fn refuses_to_overwrite_an_externally_modified_document() {
         .update_request(
             "items/0",
             &RequestUpdate {
-                url: Some("https://should-not-be-written.example".to_owned()),
+                url: FieldPatch::Set("https://should-not-be-written.example".to_owned()),
                 ..RequestUpdate::default()
             },
         )

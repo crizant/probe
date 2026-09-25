@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use probe_core::{HttpRequest, RequestKey, RequestUpdate};
+use probe_core::{HttpRequest, RequestDiffError, RequestKey, RequestUpdate};
 
 #[derive(Debug, Default)]
 pub(crate) struct PersistenceState {
@@ -72,60 +72,14 @@ impl PersistenceState {
         &self,
         key: RequestKey,
         request: &HttpRequest,
-    ) -> (u64, HttpRequest, RequestUpdate) {
+    ) -> Result<(u64, HttpRequest, RequestUpdate), RequestDiffError> {
         let snapshot = request.clone();
-        let baseline = self.saved.get(&key);
-        let update = RequestUpdate {
-            name: (baseline.and_then(|request| request.metadata.name.as_ref())
-                != snapshot.metadata.name.as_ref())
-            .then(|| snapshot.metadata.name.clone())
-            .flatten(),
-            method: (baseline.and_then(|request| request.method.as_ref())
-                != snapshot.method.as_ref())
-            .then(|| snapshot.method.clone())
-            .flatten(),
-            url: (baseline.and_then(|request| request.url.as_ref()) != snapshot.url.as_ref())
-                .then(|| snapshot.url.clone())
-                .flatten(),
-            headers: (baseline.map(|request| &request.headers) != Some(&snapshot.headers))
-                .then(|| snapshot.headers.clone()),
-            query_parameters: (baseline.map(|request| &request.query_parameters)
-                != Some(&snapshot.query_parameters))
-            .then(|| snapshot.query_parameters.clone()),
-            path_parameters: (baseline.map(|request| &request.path_parameters)
-                != Some(&snapshot.path_parameters))
-            .then(|| snapshot.path_parameters.clone()),
-            body: (baseline.and_then(|request| request.body.as_ref()) != snapshot.body.as_ref())
-                .then(|| snapshot.body.clone()),
-            authentication: (baseline.and_then(|request| request.authentication.as_ref())
-                != snapshot.authentication.as_ref())
-            .then(|| snapshot.authentication.clone()),
-            graphql: match (&baseline.map(|r| &r.protocol), &snapshot.protocol) {
-                (
-                    Some(probe_core::RequestProtocol::Graphql(b)),
-                    probe_core::RequestProtocol::Graphql(s),
-                ) if b != s => {
-                    let baseline_op = baseline.and_then(|r| r.selected_graphql().ok().flatten());
-                    let snapshot_op = snapshot.selected_graphql().ok().flatten();
-                    if baseline_op != snapshot_op {
-                        Some(probe_core::GraphqlUpdate {
-                            query: snapshot_op.and_then(|op| op.query.clone()),
-                            variables: snapshot_op.map(|op| op.variables.clone()),
-                            operation_name: snapshot_op.map(|op| op.operation_name.clone()),
-                            extensions: snapshot_op.map(|op| op.extensions.clone()),
-                        })
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
-        };
-        (
+        let update = RequestUpdate::between(self.saved.get(&key), &snapshot)?;
+        Ok((
             self.revisions.get(&key).copied().unwrap_or_default(),
             snapshot,
             update,
-        )
+        ))
     }
 
     pub(crate) fn complete(&mut self, key: RequestKey, snapshot: HttpRequest) {
@@ -141,7 +95,11 @@ impl PersistenceState {
 
 #[cfg(test)]
 mod tests {
-    use probe_core::{Collection, CollectionItem, HttpRequest, Workspace, WorkspaceItemRef};
+    use probe_core::{
+        Collection, CollectionItem, GraphqlBody, GraphqlBodyVariant, GraphqlOperation,
+        GraphqlRequest, GraphqlRequestError, HttpRequest, RequestDiffError, Workspace,
+        WorkspaceItemRef,
+    };
 
     use super::PersistenceState;
 
@@ -156,6 +114,35 @@ mod tests {
         *key
     }
 
+    fn graphql_request(body: GraphqlBody) -> HttpRequest {
+        GraphqlRequest {
+            body: Some(body),
+            ..GraphqlRequest::default()
+        }
+        .into_request()
+    }
+
+    fn variants(first_selected: bool, second_selected: bool) -> GraphqlBody {
+        GraphqlBody::Variants(vec![
+            GraphqlBodyVariant {
+                title: "first".to_owned(),
+                selected: first_selected,
+                body: GraphqlOperation {
+                    query: Some("query First { first }".to_owned()),
+                    ..GraphqlOperation::default()
+                },
+            },
+            GraphqlBodyVariant {
+                title: "second".to_owned(),
+                selected: second_selected,
+                body: GraphqlOperation {
+                    query: Some("query Second { second }".to_owned()),
+                    ..GraphqlOperation::default()
+                },
+            },
+        ])
+    }
+
     #[test]
     fn completion_tracks_the_saved_snapshot_not_newer_edits() {
         let key = request_key();
@@ -166,32 +153,12 @@ mod tests {
         let mut request = original;
         request.url = Some("https://saved.example".to_owned());
         state.edited(key);
-        let (_, saved_snapshot, _) = state.begin(key, &request);
+        let (_, saved_snapshot, _) = state.begin(key, &request).unwrap();
         request.url = Some("https://newer.example".to_owned());
         state.edited(key);
         state.complete(key, saved_snapshot);
 
         assert!(state.is_dirty(key, &request));
-    }
-
-    #[test]
-    fn save_update_contains_only_fields_changed_since_the_baseline() {
-        let key = request_key();
-        let mut original = HttpRequest {
-            method: Some("GET".to_owned()),
-            url: Some("https://old.example".to_owned()),
-            ..HttpRequest::default()
-        };
-        let mut state = PersistenceState::default();
-        state.reset([(key, original.clone())]);
-        original.url = Some("https://new.example".to_owned());
-
-        let (_, _, update) = state.begin(key, &original);
-
-        assert_eq!(update.url.as_deref(), Some("https://new.example"));
-        assert!(update.method.is_none());
-        assert!(update.headers.is_none());
-        assert!(update.body.is_none());
     }
 
     #[test]
@@ -206,5 +173,29 @@ mod tests {
         state.complete(key, HttpRequest::default());
 
         assert_eq!(state.next(), Some(key));
+    }
+
+    #[test]
+    fn invalid_graphql_selection_rejects_diff_without_advancing_saved_baseline() {
+        let key = request_key();
+        for (body, message) in [
+            (variants(false, false), "no selected value"),
+            (variants(true, true), "multiple selected values"),
+        ] {
+            let baseline = graphql_request(variants(true, false));
+            let draft = graphql_request(body);
+            let mut state = PersistenceState::default();
+            state.reset([(key, baseline.clone())]);
+            state.edited(key);
+            state.enqueue([key]);
+            assert_eq!(state.next(), Some(key));
+            assert!(
+                matches!(state.begin(key, &draft), Err(RequestDiffError::Graphql(GraphqlRequestError::InvalidBodySelection(error))) if error.contains(message))
+            );
+            state.fail(key);
+            assert!(state.is_dirty(key, &draft));
+            assert_eq!(state.saved_request(key), Some(&baseline));
+            assert!(!state.has_outstanding_saves());
+        }
     }
 }

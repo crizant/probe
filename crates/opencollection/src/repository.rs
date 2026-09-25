@@ -8,9 +8,10 @@ use std::{
 
 use atomic_write_file::AtomicWriteFile;
 use probe_core::{
-    CollectionItem, Environment, EnvironmentResolutionError, EnvironmentVariable, FolderKey,
-    RequestKey, RequestUpdate, Variable, VariableValue, VariableValueSet, VariableValueVariant,
-    Workspace, WorkspaceItemRef, validate_environments, validate_unique_variable_names,
+    CollectionItem, Environment, EnvironmentResolutionError, EnvironmentVariable, FieldPatch,
+    FolderKey, RequestKey, RequestUpdate, Variable, VariableValue, VariableValueSet,
+    VariableValueVariant, Workspace, WorkspaceItemRef, validate_environments,
+    validate_unique_variable_names,
 };
 use serde_yaml_ng::Value;
 
@@ -965,24 +966,37 @@ pub(crate) fn apply_request_update(
         .and_then(Value::as_str)
         == Some("graphql");
     let details_name = if is_graphql { "graphql" } else { "http" };
-    if update.method.is_some()
-        || update.url.is_some()
+    if !update.method.is_unchanged()
+        || !update.url.is_unchanged()
         || update.headers.is_some()
         || update.query_parameters.is_some()
         || update.path_parameters.is_some()
-        || update.body.is_some()
-        || update.authentication.is_some()
+        || !update.body.is_unchanged()
+        || !update.authentication.is_unchanged()
         || update.graphql.is_some()
     {
         let details = mapping_child(request, details_name)?;
-        if let Some(method) = &update.method {
-            details.insert(
-                Value::String("method".to_owned()),
-                Value::String(method.clone()),
+        if !update.method.is_unchanged() {
+            set_optional(
+                details,
+                "method",
+                match &update.method {
+                    FieldPatch::Set(method) => Some(Value::String(method.clone())),
+                    FieldPatch::Clear => None,
+                    FieldPatch::Unchanged => unreachable!(),
+                },
             );
         }
-        if let Some(url) = &update.url {
-            details.insert(Value::String("url".to_owned()), Value::String(url.clone()));
+        if !update.url.is_unchanged() {
+            set_optional(
+                details,
+                "url",
+                match &update.url {
+                    FieldPatch::Set(url) => Some(Value::String(url.clone())),
+                    FieldPatch::Clear => None,
+                    FieldPatch::Unchanged => unreachable!(),
+                },
+            );
         }
         if let Some(headers) = &update.headers {
             merge_sequence_preserving(
@@ -999,20 +1013,26 @@ pub(crate) fn apply_request_update(
                 update.path_parameters.as_deref(),
             );
         }
-        if let Some(body) = &update.body {
+        if !update.body.is_unchanged() {
             if is_graphql {
                 return Err(SaveError::InvalidDocument(
                     "HTTP body updates cannot be applied to a native GraphQL request".to_owned(),
                 ));
             }
-            set_optional_merged(details, "body", body.as_ref().map(request_body_value));
+            let value = match &update.body {
+                FieldPatch::Set(body) => Some(request_body_value(body)),
+                FieldPatch::Clear => None,
+                FieldPatch::Unchanged => unreachable!(),
+            };
+            set_optional_merged(details, "body", value);
         }
-        if let Some(authentication) = &update.authentication {
-            set_optional(
-                details,
-                "auth",
-                authentication.as_ref().map(authentication_value),
-            );
+        if !update.authentication.is_unchanged() {
+            let value = match &update.authentication {
+                FieldPatch::Set(authentication) => Some(authentication_value(authentication)),
+                FieldPatch::Clear => None,
+                FieldPatch::Unchanged => unreachable!(),
+            };
+            set_optional(details, "auth", value);
         }
         if let Some(graphql) = &update.graphql {
             if !is_graphql {
@@ -1031,38 +1051,44 @@ fn apply_graphql_update(
     update: &probe_core::GraphqlUpdate,
 ) -> Result<(), SaveError> {
     let body = graphql_body_mapping(graphql)?;
-    if let Some(query) = &update.query {
-        body.insert(
-            Value::String("query".to_owned()),
-            Value::String(query.clone()),
-        );
-    }
-    if let Some(variables) = &update.variables {
+    if !update.query.is_unchanged() {
         set_optional(
             body,
-            "variables",
-            variables.as_ref().map(|variables| {
-                Value::String(serde_json::Value::Object(variables.clone()).to_string())
-            }),
+            "query",
+            match &update.query {
+                FieldPatch::Set(query) => Some(Value::String(query.clone())),
+                FieldPatch::Clear => None,
+                FieldPatch::Unchanged => unreachable!(),
+            },
         );
     }
-    if let Some(operation_name) = &update.operation_name {
-        set_optional(
-            body,
-            "operationName",
-            operation_name
-                .as_ref()
-                .map(|value| Value::String(value.clone())),
-        );
+    if !update.variables.is_unchanged() {
+        let value = match &update.variables {
+            FieldPatch::Set(variables) => Some(Value::String(
+                serde_json::Value::Object(variables.clone()).to_string(),
+            )),
+            FieldPatch::Clear => None,
+            FieldPatch::Unchanged => unreachable!(),
+        };
+        set_optional(body, "variables", value);
     }
-    if let Some(extensions) = &update.extensions {
-        set_optional(
-            body,
-            "extensions",
-            extensions.as_ref().map(|extensions| {
-                Value::String(serde_json::Value::Object(extensions.clone()).to_string())
-            }),
-        );
+    if !update.operation_name.is_unchanged() {
+        let value = match &update.operation_name {
+            FieldPatch::Set(operation_name) => Some(Value::String(operation_name.clone())),
+            FieldPatch::Clear => None,
+            FieldPatch::Unchanged => unreachable!(),
+        };
+        set_optional(body, "operationName", value);
+    }
+    if !update.extensions.is_unchanged() {
+        let value = match &update.extensions {
+            FieldPatch::Set(extensions) => Some(Value::String(
+                serde_json::Value::Object(extensions.clone()).to_string(),
+            )),
+            FieldPatch::Clear => None,
+            FieldPatch::Unchanged => unreachable!(),
+        };
+        set_optional(body, "extensions", value);
     }
     Ok(())
 }

@@ -207,7 +207,9 @@ fn saving_detached_graphql_request_preserves_query(cx: &mut TestAppContext) {
                     request.url = Some("https://example.test/graphql".to_owned());
                     request
                         .apply_graphql_update(&probe_core::GraphqlUpdate {
-                            query: Some("query Viewer { viewer { id } }".to_owned()),
+                            query: probe_core::FieldPatch::Set(
+                                "query Viewer { viewer { id } }".to_owned(),
+                            ),
                             ..probe_core::GraphqlUpdate::default()
                         })
                         .unwrap();

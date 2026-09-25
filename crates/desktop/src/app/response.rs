@@ -41,31 +41,25 @@ impl ProbeApp {
                 .and_then(workspace_base_directory),
             response_cache: Some(self.response_cache.clone()),
         };
-        let (cancellation_sender, cancellation_receiver) = tokio::sync::oneshot::channel();
-        let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
-        let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
-        let generation = self.execution.begin(key, cancellation_sender);
-        let spawn_result = thread::Builder::new()
-            .name("probe-http-request".to_owned())
-            .spawn(move || {
-                let result = execute_http_request(
-                    request,
-                    options,
-                    output,
-                    cancellation_receiver,
-                    move |progress| {
-                        let _ = progress_sender.send(progress);
-                    },
-                );
-                let _ = result_sender.send(result);
-            });
-        if let Err(error) = spawn_result {
-            self.execution
-                .fail(key, format!("Could not start HTTP execution: {error}"));
-            self.response_viewer.remove(key);
-            cx.notify();
-            return;
+        if self.execution_service.is_none() {
+            match ExecutionService::new() {
+                Ok(service) => self.execution_service = Some(service),
+                Err(error) => {
+                    self.execution
+                        .fail(key, format!("Could not start HTTP execution: {error}"));
+                    self.response_viewer.remove(key);
+                    cx.notify();
+                    return;
+                }
+            }
         }
+        let (cancellation_sender, cancellation_receiver) = tokio::sync::oneshot::channel();
+        let generation = self.execution.begin(key, cancellation_sender);
+        let (result_receiver, mut progress_receiver) = self
+            .execution_service
+            .as_ref()
+            .unwrap()
+            .execute(request, options, output, cancellation_receiver);
 
         cx.spawn(async move |view, cx| {
             while let Some(progress) = progress_receiver.recv().await {

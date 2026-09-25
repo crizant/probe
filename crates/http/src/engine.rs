@@ -1,4 +1,4 @@
-use std::{borrow::Cow, future::Future, future::pending, path::Path, time::Instant};
+use std::{future::Future, future::pending, path::Path, time::Instant};
 
 use probe_core::{HttpRequest, RequestSettings};
 use reqwest::{Client, header::HeaderMap, redirect::Policy};
@@ -228,13 +228,13 @@ impl HttpEngine {
         })
     }
 
-    fn client_for(&self, settings: &RequestSettings) -> Result<Cow<'_, Client>, HttpError> {
+    fn client_for(&self, settings: &RequestSettings) -> Result<Client, HttpError> {
         let follow = settings.follow_redirects.unwrap_or(true);
         let maximum = settings.max_redirects.unwrap_or(DEFAULT_MAX_REDIRECTS);
         if follow && maximum == DEFAULT_MAX_REDIRECTS {
-            Ok(Cow::Borrowed(&self.default_client))
+            Ok(self.default_client.clone())
         } else {
-            build_client(follow, maximum).map(Cow::Owned)
+            build_client(follow, maximum)
         }
     }
 }

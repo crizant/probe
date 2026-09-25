@@ -435,17 +435,17 @@ impl ProbeApp {
         };
         draft.metadata.name = Some(name.clone());
         let graphql = matches!(draft.protocol, probe_core::RequestProtocol::Graphql(_));
-        let graphql_update =
-            draft
-                .selected_graphql()
-                .ok()
-                .flatten()
-                .map(|operation| probe_core::GraphqlUpdate {
-                    query: operation.query.clone(),
-                    variables: Some(operation.variables.clone()),
-                    operation_name: Some(operation.operation_name.clone()),
-                    extensions: Some(operation.extensions.clone()),
-                });
+        let mut update = match probe_core::RequestUpdate::between(None, &draft) {
+            Ok(update) => update,
+            Err(error) => {
+                self.show_toast(ToastIntent::Warning, error.to_string(), cx);
+                return;
+            }
+        };
+        let graphql_update = update.graphql.take();
+        update.name = None;
+        update.method = probe_core::FieldPatch::Unchanged;
+        update.url = probe_core::FieldPatch::Unchanged;
         let operation = StructureOperation::CreateRequest {
             parent,
             index: None,
@@ -458,14 +458,7 @@ impl ProbeApp {
                 probe_opencollection::CreatedRequestProtocol::Http
             },
             graphql: graphql_update,
-            update: Some(probe_core::RequestUpdate {
-                headers: Some(draft.headers.clone()),
-                query_parameters: Some(draft.query_parameters.clone()),
-                path_parameters: Some(draft.path_parameters.clone()),
-                body: (!graphql).then(|| draft.body.clone()),
-                authentication: Some(draft.authentication.clone()),
-                ..probe_core::RequestUpdate::default()
-            }),
+            update: Some(update),
         };
         let operation_for_task = operation.clone();
         self.loading = true;
@@ -594,7 +587,19 @@ impl ProbeApp {
             self.persistence.fail(key);
             return;
         };
-        let (_revision, snapshot, update) = self.persistence.begin(key, request);
+        let (_revision, snapshot, update) = match self.persistence.begin(key, request) {
+            Ok(save) => save,
+            Err(error) => {
+                self.persistence.fail(key);
+                self.pending_close = None;
+                self.show_toast(
+                    ToastIntent::Error,
+                    format!("Could not save request: {error}"),
+                    cx,
+                );
+                return;
+            }
+        };
         let prepared = match loaded.prepare_request_save(&selector, update) {
             Ok(prepared) => prepared,
             Err(error) => {

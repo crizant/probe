@@ -31,41 +31,195 @@ pub struct HttpRequest {
     pub protocol: RequestProtocol,
 }
 
+/// A change to an optional request field.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum FieldPatch<T> {
+    /// Keep the current value.
+    #[default]
+    Unchanged,
+    /// Replace the current value.
+    Set(T),
+    /// Remove the current value.
+    Clear,
+}
+
+impl<T> FieldPatch<T> {
+    /// Converts a replacement optional value into a set or clear patch.
+    pub fn from_optional(value: Option<T>) -> Self {
+        match value {
+            Some(value) => Self::Set(value),
+            None => Self::Clear,
+        }
+    }
+
+    /// Returns whether this patch leaves the field unchanged.
+    pub const fn is_unchanged(&self) -> bool {
+        matches!(self, Self::Unchanged)
+    }
+
+    /// Consumes a set patch, returning its value if present.
+    pub fn into_set(self) -> Option<T> {
+        match self {
+            Self::Set(value) => Some(value),
+            Self::Unchanged | Self::Clear => None,
+        }
+    }
+
+    fn apply_to(&self, target: &mut Option<T>)
+    where
+        T: Clone,
+    {
+        match self {
+            Self::Unchanged => {}
+            Self::Set(value) => *target = Some(value.clone()),
+            Self::Clear => *target = None,
+        }
+    }
+}
+
 /// A non-interactive partial update to an HTTP request.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RequestUpdate {
-    /// Replacement request name.
+    /// Replacement request name. Removing a name is unsupported and rejected by `between`.
     pub name: Option<String>,
     /// Replacement HTTP method.
-    pub method: Option<String>,
+    pub method: FieldPatch<String>,
     /// Replacement URL.
-    pub url: Option<String>,
+    pub url: FieldPatch<String>,
     /// Replacement headers.
     pub headers: Option<Vec<Header>>,
     /// Replacement query parameters.
     pub query_parameters: Option<Vec<QueryParameter>>,
     /// Replacement path parameters.
     pub path_parameters: Option<Vec<QueryParameter>>,
-    /// Replacement body; inner `None` removes it.
-    pub body: Option<Option<RequestBody>>,
-    /// Replacement authentication; inner `None` removes it.
-    pub authentication: Option<Option<Authentication>>,
+    /// Request body change.
+    pub body: FieldPatch<RequestBody>,
+    /// Authentication change.
+    pub authentication: FieldPatch<Authentication>,
     /// Partial native GraphQL body update.
     pub graphql: Option<GraphqlUpdate>,
 }
 
 impl RequestUpdate {
+    /// Builds the supported field changes from a saved request to its current draft.
+    /// A missing `base` treats the request as new.
+    pub fn between(
+        base: Option<&HttpRequest>,
+        current: &HttpRequest,
+    ) -> Result<Self, RequestDiffError> {
+        if base.is_some_and(|saved| saved.protocol.as_str() != current.protocol.as_str()) {
+            return Err(RequestDiffError::UnsupportedChange("request protocol"));
+        }
+        if base.is_some_and(|saved| saved.settings != current.settings)
+            || base.is_none() && current.settings != RequestSettings::default()
+        {
+            return Err(RequestDiffError::UnsupportedChange("request settings"));
+        }
+        if base.is_some_and(|saved| saved.metadata.sequence != current.metadata.sequence)
+            || base.is_none() && current.metadata.sequence.is_some()
+        {
+            return Err(RequestDiffError::UnsupportedChange("request sequence"));
+        }
+        if base
+            .is_some_and(|saved| saved.metadata.name.is_some() && current.metadata.name.is_none())
+        {
+            return Err(RequestDiffError::UnsupportedChange("request name removal"));
+        }
+        let base_operation = base
+            .map(HttpRequest::selected_graphql)
+            .transpose()?
+            .flatten();
+        let current_operation = current.selected_graphql()?;
+        if base.is_none()
+            && matches!(
+                current.protocol,
+                RequestProtocol::Graphql(Some(GraphqlBody::Variants(_)))
+            )
+        {
+            return Err(RequestDiffError::UnsupportedChange("GraphQL body variants"));
+        }
+        let update = Self {
+            name: (base.and_then(|request| request.metadata.name.as_ref())
+                != current.metadata.name.as_ref())
+            .then(|| current.metadata.name.clone())
+            .flatten(),
+            method: if base.and_then(|request| request.method.as_ref()) != current.method.as_ref() {
+                FieldPatch::from_optional(current.method.clone())
+            } else {
+                FieldPatch::Unchanged
+            },
+            url: if base.and_then(|request| request.url.as_ref()) != current.url.as_ref() {
+                FieldPatch::from_optional(current.url.clone())
+            } else {
+                FieldPatch::Unchanged
+            },
+            headers: (base.map(|request| &request.headers) != Some(&current.headers))
+                .then(|| current.headers.clone()),
+            query_parameters: (base.map(|request| &request.query_parameters)
+                != Some(&current.query_parameters))
+            .then(|| current.query_parameters.clone()),
+            path_parameters: (base.map(|request| &request.path_parameters)
+                != Some(&current.path_parameters))
+            .then(|| current.path_parameters.clone()),
+            body: if base.and_then(|request| request.body.as_ref()) != current.body.as_ref() {
+                FieldPatch::from_optional(current.body.clone())
+            } else {
+                FieldPatch::Unchanged
+            },
+            authentication: if base.and_then(|request| request.authentication.as_ref())
+                != current.authentication.as_ref()
+            {
+                FieldPatch::from_optional(current.authentication.clone())
+            } else {
+                FieldPatch::Unchanged
+            },
+            graphql: match (base.map(|request| &request.protocol), &current.protocol) {
+                (None | Some(RequestProtocol::Graphql(_)), RequestProtocol::Graphql(_))
+                    if base_operation != current_operation =>
+                {
+                    Some(GraphqlUpdate {
+                        query: current_operation
+                            .map(|operation| FieldPatch::from_optional(operation.query.clone()))
+                            .unwrap_or(FieldPatch::Clear),
+                        variables: current_operation
+                            .map(|operation| FieldPatch::from_optional(operation.variables.clone()))
+                            .unwrap_or_default(),
+                        operation_name: current_operation
+                            .map(|operation| {
+                                FieldPatch::from_optional(operation.operation_name.clone())
+                            })
+                            .unwrap_or_default(),
+                        extensions: current_operation
+                            .map(|operation| {
+                                FieldPatch::from_optional(operation.extensions.clone())
+                            })
+                            .unwrap_or_default(),
+                    })
+                }
+                _ => None,
+            },
+        };
+        if let Some(base) = base {
+            let mut reconstructed = base.clone();
+            update.apply(&mut reconstructed)?;
+            if reconstructed != *current {
+                return Err(RequestDiffError::UnsupportedChange("GraphQL body variants"));
+            }
+        }
+        Ok(update)
+    }
+
     /// Returns whether every field is unchanged.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.name.is_none()
-            && self.method.is_none()
-            && self.url.is_none()
+            && self.method.is_unchanged()
+            && self.url.is_unchanged()
             && self.headers.is_none()
             && self.query_parameters.is_none()
             && self.path_parameters.is_none()
-            && self.body.is_none()
-            && self.authentication.is_none()
+            && self.body.is_unchanged()
+            && self.authentication.is_unchanged()
             && self.graphql.as_ref().is_none_or(GraphqlUpdate::is_empty)
     }
 
@@ -74,12 +228,8 @@ impl RequestUpdate {
         if let Some(name) = &self.name {
             request.metadata.name = Some(name.clone());
         }
-        if let Some(method) = &self.method {
-            request.method = Some(method.clone());
-        }
-        if let Some(url) = &self.url {
-            request.url = Some(url.clone());
-        }
+        self.method.apply_to(&mut request.method);
+        self.url.apply_to(&mut request.url);
         if let Some(headers) = &self.headers {
             request.headers.clone_from(headers);
         }
@@ -89,12 +239,8 @@ impl RequestUpdate {
         if let Some(parameters) = &self.path_parameters {
             request.path_parameters.clone_from(parameters);
         }
-        if let Some(body) = &self.body {
-            request.body.clone_from(body);
-        }
-        if let Some(authentication) = &self.authentication {
-            request.authentication.clone_from(authentication);
-        }
+        self.body.apply_to(&mut request.body);
+        self.authentication.apply_to(&mut request.authentication);
         if let Some(graphql) = self.graphql.as_ref().filter(|update| !update.is_empty()) {
             request.apply_graphql_update(graphql)?;
         }
@@ -249,39 +395,31 @@ pub struct GraphqlBodyVariant {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GraphqlUpdate {
     /// Replacement query.
-    pub query: Option<String>,
-    /// Replacement variables; inner `None` clears them.
-    pub variables: Option<Option<Map<String, Value>>>,
-    /// Replacement operation name; inner `None` clears it.
-    pub operation_name: Option<Option<String>>,
-    /// Replacement extensions; inner `None` clears them.
-    pub extensions: Option<Option<Map<String, Value>>>,
+    pub query: FieldPatch<String>,
+    /// Variables change.
+    pub variables: FieldPatch<Map<String, Value>>,
+    /// Operation name change.
+    pub operation_name: FieldPatch<String>,
+    /// Extensions change.
+    pub extensions: FieldPatch<Map<String, Value>>,
 }
 
 impl GraphqlUpdate {
     /// Returns whether every GraphQL field is unchanged.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.query.is_none()
-            && self.variables.is_none()
-            && self.operation_name.is_none()
-            && self.extensions.is_none()
+        self.query.is_unchanged()
+            && self.variables.is_unchanged()
+            && self.operation_name.is_unchanged()
+            && self.extensions.is_unchanged()
     }
 
     /// Applies this update to one operation.
     pub fn apply(&self, operation: &mut GraphqlOperation) {
-        if let Some(query) = &self.query {
-            operation.query = Some(query.clone());
-        }
-        if let Some(variables) = &self.variables {
-            operation.variables.clone_from(variables);
-        }
-        if let Some(operation_name) = &self.operation_name {
-            operation.operation_name.clone_from(operation_name);
-        }
-        if let Some(extensions) = &self.extensions {
-            operation.extensions.clone_from(extensions);
-        }
+        self.query.apply_to(&mut operation.query);
+        self.variables.apply_to(&mut operation.variables);
+        self.operation_name.apply_to(&mut operation.operation_name);
+        self.extensions.apply_to(&mut operation.extensions);
     }
 }
 
@@ -304,6 +442,32 @@ impl std::fmt::Display for GraphqlRequestError {
 }
 
 impl std::error::Error for GraphqlRequestError {}
+
+/// A request edit that cannot be represented by a persistence update.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RequestDiffError {
+    /// The GraphQL body or selection is invalid.
+    Graphql(GraphqlRequestError),
+    /// A changed field has no supported persistence operation.
+    UnsupportedChange(&'static str),
+}
+
+impl From<GraphqlRequestError> for RequestDiffError {
+    fn from(error: GraphqlRequestError) -> Self {
+        Self::Graphql(error)
+    }
+}
+
+impl std::fmt::Display for RequestDiffError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Graphql(error) => error.fmt(formatter),
+            Self::UnsupportedChange(field) => write!(formatter, "cannot save changed {field}"),
+        }
+    }
+}
+
+impl std::error::Error for RequestDiffError {}
 
 impl GraphqlRequest {
     /// Converts this native request into Probe's common in-memory request representation.
@@ -335,12 +499,14 @@ impl HttpRequest {
     }
 
     /// Finds the single selected operation in a GraphQL variant list.
-    fn selected_graphql_variant<'a, T>(
-        variants: &'a [GraphqlBodyVariant],
-        extractor: impl Fn(&'a GraphqlBodyVariant) -> T,
-    ) -> Result<T, GraphqlRequestError> {
-        let mut selected = variants.iter().filter(|variant| variant.selected);
-        let operation = selected.next().ok_or_else(|| {
+    fn selected_graphql_variant_index(
+        variants: &[GraphqlBodyVariant],
+    ) -> Result<usize, GraphqlRequestError> {
+        let mut selected = variants
+            .iter()
+            .enumerate()
+            .filter(|(_, variant)| variant.selected);
+        let (index, _) = selected.next().ok_or_else(|| {
             GraphqlRequestError::InvalidBodySelection(
                 "GraphQL body variants have no selected value".to_owned(),
             )
@@ -350,26 +516,7 @@ impl HttpRequest {
                 "GraphQL body variants have multiple selected values".to_owned(),
             ));
         }
-        Ok(extractor(operation))
-    }
-
-    /// Finds the single selected operation in a mutable GraphQL variant list.
-    fn selected_graphql_variant_mut<'a, T>(
-        variants: &'a mut [GraphqlBodyVariant],
-        extractor: impl Fn(&'a mut GraphqlBodyVariant) -> T,
-    ) -> Result<T, GraphqlRequestError> {
-        let mut selected = variants.iter_mut().filter(|variant| variant.selected);
-        let operation = selected.next().ok_or_else(|| {
-            GraphqlRequestError::InvalidBodySelection(
-                "GraphQL body variants have no selected value".to_owned(),
-            )
-        })?;
-        if selected.next().is_some() {
-            return Err(GraphqlRequestError::InvalidBodySelection(
-                "GraphQL body variants have multiple selected values".to_owned(),
-            ));
-        }
-        Ok(extractor(operation))
+        Ok(index)
     }
 
     /// Returns the selected native GraphQL operation.
@@ -377,9 +524,8 @@ impl HttpRequest {
         match self.graphql() {
             None => Ok(None),
             Some(GraphqlBody::Single(operation)) => Ok(Some(operation)),
-            Some(GraphqlBody::Variants(variants)) => {
-                Self::selected_graphql_variant(variants, |variant| &variant.body).map(Some)
-            }
+            Some(GraphqlBody::Variants(variants)) => Self::selected_graphql_variant_index(variants)
+                .map(|index| Some(&variants[index].body)),
         }
     }
 
@@ -391,59 +537,60 @@ impl HttpRequest {
         let RequestProtocol::Graphql(body) = &mut self.protocol else {
             return Err(GraphqlRequestError::NotGraphql);
         };
-        if body.is_none() {
-            *body = Some(GraphqlBody::Single(GraphqlOperation::default()));
-        }
-        let operation = match body.as_mut().expect("GraphQL body was initialized") {
-            GraphqlBody::Single(operation) => operation,
-            GraphqlBody::Variants(variants) => {
-                Self::selected_graphql_variant_mut(variants, |variant| &mut variant.body)?
-            }
-        };
+        let operation =
+            match body.get_or_insert_with(|| GraphqlBody::Single(GraphqlOperation::default())) {
+                GraphqlBody::Single(operation) => operation,
+                GraphqlBody::Variants(variants) => {
+                    let index = Self::selected_graphql_variant_index(variants)?;
+                    &mut variants[index].body
+                }
+            };
         update.apply(operation);
         Ok(())
     }
 
-    /// Builds the GraphQL-over-HTTP request consumed by Probe's HTTP engine.
-    pub fn prepare_http(&self) -> Result<Self, GraphqlRequestError> {
-        if matches!(self.protocol, RequestProtocol::Http) {
-            return Ok(self.clone());
-        }
-        let mut request = self.clone();
-        request.protocol = RequestProtocol::Http;
-        let operation = self.selected_graphql()?.cloned().unwrap_or_default();
+    /// Converts an owned request into the HTTP request consumed by Probe's engine.
+    pub fn into_http(mut self) -> Result<Self, GraphqlRequestError> {
+        let operation = match std::mem::replace(&mut self.protocol, RequestProtocol::Http) {
+            RequestProtocol::Http => return Ok(self),
+            RequestProtocol::Graphql(None) => GraphqlOperation::default(),
+            RequestProtocol::Graphql(Some(GraphqlBody::Single(operation))) => operation,
+            RequestProtocol::Graphql(Some(GraphqlBody::Variants(mut variants))) => {
+                let index = Self::selected_graphql_variant_index(&variants)?;
+                variants.swap_remove(index).body
+            }
+        };
         if self
             .method
             .as_deref()
             .is_some_and(|method| method.eq_ignore_ascii_case("GET"))
         {
-            request
-                .query_parameters
+            self.query_parameters
                 .retain(|parameter| !is_graphql_http_parameter(&parameter.name));
             if let Some(query) = operation.query {
-                request.query_parameters.push(QueryParameter {
+                self.query_parameters.push(QueryParameter {
                     name: "query".to_owned(),
                     value: query,
                     disabled: false,
                 });
             }
-            append_graphql_parameter(&mut request, "variables", operation.variables);
+            append_graphql_parameter(&mut self, "variables", operation.variables);
             if let Some(operation_name) = operation.operation_name {
-                request.query_parameters.push(QueryParameter {
+                self.query_parameters.push(QueryParameter {
                     name: "operationName".to_owned(),
                     value: operation_name,
                     disabled: false,
                 });
             }
-            append_graphql_parameter(&mut request, "extensions", operation.extensions);
+            append_graphql_parameter(&mut self, "extensions", operation.extensions);
         } else {
             let envelope = operation.into_json_envelope();
-            request.body = Some(RequestBody::Single(Body::Raw(RawBody {
+            self.body = Some(RequestBody::Single(Body::Raw(RawBody {
                 kind: RawBodyKind::Json,
                 data: Value::Object(envelope).to_string(),
             })));
         }
-        Ok(request)
+        Ok(self)
     }
 }
 

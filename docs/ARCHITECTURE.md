@@ -236,6 +236,9 @@ Desktop Send resolves the selected environment and executes the same probe-http
 engine used by the CLI, away from the UI thread. Cancellation reaches that engine;
 generation checks prevent stale completions from replacing newer results. Response
 and execution state remain presentation-only.
+The desktop retains one Tokio execution runtime and HTTP engine per window, so
+concurrent sends can reuse HTTP connections while progress and completion return
+to GPUI through channels.
 
 The response viewer uses virtualized, read-only editing and performs expensive
 formatting or highlighting on a background executor. The request tree similarly
@@ -262,8 +265,10 @@ Closing a collection clears active session state without deleting collection fil
 ### Runtime Identity and Persistence Locators
 
 OpenCollection does not define durable request or folder IDs. Each loaded workspace
-therefore assigns generational RequestKey and FolderKey values for fast, stale-safe
-in-memory lookup. These keys are never serialized and are rebuilt on reload.
+therefore assigns session-only RequestKey and FolderKey values for fast, stale-safe
+in-memory lookup. RequestKey includes a workspace generation as well as the arena
+slot generation, so a key from an earlier load cannot resolve in a new workspace.
+These keys are never serialized and are rebuilt on reload.
 
 Repository adapters separately own persistence locators: workspace-relative paths for
 unbundled collections and structural item paths for bundled collections. CLI selectors
@@ -364,8 +369,10 @@ refresh the retained baseline. Symlinked workspaces update their canonical targe
 without replacing the symlink.
 
 Desktop dirty state compares the live request with its last loaded or successfully
-saved snapshot. Save completion acknowledges the captured revision, so edits made
-while I/O is running remain dirty. Failures and external-change conflicts retain the
+saved snapshot. `probe-core` builds the request patch between those snapshots;
+the desktop owns save queue and revision tracking. Save completion acknowledges the
+captured revision, so edits made while I/O is running remain dirty. Failures and
+external-change conflicts retain the
 in-memory draft. Closing dirty work requires an explicit save, discard, or cancel
 decision.
 

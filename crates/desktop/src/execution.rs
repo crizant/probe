@@ -15,7 +15,7 @@ use probe_http::{
     ResponseCache,
 };
 use sha2::{Digest, Sha256};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SavedResponseBody {
@@ -273,7 +273,75 @@ pub(crate) fn body_file_path_for_storage(selected: &Path, workspace_path: Option
     selected.display().to_string()
 }
 
-pub(crate) fn execute_http_request<P>(
+pub(crate) struct ExecutionService {
+    runtime: Option<tokio::runtime::Runtime>,
+    engine: HttpEngine,
+}
+
+type ExecutionResult = Result<(HttpResponse, Option<SavedResponseBody>), HttpError>;
+type ExecutionReceivers = (
+    oneshot::Receiver<ExecutionResult>,
+    mpsc::UnboundedReceiver<HttpProgress>,
+);
+
+impl Drop for ExecutionService {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+impl ExecutionService {
+    pub(crate) fn new() -> Result<Self, HttpError> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|error| HttpError::ClientConfiguration(error.to_string()))?;
+        let engine = {
+            let _guard = runtime.enter();
+            HttpEngine::new()?
+        };
+        Ok(Self {
+            runtime: Some(runtime),
+            engine,
+        })
+    }
+
+    pub(crate) fn execute(
+        &self,
+        request: HttpRequest,
+        options: ExecutionOptions,
+        output: Option<PathBuf>,
+        cancellation: oneshot::Receiver<()>,
+    ) -> ExecutionReceivers {
+        let (result_sender, result_receiver) = oneshot::channel();
+        let (progress_sender, progress_receiver) = mpsc::unbounded_channel();
+        let engine = self.engine.clone();
+        self.runtime
+            .as_ref()
+            .expect("execution runtime is active")
+            .spawn(async move {
+                let result = execute_http_request(
+                    &engine,
+                    request,
+                    options,
+                    output,
+                    cancellation,
+                    move |progress| {
+                        let _ = progress_sender.send(progress);
+                    },
+                )
+                .await;
+                let _ = result_sender.send(result);
+            });
+        (result_receiver, progress_receiver)
+    }
+}
+
+pub(crate) async fn execute_http_request<P>(
+    engine: &HttpEngine,
     request: HttpRequest,
     options: ExecutionOptions,
     output: Option<PathBuf>,
@@ -284,44 +352,37 @@ where
     P: FnMut(HttpProgress) + Send,
 {
     let request = request
-        .prepare_http()
+        .into_http()
         .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| HttpError::ClientConfiguration(error.to_string()))?;
-    runtime.block_on(async move {
-        let engine = HttpEngine::new()?;
-        let cancellation = async move {
-            let _ = cancellation.await;
-        };
-        match output {
-            Some(output) => {
-                let streamed = engine
-                    .execute_cancellable_to_file_with_progress(
-                        &request,
-                        &options,
-                        &output,
-                        cancellation,
-                        progress,
-                    )
-                    .await?;
-                Ok((
-                    streamed.response,
-                    Some(SavedResponseBody {
-                        path: output,
-                        sha256: streamed.body_sha256,
-                    }),
-                ))
-            }
-            None => {
-                let response = engine
-                    .execute_cancellable_with_progress(&request, &options, cancellation, progress)
-                    .await?;
-                Ok((response, None))
-            }
+    let cancellation = async move {
+        let _ = cancellation.await;
+    };
+    match output {
+        Some(output) => {
+            let streamed = engine
+                .execute_cancellable_to_file_with_progress(
+                    &request,
+                    &options,
+                    &output,
+                    cancellation,
+                    progress,
+                )
+                .await?;
+            Ok((
+                streamed.response,
+                Some(SavedResponseBody {
+                    path: output,
+                    sha256: streamed.body_sha256,
+                }),
+            ))
         }
-    })
+        None => {
+            let response = engine
+                .execute_cancellable_with_progress(&request, &options, cancellation, progress)
+                .await?;
+            Ok((response, None))
+        }
+    }
 }
 
 pub(crate) fn save_response_body(
@@ -585,8 +646,8 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::{
-        ExecutionState, ResponseState, SavedResponseBody, body_file_path_for_storage,
-        execute_http_request, format_duration, format_size, format_transfer_progress,
+        ExecutionService, ExecutionState, ResponseState, SavedResponseBody,
+        body_file_path_for_storage, format_duration, format_size, format_transfer_progress,
         save_response_body, suggested_request_filename, suggested_response_filename,
     };
 
@@ -745,6 +806,57 @@ mod tests {
     }
 
     #[test]
+    fn swapped_requests_keep_their_own_in_flight_executions() {
+        let (old_a, old_b) = two_keys();
+        let (new_b, new_a) = two_keys();
+        assert_eq!(
+            (old_a.slot(), old_a.generation()),
+            (new_b.slot(), new_b.generation())
+        );
+        assert_ne!(old_a, new_b);
+        let mut state = ExecutionState::default();
+        let (sender_a, mut receiver_a) = oneshot::channel();
+        let (sender_b, mut receiver_b) = oneshot::channel();
+        let generation_a = state.begin(old_a, sender_a);
+        let generation_b = state.begin(old_b, sender_b);
+
+        state.remap_requests(&BTreeMap::from([(old_a, new_a), (old_b, new_b)]));
+        assert!(receiver_a.try_recv().is_err());
+        assert!(receiver_b.try_recv().is_err());
+        state.finish(old_a, generation_a, Ok(response(201)), None);
+        state.finish(old_b, generation_b, Ok(response(202)), None);
+
+        assert!(
+            matches!(state.response(new_a), Some(ResponseState::Complete { response, .. }) if response.status == 201)
+        );
+        assert!(
+            matches!(state.response(new_b), Some(ResponseState::Complete { response, .. }) if response.status == 202)
+        );
+        assert!(state.response(old_a).is_none());
+        assert!(state.response(old_b).is_none());
+    }
+
+    #[test]
+    fn removed_request_cannot_attach_to_a_reused_arena_position() {
+        let (removed, retained) = two_keys();
+        let (replacement, new_retained) = two_keys();
+        let mut state = ExecutionState::default();
+        let (removed_sender, mut removed_receiver) = oneshot::channel();
+        let (retained_sender, _) = oneshot::channel();
+        let removed_generation = state.begin(removed, removed_sender);
+        let retained_generation = state.begin(retained, retained_sender);
+
+        state.remap_requests(&BTreeMap::from([(retained, new_retained)]));
+        assert!(removed_receiver.try_recv().is_ok());
+        state.finish(removed, removed_generation, Ok(response(201)), None);
+        assert!(state.response(replacement).is_none());
+        state.finish(retained, retained_generation, Ok(response(202)), None);
+        assert!(
+            matches!(state.response(new_retained), Some(ResponseState::Complete { response, .. }) if response.status == 202)
+        );
+    }
+
+    #[test]
     fn metadata_units_are_readable() {
         assert_eq!(format_duration(Duration::from_millis(83)), "83 ms");
         assert_eq!(format_duration(Duration::from_millis(1250)), "1.25 s");
@@ -840,7 +952,8 @@ mod tests {
     fn desktop_adapter_forwards_cancellation_to_the_shared_http_engine() {
         let (cancel, cancellation) = oneshot::channel();
         cancel.send(()).expect("cancellation should be delivered");
-        let result = execute_http_request(
+        let service = ExecutionService::new().expect("execution service should start");
+        let (result, _) = service.execute(
             HttpRequest {
                 method: Some("GET".to_owned()),
                 url: Some("http://127.0.0.1:1/phase-12".to_owned()),
@@ -849,8 +962,13 @@ mod tests {
             ExecutionOptions::default(),
             None,
             cancellation,
-            |_| {},
         );
+        let result = service
+            .runtime
+            .as_ref()
+            .unwrap()
+            .block_on(result)
+            .expect("execution should complete");
         assert_eq!(result, Err(HttpError::Cancelled));
     }
 

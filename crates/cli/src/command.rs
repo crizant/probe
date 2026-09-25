@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use probe_core::{GraphqlUpdate, RequestUpdate, StatusExpectation};
+use probe_core::{FieldPatch, GraphqlUpdate, RequestUpdate, StatusExpectation};
 use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
 use serde_json::{Map, Value};
 
@@ -140,8 +140,8 @@ impl Options {
         option_bit(self.environment.is_some(), ENVIRONMENT)
             | option_bit(self.output.is_some(), OUTPUT)
             | option_bit(self.update.name.is_some(), NAME)
-            | option_bit(self.update.method.is_some(), METHOD)
-            | option_bit(self.update.url.is_some(), URL)
+            | option_bit(!self.update.method.is_unchanged(), METHOD)
+            | option_bit(!self.update.url.is_unchanged(), URL)
             | option_bit(self.parent.is_some(), PARENT)
             | option_bit(self.index.is_some(), INDEX)
             | option_bit(self.value.is_some(), VALUE)
@@ -311,8 +311,8 @@ pub(crate) fn parse(mut args: Vec<String>) -> Result<Command, CliError> {
                     parent,
                     index,
                     name,
-                    method: update.method,
-                    url: update.url,
+                    method: update.method.into_set(),
+                    url: update.url.into_set(),
                     protocol,
                     graphql: update.graphql,
                     update: None,
@@ -485,8 +485,12 @@ fn extract_options(args: &mut Vec<String>) -> Result<Options, CliError> {
         output: extract_string_option(args, "--output")?.map(PathBuf::from),
         update: RequestUpdate {
             name: extract_string_option(args, "--name")?,
-            method: extract_string_option(args, "--method")?,
-            url: extract_string_option(args, "--url")?,
+            method: extract_string_option(args, "--method")?
+                .map(FieldPatch::Set)
+                .unwrap_or_default(),
+            url: extract_string_option(args, "--url")?
+                .map(FieldPatch::Set)
+                .unwrap_or_default(),
             ..RequestUpdate::default()
         },
         parent: extract_string_option(args, "--parent")?,
@@ -538,22 +542,32 @@ fn graphql_update(mut options: Options) -> Result<RequestUpdate, CliError> {
         return Ok(options.update);
     }
     let graphql = GraphqlUpdate {
-        query: options.graphql_query.take(),
+        query: options
+            .graphql_query
+            .take()
+            .map(FieldPatch::Set)
+            .unwrap_or_default(),
         variables: options
             .graphql_variables
             .as_deref()
             .map(|source| parse_graphql_object(source, "variables"))
-            .transpose()?,
+            .transpose()?
+            .map(FieldPatch::from_optional)
+            .unwrap_or_default(),
         operation_name: options
             .graphql_operation_name
             .as_deref()
             .map(|source| parse_graphql_string(source, "operation name"))
-            .transpose()?,
+            .transpose()?
+            .map(FieldPatch::from_optional)
+            .unwrap_or_default(),
         extensions: options
             .graphql_extensions
             .as_deref()
             .map(|source| parse_graphql_object(source, "extensions"))
-            .transpose()?,
+            .transpose()?
+            .map(FieldPatch::from_optional)
+            .unwrap_or_default(),
     };
     options.update.graphql = Some(graphql);
     Ok(options.update)

@@ -3,7 +3,18 @@ use crate::{
     arena::{Arena, ArenaKey},
 };
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{error::Error, fmt};
+
+static NEXT_WORKSPACE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_workspace_generation() -> u64 {
+    NEXT_WORKSPACE_GENERATION
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+            generation.checked_add(1)
+        })
+        .expect("workspace generation exhausted")
+}
 
 /// Session-only generational key for an HTTP request in a loaded workspace.
 ///
@@ -11,11 +22,26 @@ use std::{error::Error, fmt};
 /// deleted request's slot is reused, its replacement receives a different generation.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestKey {
+    workspace_generation: u64,
     slot: usize,
     generation: u64,
 }
 
 impl RequestKey {
+    fn in_workspace(workspace_generation: u64, key: ArenaKey) -> Self {
+        Self {
+            workspace_generation,
+            slot: key.slot,
+            generation: key.generation,
+        }
+    }
+
+    /// Returns the generation of the loaded workspace that issued this key.
+    #[must_use]
+    pub const fn workspace_generation(self) -> u64 {
+        self.workspace_generation
+    }
+
     /// Returns the workspace-local storage slot.
     #[must_use]
     pub const fn slot(self) -> usize {
@@ -32,11 +58,26 @@ impl RequestKey {
 /// Session-only generational key for a folder in a loaded workspace.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FolderKey {
+    workspace_generation: u64,
     slot: usize,
     generation: u64,
 }
 
 impl FolderKey {
+    fn in_workspace(workspace_generation: u64, key: ArenaKey) -> Self {
+        Self {
+            workspace_generation,
+            slot: key.slot,
+            generation: key.generation,
+        }
+    }
+
+    /// Returns the generation of the loaded workspace that issued this key.
+    #[must_use]
+    pub const fn workspace_generation(self) -> u64 {
+        self.workspace_generation
+    }
+
     /// Returns the workspace-local storage slot.
     #[must_use]
     pub const fn slot(self) -> usize {
@@ -76,6 +117,7 @@ pub struct WorkspaceFolder {
 /// key requires no filesystem access, parsing, database query, or network operation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workspace {
+    workspace_generation: u64,
     metadata: CollectionMetadata,
     root_items: Vec<WorkspaceItemRef>,
     requests: Arena<HttpRequest>,
@@ -123,11 +165,13 @@ impl Workspace {
     /// Builds an indexed workspace from a domain collection.
     #[must_use]
     pub fn from_collection(collection: Collection) -> Self {
+        let workspace_generation = next_workspace_generation();
         let mut requests = Arena::default();
         let mut folders = Arena::default();
         let mut request_ancestors = BTreeMap::new();
         let root_items = index_items(
             collection.items,
+            workspace_generation,
             &mut requests,
             &mut folders,
             &mut request_ancestors,
@@ -135,6 +179,7 @@ impl Workspace {
         );
 
         Self {
+            workspace_generation,
             metadata: collection.metadata,
             root_items,
             requests,
@@ -159,11 +204,17 @@ impl Workspace {
     /// Looks up a request in constant time, rejecting stale generations.
     #[must_use]
     pub fn request(&self, key: RequestKey) -> Option<&HttpRequest> {
+        if key.workspace_generation != self.workspace_generation {
+            return None;
+        }
         self.requests.get(key.into())
     }
 
     /// Mutably looks up a request in constant time, rejecting stale generations.
     pub fn request_mut(&mut self, key: RequestKey) -> Option<&mut HttpRequest> {
+        if key.workspace_generation != self.workspace_generation {
+            return None;
+        }
         self.requests.get_mut(key.into())
     }
 
@@ -175,7 +226,8 @@ impl Workspace {
 
     /// Adds a request at the workspace root and returns its new runtime key.
     pub fn add_root_request(&mut self, request: HttpRequest) -> RequestKey {
-        let key = RequestKey::from(self.requests.insert(request));
+        let key =
+            RequestKey::in_workspace(self.workspace_generation, self.requests.insert(request));
         self.request_ancestors.insert(key, Vec::new());
         self.root_items.push(WorkspaceItemRef::Request(key));
         key
@@ -184,7 +236,7 @@ impl Workspace {
     /// Retains an editor draft without adding it to the collection hierarchy.
     /// The returned key is valid for the lifetime of this workspace only.
     pub fn add_detached_request(&mut self, request: HttpRequest) -> RequestKey {
-        RequestKey::from(self.requests.insert(request))
+        RequestKey::in_workspace(self.workspace_generation, self.requests.insert(request))
     }
 
     /// Inserts a request at an exact position under a parent.
@@ -195,7 +247,8 @@ impl Workspace {
         request: HttpRequest,
     ) -> Result<RequestKey, WorkspaceEditError> {
         self.validate_insertion(parent, index)?;
-        let key = RequestKey::from(self.requests.insert(request));
+        let key =
+            RequestKey::in_workspace(self.workspace_generation, self.requests.insert(request));
         self.insert_reference(parent, index, WorkspaceItemRef::Request(key))?;
         self.rebuild_request_ancestors();
         Ok(key)
@@ -209,12 +262,13 @@ impl Workspace {
         metadata: ItemMetadata,
     ) -> Result<FolderKey, WorkspaceEditError> {
         self.validate_insertion(parent, index)?;
+        let workspace_generation = self.workspace_generation;
         let arena_key = self.folders.insert_with_key(|arena_key| WorkspaceFolder {
-            key: FolderKey::from(arena_key),
+            key: FolderKey::in_workspace(workspace_generation, arena_key),
             metadata,
             children: Vec::new(),
         });
-        let key = FolderKey::from(arena_key);
+        let key = FolderKey::in_workspace(workspace_generation, arena_key);
         self.insert_reference(parent, index, WorkspaceItemRef::Folder(key))?;
         Ok(key)
     }
@@ -238,6 +292,9 @@ impl Workspace {
         key: FolderKey,
         name: String,
     ) -> Result<(), WorkspaceEditError> {
+        if self.folder(key).is_none() {
+            return Err(WorkspaceEditError::ItemNotFound);
+        }
         self.folders
             .get_mut(key.into())
             .ok_or(WorkspaceEditError::ItemNotFound)?
@@ -302,6 +359,9 @@ impl Workspace {
     /// A later request may reuse the storage slot, but receives a new generation so
     /// the removed key can never resolve to the replacement.
     pub fn remove_request(&mut self, key: RequestKey) -> Option<HttpRequest> {
+        if key.workspace_generation != self.workspace_generation {
+            return None;
+        }
         let request = self.requests.remove(key.into())?;
         self.request_ancestors.remove(&key);
         self.root_items
@@ -317,6 +377,9 @@ impl Workspace {
     /// Looks up a folder in constant time, rejecting stale generations.
     #[must_use]
     pub fn folder(&self, key: FolderKey) -> Option<&WorkspaceFolder> {
+        if key.workspace_generation != self.workspace_generation {
+            return None;
+        }
         self.folders.get(key.into())
     }
 
@@ -421,11 +484,15 @@ impl Workspace {
     ) -> Result<&mut Vec<WorkspaceItemRef>, WorkspaceEditError> {
         match parent {
             WorkspaceParent::Root => Ok(&mut self.root_items),
-            WorkspaceParent::Folder(key) => self
-                .folders
-                .get_mut(key.into())
-                .map(|folder| &mut folder.children)
-                .ok_or(WorkspaceEditError::DestinationNotFound),
+            WorkspaceParent::Folder(key) => {
+                if key.workspace_generation != self.workspace_generation {
+                    return Err(WorkspaceEditError::DestinationNotFound);
+                }
+                self.folders
+                    .get_mut(key.into())
+                    .map(|folder| &mut folder.children)
+                    .ok_or(WorkspaceEditError::DestinationNotFound)
+            }
         }
     }
 
@@ -573,26 +640,8 @@ fn collect_request_ancestors(
     }
 }
 
-impl From<ArenaKey> for RequestKey {
-    fn from(key: ArenaKey) -> Self {
-        Self {
-            slot: key.slot,
-            generation: key.generation,
-        }
-    }
-}
-
 impl From<RequestKey> for ArenaKey {
     fn from(key: RequestKey) -> Self {
-        Self {
-            slot: key.slot,
-            generation: key.generation,
-        }
-    }
-}
-
-impl From<ArenaKey> for FolderKey {
-    fn from(key: ArenaKey) -> Self {
         Self {
             slot: key.slot,
             generation: key.generation,
@@ -611,6 +660,7 @@ impl From<FolderKey> for ArenaKey {
 
 fn index_items(
     items: Vec<CollectionItem>,
+    workspace_generation: u64,
     requests: &mut Arena<HttpRequest>,
     folders: &mut Arena<WorkspaceFolder>,
     request_ancestors: &mut BTreeMap<RequestKey, Vec<FolderKey>>,
@@ -618,12 +668,22 @@ fn index_items(
 ) -> Vec<WorkspaceItemRef> {
     items
         .into_iter()
-        .map(|item| index_item(item, requests, folders, request_ancestors, ancestors))
+        .map(|item| {
+            index_item(
+                item,
+                workspace_generation,
+                requests,
+                folders,
+                request_ancestors,
+                ancestors,
+            )
+        })
         .collect()
 }
 
 fn index_item(
     item: CollectionItem,
+    workspace_generation: u64,
     requests: &mut Arena<HttpRequest>,
     folders: &mut Arena<WorkspaceFolder>,
     request_ancestors: &mut BTreeMap<RequestKey, Vec<FolderKey>>,
@@ -631,26 +691,30 @@ fn index_item(
 ) -> WorkspaceItemRef {
     match item {
         CollectionItem::HttpRequest(request) => {
-            let key = RequestKey::from(requests.insert(request));
+            let key = RequestKey::in_workspace(workspace_generation, requests.insert(request));
             request_ancestors.insert(key, ancestors.to_vec());
             WorkspaceItemRef::Request(key)
         }
         CollectionItem::GraphqlRequest(request) => {
-            let key = RequestKey::from(requests.insert(request.into_request()));
+            let key = RequestKey::in_workspace(
+                workspace_generation,
+                requests.insert(request.into_request()),
+            );
             request_ancestors.insert(key, ancestors.to_vec());
             WorkspaceItemRef::Request(key)
         }
         CollectionItem::Folder(folder) => {
             let arena_key = folders.insert_with_key(|arena_key| WorkspaceFolder {
-                key: FolderKey::from(arena_key),
+                key: FolderKey::in_workspace(workspace_generation, arena_key),
                 metadata: folder.metadata,
                 children: Vec::new(),
             });
-            let key = FolderKey::from(arena_key);
+            let key = FolderKey::in_workspace(workspace_generation, arena_key);
             let mut child_ancestors = ancestors.to_vec();
             child_ancestors.push(key);
             let children = index_items(
                 folder.items,
+                workspace_generation,
                 requests,
                 folders,
                 request_ancestors,
@@ -689,6 +753,35 @@ mod tests {
             unreachable!();
         };
         request
+    }
+
+    #[test]
+    fn folder_keys_do_not_cross_workspace_generations() {
+        let collection = || Collection {
+            items: vec![CollectionItem::Folder(Folder {
+                metadata: ItemMetadata::default(),
+                items: Vec::new(),
+            })],
+            ..Collection::default()
+        };
+        let first = Workspace::from_collection(collection());
+        let mut second = Workspace::from_collection(collection());
+        let WorkspaceItemRef::Folder(key) = first.root_items()[0] else {
+            unreachable!()
+        };
+        assert!(second.folder(key).is_none());
+        assert_eq!(
+            second.rename_folder(key, "wrong".into()),
+            Err(WorkspaceEditError::ItemNotFound)
+        );
+        assert_eq!(
+            second.remove_folder(key),
+            Err(WorkspaceEditError::ItemNotFound)
+        );
+        assert_eq!(
+            second.insert_request(WorkspaceParent::Folder(key), 0, HttpRequest::default()),
+            Err(WorkspaceEditError::DestinationNotFound)
+        );
     }
 
     #[test]
@@ -769,6 +862,42 @@ mod tests {
         assert_eq!(
             workspace.root_items(),
             [WorkspaceItemRef::Request(request_y_key)]
+        );
+    }
+
+    #[test]
+    fn request_keys_are_scoped_to_their_loaded_workspace() {
+        let first = Workspace::from_collection(Collection {
+            items: vec![request("First")],
+            ..Collection::default()
+        });
+        let mut second = Workspace::from_collection(Collection {
+            items: vec![request("Second")],
+            ..Collection::default()
+        });
+        let WorkspaceItemRef::Request(first_key) = first.root_items()[0] else {
+            unreachable!()
+        };
+        let WorkspaceItemRef::Request(second_key) = second.root_items()[0] else {
+            unreachable!()
+        };
+
+        assert_eq!(
+            (first_key.slot(), first_key.generation()),
+            (second_key.slot(), second_key.generation())
+        );
+        assert_ne!(
+            first_key.workspace_generation(),
+            second_key.workspace_generation()
+        );
+        assert!(second.request(first_key).is_none());
+        assert!(second.request_mut(first_key).is_none());
+        assert!(second.remove_request(first_key).is_none());
+        assert_eq!(
+            second
+                .request(second_key)
+                .and_then(|request| request.metadata.name.as_deref()),
+            Some("Second")
         );
     }
 

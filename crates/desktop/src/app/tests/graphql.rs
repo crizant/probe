@@ -1,4 +1,4 @@
-use probe_core::{GraphqlUpdate, RequestProtocol};
+use probe_core::{FieldPatch, GraphqlUpdate, RequestProtocol};
 use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
 
 use super::*;
@@ -25,10 +25,10 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
                     url: Some("https://api.example.com/graphql".to_owned()),
                     protocol: CreatedRequestProtocol::Graphql,
                     graphql: Some(GraphqlUpdate {
-                        query: Some("query { viewer { login } }".to_owned()),
-                        variables: None,
-                        operation_name: None,
-                        extensions: None,
+                        query: FieldPatch::Set("query { viewer { login } }".to_owned()),
+                        variables: FieldPatch::Unchanged,
+                        operation_name: FieldPatch::Unchanged,
+                        extensions: FieldPatch::Unchanged,
                     }),
                     update: None,
                 },
@@ -83,7 +83,7 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
                 .unwrap();
             request
                 .apply_graphql_update(&GraphqlUpdate {
-                    query: Some("query { user(id: 1) { name } }".to_owned()),
+                    query: FieldPatch::Set("query { user(id: 1) { name } }".to_owned()),
                     ..GraphqlUpdate::default()
                 })
                 .unwrap();
@@ -151,14 +151,14 @@ fn graphql_variables_extensions_and_operation_name_persist(cx: &mut TestAppConte
                     url: Some("https://api.example.com/graphql".to_owned()),
                     protocol: CreatedRequestProtocol::Graphql,
                     graphql: Some(GraphqlUpdate {
-                        query: Some(
+                        query: FieldPatch::Set(
                             "query GetUser($id: Int!) { user(id: $id) { name } }".to_owned(),
                         ),
-                        variables: Some(Some(serde_json::from_str(r#"{"id": 1}"#).unwrap())),
-                        operation_name: Some(Some("GetUser".to_owned())),
-                        extensions: Some(Some(
+                        variables: FieldPatch::Set(serde_json::from_str(r#"{"id": 1}"#).unwrap()),
+                        operation_name: FieldPatch::Set("GetUser".to_owned()),
+                        extensions: FieldPatch::Set(
                             serde_json::from_str(r#"{"persistedQuery":{"version":1}}"#).unwrap(),
-                        )),
+                        ),
                     }),
                     update: None,
                 },
@@ -268,18 +268,6 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
         .unwrap();
     cx.run_until_parked();
 
-    let http_key = window
-        .update(cx, |view, _, _| {
-            view.loaded_workspace
-                .as_ref()
-                .unwrap()
-                .requests()
-                .last()
-                .unwrap()
-                .key()
-        })
-        .unwrap();
-
     window
         .update(cx, |view, window, cx| {
             view.apply_structure(
@@ -300,15 +288,13 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
         .unwrap();
     cx.run_until_parked();
 
-    let graphql_key = window
+    let (http_key, graphql_key) = window
         .update(cx, |view, _, _| {
-            view.loaded_workspace
-                .as_ref()
-                .unwrap()
-                .requests()
-                .last()
-                .unwrap()
-                .key()
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            (
+                requests[requests.len() - 2].key(),
+                requests.last().unwrap().key(),
+            )
         })
         .unwrap();
 
@@ -358,18 +344,6 @@ fn closing_graphql_tab_resets_unavailable_editor_section(cx: &mut TestAppContext
         .unwrap();
     cx.run_until_parked();
 
-    let http_key = window
-        .update(cx, |view, _, _| {
-            view.loaded_workspace
-                .as_ref()
-                .unwrap()
-                .requests()
-                .last()
-                .unwrap()
-                .key()
-        })
-        .unwrap();
-
     window
         .update(cx, |view, window, cx| {
             view.apply_structure(
@@ -390,15 +364,13 @@ fn closing_graphql_tab_resets_unavailable_editor_section(cx: &mut TestAppContext
         .unwrap();
     cx.run_until_parked();
 
-    let graphql_key = window
+    let (http_key, graphql_key) = window
         .update(cx, |view, _, _| {
-            view.loaded_workspace
-                .as_ref()
-                .unwrap()
-                .requests()
-                .last()
-                .unwrap()
-                .key()
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            (
+                requests[requests.len() - 2].key(),
+                requests.last().unwrap().key(),
+            )
         })
         .unwrap();
 

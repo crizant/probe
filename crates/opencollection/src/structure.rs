@@ -8,7 +8,7 @@ use std::{
 use atomic_write_file::AtomicWriteFile;
 use serde_yaml_ng::{Mapping, Value};
 
-use probe_core::{GraphqlUpdate, RequestUpdate};
+use probe_core::{FieldPatch, GraphqlUpdate, RequestUpdate};
 
 use crate::repository::{
     LoadedWorkspace, SaveError, SaveLock, WorkspaceSource, apply_request_update, atomic_write,
@@ -527,25 +527,25 @@ fn request_value(
 
 fn graphql_body_value(update: &GraphqlUpdate) -> Value {
     let mut body = Mapping::new();
-    if let Some(query) = &update.query {
+    if let FieldPatch::Set(query) = &update.query {
         body.insert(
             Value::String("query".to_owned()),
             Value::String(query.clone()),
         );
     }
-    if let Some(Some(variables)) = &update.variables {
+    if let FieldPatch::Set(variables) = &update.variables {
         body.insert(
             Value::String("variables".to_owned()),
             Value::String(serde_json::Value::Object(variables.clone()).to_string()),
         );
     }
-    if let Some(Some(operation_name)) = &update.operation_name {
+    if let FieldPatch::Set(operation_name) = &update.operation_name {
         body.insert(
             Value::String("operationName".to_owned()),
             Value::String(operation_name.clone()),
         );
     }
-    if let Some(Some(extensions)) = &update.extensions {
+    if let FieldPatch::Set(extensions) = &update.extensions {
         body.insert(
             Value::String("extensions".to_owned()),
             Value::String(serde_json::Value::Object(extensions.clone()).to_string()),
