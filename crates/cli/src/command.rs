@@ -604,7 +604,7 @@ fn extract_expectations(args: &mut Vec<String>) -> Result<Vec<StatusExpectation>
     while let Some(position) = args.iter().position(|argument| argument == "--expect") {
         if position + 1 >= args.len()
             || args[position + 1].is_empty()
-            || args[position + 1].starts_with('-')
+            || is_option_name(&args[position + 1])
         {
             return Err(invalid_expectation());
         }
@@ -666,7 +666,7 @@ fn extract_string_option(
         [position] => {
             if *position + 1 >= args.len()
                 || args[*position + 1].is_empty()
-                || args[*position + 1].starts_with('-')
+                || is_option_name(&args[*position + 1])
             {
                 return Err(CliError::invalid_arguments(format!(
                     "{option} requires a non-empty value"
@@ -677,6 +677,39 @@ fn extract_string_option(
             Ok(Some(value))
         }
     }
+}
+
+fn is_option_name(argument: &str) -> bool {
+    matches!(
+        argument,
+        "--environment"
+            | "--output"
+            | "--name"
+            | "--method"
+            | "--url"
+            | "--parent"
+            | "--index"
+            | "--value"
+            | "--extends"
+            | "--workspace"
+            | "--allow-partial"
+            | "--var"
+            | "--strict-variables"
+            | "--graphql-query"
+            | "--graphql-variables"
+            | "--graphql-operation-name"
+            | "--graphql-extensions"
+            | "--type"
+            | "--dry-run"
+            | "--expect"
+            | "--json"
+            | "-q"
+            | "--quiet"
+            | "-h"
+            | "--help"
+            | "-V"
+            | "--version"
+    )
 }
 
 fn extract_index(args: &mut Vec<String>) -> Result<Option<usize>, CliError> {
