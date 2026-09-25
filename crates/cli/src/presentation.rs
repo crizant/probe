@@ -113,9 +113,9 @@ fn human_size(size: usize) -> String {
     if size < 1024 {
         format!("{size} B")
     } else if size < 1024 * 1024 {
-        format!("{:.1} KB", size as f64 / 1024.0)
+        format!("{:.1} KiB", size as f64 / 1024.0)
     } else {
-        format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+        format!("{:.1} MiB", size as f64 / (1024.0 * 1024.0))
     }
 }
 
@@ -384,5 +384,18 @@ fn authentication_value(value: &AuthenticationValue) -> Value {
                 .map(|(name, value)| (name.clone(), authentication_value(value)))
                 .collect(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::human_size;
+
+    #[test]
+    fn human_size_uses_binary_units() {
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1024), "1.0 KiB");
+        assert_eq!(human_size(2048), "2.0 KiB");
+        assert_eq!(human_size(1024 * 1024), "1.0 MiB");
     }
 }

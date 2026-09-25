@@ -337,8 +337,8 @@ Completed responses contain status, reason, final URL, duration, size, determini
 sorted headers, and at most 16 MiB of in-memory body data. Once that bound is crossed, the
 engine keeps the leading 16 MiB as the first presentation page and, when requested by the caller,
 streams the complete body to an automatically managed spool file. Cloned response handles share
-ownership of that file, and
-the final owner removes it. Frontends that need the complete body provide a cache directory;
+ownership of that file. The final owner queues its deletion on a cache worker, which removes it
+under the quota lock. Frontends that need the complete body provide a cache directory;
 callers such as the CLI can drain the remainder without retaining it. The desktop reads subsequent
 16 MiB pages off the UI thread, searches only the resident page, and renders those pages as
 unwrapped Raw text without retaining a duplicate Pretty representation. Pretty is hidden for

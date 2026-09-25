@@ -615,9 +615,9 @@ pub(crate) fn format_duration(duration: Duration) -> String {
 
 pub(crate) fn format_size(size: u64) -> String {
     if size >= 1024 * 1024 {
-        format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+        format!("{:.1} MiB", size as f64 / (1024.0 * 1024.0))
     } else if size >= 1024 {
-        format!("{:.1} KB", size as f64 / 1024.0)
+        format!("{:.1} KiB", size as f64 / 1024.0)
     } else {
         format!("{size} B")
     }
@@ -861,12 +861,15 @@ mod tests {
         assert_eq!(format_duration(Duration::from_millis(83)), "83 ms");
         assert_eq!(format_duration(Duration::from_millis(1250)), "1.25 s");
         assert_eq!(format_size(812), "812 B");
-        assert_eq!(format_size(2048), "2.0 KB");
+        assert_eq!(format_size(1023), "1023 B");
+        assert_eq!(format_size(1024), "1.0 KiB");
+        assert_eq!(format_size(2048), "2.0 KiB");
+        assert_eq!(format_size(1024 * 1024), "1.0 MiB");
         assert_eq!(
             format_transfer_progress(40_265_318, Some(120 * 1024 * 1024)),
-            "38.4 MB of 120.0 MB"
+            "38.4 MiB of 120.0 MiB"
         );
-        assert_eq!(format_transfer_progress(2048, None), "2.0 KB received");
+        assert_eq!(format_transfer_progress(2048, None), "2.0 KiB received");
     }
 
     #[test]

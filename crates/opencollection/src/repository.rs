@@ -15,9 +15,10 @@ use probe_core::{
 };
 use serde_yaml_ng::Value;
 
-use super::{
-    EnvironmentDocument, ParseError, ProjectionDiagnostic, parse, project_item, project_items,
-    sort_diagnostics,
+use super::{ParseError, ProjectionDiagnostic, parse};
+use crate::{
+    document::EnvironmentDocument,
+    projection::{project_item, project_items, sort_diagnostics},
 };
 
 mod create;
