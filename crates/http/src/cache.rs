@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     io,
     path::{Path, PathBuf},
     sync::{
@@ -23,6 +24,7 @@ struct ResponseCacheInner {
     directory: PathBuf,
     quota_bytes: u64,
     session: Mutex<Option<ResponseCacheSession>>,
+    pending_cleanup: Mutex<BTreeSet<PathBuf>>,
 }
 
 #[derive(Debug)]
@@ -41,6 +43,7 @@ impl ResponseCache {
                 directory,
                 quota_bytes,
                 session: Mutex::new(None),
+                pending_cleanup: Mutex::new(BTreeSet::new()),
             }),
         }
     }
@@ -71,15 +74,31 @@ impl ResponseCache {
         recover_orphaned_sessions(&self.inner.directory, Some(&session_directory))
             .map_err(ResponseCacheReservationError::Io)?;
 
-        let used = retained_body_bytes(&self.inner.directory)
-            .map_err(ResponseCacheReservationError::Io)?;
-        let available = self.inner.quota_bytes.saturating_sub(used);
-        let reserved_bytes = expected_bytes
-            .map(|expected| expected.max(minimum_bytes))
-            .unwrap_or(available);
-        if reserved_bytes > available {
-            return Err(ResponseCacheReservationError::QuotaExceeded);
-        }
+        let reserved_bytes = match reservation_size(
+            &self.inner.directory,
+            self.inner.quota_bytes,
+            expected_bytes,
+            minimum_bytes,
+        )
+        .map_err(ResponseCacheReservationError::Io)?
+        {
+            Some(reserved_bytes) => reserved_bytes,
+            None => {
+                let reclaimed = reclaim_released_bodies(&self.inner)
+                    .map_err(ResponseCacheReservationError::Io)?;
+                if !reclaimed {
+                    return Err(ResponseCacheReservationError::QuotaExceeded);
+                }
+                reservation_size(
+                    &self.inner.directory,
+                    self.inner.quota_bytes,
+                    expected_bytes,
+                    minimum_bytes,
+                )
+                .map_err(ResponseCacheReservationError::Io)?
+                .ok_or(ResponseCacheReservationError::QuotaExceeded)?
+            }
+        };
 
         loop {
             let sequence = BODY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -141,10 +160,10 @@ impl ResponseCache {
         };
         let lease = locked_file(&directory.join("session.lock"))?;
         let (cleanup, pending) = mpsc::channel();
-        let base = self.inner.directory.clone();
+        let inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
             .name("probe-response-cache-cleanup".to_owned())
-            .spawn(move || cleanup_released_bodies(&base, pending))?;
+            .spawn(move || cleanup_released_bodies(&inner, pending))?;
         *session = Some(ResponseCacheSession {
             directory: directory.clone(),
             _lease: lease,
@@ -196,16 +215,61 @@ impl Eq for ResponseBodyFile {}
 
 impl Drop for ResponseBodyFileInner {
     fn drop(&mut self) {
-        let _ = self.cleanup.send(std::mem::take(&mut self.path));
+        let path = std::mem::take(&mut self.path);
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        if let Ok(mut pending) = self._cache.inner.pending_cleanup.lock() {
+            pending.insert(path.clone());
+        }
+        let _ = self.cleanup.send(path);
     }
 }
 
-fn cleanup_released_bodies(base: &Path, pending: Receiver<PathBuf>) {
+fn cleanup_released_bodies(inner: &ResponseCacheInner, pending: Receiver<PathBuf>) {
     for path in pending {
-        if let Ok(_quota_lock) = locked_file(&base.join("quota.lock")) {
-            let _ = std::fs::remove_file(path);
+        if let Ok(_quota_lock) = locked_file(&inner.directory.join("quota.lock")) {
+            let _ = std::fs::remove_file(&path);
+            if let Ok(mut queued) = inner.pending_cleanup.lock() {
+                queued.remove(&path);
+            }
         }
     }
+}
+
+fn reservation_size(
+    directory: &Path,
+    quota_bytes: u64,
+    expected_bytes: Option<u64>,
+    minimum_bytes: u64,
+) -> io::Result<Option<u64>> {
+    let used = retained_body_bytes(directory)?;
+    let available = quota_bytes.saturating_sub(used);
+    let reserved_bytes = expected_bytes
+        .map(|expected| expected.max(minimum_bytes))
+        .unwrap_or(available);
+    Ok(if reserved_bytes > available {
+        None
+    } else {
+        Some(reserved_bytes)
+    })
+}
+
+fn reclaim_released_bodies(inner: &ResponseCacheInner) -> io::Result<bool> {
+    let paths = {
+        let mut pending = inner
+            .pending_cleanup
+            .lock()
+            .map_err(|_| io::Error::other("response cache state is unavailable"))?;
+        if pending.is_empty() {
+            return Ok(false);
+        }
+        std::mem::take(&mut *pending)
+    };
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(true)
 }
 
 pub(crate) struct ResponseCacheReservation {
@@ -324,6 +388,28 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn released_body_does_not_block_the_next_reservation() {
+        let base = std::env::temp_dir().join(format!(
+            "probe-cache-quota-{}-{}",
+            std::process::id(),
+            SESSION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let cache = ResponseCache::new(base.clone(), 2048);
+        let held = cache.reserve(Some(2048), 0).unwrap();
+        assert!(matches!(
+            cache.reserve(Some(2048), 0),
+            Err(ResponseCacheReservationError::QuotaExceeded)
+        ));
+        drop(held);
+        let next = cache.reserve(Some(2048), 0).unwrap();
+        let next_path = next.body_file.path().to_owned();
+        drop(next);
+        wait_until(|| !next_path.exists());
+        drop(cache);
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
