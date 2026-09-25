@@ -15,7 +15,7 @@ use probe_http::{
     ResponseCache,
 };
 use sha2::{Digest, Sha256};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SavedResponseBody {
@@ -273,7 +273,60 @@ pub(crate) fn body_file_path_for_storage(selected: &Path, workspace_path: Option
     selected.display().to_string()
 }
 
-pub(crate) fn execute_http_request<P>(
+pub(crate) struct ExecutionService {
+    runtime: tokio::runtime::Runtime,
+    engine: HttpEngine,
+}
+
+type ExecutionResult = Result<(HttpResponse, Option<SavedResponseBody>), HttpError>;
+type ExecutionReceivers = (
+    oneshot::Receiver<ExecutionResult>,
+    mpsc::UnboundedReceiver<HttpProgress>,
+);
+
+impl ExecutionService {
+    pub(crate) fn new() -> Result<Self, HttpError> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| HttpError::ClientConfiguration(error.to_string()))?;
+        let engine = {
+            let _guard = runtime.enter();
+            HttpEngine::new()?
+        };
+        Ok(Self { runtime, engine })
+    }
+
+    pub(crate) fn execute(
+        &self,
+        request: HttpRequest,
+        options: ExecutionOptions,
+        output: Option<PathBuf>,
+        cancellation: oneshot::Receiver<()>,
+    ) -> ExecutionReceivers {
+        let (result_sender, result_receiver) = oneshot::channel();
+        let (progress_sender, progress_receiver) = mpsc::unbounded_channel();
+        let engine = self.engine.clone();
+        self.runtime.spawn(async move {
+            let result = execute_http_request(
+                &engine,
+                request,
+                options,
+                output,
+                cancellation,
+                move |progress| {
+                    let _ = progress_sender.send(progress);
+                },
+            )
+            .await;
+            let _ = result_sender.send(result);
+        });
+        (result_receiver, progress_receiver)
+    }
+}
+
+pub(crate) async fn execute_http_request<P>(
+    engine: &HttpEngine,
     request: HttpRequest,
     options: ExecutionOptions,
     output: Option<PathBuf>,
@@ -286,42 +339,35 @@ where
     let request = request
         .prepare_http()
         .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| HttpError::ClientConfiguration(error.to_string()))?;
-    runtime.block_on(async move {
-        let engine = HttpEngine::new()?;
-        let cancellation = async move {
-            let _ = cancellation.await;
-        };
-        match output {
-            Some(output) => {
-                let streamed = engine
-                    .execute_cancellable_to_file_with_progress(
-                        &request,
-                        &options,
-                        &output,
-                        cancellation,
-                        progress,
-                    )
-                    .await?;
-                Ok((
-                    streamed.response,
-                    Some(SavedResponseBody {
-                        path: output,
-                        sha256: streamed.body_sha256,
-                    }),
-                ))
-            }
-            None => {
-                let response = engine
-                    .execute_cancellable_with_progress(&request, &options, cancellation, progress)
-                    .await?;
-                Ok((response, None))
-            }
+    let cancellation = async move {
+        let _ = cancellation.await;
+    };
+    match output {
+        Some(output) => {
+            let streamed = engine
+                .execute_cancellable_to_file_with_progress(
+                    &request,
+                    &options,
+                    &output,
+                    cancellation,
+                    progress,
+                )
+                .await?;
+            Ok((
+                streamed.response,
+                Some(SavedResponseBody {
+                    path: output,
+                    sha256: streamed.body_sha256,
+                }),
+            ))
         }
-    })
+        None => {
+            let response = engine
+                .execute_cancellable_with_progress(&request, &options, cancellation, progress)
+                .await?;
+            Ok((response, None))
+        }
+    }
 }
 
 pub(crate) fn save_response_body(
@@ -585,8 +631,8 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::{
-        ExecutionState, ResponseState, SavedResponseBody, body_file_path_for_storage,
-        execute_http_request, format_duration, format_size, format_transfer_progress,
+        ExecutionService, ExecutionState, ResponseState, SavedResponseBody,
+        body_file_path_for_storage, format_duration, format_size, format_transfer_progress,
         save_response_body, suggested_request_filename, suggested_response_filename,
     };
 
@@ -891,7 +937,8 @@ mod tests {
     fn desktop_adapter_forwards_cancellation_to_the_shared_http_engine() {
         let (cancel, cancellation) = oneshot::channel();
         cancel.send(()).expect("cancellation should be delivered");
-        let result = execute_http_request(
+        let service = ExecutionService::new().expect("execution service should start");
+        let (result, _) = service.execute(
             HttpRequest {
                 method: Some("GET".to_owned()),
                 url: Some("http://127.0.0.1:1/phase-12".to_owned()),
@@ -900,9 +947,105 @@ mod tests {
             ExecutionOptions::default(),
             None,
             cancellation,
-            |_| {},
         );
+        let result = service
+            .runtime
+            .block_on(result)
+            .expect("execution should complete");
         assert_eq!(result, Err(HttpError::Cancelled));
+    }
+
+    #[test]
+    fn shared_service_runs_requests_concurrently_and_keeps_cancellation_targeted() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let service = ExecutionService::new().unwrap();
+        let listener = service
+            .runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (slow_started_sender, slow_started_receiver) = oneshot::channel();
+        let server = service.runtime.spawn(async move {
+            let mut slow_started_sender = Some(slow_started_sender);
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 1024];
+                let size = stream.read(&mut buffer).await.unwrap();
+                if buffer[..size].starts_with(b"GET /slow ") {
+                    if let Some(sender) = slow_started_sender.take() {
+                        let _ = sender.send(());
+                    }
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        let _ = stream
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nslow")
+                            .await;
+                    });
+                } else {
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nfast")
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+        let request = |path: &str| HttpRequest {
+            method: Some("GET".to_owned()),
+            url: Some(format!("http://{address}/{path}")),
+            ..HttpRequest::default()
+        };
+        let (cancel_slow, slow_cancellation) = oneshot::channel();
+        let (slow_result, _) = service.execute(
+            request("slow"),
+            ExecutionOptions::default(),
+            None,
+            slow_cancellation,
+        );
+        service.runtime.block_on(slow_started_receiver).unwrap();
+        let (_cancel_fast, fast_cancellation) = oneshot::channel();
+        let output = std::env::temp_dir().join(format!(
+            "probe-service-output-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (fast_result, mut progress) = service.execute(
+            request("fast"),
+            ExecutionOptions::default(),
+            Some(output.clone()),
+            fast_cancellation,
+        );
+        let fast = service.runtime.block_on(fast_result).unwrap().unwrap();
+        assert_eq!(fast.0.body, b"fast");
+        assert_eq!(fs::read(&output).unwrap(), b"fast");
+        fs::remove_file(output).unwrap();
+        assert!(service.runtime.block_on(progress.recv()).is_some());
+        let (_cancel_again, again_cancellation) = oneshot::channel();
+        let (again_result, _) = service.execute(
+            request("fast"),
+            ExecutionOptions::default(),
+            None,
+            again_cancellation,
+        );
+        assert_eq!(
+            service
+                .runtime
+                .block_on(again_result)
+                .unwrap()
+                .unwrap()
+                .0
+                .body,
+            b"fast"
+        );
+        cancel_slow.send(()).unwrap();
+        assert_eq!(
+            service.runtime.block_on(slow_result).unwrap(),
+            Err(HttpError::Cancelled)
+        );
+        server.abort();
     }
 
     fn response(status: u16) -> HttpResponse {

@@ -4,7 +4,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
-    thread,
     time::Duration,
 };
 
@@ -80,8 +79,8 @@ use tree::{
 use crate::{
     components,
     execution::{
-        ExecutionState, ResponseState, SavedResponseBody, body_file_path_for_storage,
-        download_directory, execute_http_request, format_duration, format_size,
+        ExecutionService, ExecutionState, ResponseState, SavedResponseBody,
+        body_file_path_for_storage, download_directory, format_duration, format_size,
         format_transfer_progress, read_response_page, response_cache, save_response_body,
         suggested_request_filename, suggested_response_filename,
     },
@@ -322,6 +321,7 @@ pub(crate) struct ProbeApp {
     toast_paused: bool,
     request_editor: RequestEditorState,
     execution: ExecutionState,
+    execution_service: Option<ExecutionService>,
     response_cache: probe_http::ResponseCache,
     response_viewer: ResponseViewerState,
     tree_scroll: UniformListScrollHandle,
@@ -444,6 +444,7 @@ impl ProbeApp {
             toast_paused: false,
             request_editor: RequestEditorState::default(),
             execution: ExecutionState::default(),
+            execution_service: None,
             response_cache,
             response_viewer: ResponseViewerState::default(),
             tree_scroll: UniformListScrollHandle::new(),

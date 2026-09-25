@@ -236,6 +236,9 @@ Desktop Send resolves the selected environment and executes the same probe-http
 engine used by the CLI, away from the UI thread. Cancellation reaches that engine;
 generation checks prevent stale completions from replacing newer results. Response
 and execution state remain presentation-only.
+The desktop retains one Tokio execution runtime and HTTP engine per window, so
+concurrent sends can reuse HTTP connections while progress and completion return
+to GPUI through channels.
 
 The response viewer uses virtualized, read-only editing and performs expensive
 formatting or highlighting on a background executor. The request tree similarly
