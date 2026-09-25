@@ -1,11 +1,4 @@
-use std::{
-    collections::VecDeque,
-    future::Future,
-    future::pending,
-    path::Path,
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::{future::Future, future::pending, path::Path, time::Instant};
 
 use probe_core::{HttpRequest, RequestSettings};
 use reqwest::{Client, header::HeaderMap, redirect::Policy};
@@ -17,8 +10,6 @@ use crate::{
 };
 
 const DEFAULT_MAX_REDIRECTS: usize = 10;
-const MAX_CACHED_REDIRECT_CLIENTS: usize = 16;
-type RedirectClientCache = Arc<Mutex<VecDeque<((bool, usize), Client)>>>;
 
 /// Progress reported while an HTTP response is being received.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,7 +34,6 @@ pub enum HttpProgress {
 #[derive(Clone, Debug)]
 pub struct HttpEngine {
     default_client: Client,
-    redirect_clients: RedirectClientCache,
 }
 
 /// A completed response streamed to a caller-owned file.
@@ -60,7 +50,6 @@ impl HttpEngine {
     pub fn new() -> Result<Self, HttpError> {
         Ok(Self {
             default_client: build_client(true, DEFAULT_MAX_REDIRECTS)?,
-            redirect_clients: Arc::new(Mutex::new(VecDeque::new())),
         })
     }
 
@@ -245,20 +234,7 @@ impl HttpEngine {
         if follow && maximum == DEFAULT_MAX_REDIRECTS {
             Ok(self.default_client.clone())
         } else {
-            let key = (follow, if follow { maximum } else { 0 });
-            let mut clients = self
-                .redirect_clients
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some((_, client)) = clients.iter().find(|(cached, _)| *cached == key) {
-                return Ok(client.clone());
-            }
-            let client = build_client(follow, maximum)?;
-            if clients.len() == MAX_CACHED_REDIRECT_CLIENTS {
-                clients.pop_front();
-            }
-            clients.push_back((key, client.clone()));
-            Ok(client)
+            build_client(follow, maximum)
         }
     }
 }
@@ -290,38 +266,4 @@ fn response_headers(headers: &HeaderMap) -> Vec<ResponseHeader> {
         .collect();
     headers.sort_by(|left, right| (&left.name, &left.value).cmp(&(&right.name, &right.value)));
     headers
-}
-
-#[cfg(test)]
-mod tests {
-    use probe_core::RequestSettings;
-
-    use super::{HttpEngine, MAX_CACHED_REDIRECT_CLIENTS};
-
-    #[test]
-    fn redirect_clients_are_reused_and_bounded() {
-        let engine = HttpEngine::new().unwrap();
-        let shared = engine.clone();
-        let settings = RequestSettings {
-            follow_redirects: Some(false),
-            max_redirects: Some(3),
-            ..RequestSettings::default()
-        };
-        engine.client_for(&settings).unwrap();
-        shared.client_for(&settings).unwrap();
-        assert_eq!(engine.redirect_clients.lock().unwrap().len(), 1);
-
-        for maximum in 1..=MAX_CACHED_REDIRECT_CLIENTS + 2 {
-            engine
-                .client_for(&RequestSettings {
-                    max_redirects: Some(maximum),
-                    ..RequestSettings::default()
-                })
-                .unwrap();
-        }
-        assert_eq!(
-            engine.redirect_clients.lock().unwrap().len(),
-            MAX_CACHED_REDIRECT_CLIENTS
-        );
-    }
 }

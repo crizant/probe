@@ -36,7 +36,7 @@ impl ProbeApp {
                                 view.edit_graphql_request(
                                     key,
                                     |_| probe_core::GraphqlUpdate {
-                                        query: Some(value.to_string()),
+                                        query: probe_core::FieldPatch::Set(value.to_string()),
                                         ..probe_core::GraphqlUpdate::default()
                                     },
                                     cx,

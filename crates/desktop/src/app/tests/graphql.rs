@@ -25,7 +25,7 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
                     url: Some("https://api.example.com/graphql".to_owned()),
                     protocol: CreatedRequestProtocol::Graphql,
                     graphql: Some(GraphqlUpdate {
-                        query: Some("query { viewer { login } }".to_owned()),
+                        query: FieldPatch::Set("query { viewer { login } }".to_owned()),
                         variables: FieldPatch::Unchanged,
                         operation_name: FieldPatch::Unchanged,
                         extensions: FieldPatch::Unchanged,
@@ -83,7 +83,7 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
                 .unwrap();
             request
                 .apply_graphql_update(&GraphqlUpdate {
-                    query: Some("query { user(id: 1) { name } }".to_owned()),
+                    query: FieldPatch::Set("query { user(id: 1) { name } }".to_owned()),
                     ..GraphqlUpdate::default()
                 })
                 .unwrap();
@@ -151,7 +151,7 @@ fn graphql_variables_extensions_and_operation_name_persist(cx: &mut TestAppConte
                     url: Some("https://api.example.com/graphql".to_owned()),
                     protocol: CreatedRequestProtocol::Graphql,
                     graphql: Some(GraphqlUpdate {
-                        query: Some(
+                        query: FieldPatch::Set(
                             "query GetUser($id: Int!) { user(id: $id) { name } }".to_owned(),
                         ),
                         variables: FieldPatch::Set(serde_json::from_str(r#"{"id": 1}"#).unwrap()),

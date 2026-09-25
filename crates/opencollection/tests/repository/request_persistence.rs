@@ -141,8 +141,8 @@ fn bundled_update_save_reload_preserves_unknown_fields() {
         .update_request(
             "items/0",
             &RequestUpdate {
-                method: Some("PUT".to_owned()),
-                url: Some("https://api.example.com/pets/42".to_owned()),
+                method: FieldPatch::Set("PUT".to_owned()),
+                url: FieldPatch::Set("https://api.example.com/pets/42".to_owned()),
                 ..RequestUpdate::default()
             },
         )
@@ -190,7 +190,7 @@ fn bundled_graphql_update_save_reload_remains_native() {
             "items/0",
             &RequestUpdate {
                 graphql: Some(probe_core::GraphqlUpdate {
-                    query: Some("query Viewer { viewer { login } }".to_owned()),
+                    query: FieldPatch::Set("query Viewer { viewer { login } }".to_owned()),
                     variables: FieldPatch::Set(variables.clone()),
                     operation_name: FieldPatch::Set("Viewer".to_owned()),
                     ..probe_core::GraphqlUpdate::default()
@@ -212,6 +212,36 @@ fn bundled_graphql_update_save_reload_remains_native() {
     assert!(saved.contains("type: graphql"));
     assert!(saved.contains("graphql:"));
     assert!(!saved.contains("type: http"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn bundled_graphql_optional_fields_clear_on_save_and_reload() {
+    let path = temporary_path("graphql-clears.yml");
+    fs::copy(fixture("graphql-http.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                method: FieldPatch::Clear,
+                url: FieldPatch::Clear,
+                graphql: Some(probe_core::GraphqlUpdate {
+                    query: FieldPatch::Clear,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let reloaded = load_workspace(&path).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("items/0").unwrap())
+        .unwrap();
+    assert_eq!(request.method, None);
+    assert_eq!(request.url, None);
+    assert_eq!(request.selected_graphql().unwrap().unwrap().query, None);
     fs::remove_file(path).unwrap();
 }
 
@@ -278,8 +308,8 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
         AuthenticationValue::String("probe".to_owned()),
     );
     let update = RequestUpdate {
-        method: Some("PATCH".to_owned()),
-        url: Some("https://api.example.com/pets/42".to_owned()),
+        method: FieldPatch::Set("PATCH".to_owned()),
+        url: FieldPatch::Set("https://api.example.com/pets/42".to_owned()),
         headers: Some(vec![Header {
             name: "X-Probe".to_owned(),
             value: "desktop".to_owned(),
@@ -390,8 +420,8 @@ fn every_supported_body_and_authentication_shape_survives_desktop_style_saves() 
 
     for (selector, request) in &snapshots {
         let update = RequestUpdate {
-            method: request.method.clone(),
-            url: request.url.clone(),
+            method: FieldPatch::from_optional(request.method.clone()),
+            url: FieldPatch::from_optional(request.url.clone()),
             headers: Some(request.headers.clone()),
             query_parameters: Some(request.query_parameters.clone()),
             path_parameters: Some(request.path_parameters.clone()),
@@ -428,7 +458,7 @@ fn updates_a_nested_bundled_request_by_structural_locator() {
         .update_request(
             "items/0/items/0",
             &RequestUpdate {
-                url: Some("https://api.example.com/v2/pets".to_owned()),
+                url: FieldPatch::Set("https://api.example.com/v2/pets".to_owned()),
                 ..RequestUpdate::default()
             },
         )
@@ -473,7 +503,7 @@ fn unbundled_update_preserves_request_extensions() {
         .update_request(
             "health.yml",
             &RequestUpdate {
-                url: Some("https://example.com/ready".to_owned()),
+                url: FieldPatch::Set("https://example.com/ready".to_owned()),
                 ..RequestUpdate::default()
             },
         )
@@ -507,7 +537,7 @@ fn refuses_to_overwrite_an_externally_modified_document() {
         .update_request(
             "items/0",
             &RequestUpdate {
-                url: Some("https://should-not-be-written.example".to_owned()),
+                url: FieldPatch::Set("https://should-not-be-written.example".to_owned()),
                 ..RequestUpdate::default()
             },
         )

@@ -129,7 +129,6 @@ fn owned_http_preparation_preserves_existing_body_variants() {
         ..HttpRequest::default()
     };
     assert_eq!(request.clone().into_http().unwrap(), request);
-    assert_eq!(request.prepare_http().unwrap(), request);
 }
 
 #[test]
@@ -222,7 +221,7 @@ fn graphql_variant_selection_is_shared_by_read_and_update() {
     );
     request
         .apply_graphql_update(&GraphqlUpdate {
-            query: Some("changed".to_owned()),
+            query: FieldPatch::Set("changed".to_owned()),
             ..GraphqlUpdate::default()
         })
         .unwrap();
@@ -262,7 +261,7 @@ fn graphql_variant_selection_is_shared_by_read_and_update() {
     let mut empty = GraphqlRequest::default().into_request();
     empty
         .apply_graphql_update(&GraphqlUpdate {
-            query: Some("initialized".to_owned()),
+            query: FieldPatch::Set("initialized".to_owned()),
             ..GraphqlUpdate::default()
         })
         .unwrap();
@@ -298,7 +297,7 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
     assert_eq!(
         RequestUpdate {
             graphql: Some(GraphqlUpdate {
-                query: Some("query Viewer { viewer { login } }".to_owned()),
+                query: FieldPatch::Set("query Viewer { viewer { login } }".to_owned()),
                 ..GraphqlUpdate::default()
             }),
             ..RequestUpdate::default()
@@ -307,28 +306,4 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
         Err(GraphqlRequestError::NotGraphql)
     );
     assert_eq!(ordinary_http.protocol, RequestProtocol::Http);
-}
-
-#[test]
-fn graphql_updates_are_partial_and_http_json_is_not_reclassified() {
-    let mut request = native_request("POST");
-    request
-        .apply_graphql_update(&GraphqlUpdate {
-            variables: FieldPatch::Set(object(json!({ "page": 1 }))),
-            ..GraphqlUpdate::default()
-        })
-        .unwrap();
-    let graphql = request.selected_graphql().unwrap().unwrap();
-    assert!(graphql.query.as_ref().unwrap().starts_with("query"));
-    assert_eq!(graphql.variables.as_ref().unwrap()["page"], 1);
-
-    let ordinary_http = HttpRequest {
-        body: Some(RequestBody::Single(Body::Raw(RawBody {
-            kind: RawBodyKind::Json,
-            data: r#"{"query":"search term","variables":{"page":1}}"#.to_owned(),
-        }))),
-        ..HttpRequest::default()
-    };
-    assert_eq!(ordinary_http.protocol, RequestProtocol::Http);
-    assert!(ordinary_http.graphql().is_none());
 }

@@ -58,11 +58,26 @@ impl RequestKey {
 /// Session-only generational key for a folder in a loaded workspace.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FolderKey {
+    workspace_generation: u64,
     slot: usize,
     generation: u64,
 }
 
 impl FolderKey {
+    fn in_workspace(workspace_generation: u64, key: ArenaKey) -> Self {
+        Self {
+            workspace_generation,
+            slot: key.slot,
+            generation: key.generation,
+        }
+    }
+
+    /// Returns the generation of the loaded workspace that issued this key.
+    #[must_use]
+    pub const fn workspace_generation(self) -> u64 {
+        self.workspace_generation
+    }
+
     /// Returns the workspace-local storage slot.
     #[must_use]
     pub const fn slot(self) -> usize {
@@ -247,12 +262,13 @@ impl Workspace {
         metadata: ItemMetadata,
     ) -> Result<FolderKey, WorkspaceEditError> {
         self.validate_insertion(parent, index)?;
+        let workspace_generation = self.workspace_generation;
         let arena_key = self.folders.insert_with_key(|arena_key| WorkspaceFolder {
-            key: FolderKey::from(arena_key),
+            key: FolderKey::in_workspace(workspace_generation, arena_key),
             metadata,
             children: Vec::new(),
         });
-        let key = FolderKey::from(arena_key);
+        let key = FolderKey::in_workspace(workspace_generation, arena_key);
         self.insert_reference(parent, index, WorkspaceItemRef::Folder(key))?;
         Ok(key)
     }
@@ -276,6 +292,9 @@ impl Workspace {
         key: FolderKey,
         name: String,
     ) -> Result<(), WorkspaceEditError> {
+        if self.folder(key).is_none() {
+            return Err(WorkspaceEditError::ItemNotFound);
+        }
         self.folders
             .get_mut(key.into())
             .ok_or(WorkspaceEditError::ItemNotFound)?
@@ -358,6 +377,9 @@ impl Workspace {
     /// Looks up a folder in constant time, rejecting stale generations.
     #[must_use]
     pub fn folder(&self, key: FolderKey) -> Option<&WorkspaceFolder> {
+        if key.workspace_generation != self.workspace_generation {
+            return None;
+        }
         self.folders.get(key.into())
     }
 
@@ -462,11 +484,15 @@ impl Workspace {
     ) -> Result<&mut Vec<WorkspaceItemRef>, WorkspaceEditError> {
         match parent {
             WorkspaceParent::Root => Ok(&mut self.root_items),
-            WorkspaceParent::Folder(key) => self
-                .folders
-                .get_mut(key.into())
-                .map(|folder| &mut folder.children)
-                .ok_or(WorkspaceEditError::DestinationNotFound),
+            WorkspaceParent::Folder(key) => {
+                if key.workspace_generation != self.workspace_generation {
+                    return Err(WorkspaceEditError::DestinationNotFound);
+                }
+                self.folders
+                    .get_mut(key.into())
+                    .map(|folder| &mut folder.children)
+                    .ok_or(WorkspaceEditError::DestinationNotFound)
+            }
         }
     }
 
@@ -623,15 +649,6 @@ impl From<RequestKey> for ArenaKey {
     }
 }
 
-impl From<ArenaKey> for FolderKey {
-    fn from(key: ArenaKey) -> Self {
-        Self {
-            slot: key.slot,
-            generation: key.generation,
-        }
-    }
-}
-
 impl From<FolderKey> for ArenaKey {
     fn from(key: FolderKey) -> Self {
         Self {
@@ -688,11 +705,11 @@ fn index_item(
         }
         CollectionItem::Folder(folder) => {
             let arena_key = folders.insert_with_key(|arena_key| WorkspaceFolder {
-                key: FolderKey::from(arena_key),
+                key: FolderKey::in_workspace(workspace_generation, arena_key),
                 metadata: folder.metadata,
                 children: Vec::new(),
             });
-            let key = FolderKey::from(arena_key);
+            let key = FolderKey::in_workspace(workspace_generation, arena_key);
             let mut child_ancestors = ancestors.to_vec();
             child_ancestors.push(key);
             let children = index_items(
@@ -736,6 +753,35 @@ mod tests {
             unreachable!();
         };
         request
+    }
+
+    #[test]
+    fn folder_keys_do_not_cross_workspace_generations() {
+        let collection = || Collection {
+            items: vec![CollectionItem::Folder(Folder {
+                metadata: ItemMetadata::default(),
+                items: Vec::new(),
+            })],
+            ..Collection::default()
+        };
+        let first = Workspace::from_collection(collection());
+        let mut second = Workspace::from_collection(collection());
+        let WorkspaceItemRef::Folder(key) = first.root_items()[0] else {
+            unreachable!()
+        };
+        assert!(second.folder(key).is_none());
+        assert_eq!(
+            second.rename_folder(key, "wrong".into()),
+            Err(WorkspaceEditError::ItemNotFound)
+        );
+        assert_eq!(
+            second.remove_folder(key),
+            Err(WorkspaceEditError::ItemNotFound)
+        );
+        assert_eq!(
+            second.insert_request(WorkspaceParent::Folder(key), 0, HttpRequest::default()),
+            Err(WorkspaceEditError::DestinationNotFound)
+        );
     }
 
     #[test]

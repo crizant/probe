@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use probe_core::{GraphqlRequestError, HttpRequest, RequestKey, RequestUpdate};
+use probe_core::{HttpRequest, RequestDiffError, RequestKey, RequestUpdate};
 
 #[derive(Debug, Default)]
 pub(crate) struct PersistenceState {
@@ -72,7 +72,7 @@ impl PersistenceState {
         &self,
         key: RequestKey,
         request: &HttpRequest,
-    ) -> Result<(u64, HttpRequest, RequestUpdate), GraphqlRequestError> {
+    ) -> Result<(u64, HttpRequest, RequestUpdate), RequestDiffError> {
         let snapshot = request.clone();
         let update = RequestUpdate::between(self.saved.get(&key), &snapshot)?;
         Ok((
@@ -97,7 +97,8 @@ impl PersistenceState {
 mod tests {
     use probe_core::{
         Collection, CollectionItem, GraphqlBody, GraphqlBodyVariant, GraphqlOperation,
-        GraphqlRequest, GraphqlRequestError, HttpRequest, Workspace, WorkspaceItemRef,
+        GraphqlRequest, GraphqlRequestError, HttpRequest, RequestDiffError, Workspace,
+        WorkspaceItemRef,
     };
 
     use super::PersistenceState;
@@ -189,7 +190,7 @@ mod tests {
             state.enqueue([key]);
             assert_eq!(state.next(), Some(key));
             assert!(
-                matches!(state.begin(key, &draft), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+                matches!(state.begin(key, &draft), Err(RequestDiffError::Graphql(GraphqlRequestError::InvalidBodySelection(error))) if error.contains(message))
             );
             state.fail(key);
             assert!(state.is_dirty(key, &draft));

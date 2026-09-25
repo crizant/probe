@@ -527,7 +527,7 @@ fn request_value(
 
 fn graphql_body_value(update: &GraphqlUpdate) -> Value {
     let mut body = Mapping::new();
-    if let Some(query) = &update.query {
+    if let FieldPatch::Set(query) = &update.query {
         body.insert(
             Value::String("query".to_owned()),
             Value::String(query.clone()),

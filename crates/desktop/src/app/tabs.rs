@@ -435,19 +435,17 @@ impl ProbeApp {
         };
         draft.metadata.name = Some(name.clone());
         let graphql = matches!(draft.protocol, probe_core::RequestProtocol::Graphql(_));
-        let graphql_update =
-            draft
-                .selected_graphql()
-                .ok()
-                .flatten()
-                .map(|operation| probe_core::GraphqlUpdate {
-                    query: operation.query.clone(),
-                    variables: probe_core::FieldPatch::from_optional(operation.variables.clone()),
-                    operation_name: probe_core::FieldPatch::from_optional(
-                        operation.operation_name.clone(),
-                    ),
-                    extensions: probe_core::FieldPatch::from_optional(operation.extensions.clone()),
-                });
+        let mut update = match probe_core::RequestUpdate::between(None, &draft) {
+            Ok(update) => update,
+            Err(error) => {
+                self.show_toast(ToastIntent::Warning, error.to_string(), cx);
+                return;
+            }
+        };
+        let graphql_update = update.graphql.take();
+        update.name = None;
+        update.method = probe_core::FieldPatch::Unchanged;
+        update.url = probe_core::FieldPatch::Unchanged;
         let operation = StructureOperation::CreateRequest {
             parent,
             index: None,
@@ -460,18 +458,7 @@ impl ProbeApp {
                 probe_opencollection::CreatedRequestProtocol::Http
             },
             graphql: graphql_update,
-            update: Some(probe_core::RequestUpdate {
-                headers: Some(draft.headers.clone()),
-                query_parameters: Some(draft.query_parameters.clone()),
-                path_parameters: Some(draft.path_parameters.clone()),
-                body: if graphql {
-                    probe_core::FieldPatch::Unchanged
-                } else {
-                    probe_core::FieldPatch::from_optional(draft.body.clone())
-                },
-                authentication: probe_core::FieldPatch::from_optional(draft.authentication.clone()),
-                ..probe_core::RequestUpdate::default()
-            }),
+            update: Some(update),
         };
         let operation_for_task = operation.clone();
         self.loading = true;

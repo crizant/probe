@@ -966,8 +966,8 @@ pub(crate) fn apply_request_update(
         .and_then(Value::as_str)
         == Some("graphql");
     let details_name = if is_graphql { "graphql" } else { "http" };
-    if update.method.is_some()
-        || update.url.is_some()
+    if !update.method.is_unchanged()
+        || !update.url.is_unchanged()
         || update.headers.is_some()
         || update.query_parameters.is_some()
         || update.path_parameters.is_some()
@@ -976,14 +976,27 @@ pub(crate) fn apply_request_update(
         || update.graphql.is_some()
     {
         let details = mapping_child(request, details_name)?;
-        if let Some(method) = &update.method {
-            details.insert(
-                Value::String("method".to_owned()),
-                Value::String(method.clone()),
+        if !update.method.is_unchanged() {
+            set_optional(
+                details,
+                "method",
+                match &update.method {
+                    FieldPatch::Set(method) => Some(Value::String(method.clone())),
+                    FieldPatch::Clear => None,
+                    FieldPatch::Unchanged => unreachable!(),
+                },
             );
         }
-        if let Some(url) = &update.url {
-            details.insert(Value::String("url".to_owned()), Value::String(url.clone()));
+        if !update.url.is_unchanged() {
+            set_optional(
+                details,
+                "url",
+                match &update.url {
+                    FieldPatch::Set(url) => Some(Value::String(url.clone())),
+                    FieldPatch::Clear => None,
+                    FieldPatch::Unchanged => unreachable!(),
+                },
+            );
         }
         if let Some(headers) = &update.headers {
             merge_sequence_preserving(
@@ -1038,10 +1051,15 @@ fn apply_graphql_update(
     update: &probe_core::GraphqlUpdate,
 ) -> Result<(), SaveError> {
     let body = graphql_body_mapping(graphql)?;
-    if let Some(query) = &update.query {
-        body.insert(
-            Value::String("query".to_owned()),
-            Value::String(query.clone()),
+    if !update.query.is_unchanged() {
+        set_optional(
+            body,
+            "query",
+            match &update.query {
+                FieldPatch::Set(query) => Some(Value::String(query.clone())),
+                FieldPatch::Clear => None,
+                FieldPatch::Unchanged => unreachable!(),
+            },
         );
     }
     if !update.variables.is_unchanged() {

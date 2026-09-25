@@ -14,6 +14,7 @@ use crate::{
     load,
     presentation::{
         dry_run_human, dry_run_json, request_human, request_json, response_human, response_json,
+        run_request_json,
     },
 };
 
@@ -218,13 +219,22 @@ pub(crate) fn run(
         options.variables,
         options.strict_variables,
     )?;
-    let prepared = request.prepare_http().map_err(CliError::graphql)?;
     if options.dry_run {
         return Ok(CommandOutput {
             human: dry_run_human(&request),
             json: dry_run_json(&request).map_err(CliError::graphql)?,
         });
     }
+    let method = request
+        .method
+        .clone()
+        .unwrap_or_else(|| "<unset>".to_owned());
+    let url = request.url.clone().unwrap_or_else(|| "<unset>".to_owned());
+    let request_json = run_request_json(&request).map_err(CliError::graphql)?;
+    let prepared = request
+        .into_owned()
+        .into_http()
+        .map_err(CliError::graphql)?;
     let execution = ExecutionOptions {
         base_directory: input.base_directory(),
         ..ExecutionOptions::default()
@@ -251,7 +261,14 @@ pub(crate) fn run(
     if outcomes.iter().any(|outcome| !outcome.ok) {
         return Err(CliError::expectation_failed(&outcomes));
     }
-    response_output(&request, &response, options.output, &outcomes)
+    response_output(
+        &method,
+        &url,
+        request_json,
+        &response,
+        options.output,
+        &outcomes,
+    )
 }
 
 fn selected_request<'a>(
@@ -290,13 +307,15 @@ fn selected_request<'a>(
 }
 
 fn response_output(
-    request: &HttpRequest,
+    method: &str,
+    url: &str,
+    request_json: serde_json::Value,
     response: &HttpResponse,
     output: Option<&PathBuf>,
     outcomes: &[ExpectationOutcome],
 ) -> Result<CommandOutput, CliError> {
     let output = output.map(PathBuf::as_path);
-    let mut json = response_json(request, response, output).map_err(CliError::graphql)?;
+    let mut json = response_json(request_json, response, output);
     if !outcomes.is_empty() {
         let Some(object) = json.as_object_mut() else {
             return Err(CliError {
@@ -312,7 +331,7 @@ fn response_output(
         );
     }
     Ok(CommandOutput {
-        human: response_human(request, response, output),
+        human: response_human(method, url, response, output),
         json,
     })
 }
