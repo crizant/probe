@@ -58,9 +58,7 @@ impl ProbeApp {
                 .loaded_workspace
                 .as_ref()
                 .and_then(|loaded| loaded.workspace().request(key))
-                .is_some_and(|request| {
-                    matches!(request.protocol, probe_core::RequestProtocol::Graphql(_))
-                });
+                .is_some_and(|request| request.kind.is_graphql());
             self.request_editor.ensure_available_section(is_graphql);
             self.selected_tree_item =
                 (!self.detached_requests.contains(&key)).then_some(WorkspaceItemRef::Request(key));
@@ -678,9 +676,7 @@ impl ProbeApp {
                 .loaded_workspace
                 .as_ref()
                 .and_then(|loaded| loaded.workspace().request(key))
-                .is_some_and(|request| {
-                    matches!(request.protocol, probe_core::RequestProtocol::Graphql(_))
-                });
+                .is_some_and(|request| request.kind.is_graphql());
             self.request_editor.ensure_available_section(is_graphql);
             self.shell.open_request(key);
         }

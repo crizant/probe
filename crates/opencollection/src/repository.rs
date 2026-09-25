@@ -140,17 +140,17 @@ impl LoadedWorkspace {
     ///
     /// Desktop editors use this fast path to apply draft changes immediately. Saving
     /// remains an explicit, separate repository operation.
-    pub fn request_mut(&mut self, key: RequestKey) -> Option<&mut probe_core::HttpRequest> {
+    pub fn request_mut(&mut self, key: RequestKey) -> Option<&mut probe_core::Request> {
         self.workspace.request_mut(key)
     }
 
     /// Adds an in-memory editor draft with no persistence locator.
-    pub fn add_detached_request(&mut self, request: probe_core::HttpRequest) -> RequestKey {
+    pub fn add_detached_request(&mut self, request: probe_core::Request) -> RequestKey {
         self.workspace.add_detached_request(request)
     }
 
     /// Removes an in-memory editor draft after its tab closes.
-    pub fn remove_detached_request(&mut self, key: RequestKey) -> Option<probe_core::HttpRequest> {
+    pub fn remove_detached_request(&mut self, key: RequestKey) -> Option<probe_core::Request> {
         if self.request_selector(key).is_some() {
             return None;
         }

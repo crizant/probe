@@ -2,11 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, Environment,
-    EnvironmentResolutionError, EnvironmentVariable, FormField, Header, HttpRequest, MultipartPart,
-    MultipartPartKind, MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody,
-    ResolvedEnvironment, SecretVariable, Variable, VariableStatus, VariableValue, VariableValueSet,
-    VariableValueVariant, resolve_environment, resolve_environment_with_overrides, resolve_request,
-    variable_status,
+    EnvironmentResolutionError, EnvironmentVariable, FormField, Header, MultipartPart,
+    MultipartPartKind, MultipartValue, QueryParameter, RawBody, RawBodyKind, Request, RequestBody,
+    RequestKind, ResolvedEnvironment, SecretVariable, Variable, VariableStatus, VariableValue,
+    VariableValueSet, VariableValueVariant, resolve_environment,
+    resolve_environment_with_overrides, resolve_request, variable_status,
 };
 
 fn variable(name: &str, value: &str) -> EnvironmentVariable {
@@ -177,7 +177,7 @@ fn runtime_variables_reject_an_empty_name() {
 
 #[test]
 fn resolves_supported_request_fields_without_mutating_the_source() {
-    let request = HttpRequest {
+    let request = Request {
         method: Some("{{method}}".to_owned()),
         url: Some("{{baseUrl}}/users".to_owned()),
         headers: vec![Header {
@@ -195,15 +195,17 @@ fn resolves_supported_request_fields_without_mutating_the_source() {
             value: "{{tenant}}".to_owned(),
             disabled: false,
         }],
-        body: Some(RequestBody::Variants(vec![probe_core::BodyVariant {
-            title: "form".to_owned(),
-            selected: true,
-            body: Body::FormUrlEncoded(vec![FormField {
-                name: "owner".to_owned(),
-                value: "{{tenant}}".to_owned(),
-                disabled: false,
-            }]),
-        }])),
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Variants(vec![probe_core::BodyVariant {
+                title: "form".to_owned(),
+                selected: true,
+                body: Body::FormUrlEncoded(vec![FormField {
+                    name: "owner".to_owned(),
+                    value: "{{tenant}}".to_owned(),
+                    disabled: false,
+                }]),
+            }])),
+        },
         authentication: Some(Authentication {
             kind: AuthenticationKind::Bearer,
             properties: BTreeMap::from([(
@@ -211,7 +213,7 @@ fn resolves_supported_request_fields_without_mutating_the_source() {
                 AuthenticationValue::String("{{token}}".to_owned()),
             )]),
         }),
-        ..HttpRequest::default()
+        ..Request::default()
     };
     let resolved = resolve_environment(
         &[environment(
@@ -240,7 +242,7 @@ fn resolves_supported_request_fields_without_mutating_the_source() {
     assert_eq!(request_with_values.headers[0].value, "Bearer test-token");
     assert_eq!(request_with_values.query_parameters[0].value, "probe");
     assert_eq!(request_with_values.path_parameters[0].value, "probe");
-    let Some(RequestBody::Variants(variants)) = &request_with_values.body else {
+    let Some(RequestBody::Variants(variants)) = request_with_values.http_body() else {
         panic!("expected body variants");
     };
     let Body::FormUrlEncoded(fields) = &variants[0].body else {
@@ -415,31 +417,35 @@ fn resolves_raw_and_multipart_body_values() {
         "development",
     )
     .unwrap();
-    let mut raw_request = HttpRequest {
-        body: Some(RequestBody::Single(Body::Raw(RawBody {
-            kind: RawBodyKind::Json,
-            data: "{\"value\":\"{{value}}\"}".to_owned(),
-        }))),
-        ..HttpRequest::default()
+    let mut raw_request = Request {
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Single(Body::Raw(RawBody {
+                kind: RawBodyKind::Json,
+                data: "{\"value\":\"{{value}}\"}".to_owned(),
+            }))),
+        },
+        ..Request::default()
     };
-    let multipart_request = HttpRequest {
-        body: Some(RequestBody::Single(Body::Multipart(vec![MultipartPart {
-            name: "upload".to_owned(),
-            kind: MultipartPartKind::File,
-            value: MultipartValue::Multiple(vec!["./{{value}}.txt".to_owned()]),
-            content_type: Some("text/{{value}}".to_owned()),
-            disabled: false,
-        }]))),
-        ..HttpRequest::default()
+    let multipart_request = Request {
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+                name: "upload".to_owned(),
+                kind: MultipartPartKind::File,
+                value: MultipartValue::Multiple(vec!["./{{value}}.txt".to_owned()]),
+                content_type: Some("text/{{value}}".to_owned()),
+                disabled: false,
+            }]))),
+        },
+        ..Request::default()
     };
 
     raw_request = resolve_request(&raw_request, &environment).unwrap();
     let multipart_request = resolve_request(&multipart_request, &environment).unwrap();
-    let Some(RequestBody::Single(Body::Raw(raw))) = raw_request.body else {
+    let Some(RequestBody::Single(Body::Raw(raw))) = raw_request.http_body() else {
         panic!("expected raw body");
     };
     assert_eq!(raw.data, "{\"value\":\"resolved\"}");
-    let Some(RequestBody::Single(Body::Multipart(parts))) = multipart_request.body else {
+    let Some(RequestBody::Single(Body::Multipart(parts))) = multipart_request.http_body() else {
         panic!("expected multipart body");
     };
     assert_eq!(

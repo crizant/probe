@@ -57,7 +57,7 @@ impl ProbeApp {
             .unwrap_or("Untitled request")
             .to_owned();
         let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
-        let navigation_label = request_navigation_label(&request.protocol, &method);
+        let navigation_label = request_navigation_label(&request.kind, &method);
         let position = point(
             tooltip.position.x + px(theme.metrics.spacing_1),
             tooltip.position.y + px(theme.metrics.control_height * 0.5),
@@ -86,7 +86,7 @@ impl ProbeApp {
                     .font_family(theme.typography.monospace_family)
                     .text_size(px(tree_method_font_size(theme, &navigation_label)))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(request_navigation_color(theme, &request.protocol, &method))
+                    .text_color(request_navigation_color(theme, &request.kind, &method))
                     .child(navigation_label),
             )
             .child(components::truncated_label(label).min_w(px(0.0)).flex_1());
@@ -270,10 +270,9 @@ impl ProbeApp {
                     .as_deref()
                     .unwrap_or("Untitled request");
                 let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
-                let navigation_label = request_navigation_label(&request.protocol, &method);
-                let navigation_color = request_navigation_color(theme, &request.protocol, &method);
-                let is_graphql =
-                    matches!(request.protocol, probe_core::RequestProtocol::Graphql(_));
+                let navigation_label = request_navigation_label(&request.kind, &method);
+                let navigation_color = request_navigation_color(theme, &request.kind, &method);
+                let is_graphql = request.kind.is_graphql();
                 let selected = self.selected_tree_item == Some(WorkspaceItemRef::Request(key));
                 let view = cx.weak_entity();
                 let context_menu_view = cx.weak_entity();

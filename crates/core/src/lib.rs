@@ -45,10 +45,10 @@ pub use path_parameters::{
 };
 pub use request::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, BodyVariant, FieldPatch,
-    FileReference, FormField, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, GraphqlRequest,
-    GraphqlRequestError, GraphqlUpdate, Header, HttpRequest, MultipartPart, MultipartPartKind,
-    MultipartValue, QueryParameter, RawBody, RawBodyKind, RequestBody, RequestDiffError,
-    RequestProtocol, RequestSettings, RequestUpdate,
+    FileReference, FormField, GraphqlBody, GraphqlBodyVariant, GraphqlOperation,
+    GraphqlRequestError, GraphqlUpdate, Header, MultipartPart, MultipartPartKind, MultipartValue,
+    PreparedHttpRequest, QueryParameter, RawBody, RawBodyKind, Request, RequestBody,
+    RequestDiffError, RequestKind, RequestSettings, RequestUpdate,
 };
 pub use request_resolution::{
     RequestVariableInfo, VariableUsage, discover_request_variables, resolve_request,

@@ -581,7 +581,7 @@ fn bundled_create_can_write_native_graphql_requests() {
         .workspace()
         .request(reloaded.request_key(&selector).unwrap())
         .unwrap();
-    assert_eq!(request.protocol.as_str(), "graphql");
+    assert_eq!(request.kind.as_str(), "graphql");
     assert_eq!(
         request
             .selected_graphql()

@@ -35,7 +35,7 @@ impl ProbeApp {
                                     key,
                                     |request| {
                                         if let Some(RequestBody::Single(Body::Multipart(parts))) =
-                                            request.body.as_mut()
+                                            request.http_body_mut()
                                             && let Some(part) = parts.get_mut(index)
                                         {
                                             part.kind = if part.kind == MultipartPartKind::Text {
@@ -64,7 +64,7 @@ impl ProbeApp {
                                             |request| {
                                                 if let Some(RequestBody::Single(Body::Multipart(
                                                     parts,
-                                                ))) = request.body.as_mut()
+                                                ))) = request.http_body_mut()
                                                     && let Some(part) = parts.get_mut(index)
                                                 {
                                                     part.name = value.to_string();
@@ -97,7 +97,7 @@ impl ProbeApp {
                                                     |request| {
                                                         if let Some(RequestBody::Single(
                                                             Body::Multipart(parts),
-                                                        )) = request.body.as_mut()
+                                                        )) = request.http_body_mut()
                                                             && let Some(part) = parts.get_mut(index)
                                                         {
                                                             part.value = MultipartValue::Single(
@@ -139,7 +139,7 @@ impl ProbeApp {
                                                 |request| {
                                                     if let Some(RequestBody::Single(
                                                         Body::Multipart(parts),
-                                                    )) = request.body.as_mut()
+                                                    )) = request.http_body_mut()
                                                         && let Some(part) = parts.get_mut(index)
                                                     {
                                                         part.value = MultipartValue::Single(
@@ -166,7 +166,7 @@ impl ProbeApp {
                                     key,
                                     |request| {
                                         if let Some(RequestBody::Single(Body::Multipart(parts))) =
-                                            request.body.as_mut()
+                                            request.http_body_mut()
                                             && let Some(part) = parts.get_mut(index)
                                         {
                                             part.disabled = !enabled;
@@ -187,7 +187,7 @@ impl ProbeApp {
                                     key,
                                     |request| {
                                         if let Some(RequestBody::Single(Body::Multipart(parts))) =
-                                            request.body.as_mut()
+                                            request.http_body_mut()
                                             && index < parts.len()
                                         {
                                             parts.remove(index);
@@ -212,7 +212,7 @@ impl ProbeApp {
                         key,
                         |request| {
                             if let Some(RequestBody::Single(Body::Multipart(parts))) =
-                                request.body.as_mut()
+                                request.http_body_mut()
                             {
                                 parts.push(MultipartPart {
                                     name: String::new(),

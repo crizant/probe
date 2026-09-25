@@ -12,21 +12,21 @@ pub(super) enum ParameterEditorKind {
 }
 
 impl ParameterEditorKind {
-    fn parameters(self, request: &HttpRequest) -> &[QueryParameter] {
+    fn parameters(self, request: &Request) -> &[QueryParameter] {
         match self {
             Self::Path => &request.path_parameters,
             Self::Query => &request.query_parameters,
         }
     }
 
-    fn parameter_mut(self, request: &mut HttpRequest, index: usize) -> Option<&mut QueryParameter> {
+    fn parameter_mut(self, request: &mut Request, index: usize) -> Option<&mut QueryParameter> {
         match self {
             Self::Path => request.path_parameters.get_mut(index),
             Self::Query => request.query_parameters.get_mut(index),
         }
     }
 
-    fn rename(self, request: &mut HttpRequest, index: usize, name: &str) {
+    fn rename(self, request: &mut Request, index: usize, name: &str) {
         match self {
             Self::Path => {
                 rename_path_parameter_at(request, index, name);
@@ -39,7 +39,7 @@ impl ParameterEditorKind {
         }
     }
 
-    fn remove(self, request: &mut HttpRequest, index: usize) {
+    fn remove(self, request: &mut Request, index: usize) {
         match self {
             Self::Path => {
                 remove_path_parameter_at(request, index);
@@ -51,7 +51,7 @@ impl ParameterEditorKind {
         }
     }
 
-    fn add(self, request: &mut HttpRequest) {
+    fn add(self, request: &mut Request) {
         match self {
             Self::Path => add_path_parameter(request),
             Self::Query => request.query_parameters.push(QueryParameter {
@@ -170,7 +170,7 @@ impl Render for ProbeApp {
         }
         let theme = Theme::for_window_appearance(window.appearance());
         let sidebar_view = cx.weak_entity();
-        if self.toasts.stack_state.is_expanded() != self.toast_paused {
+        if self.toasts.pause_pending() {
             self.schedule_toast_lifecycle(cx);
         }
         #[cfg(test)]

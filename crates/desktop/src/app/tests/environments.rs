@@ -1764,12 +1764,14 @@ fn json_body_variables_show_resolved_tooltips(cx: &mut TestAppContext) {
             view.edit_request(
                 request_key,
                 |request| {
-                    request.body = Some(probe_core::RequestBody::Single(probe_core::Body::Raw(
-                        probe_core::RawBody {
-                            kind: probe_core::RawBodyKind::Json,
-                            data: "{\n  \"tenant\": \"{{tenant}}\"\n}".to_owned(),
-                        },
-                    )));
+                    request.kind = probe_core::RequestKind::Http {
+                        body: Some(probe_core::RequestBody::Single(probe_core::Body::Raw(
+                            probe_core::RawBody {
+                                kind: probe_core::RawBodyKind::Json,
+                                data: "{\n  \"tenant\": \"{{tenant}}\"\n}".to_owned(),
+                            },
+                        ))),
+                    };
                 },
                 cx,
             );

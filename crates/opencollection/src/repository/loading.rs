@@ -174,7 +174,7 @@ fn read_items(
             );
             let mut folder = match read.item {
                 Some(CollectionItem::Folder(folder)) => folder,
-                Some(CollectionItem::HttpRequest(_) | CollectionItem::GraphqlRequest(_)) => {
+                Some(CollectionItem::Request(_)) => {
                     return Err(LoadError::InvalidItem {
                         path: folder_config,
                         message: "folder.yml must describe a folder".to_owned(),
@@ -208,23 +208,10 @@ fn read_items(
             );
             if let Some(item) = read.item {
                 match item {
-                    CollectionItem::HttpRequest(request) => {
+                    CollectionItem::Request(request) => {
                         let selector = relative_selector(root, &path);
                         items.push((
-                            CollectionItem::HttpRequest(request),
-                            LocatorNode::Request {
-                                selector,
-                                persistence: Some(RequestPersistence {
-                                    document_path: path,
-                                    item_path: Vec::new(),
-                                }),
-                            },
-                        ));
-                    }
-                    CollectionItem::GraphqlRequest(request) => {
-                        let selector = relative_selector(root, &path);
-                        items.push((
-                            CollectionItem::GraphqlRequest(request),
+                            CollectionItem::Request(request),
                             LocatorNode::Request {
                                 selector,
                                 persistence: Some(RequestPersistence {
@@ -445,8 +432,7 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
 fn item_sequence(item: &CollectionItem) -> f64 {
     match item {
         CollectionItem::Folder(folder) => folder.metadata.sequence,
-        CollectionItem::HttpRequest(request) => request.metadata.sequence,
-        CollectionItem::GraphqlRequest(request) => request.metadata.sequence,
+        CollectionItem::Request(request) => request.metadata.sequence,
     }
     .unwrap_or(f64::INFINITY)
 }

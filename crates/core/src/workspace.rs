@@ -1,5 +1,5 @@
 use crate::{
-    Collection, CollectionItem, CollectionMetadata, Environment, HttpRequest, ItemMetadata,
+    Collection, CollectionItem, CollectionMetadata, Environment, ItemMetadata, Request,
     arena::{Arena, ArenaKey},
 };
 use std::collections::BTreeMap;
@@ -120,7 +120,7 @@ pub struct Workspace {
     workspace_generation: u64,
     metadata: CollectionMetadata,
     root_items: Vec<WorkspaceItemRef>,
-    requests: Arena<HttpRequest>,
+    requests: Arena<Request>,
     folders: Arena<WorkspaceFolder>,
     request_ancestors: BTreeMap<RequestKey, Vec<FolderKey>>,
     environments: Vec<Environment>,
@@ -203,7 +203,7 @@ impl Workspace {
 
     /// Looks up a request in constant time, rejecting stale generations.
     #[must_use]
-    pub fn request(&self, key: RequestKey) -> Option<&HttpRequest> {
+    pub fn request(&self, key: RequestKey) -> Option<&Request> {
         if key.workspace_generation != self.workspace_generation {
             return None;
         }
@@ -211,7 +211,7 @@ impl Workspace {
     }
 
     /// Mutably looks up a request in constant time, rejecting stale generations.
-    pub fn request_mut(&mut self, key: RequestKey) -> Option<&mut HttpRequest> {
+    pub fn request_mut(&mut self, key: RequestKey) -> Option<&mut Request> {
         if key.workspace_generation != self.workspace_generation {
             return None;
         }
@@ -225,7 +225,7 @@ impl Workspace {
     }
 
     /// Adds a request at the workspace root and returns its new runtime key.
-    pub fn add_root_request(&mut self, request: HttpRequest) -> RequestKey {
+    pub fn add_root_request(&mut self, request: Request) -> RequestKey {
         let key =
             RequestKey::in_workspace(self.workspace_generation, self.requests.insert(request));
         self.request_ancestors.insert(key, Vec::new());
@@ -235,7 +235,7 @@ impl Workspace {
 
     /// Retains an editor draft without adding it to the collection hierarchy.
     /// The returned key is valid for the lifetime of this workspace only.
-    pub fn add_detached_request(&mut self, request: HttpRequest) -> RequestKey {
+    pub fn add_detached_request(&mut self, request: Request) -> RequestKey {
         RequestKey::in_workspace(self.workspace_generation, self.requests.insert(request))
     }
 
@@ -244,7 +244,7 @@ impl Workspace {
         &mut self,
         parent: WorkspaceParent,
         index: usize,
-        request: HttpRequest,
+        request: Request,
     ) -> Result<RequestKey, WorkspaceEditError> {
         self.validate_insertion(parent, index)?;
         let key =
@@ -358,7 +358,7 @@ impl Workspace {
     ///
     /// A later request may reuse the storage slot, but receives a new generation so
     /// the removed key can never resolve to the replacement.
-    pub fn remove_request(&mut self, key: RequestKey) -> Option<HttpRequest> {
+    pub fn remove_request(&mut self, key: RequestKey) -> Option<Request> {
         if key.workspace_generation != self.workspace_generation {
             return None;
         }
@@ -661,7 +661,7 @@ impl From<FolderKey> for ArenaKey {
 fn index_items(
     items: Vec<CollectionItem>,
     workspace_generation: u64,
-    requests: &mut Arena<HttpRequest>,
+    requests: &mut Arena<Request>,
     folders: &mut Arena<WorkspaceFolder>,
     request_ancestors: &mut BTreeMap<RequestKey, Vec<FolderKey>>,
     ancestors: &[FolderKey],
@@ -684,22 +684,14 @@ fn index_items(
 fn index_item(
     item: CollectionItem,
     workspace_generation: u64,
-    requests: &mut Arena<HttpRequest>,
+    requests: &mut Arena<Request>,
     folders: &mut Arena<WorkspaceFolder>,
     request_ancestors: &mut BTreeMap<RequestKey, Vec<FolderKey>>,
     ancestors: &[FolderKey],
 ) -> WorkspaceItemRef {
     match item {
-        CollectionItem::HttpRequest(request) => {
+        CollectionItem::Request(request) => {
             let key = RequestKey::in_workspace(workspace_generation, requests.insert(request));
-            request_ancestors.insert(key, ancestors.to_vec());
-            WorkspaceItemRef::Request(key)
-        }
-        CollectionItem::GraphqlRequest(request) => {
-            let key = RequestKey::in_workspace(
-                workspace_generation,
-                requests.insert(request.into_request()),
-            );
             request_ancestors.insert(key, ancestors.to_vec());
             WorkspaceItemRef::Request(key)
         }
@@ -732,27 +724,22 @@ fn index_item(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        Collection, CollectionItem, CollectionMetadata, Folder, HttpRequest, ItemMetadata,
-    };
+    use crate::{Collection, CollectionItem, CollectionMetadata, Folder, ItemMetadata, Request};
 
     use super::{Workspace, WorkspaceEditError, WorkspaceItemRef, WorkspaceParent};
 
     fn request(name: &str) -> CollectionItem {
-        CollectionItem::HttpRequest(HttpRequest {
+        CollectionItem::Request(http_request(name))
+    }
+
+    fn http_request(name: &str) -> Request {
+        Request {
             metadata: ItemMetadata {
                 name: Some(name.to_owned()),
                 sequence: None,
             },
-            ..HttpRequest::default()
-        })
-    }
-
-    fn http_request(name: &str) -> HttpRequest {
-        let CollectionItem::HttpRequest(request) = request(name) else {
-            unreachable!();
-        };
-        request
+            ..Request::default()
+        }
     }
 
     #[test]
@@ -779,7 +766,7 @@ mod tests {
             Err(WorkspaceEditError::ItemNotFound)
         );
         assert_eq!(
-            second.insert_request(WorkspaceParent::Folder(key), 0, HttpRequest::default()),
+            second.insert_request(WorkspaceParent::Folder(key), 0, Request::default()),
             Err(WorkspaceEditError::DestinationNotFound)
         );
     }

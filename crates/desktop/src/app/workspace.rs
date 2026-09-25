@@ -738,7 +738,7 @@ impl ProbeApp {
     pub(super) fn install_reloaded_workspace(
         &mut self,
         mut workspace: LoadedWorkspace,
-        baselines: Vec<(RequestKey, HttpRequest)>,
+        baselines: Vec<(RequestKey, Request)>,
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
     ) -> BTreeMap<RequestKey, RequestKey> {
         let detached = self

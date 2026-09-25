@@ -167,7 +167,9 @@ impl CliError {
 
     pub(crate) fn graphql(error: GraphqlRequestError) -> Self {
         match error {
-            GraphqlRequestError::NotGraphql => Self::invalid_arguments(error.to_string()),
+            GraphqlRequestError::NotGraphql | GraphqlRequestError::NotHttp => {
+                Self::invalid_arguments(error.to_string())
+            }
             GraphqlRequestError::InvalidBodySelection(message) => {
                 Self::http(HttpError::InvalidBodySelection(message))
             }

@@ -1,4 +1,4 @@
-//! HTTP request, body, authentication, and edit models.
+//! Native request, body, authentication, and edit models.
 
 use std::{collections::BTreeMap, time::Duration};
 
@@ -6,9 +6,12 @@ use serde_json::{Map, Value};
 
 use crate::ItemMetadata;
 
-/// An HTTP request definition.
+/// A native API request definition.
+///
+/// Fields shared by every protocol are stored once; protocol-specific state belongs to
+/// [`RequestKind`].
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct HttpRequest {
+pub struct Request {
     /// Request metadata.
     pub metadata: ItemMetadata,
     /// HTTP method as written in the collection.
@@ -21,14 +24,12 @@ pub struct HttpRequest {
     pub query_parameters: Vec<QueryParameter>,
     /// Path parameters.
     pub path_parameters: Vec<QueryParameter>,
-    /// Request body definition.
-    pub body: Option<RequestBody>,
     /// Request authentication configuration.
     pub authentication: Option<Authentication>,
     /// Execution settings.
     pub settings: RequestSettings,
-    /// Canonical protocol identity for this request.
-    pub protocol: RequestProtocol,
+    /// Protocol identity and protocol-specific body.
+    pub kind: RequestKind,
 }
 
 /// A change to an optional request field.
@@ -77,7 +78,7 @@ impl<T> FieldPatch<T> {
     }
 }
 
-/// A non-interactive partial update to an HTTP request.
+/// A non-interactive partial update to a native request.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RequestUpdate {
     /// Replacement request name. Removing a name is unsupported and rejected by `between`.
@@ -103,11 +104,8 @@ pub struct RequestUpdate {
 impl RequestUpdate {
     /// Builds the supported field changes from a saved request to its current draft.
     /// A missing `base` treats the request as new.
-    pub fn between(
-        base: Option<&HttpRequest>,
-        current: &HttpRequest,
-    ) -> Result<Self, RequestDiffError> {
-        if base.is_some_and(|saved| saved.protocol.as_str() != current.protocol.as_str()) {
+    pub fn between(base: Option<&Request>, current: &Request) -> Result<Self, RequestDiffError> {
+        if base.is_some_and(|saved| saved.kind.as_str() != current.kind.as_str()) {
             return Err(RequestDiffError::UnsupportedChange("request protocol"));
         }
         if base.is_some_and(|saved| saved.settings != current.settings)
@@ -125,17 +123,9 @@ impl RequestUpdate {
         {
             return Err(RequestDiffError::UnsupportedChange("request name removal"));
         }
-        let base_operation = base
-            .map(HttpRequest::selected_graphql)
-            .transpose()?
-            .flatten();
+        let base_operation = base.map(Request::selected_graphql).transpose()?.flatten();
         let current_operation = current.selected_graphql()?;
-        if base.is_none()
-            && matches!(
-                current.protocol,
-                RequestProtocol::Graphql(Some(GraphqlBody::Variants(_)))
-            )
-        {
+        if base.is_none() && matches!(current.graphql(), Some(GraphqlBody::Variants(_))) {
             return Err(RequestDiffError::UnsupportedChange("GraphQL body variants"));
         }
         let update = Self {
@@ -161,8 +151,8 @@ impl RequestUpdate {
             path_parameters: (base.map(|request| &request.path_parameters)
                 != Some(&current.path_parameters))
             .then(|| current.path_parameters.clone()),
-            body: if base.and_then(|request| request.body.as_ref()) != current.body.as_ref() {
-                FieldPatch::from_optional(current.body.clone())
+            body: if base.and_then(Request::http_body) != current.http_body() {
+                FieldPatch::from_optional(current.http_body().cloned())
             } else {
                 FieldPatch::Unchanged
             },
@@ -173,10 +163,8 @@ impl RequestUpdate {
             } else {
                 FieldPatch::Unchanged
             },
-            graphql: match (base.map(|request| &request.protocol), &current.protocol) {
-                (None | Some(RequestProtocol::Graphql(_)), RequestProtocol::Graphql(_))
-                    if base_operation != current_operation =>
-                {
+            graphql: match &current.kind {
+                RequestKind::Graphql { .. } if base_operation != current_operation => {
                     Some(GraphqlUpdate {
                         query: current_operation
                             .map(|operation| FieldPatch::from_optional(operation.query.clone()))
@@ -224,7 +212,24 @@ impl RequestUpdate {
     }
 
     /// Applies the update to a domain request, including native GraphQL fields.
-    pub fn apply(&self, request: &mut HttpRequest) -> Result<(), GraphqlRequestError> {
+    ///
+    /// On error the request is left unchanged.
+    pub fn apply(&self, request: &mut Request) -> Result<(), GraphqlRequestError> {
+        let graphql = self.graphql.as_ref().filter(|update| !update.is_empty());
+        match &mut request.kind {
+            RequestKind::Http { .. } if graphql.is_some() => {
+                return Err(GraphqlRequestError::NotGraphql);
+            }
+            RequestKind::Http { body } => self.body.apply_to(body),
+            RequestKind::Graphql { .. } if !self.body.is_unchanged() => {
+                return Err(GraphqlRequestError::NotHttp);
+            }
+            RequestKind::Graphql { .. } => {}
+        }
+        // Must precede common fields: variant selection can still fail here.
+        if let Some(graphql) = graphql {
+            request.apply_graphql_update(graphql)?;
+        }
         if let Some(name) = &self.name {
             request.metadata.name = Some(name.clone());
         }
@@ -239,33 +244,46 @@ impl RequestUpdate {
         if let Some(parameters) = &self.path_parameters {
             request.path_parameters.clone_from(parameters);
         }
-        self.body.apply_to(&mut request.body);
         self.authentication.apply_to(&mut request.authentication);
-        if let Some(graphql) = self.graphql.as_ref().filter(|update| !update.is_empty()) {
-            request.apply_graphql_update(graphql)?;
-        }
         Ok(())
     }
 }
 
-/// The canonical protocol represented by an in-memory request.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub enum RequestProtocol {
+/// The protocol of a native request and the body that belongs to that protocol.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RequestKind {
     /// A native OpenCollection HTTP request.
-    #[default]
-    Http,
-    /// A native OpenCollection GraphQL request and its protocol body.
-    Graphql(Option<GraphqlBody>),
+    Http {
+        /// HTTP request body definition.
+        body: Option<RequestBody>,
+    },
+    /// A native OpenCollection GraphQL request.
+    Graphql {
+        /// Native GraphQL body definition.
+        body: Option<GraphqlBody>,
+    },
 }
 
-impl RequestProtocol {
+impl Default for RequestKind {
+    fn default() -> Self {
+        Self::Http { body: None }
+    }
+}
+
+impl RequestKind {
     /// Returns the stable lowercase protocol name.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Http => "http",
-            Self::Graphql(_) => "graphql",
+            Self::Http { .. } => "http",
+            Self::Graphql { .. } => "graphql",
         }
+    }
+
+    /// Returns whether this is a native GraphQL request.
+    #[must_use]
+    pub const fn is_graphql(&self) -> bool {
+        matches!(self, Self::Graphql { .. })
     }
 }
 
@@ -333,29 +351,6 @@ pub enum Body {
     Multipart(Vec<MultipartPart>),
     /// One or more file-body variants.
     File(Vec<FileReference>),
-}
-
-/// A native OpenCollection GraphQL request definition.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct GraphqlRequest {
-    /// Request metadata.
-    pub metadata: ItemMetadata,
-    /// GraphQL-over-HTTP method as written in the collection.
-    pub method: Option<String>,
-    /// GraphQL endpoint URL, which may contain variables.
-    pub url: Option<String>,
-    /// Request headers.
-    pub headers: Vec<Header>,
-    /// Query parameters.
-    pub query_parameters: Vec<QueryParameter>,
-    /// Path parameters.
-    pub path_parameters: Vec<QueryParameter>,
-    /// Native GraphQL body definition.
-    pub body: Option<GraphqlBody>,
-    /// Request authentication configuration.
-    pub authentication: Option<Authentication>,
-    /// Execution settings.
-    pub settings: RequestSettings,
 }
 
 /// A native GraphQL body represented directly or as selectable variants.
@@ -430,6 +425,8 @@ pub enum GraphqlRequestError {
     InvalidBodySelection(String),
     /// GraphQL-only fields were requested for an HTTP request.
     NotGraphql,
+    /// HTTP body fields were requested for a native GraphQL request.
+    NotHttp,
 }
 
 impl std::fmt::Display for GraphqlRequestError {
@@ -437,6 +434,8 @@ impl std::fmt::Display for GraphqlRequestError {
         match self {
             Self::InvalidBodySelection(message) => formatter.write_str(message),
             Self::NotGraphql => formatter.write_str("request is not a native GraphQL request"),
+            Self::NotHttp => formatter
+                .write_str("HTTP body updates cannot be applied to a native GraphQL request"),
         }
     }
 }
@@ -469,32 +468,30 @@ impl std::fmt::Display for RequestDiffError {
 
 impl std::error::Error for RequestDiffError {}
 
-impl GraphqlRequest {
-    /// Converts this native request into Probe's common in-memory request representation.
+impl Request {
+    /// Returns the HTTP body when this is an HTTP request with a body.
     #[must_use]
-    pub fn into_request(self) -> HttpRequest {
-        HttpRequest {
-            metadata: self.metadata,
-            method: self.method,
-            url: self.url,
-            headers: self.headers,
-            query_parameters: self.query_parameters,
-            path_parameters: self.path_parameters,
-            body: None,
-            authentication: self.authentication,
-            settings: self.settings,
-            protocol: RequestProtocol::Graphql(self.body),
+    pub const fn http_body(&self) -> Option<&RequestBody> {
+        match &self.kind {
+            RequestKind::Http { body } => body.as_ref(),
+            RequestKind::Graphql { .. } => None,
         }
     }
-}
 
-impl HttpRequest {
-    /// Returns the native GraphQL body when this is a GraphQL request.
+    /// Returns the mutable HTTP body when this is an HTTP request with a body.
+    pub const fn http_body_mut(&mut self) -> Option<&mut RequestBody> {
+        match &mut self.kind {
+            RequestKind::Http { body } => body.as_mut(),
+            RequestKind::Graphql { .. } => None,
+        }
+    }
+
+    /// Returns the native GraphQL body when this is a GraphQL request with a body.
     #[must_use]
     pub const fn graphql(&self) -> Option<&GraphqlBody> {
-        match &self.protocol {
-            RequestProtocol::Http | RequestProtocol::Graphql(None) => None,
-            RequestProtocol::Graphql(Some(body)) => Some(body),
+        match &self.kind {
+            RequestKind::Graphql { body } => body.as_ref(),
+            RequestKind::Http { .. } => None,
         }
     }
 
@@ -534,7 +531,7 @@ impl HttpRequest {
         &mut self,
         update: &GraphqlUpdate,
     ) -> Result<(), GraphqlRequestError> {
-        let RequestProtocol::Graphql(body) = &mut self.protocol else {
+        let RequestKind::Graphql { body } = &mut self.kind else {
             return Err(GraphqlRequestError::NotGraphql);
         };
         let operation =
@@ -550,12 +547,22 @@ impl HttpRequest {
     }
 
     /// Converts an owned request into the HTTP request consumed by Probe's engine.
-    pub fn into_http(mut self) -> Result<Self, GraphqlRequestError> {
-        let operation = match std::mem::replace(&mut self.protocol, RequestProtocol::Http) {
-            RequestProtocol::Http => return Ok(self),
-            RequestProtocol::Graphql(None) => GraphqlOperation::default(),
-            RequestProtocol::Graphql(Some(GraphqlBody::Single(operation))) => operation,
-            RequestProtocol::Graphql(Some(GraphqlBody::Variants(mut variants))) => {
+    ///
+    /// Native GraphQL requests become GraphQL-over-HTTP: GET requests carry the selected
+    /// operation in query parameters, other methods carry a JSON envelope body.
+    pub fn into_http(mut self) -> Result<PreparedHttpRequest, GraphqlRequestError> {
+        let operation = match std::mem::take(&mut self.kind) {
+            http @ RequestKind::Http { .. } => {
+                self.kind = http;
+                return Ok(PreparedHttpRequest(self));
+            }
+            RequestKind::Graphql { body: None } => GraphqlOperation::default(),
+            RequestKind::Graphql {
+                body: Some(GraphqlBody::Single(operation)),
+            } => operation,
+            RequestKind::Graphql {
+                body: Some(GraphqlBody::Variants(mut variants)),
+            } => {
                 let index = Self::selected_graphql_variant_index(&variants)?;
                 variants.swap_remove(index).body
             }
@@ -585,12 +592,35 @@ impl HttpRequest {
             append_graphql_parameter(&mut self, "extensions", operation.extensions);
         } else {
             let envelope = operation.into_json_envelope();
-            self.body = Some(RequestBody::Single(Body::Raw(RawBody {
-                kind: RawBodyKind::Json,
-                data: Value::Object(envelope).to_string(),
-            })));
+            self.kind = RequestKind::Http {
+                body: Some(RequestBody::Single(Body::Raw(RawBody {
+                    kind: RawBodyKind::Json,
+                    data: Value::Object(envelope).to_string(),
+                }))),
+            };
         }
-        Ok(self)
+        Ok(PreparedHttpRequest(self))
+    }
+}
+
+/// A request ready for HTTP transport.
+///
+/// Only [`Request::into_http`] constructs this value, so its request is always
+/// [`RequestKind::Http`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedHttpRequest(Request);
+
+impl PreparedHttpRequest {
+    /// Returns the prepared request fields.
+    #[must_use]
+    pub const fn request(&self) -> &Request {
+        &self.0
+    }
+
+    /// Returns the HTTP body to send.
+    #[must_use]
+    pub const fn body(&self) -> Option<&RequestBody> {
+        self.0.http_body()
     }
 }
 
@@ -613,11 +643,7 @@ impl GraphqlOperation {
     }
 }
 
-fn append_graphql_parameter(
-    request: &mut HttpRequest,
-    name: &str,
-    value: Option<Map<String, Value>>,
-) {
+fn append_graphql_parameter(request: &mut Request, name: &str, value: Option<Map<String, Value>>) {
     if let Some(value) = value {
         request.query_parameters.push(QueryParameter {
             name: name.to_owned(),

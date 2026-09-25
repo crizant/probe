@@ -1,5 +1,5 @@
 use super::*;
-use probe_core::{GraphqlBody, GraphqlOperation, GraphqlRequest};
+use probe_core::{GraphqlBody, GraphqlOperation, Request, RequestKind};
 
 pub(super) fn convert_request(
     workspace: &YaakWorkspace,
@@ -71,30 +71,25 @@ pub(super) fn convert_request(
         "url",
         diagnostics,
     ));
-    if request.body_type.as_deref() == Some("graphql") {
-        return Ok(CollectionItem::GraphqlRequest(GraphqlRequest {
-            metadata,
-            method,
-            url,
-            headers,
-            query_parameters,
-            path_parameters,
+    let kind = if request.body_type.as_deref() == Some("graphql") {
+        RequestKind::Graphql {
             body: convert_graphql_body(request, diagnostics)?,
-            authentication,
-            settings,
-        }));
-    }
-    Ok(CollectionItem::HttpRequest(HttpRequest {
+        }
+    } else {
+        RequestKind::Http {
+            body: convert_http_body(request, diagnostics),
+        }
+    };
+    Ok(CollectionItem::Request(Request {
         metadata,
         method,
         url,
         headers,
         query_parameters,
         path_parameters,
-        body: convert_http_body(request, diagnostics),
         authentication,
         settings,
-        protocol: probe_core::RequestProtocol::Http,
+        kind,
     }))
 }
 

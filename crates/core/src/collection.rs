@@ -1,6 +1,6 @@
 //! Collection structure and portable-import diagnostics.
 
-use crate::{Environment, GraphqlRequest, HttpRequest};
+use crate::{Environment, Request};
 
 /// A parsed API collection.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -187,10 +187,8 @@ pub struct Author {
 pub enum CollectionItem {
     /// A folder containing more items.
     Folder(Folder),
-    /// An HTTP request.
-    HttpRequest(HttpRequest),
-    /// A native GraphQL request.
-    GraphqlRequest(GraphqlRequest),
+    /// A native request of any supported protocol.
+    Request(Request),
 }
 
 /// Metadata shared by folders and requests.

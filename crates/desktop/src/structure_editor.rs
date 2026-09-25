@@ -613,7 +613,7 @@ fn adjusted_drop_index(
 #[cfg(test)]
 mod tests {
     use probe_core::{
-        Collection, CollectionItem, Folder, HttpRequest, ItemMetadata, Workspace, WorkspaceItemRef,
+        Collection, CollectionItem, Folder, ItemMetadata, Request, Workspace, WorkspaceItemRef,
     };
     use probe_opencollection::{ItemKind, StructureOperation};
 
@@ -660,7 +660,7 @@ mod tests {
                     name: Some("Group".to_owned()),
                     ..ItemMetadata::default()
                 },
-                items: vec![CollectionItem::HttpRequest(HttpRequest::default())],
+                items: vec![CollectionItem::Request(Request::default())],
             })],
             ..Collection::default()
         });
@@ -682,24 +682,24 @@ mod tests {
     ) {
         let workspace = Workspace::from_collection(Collection {
             items: vec![
-                CollectionItem::HttpRequest(HttpRequest {
+                CollectionItem::Request(Request {
                     metadata: ItemMetadata {
                         name: Some("Alpha".to_owned()),
                         ..ItemMetadata::default()
                     },
-                    ..HttpRequest::default()
+                    ..Request::default()
                 }),
                 CollectionItem::Folder(Folder {
                     metadata: ItemMetadata {
                         name: Some("Group".to_owned()),
                         ..ItemMetadata::default()
                     },
-                    items: vec![CollectionItem::HttpRequest(HttpRequest {
+                    items: vec![CollectionItem::Request(Request {
                         metadata: ItemMetadata {
                             name: Some("Nested".to_owned()),
                             ..ItemMetadata::default()
                         },
-                        ..HttpRequest::default()
+                        ..Request::default()
                     })],
                 }),
             ],

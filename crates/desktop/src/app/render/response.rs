@@ -1052,7 +1052,7 @@ impl ProbeApp {
             )
     }
 
-    pub(in crate::app) fn active_request(&self) -> Option<&HttpRequest> {
+    pub(in crate::app) fn active_request(&self) -> Option<&Request> {
         let key = self.shell.active_tab()?;
         self.loaded_workspace.as_ref()?.workspace().request(key)
     }

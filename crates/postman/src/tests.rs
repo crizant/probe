@@ -50,7 +50,7 @@ fn imports_v21_collection_into_domain_model() {
     let CollectionItem::Folder(folder) = &imported.collection.items[0] else {
         panic!("first item should be a folder");
     };
-    let CollectionItem::HttpRequest(request) = &folder.items[0] else {
+    let CollectionItem::Request(request) = &folder.items[0] else {
         panic!("folder should contain a request");
     };
     assert_eq!(request.url.as_deref(), Some("{{baseUrl}}/pets/:petId"));
@@ -61,7 +61,7 @@ fn imports_v21_collection_into_domain_model() {
         Some(&AuthenticationKind::Bearer)
     );
     assert!(matches!(
-        request.body,
+        request.http_body(),
         Some(RequestBody::Single(Body::Raw(_)))
     ));
     assert_eq!(
@@ -126,7 +126,7 @@ fn imports_v2_object_authentication() {
     let preview = inspect_postman_source(fixture("collection-v2.json")).unwrap();
     assert_eq!(preview.format(), PostmanSourceFormat::CollectionV2);
     let imported = preview.convert(false).unwrap();
-    let CollectionItem::HttpRequest(request) = &imported.collection.items[0] else {
+    let CollectionItem::Request(request) = &imported.collection.items[0] else {
         panic!("item should be a request");
     };
     let authentication = request.authentication.as_ref().unwrap();
@@ -149,8 +149,8 @@ fn imports_all_supported_bodies_and_expands_authentication_inheritance() {
     let requests = folder.items[..4]
         .iter()
         .map(|item| match item {
-            CollectionItem::HttpRequest(request) => request,
-            CollectionItem::Folder(_) | CollectionItem::GraphqlRequest(_) => {
+            CollectionItem::Request(request) if !request.kind.is_graphql() => request,
+            CollectionItem::Folder(_) | CollectionItem::Request(_) => {
                 panic!("first four payload items should be HTTP requests")
             }
         })
@@ -168,29 +168,29 @@ fn imports_all_supported_bodies_and_expands_authentication_inheritance() {
     );
     assert!(requests[1].authentication.is_none());
     assert!(matches!(
-        requests[0].body,
+        requests[0].http_body(),
         Some(RequestBody::Single(Body::Raw(_)))
     ));
     assert!(matches!(
-        requests[1].body,
+        requests[1].http_body(),
         Some(RequestBody::Single(Body::FormUrlEncoded(_)))
     ));
-    let Some(RequestBody::Single(Body::Multipart(parts))) = &requests[2].body else {
+    let Some(RequestBody::Single(Body::Multipart(parts))) = requests[2].http_body() else {
         panic!("third request should be multipart");
     };
     assert_eq!(parts[1].kind, MultipartPartKind::File);
     assert!(matches!(
-        requests[3].body,
+        requests[3].http_body(),
         Some(RequestBody::Single(Body::File(_)))
     ));
-    let CollectionItem::GraphqlRequest(graphql) = &folder.items[4] else {
+    let CollectionItem::Request(graphql) = &folder.items[4] else {
         panic!("fifth payload item should be a GraphQL request");
     };
     assert_eq!(
         graphql.url.as_deref(),
         Some("https://api.example.com/graphql")
     );
-    let Some(GraphqlBody::Single(operation)) = &graphql.body else {
+    let Some(GraphqlBody::Single(operation)) = graphql.graphql() else {
         panic!("GraphQL request should have a single operation");
     };
     assert_eq!(
@@ -206,7 +206,7 @@ fn imports_all_supported_bodies_and_expands_authentication_inheritance() {
             .and_then(serde_json::Value::as_str),
         Some("{{petId}}")
     );
-    let CollectionItem::HttpRequest(string_request) = &imported.collection.items[1] else {
+    let CollectionItem::Request(string_request) = &imported.collection.items[1] else {
         panic!("second root item should be a request");
     };
     assert_eq!(
@@ -290,7 +290,7 @@ fn bundled_save_reload_preserves_imported_semantics_and_environment() {
     let CollectionItem::Folder(source_folder) = &imported.collection.items[0] else {
         panic!("source item should be a folder");
     };
-    let CollectionItem::HttpRequest(source_request) = &source_folder.items[0] else {
+    let CollectionItem::Request(source_request) = &source_folder.items[0] else {
         panic!("source folder item should be a request");
     };
     assert_eq!(request, source_request);
@@ -306,13 +306,13 @@ fn imports_native_graphql_requests_and_round_trips() {
     assert!(!imported.partial);
     assert_eq!(imported.collection.items.len(), 2);
 
-    let CollectionItem::GraphqlRequest(viewer) = &imported.collection.items[0] else {
+    let CollectionItem::Request(viewer) = &imported.collection.items[0] else {
         panic!("first item should be a GraphQL request");
     };
     assert_eq!(viewer.metadata.name.as_deref(), Some("Viewer"));
     assert_eq!(viewer.method.as_deref(), Some("POST"));
     assert_eq!(viewer.headers[0].name, "X-Trace");
-    let Some(GraphqlBody::Single(operation)) = &viewer.body else {
+    let Some(GraphqlBody::Single(operation)) = viewer.graphql() else {
         panic!("Viewer should have a single GraphQL operation");
     };
     assert_eq!(
@@ -338,11 +338,11 @@ fn imports_native_graphql_requests_and_round_trips() {
         Some(&serde_json::Value::Bool(true))
     );
 
-    let CollectionItem::GraphqlRequest(object_vars) = &imported.collection.items[1] else {
+    let CollectionItem::Request(object_vars) = &imported.collection.items[1] else {
         panic!("second item should be a GraphQL request");
     };
     assert_eq!(object_vars.method.as_deref(), Some("GET"));
-    let Some(GraphqlBody::Single(operation)) = &object_vars.body else {
+    let Some(GraphqlBody::Single(operation)) = object_vars.graphql() else {
         panic!("object-variable request should have a single GraphQL operation");
     };
     assert_eq!(
@@ -363,7 +363,7 @@ fn imports_native_graphql_requests_and_round_trips() {
         panic!("round-tripped root item should be a request");
     };
     let request = workspace.request(request_key).unwrap();
-    assert_eq!(request.protocol.as_str(), "graphql");
+    assert_eq!(request.kind.as_str(), "graphql");
     let operation = request.selected_graphql().unwrap().unwrap();
     assert_eq!(operation.operation_name.as_deref(), Some("Viewer"));
     assert!(

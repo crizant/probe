@@ -211,6 +211,13 @@ CLI or GPUI
 For the desktop application, the resulting workspace remains in memory
 for fast navigation.
 
+Collection items are `Folder` or `Request`. Every OpenCollection request item, HTTP or
+GraphQL, loads into one native `Request` whose `RequestKind` selects the protocol and
+owns that protocol's body: `Http { body }` or `Graphql { body }`. A request therefore
+cannot carry a body for the other protocol. OpenCollection projection maps `info.type`
+and the matching `http`/`graphql` section to and from `RequestKind`, and imports build
+the same model directly.
+
 
 ## Desktop Runtime
 
@@ -288,11 +295,17 @@ Application operation
      ↓
 WorkspaceRepository
      ↓
-Request + Environment
+native Request + Environment
      ↓
-EnvironmentResolver
+environment resolution
      ↓
-HTTP Engine
+Request::into_http()
+     ↓
+PreparedHttpRequest
+     ↓
+probe-http engine
+     ↓
+network (reqwest)
      ↓
 Response
      ↓
@@ -321,8 +334,14 @@ the domain remains independent of filesystem APIs.
 
 ## HTTP Execution
 
-`probe-http` owns the single asynchronous HTTP implementation. It converts resolved
-domain requests into network requests, substitutes enabled `:variableName` path parameters,
+Execution preparation lives in `probe-core`. `Request::into_http()` consumes a resolved
+native request and returns a `PreparedHttpRequest`, which can only be constructed there.
+HTTP requests pass through unchanged. GraphQL requests become GraphQL-over-HTTP: `GET`
+carries the selected operation in query parameters, and other methods carry a JSON
+envelope body. The engine therefore never sees GraphQL.
+
+`probe-http` owns the single asynchronous HTTP implementation. It accepts only
+`PreparedHttpRequest` values and converts them into network requests, substitutes enabled `:variableName` path parameters,
 applies enabled headers and query parameters,
 selects body/file variants, implements Basic and Bearer authentication, and enforces
 OpenCollection timeout and redirect settings. Neither CLI nor desktop constructs HTTP

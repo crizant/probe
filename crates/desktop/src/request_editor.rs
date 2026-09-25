@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use probe_core::{
-    Authentication, AuthenticationKind, AuthenticationValue, Body, HttpRequest, QueryParameter,
-    RawBody, RawBodyKind, RequestBody, RequestKey, synchronize_path_parameters,
+    Authentication, AuthenticationKind, AuthenticationValue, Body, QueryParameter, RawBody,
+    RawBodyKind, Request, RequestBody, RequestKey, RequestKind, synchronize_path_parameters,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -72,7 +72,7 @@ impl EditorSection {
     }
 }
 
-pub(crate) fn url_bar_value(request: &HttpRequest) -> String {
+pub(crate) fn url_bar_value(request: &Request) -> String {
     let url = request.url.as_deref().unwrap_or_default();
     let query = request
         .query_parameters
@@ -100,7 +100,7 @@ pub(crate) fn url_bar_value(request: &HttpRequest) -> String {
     format!("{before_fragment}{separator}{query}{fragment_separator}{fragment}")
 }
 
-pub(crate) fn apply_url_bar_value(request: &mut HttpRequest, value: &str) {
+pub(crate) fn apply_url_bar_value(request: &mut Request, value: &str) {
     let (without_fragment, fragment) = value.split_once('#').unwrap_or((value, ""));
     let (url, query) = without_fragment
         .split_once('?')
@@ -212,13 +212,16 @@ impl RequestEditorState {
     pub(crate) fn switch_body_kind(
         &mut self,
         key: RequestKey,
-        request: &mut HttpRequest,
+        request: &mut Request,
         next_kind: BodyEditorKind,
     ) {
-        let previous_body = request.body.take();
+        let RequestKind::Http { body } = &mut request.kind else {
+            return;
+        };
+        let previous_body = body.take();
         let previous_kind = previous_body.as_ref().and_then(BodyEditorKind::from_body);
         if previous_kind == Some(next_kind) {
-            request.body = previous_body;
+            *body = previous_body;
             return;
         }
         if let (Some(previous_kind), Some(previous_body)) = (previous_kind, previous_body.as_ref())
@@ -227,7 +230,7 @@ impl RequestEditorState {
                 .insert((key, previous_kind), previous_body.clone());
         }
 
-        request.body = match next_kind {
+        *body = match next_kind {
             BodyEditorKind::None => None,
             _ => self
                 .body_drafts
@@ -299,8 +302,8 @@ fn new_body_for_kind(
     Some(RequestBody::Single(body))
 }
 
-pub(crate) fn body_kind(request: &HttpRequest) -> &'static str {
-    match request.body.as_ref() {
+pub(crate) fn body_kind(request: &Request) -> &'static str {
+    match request.http_body() {
         None => "None",
         Some(RequestBody::Single(Body::Raw(RawBody {
             kind: RawBodyKind::Json,
@@ -325,8 +328,8 @@ pub(crate) fn body_kind(request: &HttpRequest) -> &'static str {
     }
 }
 
-pub(crate) fn raw_body_mut(request: &mut HttpRequest) -> Option<&mut String> {
-    match request.body.as_mut() {
+pub(crate) fn raw_body_mut(request: &mut Request) -> Option<&mut String> {
+    match request.http_body_mut() {
         Some(RequestBody::Single(Body::Raw(raw))) => Some(&mut raw.data),
         _ => None,
     }
@@ -348,7 +351,7 @@ pub(crate) fn auth_label(kind: &AuthenticationKind) -> &'static str {
     }
 }
 
-pub(crate) fn set_authentication(request: &mut HttpRequest, kind: Option<AuthenticationKind>) {
+pub(crate) fn set_authentication(request: &mut Request, kind: Option<AuthenticationKind>) {
     if request.authentication.as_ref().map(|auth| &auth.kind) == kind.as_ref() {
         return;
     }
@@ -358,7 +361,7 @@ pub(crate) fn set_authentication(request: &mut HttpRequest, kind: Option<Authent
     });
 }
 
-pub(crate) fn set_auth_property(request: &mut HttpRequest, name: String, value: String) {
+pub(crate) fn set_auth_property(request: &mut Request, name: String, value: String) {
     let Some(authentication) = request.authentication.as_mut() else {
         return;
     };
@@ -381,9 +384,7 @@ pub(crate) fn auth_value(value: &AuthenticationValue) -> String {
 mod tests {
     use std::collections::BTreeMap;
 
-    use probe_core::{
-        AuthenticationKind, Body, HttpRequest, QueryParameter, RawBodyKind, RequestBody,
-    };
+    use probe_core::{AuthenticationKind, Body, QueryParameter, RawBodyKind, Request, RequestBody};
 
     use super::{
         BodyEditorKind, EditorSection, RequestEditorState, apply_url_bar_value, raw_body_mut,
@@ -392,7 +393,7 @@ mod tests {
 
     #[test]
     fn url_bar_includes_enabled_query_values_before_the_fragment() {
-        let request = HttpRequest {
+        let request = Request {
             url: Some("https://api.example.com/users/:userId#results".to_owned()),
             query_parameters: vec![
                 QueryParameter {
@@ -406,7 +407,7 @@ mod tests {
                     disabled: true,
                 },
             ],
-            ..HttpRequest::default()
+            ..Request::default()
         };
 
         assert_eq!(
@@ -417,13 +418,13 @@ mod tests {
 
     #[test]
     fn editing_the_url_bar_updates_query_values_without_losing_disabled_rows() {
-        let mut request = HttpRequest {
+        let mut request = Request {
             query_parameters: vec![QueryParameter {
                 name: "hidden".to_owned(),
                 value: "no".to_owned(),
                 disabled: true,
             }],
-            ..HttpRequest::default()
+            ..Request::default()
         };
 
         apply_url_bar_value(
@@ -446,7 +447,7 @@ mod tests {
 
     #[test]
     fn url_bar_path_variables_reuse_values_deduplicate_and_remove_stale_rows() {
-        let mut request = HttpRequest {
+        let mut request = Request {
             path_parameters: vec![
                 QueryParameter {
                     name: "userId".to_owned(),
@@ -464,7 +465,7 @@ mod tests {
                     disabled: true,
                 },
             ],
-            ..HttpRequest::default()
+            ..Request::default()
         };
 
         apply_url_bar_value(
@@ -483,7 +484,7 @@ mod tests {
 
     #[test]
     fn raw_body_edits_update_the_request_immediately() {
-        let mut request = HttpRequest::default();
+        let mut request = Request::default();
         RequestEditorState::default().switch_body_kind(
             request_key(),
             &mut request,
@@ -492,7 +493,7 @@ mod tests {
         raw_body_mut(&mut request)
             .unwrap()
             .push_str("{\"ok\":true}");
-        let Some(RequestBody::Single(Body::Raw(body))) = request.body else {
+        let Some(RequestBody::Single(Body::Raw(body))) = request.http_body() else {
             panic!("expected a raw body");
         };
         assert_eq!(body.kind, RawBodyKind::Json);
@@ -501,7 +502,7 @@ mod tests {
 
     #[test]
     fn authentication_edits_update_the_request_immediately() {
-        let mut request = HttpRequest::default();
+        let mut request = Request::default();
         set_authentication(&mut request, Some(AuthenticationKind::Bearer));
         set_auth_property(&mut request, "token".to_owned(), "secret".to_owned());
         let authentication = request.authentication.unwrap();
@@ -516,21 +517,21 @@ mod tests {
 
     #[test]
     fn structured_body_modes_are_created_without_replacing_the_active_mode() {
-        let mut request = HttpRequest::default();
+        let mut request = Request::default();
         let mut editor = RequestEditorState::default();
         editor.switch_body_kind(request_key(), &mut request, BodyEditorKind::Form);
         assert!(matches!(
-            request.body,
+            request.http_body(),
             Some(RequestBody::Single(Body::FormUrlEncoded(_)))
         ));
         editor.switch_body_kind(request_key(), &mut request, BodyEditorKind::Multipart);
         assert!(matches!(
-            request.body,
+            request.http_body(),
             Some(RequestBody::Single(Body::Multipart(_)))
         ));
         editor.switch_body_kind(request_key(), &mut request, BodyEditorKind::File);
         assert!(matches!(
-            request.body,
+            request.http_body(),
             Some(RequestBody::Single(Body::File(_)))
         ));
     }
@@ -539,13 +540,14 @@ mod tests {
     fn switching_body_kinds_restores_each_kinds_content() {
         let key = request_key();
         let mut editor = RequestEditorState::default();
-        let mut request = HttpRequest::default();
+        let mut request = Request::default();
         editor.switch_body_kind(key, &mut request, BodyEditorKind::Json);
         raw_body_mut(&mut request)
             .unwrap()
             .push_str("{\"json\":true}");
         editor.switch_body_kind(key, &mut request, BodyEditorKind::Form);
-        let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) = request.body.as_mut() else {
+        let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) = request.http_body_mut()
+        else {
             panic!("expected form body");
         };
         fields.push(probe_core::FormField {
@@ -557,7 +559,7 @@ mod tests {
         editor.switch_body_kind(key, &mut request, BodyEditorKind::Json);
         assert_eq!(raw_body_mut(&mut request).unwrap(), "{\"json\":true}");
         editor.switch_body_kind(key, &mut request, BodyEditorKind::Form);
-        let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) = request.body else {
+        let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) = request.http_body() else {
             panic!("expected restored form body");
         };
         assert_eq!(fields[0].value, "value");
@@ -568,7 +570,7 @@ mod tests {
         let old_key = request_key();
         let new_key = replacement_request_key();
         let mut editor = RequestEditorState::default();
-        let mut request = HttpRequest::default();
+        let mut request = Request::default();
         editor.switch_body_kind(old_key, &mut request, BodyEditorKind::Json);
         raw_body_mut(&mut request)
             .unwrap()
@@ -576,7 +578,7 @@ mod tests {
         editor.switch_body_kind(old_key, &mut request, BodyEditorKind::Form);
         editor.remap_requests(&BTreeMap::from([(old_key, new_key)]));
 
-        let mut reloaded = HttpRequest::default();
+        let mut reloaded = Request::default();
         editor.switch_body_kind(new_key, &mut reloaded, BodyEditorKind::Json);
         assert_eq!(raw_body_mut(&mut reloaded).unwrap(), "{\"draft\":true}");
     }
@@ -615,9 +617,7 @@ mod tests {
 
     fn request_key() -> probe_core::RequestKey {
         let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
-            items: vec![probe_core::CollectionItem::HttpRequest(
-                HttpRequest::default(),
-            )],
+            items: vec![probe_core::CollectionItem::Request(Request::default())],
             ..probe_core::Collection::default()
         });
         let [probe_core::WorkspaceItemRef::Request(key)] = workspace.root_items() else {
@@ -628,9 +628,7 @@ mod tests {
 
     fn replacement_request_key() -> probe_core::RequestKey {
         let mut workspace = probe_core::Workspace::from_collection(probe_core::Collection {
-            items: vec![probe_core::CollectionItem::HttpRequest(
-                HttpRequest::default(),
-            )],
+            items: vec![probe_core::CollectionItem::Request(Request::default())],
             ..probe_core::Collection::default()
         });
         let [probe_core::WorkspaceItemRef::Request(old_key)] = workspace.root_items() else {
@@ -638,6 +636,6 @@ mod tests {
         };
         let old_key = *old_key;
         workspace.remove_request(old_key).unwrap();
-        workspace.add_root_request(HttpRequest::default())
+        workspace.add_root_request(Request::default())
     }
 }

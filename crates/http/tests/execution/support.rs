@@ -4,7 +4,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use probe_core::HttpRequest;
+use probe_core::{Request, RequestBody, RequestKind};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -99,12 +99,16 @@ pub(crate) async fn write_response(
     stream.write_all(body).await
 }
 
-pub(crate) fn request(method: &str, url: String) -> HttpRequest {
-    HttpRequest {
+pub(crate) fn request(method: &str, url: String) -> Request {
+    Request {
         method: Some(method.to_owned()),
         url: Some(url),
-        ..HttpRequest::default()
+        ..Request::default()
     }
+}
+
+pub(crate) const fn http_body(body: RequestBody) -> RequestKind {
+    RequestKind::Http { body: Some(body) }
 }
 
 pub(crate) async fn delayed_server() -> (String, JoinHandle<io::Result<()>>) {

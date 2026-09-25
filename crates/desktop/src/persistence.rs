@@ -1,17 +1,17 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use probe_core::{HttpRequest, RequestDiffError, RequestKey, RequestUpdate};
+use probe_core::{Request, RequestDiffError, RequestKey, RequestUpdate};
 
 #[derive(Debug, Default)]
 pub(crate) struct PersistenceState {
-    saved: BTreeMap<RequestKey, HttpRequest>,
+    saved: BTreeMap<RequestKey, Request>,
     revisions: BTreeMap<RequestKey, u64>,
     saving: BTreeMap<RequestKey, u64>,
     queue: VecDeque<RequestKey>,
 }
 
 impl PersistenceState {
-    pub(crate) fn reset(&mut self, requests: impl IntoIterator<Item = (RequestKey, HttpRequest)>) {
+    pub(crate) fn reset(&mut self, requests: impl IntoIterator<Item = (RequestKey, Request)>) {
         self.saved = requests.into_iter().collect();
         self.revisions = self.saved.keys().map(|key| (*key, 0)).collect();
         self.saving.clear();
@@ -22,7 +22,7 @@ impl PersistenceState {
         *self = Self::default();
     }
 
-    pub(crate) fn saved_request(&self, key: RequestKey) -> Option<&HttpRequest> {
+    pub(crate) fn saved_request(&self, key: RequestKey) -> Option<&Request> {
         self.saved.get(&key)
     }
 
@@ -30,7 +30,7 @@ impl PersistenceState {
         *self.revisions.entry(key).or_default() += 1;
     }
 
-    pub(crate) fn is_dirty(&self, key: RequestKey, request: &HttpRequest) -> bool {
+    pub(crate) fn is_dirty(&self, key: RequestKey, request: &Request) -> bool {
         self.saved.get(&key) != Some(request)
             || self.saving.get(&key).is_some_and(|revision| {
                 self.revisions
@@ -41,7 +41,7 @@ impl PersistenceState {
 
     pub(crate) fn dirty_keys<'a>(
         &'a self,
-        requests: impl IntoIterator<Item = (RequestKey, &'a HttpRequest)> + 'a,
+        requests: impl IntoIterator<Item = (RequestKey, &'a Request)> + 'a,
     ) -> Vec<RequestKey> {
         requests
             .into_iter()
@@ -71,8 +71,8 @@ impl PersistenceState {
     pub(crate) fn begin(
         &self,
         key: RequestKey,
-        request: &HttpRequest,
-    ) -> Result<(u64, HttpRequest, RequestUpdate), RequestDiffError> {
+        request: &Request,
+    ) -> Result<(u64, Request, RequestUpdate), RequestDiffError> {
         let snapshot = request.clone();
         let update = RequestUpdate::between(self.saved.get(&key), &snapshot)?;
         Ok((
@@ -82,7 +82,7 @@ impl PersistenceState {
         ))
     }
 
-    pub(crate) fn complete(&mut self, key: RequestKey, snapshot: HttpRequest) {
+    pub(crate) fn complete(&mut self, key: RequestKey, snapshot: Request) {
         self.saving.remove(&key);
         self.saved.insert(key, snapshot);
     }
@@ -97,15 +97,14 @@ impl PersistenceState {
 mod tests {
     use probe_core::{
         Collection, CollectionItem, GraphqlBody, GraphqlBodyVariant, GraphqlOperation,
-        GraphqlRequest, GraphqlRequestError, HttpRequest, RequestDiffError, Workspace,
-        WorkspaceItemRef,
+        GraphqlRequestError, Request, RequestDiffError, RequestKind, Workspace, WorkspaceItemRef,
     };
 
     use super::PersistenceState;
 
     fn request_key() -> probe_core::RequestKey {
         let workspace = Workspace::from_collection(Collection {
-            items: vec![CollectionItem::HttpRequest(HttpRequest::default())],
+            items: vec![CollectionItem::Request(Request::default())],
             ..Collection::default()
         });
         let [WorkspaceItemRef::Request(key)] = workspace.root_items() else {
@@ -114,12 +113,11 @@ mod tests {
         *key
     }
 
-    fn graphql_request(body: GraphqlBody) -> HttpRequest {
-        GraphqlRequest {
-            body: Some(body),
-            ..GraphqlRequest::default()
+    fn graphql_request(body: GraphqlBody) -> Request {
+        Request {
+            kind: RequestKind::Graphql { body: Some(body) },
+            ..Request::default()
         }
-        .into_request()
     }
 
     fn variants(first_selected: bool, second_selected: bool) -> GraphqlBody {
@@ -146,7 +144,7 @@ mod tests {
     #[test]
     fn completion_tracks_the_saved_snapshot_not_newer_edits() {
         let key = request_key();
-        let original = HttpRequest::default();
+        let original = Request::default();
         let mut state = PersistenceState::default();
         state.reset([(key, original.clone())]);
 
@@ -165,12 +163,12 @@ mod tests {
     fn enqueue_keeps_a_follow_up_save_for_a_request_that_is_already_saving() {
         let key = request_key();
         let mut state = PersistenceState::default();
-        state.reset([(key, HttpRequest::default())]);
+        state.reset([(key, Request::default())]);
 
         state.enqueue([key]);
         assert_eq!(state.next(), Some(key));
         state.enqueue([key]);
-        state.complete(key, HttpRequest::default());
+        state.complete(key, Request::default());
 
         assert_eq!(state.next(), Some(key));
     }

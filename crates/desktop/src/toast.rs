@@ -68,6 +68,10 @@ pub(crate) struct ToastCenter {
     last_now: Option<Instant>,
     timings: HashMap<ToastId, ToastTiming>,
     pub(crate) stack_state: ToastStackState,
+    /// Pause state most recently applied to auto-dismiss timing.
+    paused: bool,
+    /// Identifies the only scheduled wake-up that may still advance the lifecycle.
+    wake_generation: u64,
 }
 
 impl Default for ToastCenter {
@@ -78,6 +82,8 @@ impl Default for ToastCenter {
             last_now: None,
             timings: HashMap::new(),
             stack_state: ToastStackState::default(),
+            paused: false,
+            wake_generation: 0,
         }
     }
 }
@@ -135,7 +141,39 @@ impl ToastCenter {
         }
     }
 
-    pub(crate) fn advance(&mut self, now: Instant, paused: bool) -> bool {
+    /// Returns whether stack interaction changed since timing last applied its pause state.
+    pub(crate) fn pause_pending(&self) -> bool {
+        self.stack_state.is_expanded() != self.paused
+    }
+
+    /// Applies a pending stack-interaction pause change and returns whether toasts changed.
+    pub(crate) fn sync_pause(&mut self, now: Instant) -> bool {
+        self.apply_pause(self.stack_state.is_expanded(), now)
+    }
+
+    fn apply_pause(&mut self, paused: bool, now: Instant) -> bool {
+        if paused == self.paused {
+            return false;
+        }
+        // Time before this transition elapsed under the previous pause state.
+        let changed = self.advance(now, self.paused);
+        self.paused = paused;
+        changed
+    }
+
+    /// Supersedes earlier wake-ups and returns the next wake-up delay and its generation.
+    pub(crate) fn schedule_wake(&mut self, now: Instant) -> Option<(Duration, u64)> {
+        self.wake_generation = self.wake_generation.wrapping_add(1);
+        self.next_wake(now, self.paused)
+            .map(|delay| (delay, self.wake_generation))
+    }
+
+    /// Advances a scheduled wake-up, or returns `None` when it has been superseded.
+    pub(crate) fn wake(&mut self, generation: u64, now: Instant) -> Option<bool> {
+        (generation == self.wake_generation).then(|| self.advance(now, self.paused))
+    }
+
+    fn advance(&mut self, now: Instant, paused: bool) -> bool {
         let previously_present: Vec<ToastId> = self
             .iter()
             .filter(|(_, _, status)| *status == ToastTransitionStatus::Present)
@@ -172,7 +210,7 @@ impl ToastCenter {
         result.changed
     }
 
-    pub(crate) fn next_wake(&self, now: Instant, paused: bool) -> Option<Duration> {
+    fn next_wake(&self, now: Instant, paused: bool) -> Option<Duration> {
         self.iter()
             .filter_map(|(id, _, status)| {
                 let timing = self.timings.get(&id)?;
@@ -188,8 +226,12 @@ impl ToastCenter {
             .min()
     }
 
+    /// Removes every toast and supersedes any scheduled wake-up.
     pub(crate) fn clear(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            wake_generation: self.wake_generation.wrapping_add(1),
+            ..Self::default()
+        };
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -280,6 +322,73 @@ mod tests {
             Some(TOAST_AUTO_DISMISS)
         );
         assert_eq!(center.next_wake(start + TOAST_MOTION_DURATION, true), None);
+    }
+
+    #[test]
+    fn pause_transitions_charge_elapsed_time_to_the_previous_state() {
+        let start = Instant::now();
+        let presented = start + TOAST_MOTION_DURATION;
+        let mut center = ToastCenter::default();
+        center.push(ToastIntent::Success, "Saved", start);
+        center.advance(presented, false);
+
+        center.apply_pause(true, presented + Duration::from_secs(3));
+        assert_eq!(
+            center.schedule_wake(presented + Duration::from_secs(10)),
+            None
+        );
+
+        center.apply_pause(false, presented + Duration::from_secs(10));
+        assert_eq!(
+            center
+                .schedule_wake(presented + Duration::from_secs(10))
+                .map(|(delay, _)| delay),
+            Some(TOAST_AUTO_DISMISS - Duration::from_secs(3))
+        );
+    }
+
+    #[test]
+    fn wake_ups_charge_elapsed_time_to_the_applied_pause_state() {
+        let start = Instant::now();
+        let presented = start + TOAST_MOTION_DURATION;
+        let mut center = ToastCenter::default();
+        center.push(ToastIntent::Success, "Saved", start);
+        center.advance(presented, false);
+        center.apply_pause(true, presented);
+
+        // The stack collapses before render syncs the pause, so this wake still runs paused.
+        let generation = center.wake_generation;
+        assert_eq!(
+            center.wake(generation, presented + Duration::from_secs(10)),
+            Some(false)
+        );
+        center.apply_pause(false, presented + Duration::from_secs(10));
+
+        assert_eq!(
+            center
+                .schedule_wake(presented + Duration::from_secs(10))
+                .map(|(delay, _)| delay),
+            Some(TOAST_AUTO_DISMISS)
+        );
+    }
+
+    #[test]
+    fn rescheduling_and_clearing_supersede_pending_wake_ups() {
+        let start = Instant::now();
+        let mut center = ToastCenter::default();
+        center.push(ToastIntent::Success, "Saved", start);
+        let (_, first) = center.schedule_wake(start).unwrap();
+        let (_, second) = center.schedule_wake(start).unwrap();
+
+        assert_eq!(center.wake(first, start + TOAST_MOTION_DURATION), None);
+        assert_eq!(
+            center.wake(second, start + TOAST_MOTION_DURATION),
+            Some(true)
+        );
+
+        center.clear();
+        assert_eq!(center.wake(second, start + TOAST_MOTION_DURATION), None);
+        assert!(center.is_empty());
     }
 
     #[test]

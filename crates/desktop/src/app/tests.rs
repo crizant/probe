@@ -10,7 +10,7 @@ use gpui::{
     point, px, size,
 };
 use probe_core::{
-    EnvironmentVariable, HttpRequest, QueryParameter, Variable, VariableValue, VariableValueSet,
+    EnvironmentVariable, QueryParameter, Request, Variable, VariableValue, VariableValueSet,
     WorkspaceItemRef,
 };
 use probe_http::{HttpResponse, ResponseHeader};
@@ -279,7 +279,7 @@ fn assert_save_shortcut_after_clicking_remove_row_persists_removal(
     section: EditorSection,
     add_selector: &'static str,
     remove_selector: &'static str,
-    assert_request: impl FnOnce(&HttpRequest),
+    assert_request: impl FnOnce(&Request),
 ) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);

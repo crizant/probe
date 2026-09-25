@@ -4,7 +4,7 @@ impl ProbeApp {
     pub(super) fn render_body_editor(
         &self,
         key: RequestKey,
-        request: &HttpRequest,
+        request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -45,7 +45,7 @@ impl ProbeApp {
             .flex_col()
             .gap(px(theme.metrics.spacing_2))
             .child(kind_buttons);
-        match request.body.as_ref() {
+        match request.http_body() {
             Some(RequestBody::Single(Body::Raw(raw))) => {
                 let body_view = cx.weak_entity();
                 editor = editor.child(

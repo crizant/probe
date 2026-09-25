@@ -1,6 +1,6 @@
 use probe_core::{
-    Body, FileReference, FormField, GraphqlBody, ImportDiagnostic, MultipartPart,
-    MultipartPartKind, MultipartValue, RawBody, RawBodyKind, RequestBody,
+    Body, FileReference, FormField, ImportDiagnostic, MultipartPart, MultipartPartKind,
+    MultipartValue, RawBody, RawBodyKind, RequestBody, RequestKind,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -15,18 +15,13 @@ use crate::{
     schema::{PostmanBody, PostmanFile},
 };
 
-pub(super) enum ConvertedRequestBody {
-    Http(Option<RequestBody>),
-    Graphql(Option<GraphqlBody>),
-}
-
 pub(super) fn convert_body(
     value: &Value,
     resource_id: &str,
     diagnostics: &mut Vec<ImportDiagnostic>,
-) -> Result<ConvertedRequestBody, PostmanImportError> {
+) -> Result<RequestKind, PostmanImportError> {
     if value.is_null() {
-        return Ok(ConvertedRequestBody::Http(None));
+        return Ok(RequestKind::Http { body: None });
     }
     let body = PostmanBody::deserialize(value).map_err(|error| {
         PostmanImportError::Invalid(format!(
@@ -35,7 +30,7 @@ pub(super) fn convert_body(
     })?;
     diagnose_extra_fields("body", Some(resource_id), &body.extra, diagnostics);
     let Some(mode) = body.mode.as_deref() else {
-        return Ok(ConvertedRequestBody::Http(None));
+        return Ok(RequestKind::Http { body: None });
     };
     if body.disabled {
         diagnostics.push(lossy(
@@ -46,19 +41,17 @@ pub(super) fn convert_body(
             "a disabled Postman body cannot be represented by the current Probe domain",
         ));
         return Ok(if mode == "graphql" {
-            ConvertedRequestBody::Graphql(None)
+            RequestKind::Graphql { body: None }
         } else {
-            ConvertedRequestBody::Http(None)
+            RequestKind::Http { body: None }
         });
     }
     diagnose_body_options(mode, &body.options, resource_id, diagnostics);
     diagnose_inactive_body_data(&body, mode, resource_id, diagnostics);
     if mode == "graphql" {
-        return Ok(ConvertedRequestBody::Graphql(convert_graphql_body(
-            body.graphql.as_ref(),
-            resource_id,
-            diagnostics,
-        )?));
+        return Ok(RequestKind::Graphql {
+            body: convert_graphql_body(body.graphql.as_ref(), resource_id, diagnostics)?,
+        });
     }
     let converted = match mode {
         "raw" => convert_raw_body(&body, resource_id, diagnostics),
@@ -73,12 +66,12 @@ pub(super) fn convert_body(
                 Some("body.mode"),
                 &format!("Postman body mode '{other}' is not supported"),
             ));
-            return Ok(ConvertedRequestBody::Http(None));
+            return Ok(RequestKind::Http { body: None });
         }
     };
-    Ok(ConvertedRequestBody::Http(Some(RequestBody::Single(
-        converted,
-    ))))
+    Ok(RequestKind::Http {
+        body: Some(RequestBody::Single(converted)),
+    })
 }
 
 fn convert_raw_body(

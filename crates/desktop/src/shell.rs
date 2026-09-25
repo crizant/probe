@@ -209,9 +209,7 @@ impl ShellState {
 
 #[cfg(test)]
 mod tests {
-    use probe_core::{
-        Collection, CollectionItem, Folder, HttpRequest, Workspace, WorkspaceItemRef,
-    };
+    use probe_core::{Collection, CollectionItem, Folder, Request, Workspace, WorkspaceItemRef};
 
     use super::{PaneLayout, ShellState};
 
@@ -222,8 +220,8 @@ mod tests {
     ) {
         let workspace = Workspace::from_collection(Collection {
             items: vec![
-                CollectionItem::HttpRequest(HttpRequest::default()),
-                CollectionItem::HttpRequest(HttpRequest::default()),
+                CollectionItem::Request(Request::default()),
+                CollectionItem::Request(Request::default()),
                 CollectionItem::Folder(Folder::default()),
             ],
             ..Collection::default()
