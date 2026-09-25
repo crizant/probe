@@ -246,10 +246,11 @@ async fn response_cache_enforces_the_global_quota_and_recovers_orphaned_sessions
         .await
         .unwrap();
     captured.await.unwrap().unwrap();
-    assert!(third.body_file.is_some());
+    let third_path = third.body_file.as_ref().unwrap().path().to_owned();
     assert!(third.body_retention_error.is_none());
 
     drop(third);
+    wait_for_cache_cleanup(&third_path).await;
     drop(second_cache);
     std::fs::remove_dir_all(cache_directory).unwrap();
 }

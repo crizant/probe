@@ -15,9 +15,6 @@ mod projection;
 mod repository;
 mod structure;
 
-use document::EnvironmentDocument;
-use projection::{project_item, project_items, sort_diagnostics};
-
 pub use repository::{
     CompletedEnvironmentCreate, CompletedEnvironmentDelete, CompletedEnvironmentReplace,
     CompletedEnvironmentSave, CompletedRequestSave, CreateError, LoadError, LoadedWorkspace,
@@ -154,9 +151,8 @@ pub fn parse(source: &str) -> Result<ParsedCollection, ParseError> {
     }
     let bundled = wire.bundled;
     let mut diagnostics = Vec::new();
-    let collection = wire
-        .into_domain(&mut diagnostics)
-        .map_err(ParseError::new)?;
+    let collection =
+        projection::project_collection(wire, &mut diagnostics).map_err(ParseError::new)?;
     projection::sort_diagnostics(&mut diagnostics);
     validate_environments(&collection.environments).map_err(|error| {
         ParseError::new(<serde_yaml_ng::Error as serde::de::Error>::custom(

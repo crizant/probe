@@ -1,15 +1,13 @@
 use std::time::Duration;
 
 use probe_core::{
-    Author, Collection, CollectionMetadata, Environment, EnvironmentVariable, FileReference,
-    FormField, Header, ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBodyKind, RequestSettings, SecretVariable, Variable, VariableValue,
-    VariableValueSet, VariableValueType, VariableValueVariant,
+    Author, CollectionMetadata, Environment, EnvironmentVariable, FileReference, FormField, Header,
+    ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind,
+    RequestSettings, SecretVariable, Variable, VariableValue, VariableValueSet, VariableValueType,
+    VariableValueVariant,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
-
-use crate::{ProjectionDiagnostic, projection::project_items};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,24 +19,6 @@ pub(crate) struct CollectionDocument {
     pub(crate) items: Vec<Value>,
     #[serde(default)]
     pub(crate) config: CollectionConfigDocument,
-}
-
-impl CollectionDocument {
-    pub(crate) fn into_domain(
-        self,
-        diagnostics: &mut Vec<ProjectionDiagnostic>,
-    ) -> Result<Collection, serde_yaml_ng::Error> {
-        Ok(Collection {
-            metadata: self.info.into_domain(),
-            items: project_items(self.items, "items", diagnostics)?,
-            environments: self
-                .config
-                .environments
-                .into_iter()
-                .map(EnvironmentDocument::into_domain)
-                .collect(),
-        })
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
