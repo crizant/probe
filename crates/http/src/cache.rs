@@ -4,6 +4,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, Sender},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -28,6 +29,7 @@ struct ResponseCacheInner {
 struct ResponseCacheSession {
     directory: PathBuf,
     _lease: std::fs::File,
+    cleanup: Sender<PathBuf>,
 }
 
 impl ResponseCache {
@@ -61,7 +63,7 @@ impl ResponseCache {
         expected_bytes: Option<u64>,
         minimum_bytes: u64,
     ) -> Result<ResponseCacheReservation, ResponseCacheReservationError> {
-        let session_directory = self
+        let (session_directory, cleanup) = self
             .ensure_session()
             .map_err(ResponseCacheReservationError::Io)?;
         let _quota_lock = locked_file(&self.inner.directory.join("quota.lock"))
@@ -95,6 +97,7 @@ impl ResponseCache {
                             inner: Arc::new(ResponseBodyFileInner {
                                 path,
                                 _cache: self.clone(),
+                                cleanup,
                             }),
                         },
                         max_bytes: reserved_bytes,
@@ -106,14 +109,14 @@ impl ResponseCache {
         }
     }
 
-    fn ensure_session(&self) -> io::Result<PathBuf> {
+    fn ensure_session(&self) -> io::Result<(PathBuf, Sender<PathBuf>)> {
         let mut session = self
             .inner
             .session
             .lock()
             .map_err(|_| io::Error::other("response cache state is unavailable"))?;
         if let Some(session) = session.as_ref() {
-            return Ok(session.directory.clone());
+            return Ok((session.directory.clone(), session.cleanup.clone()));
         }
 
         std::fs::create_dir_all(&self.inner.directory)?;
@@ -137,11 +140,17 @@ impl ResponseCache {
             }
         };
         let lease = locked_file(&directory.join("session.lock"))?;
+        let (cleanup, pending) = mpsc::channel();
+        let base = self.inner.directory.clone();
+        std::thread::Builder::new()
+            .name("probe-response-cache-cleanup".to_owned())
+            .spawn(move || cleanup_released_bodies(&base, pending))?;
         *session = Some(ResponseCacheSession {
             directory: directory.clone(),
             _lease: lease,
+            cleanup: cleanup.clone(),
         });
-        Ok(directory)
+        Ok((directory, cleanup))
     }
 }
 
@@ -156,7 +165,7 @@ impl Eq for ResponseCache {}
 
 /// An automatically managed complete response body stored on disk.
 ///
-/// Clones share ownership. The file is removed when the final owner is dropped.
+/// Clones share ownership. The file is queued for cleanup when the final owner is dropped.
 #[derive(Clone, Debug)]
 pub struct ResponseBodyFile {
     inner: Arc<ResponseBodyFileInner>,
@@ -166,6 +175,7 @@ pub struct ResponseBodyFile {
 struct ResponseBodyFileInner {
     path: PathBuf,
     _cache: ResponseCache,
+    cleanup: Sender<PathBuf>,
 }
 
 impl ResponseBodyFile {
@@ -186,7 +196,15 @@ impl Eq for ResponseBodyFile {}
 
 impl Drop for ResponseBodyFileInner {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        let _ = self.cleanup.send(std::mem::take(&mut self.path));
+    }
+}
+
+fn cleanup_released_bodies(base: &Path, pending: Receiver<PathBuf>) {
+    for path in pending {
+        if let Ok(_quota_lock) = locked_file(&base.join("quota.lock")) {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -196,6 +214,7 @@ pub(crate) struct ResponseCacheReservation {
     pub(crate) max_bytes: u64,
 }
 
+#[derive(Debug)]
 pub(crate) enum ResponseCacheReservationError {
     QuotaExceeded,
     Io(io::Error),
@@ -285,4 +304,78 @@ fn retained_body_bytes(base: &Path) -> io::Result<u64> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        process::Command,
+        time::{Duration, Instant},
+    };
+
+    use super::*;
+
+    fn wait_until(mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !condition() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for cache state"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn child_holds_body() {
+        let Ok(base) = std::env::var("PROBE_CACHE_CHILD_DIRECTORY") else {
+            return;
+        };
+        let base = PathBuf::from(base);
+        let cache = ResponseCache::new(base.clone(), 2048);
+        let reservation = cache.reserve(Some(1024), 0).unwrap();
+        let body_path = reservation.body_file.path().to_owned();
+        std::fs::write(
+            base.join("child-ready"),
+            body_path.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        wait_until(|| base.join("child-release").exists());
+        drop(reservation);
+        wait_until(|| !body_path.exists());
+    }
+
+    #[test]
+    fn another_process_does_not_recover_a_live_session() {
+        let base = std::env::temp_dir().join(format!(
+            "probe-cache-process-{}-{}",
+            std::process::id(),
+            SESSION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "cache::tests::child_holds_body"])
+            .env("PROBE_CACHE_CHILD_DIRECTORY", &base)
+            .spawn()
+            .unwrap();
+        wait_until(|| base.join("child-ready").exists());
+        let body_path = PathBuf::from(std::fs::read_to_string(base.join("child-ready")).unwrap());
+        let other_cache = ResponseCache::new(base.clone(), 2048);
+        other_cache.initialize().unwrap();
+        assert!(
+            body_path.exists(),
+            "live body in another process must remain"
+        );
+        assert!(matches!(
+            other_cache.reserve(Some(1025), 0),
+            Err(ResponseCacheReservationError::QuotaExceeded)
+        ));
+        std::fs::write(base.join("child-release"), []).unwrap();
+        assert!(child.wait().unwrap().success());
+        let reservation = other_cache.reserve(Some(1025), 0).unwrap();
+        let released_path = reservation.body_file.path().to_owned();
+        drop(reservation);
+        wait_until(|| !released_path.exists());
+        drop(other_cache);
+        std::fs::remove_dir_all(base).unwrap();
+    }
 }

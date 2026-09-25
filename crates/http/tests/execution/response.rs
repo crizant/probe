@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use probe_core::RequestSettings;
@@ -8,6 +9,16 @@ use probe_http::{
 use sha2::{Digest, Sha256};
 
 use super::support::{delayed_server, request, serve_once, temporary_path};
+
+async fn wait_for_cache_cleanup(path: &Path) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while path.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("released body should be cleaned up");
+}
 
 #[tokio::test]
 async fn reports_timeout_and_cancellation_separately() {
@@ -108,10 +119,7 @@ async fn bounds_in_memory_responses_and_streams_file_output() {
     drop(response);
     assert!(spool_path.exists(), "a clone must retain the spool file");
     drop(response_clone);
-    assert!(
-        !spool_path.exists(),
-        "the final owner must remove the spool file"
-    );
+    wait_for_cache_cleanup(&spool_path).await;
     std::fs::remove_dir_all(spool_directory).unwrap();
 
     let (base_url, captured) = serve_once("200 OK", &[], &body).await.unwrap();
@@ -224,6 +232,7 @@ async fn response_cache_enforces_the_global_quota_and_recovers_orphaned_sessions
 
     drop(first);
     drop(first_cache);
+    wait_for_cache_cleanup(&first_path).await;
     let (base_url, captured) = serve_once("200 OK", &[], &body).await.unwrap();
     let third = HttpEngine::new()
         .unwrap()
