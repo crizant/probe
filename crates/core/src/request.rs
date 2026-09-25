@@ -404,46 +404,63 @@ impl HttpRequest {
         Ok(())
     }
 
-    /// Builds the GraphQL-over-HTTP request consumed by Probe's HTTP engine.
-    pub fn prepare_http(&self) -> Result<Self, GraphqlRequestError> {
-        if matches!(self.protocol, RequestProtocol::Http) {
-            return Ok(self.clone());
-        }
-        let mut request = self.clone();
-        request.protocol = RequestProtocol::Http;
-        let operation = self.selected_graphql()?.cloned().unwrap_or_default();
+    /// Converts an owned request into the HTTP request consumed by Probe's engine.
+    pub fn into_http(mut self) -> Result<Self, GraphqlRequestError> {
+        let operation = match std::mem::replace(&mut self.protocol, RequestProtocol::Http) {
+            RequestProtocol::Http => return Ok(self),
+            RequestProtocol::Graphql(None) => GraphqlOperation::default(),
+            RequestProtocol::Graphql(Some(GraphqlBody::Single(operation))) => operation,
+            RequestProtocol::Graphql(Some(GraphqlBody::Variants(variants))) => {
+                let mut selected = variants.into_iter().filter(|variant| variant.selected);
+                let operation = selected.next().ok_or_else(|| {
+                    GraphqlRequestError::InvalidBodySelection(
+                        "GraphQL body variants have no selected value".to_owned(),
+                    )
+                })?;
+                if selected.next().is_some() {
+                    return Err(GraphqlRequestError::InvalidBodySelection(
+                        "GraphQL body variants have multiple selected values".to_owned(),
+                    ));
+                }
+                operation.body
+            }
+        };
         if self
             .method
             .as_deref()
             .is_some_and(|method| method.eq_ignore_ascii_case("GET"))
         {
-            request
-                .query_parameters
+            self.query_parameters
                 .retain(|parameter| !is_graphql_http_parameter(&parameter.name));
             if let Some(query) = operation.query {
-                request.query_parameters.push(QueryParameter {
+                self.query_parameters.push(QueryParameter {
                     name: "query".to_owned(),
                     value: query,
                     disabled: false,
                 });
             }
-            append_graphql_parameter(&mut request, "variables", operation.variables);
+            append_graphql_parameter(&mut self, "variables", operation.variables);
             if let Some(operation_name) = operation.operation_name {
-                request.query_parameters.push(QueryParameter {
+                self.query_parameters.push(QueryParameter {
                     name: "operationName".to_owned(),
                     value: operation_name,
                     disabled: false,
                 });
             }
-            append_graphql_parameter(&mut request, "extensions", operation.extensions);
+            append_graphql_parameter(&mut self, "extensions", operation.extensions);
         } else {
             let envelope = operation.into_json_envelope();
-            request.body = Some(RequestBody::Single(Body::Raw(RawBody {
+            self.body = Some(RequestBody::Single(Body::Raw(RawBody {
                 kind: RawBodyKind::Json,
                 data: Value::Object(envelope).to_string(),
             })));
         }
-        Ok(request)
+        Ok(self)
+    }
+
+    /// Builds an HTTP request while retaining the source request for the caller.
+    pub fn prepare_http(&self) -> Result<Self, GraphqlRequestError> {
+        self.clone().into_http()
     }
 }
 

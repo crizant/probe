@@ -337,7 +337,7 @@ where
     P: FnMut(HttpProgress) + Send,
 {
     let request = request
-        .prepare_http()
+        .into_http()
         .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
     let cancellation = async move {
         let _ = cancellation.await;
