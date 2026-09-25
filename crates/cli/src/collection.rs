@@ -44,10 +44,11 @@ pub(crate) fn import_yaak(
         .map_err(CliError::create)?;
     let path = source_path_or(loaded.source_path(), destination);
     let warning_count = imported.diagnostics.len();
+    let projection_summary = projection_summary(&loaded);
     let environment = imported.default_environment;
     Ok(CommandOutput {
         human: format!(
-            "Imported Yaak workspace\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nDefault environment: {}\nWarnings: {warning_count}\n",
+            "Imported Yaak workspace\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nDefault environment: {}\nWarnings: {warning_count}\n{projection_summary}",
             imported.workspace.name,
             path.display(),
             loaded.workspace().request_count(),
@@ -67,6 +68,7 @@ pub(crate) fn import_yaak(
             "path": path,
             "counts": workspace_counts(&loaded),
             "warnings": imported.diagnostics.iter().map(import_diagnostic_json).collect::<Vec<_>>(),
+            "projectionWarnings": projection_warnings(&loaded),
         }),
     })
 }
@@ -83,10 +85,11 @@ pub(crate) fn import_postman(
         .map_err(CliError::create)?;
     let path = source_path_or(loaded.source_path(), destination);
     let warning_count = imported.diagnostics.len();
+    let projection_summary = projection_summary(&loaded);
     let environment = imported.collection_variables_environment;
     Ok(CommandOutput {
         human: format!(
-            "Imported Postman collection\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nCollection variables environment: {}\nWarnings: {warning_count}\n",
+            "Imported Postman collection\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nCollection variables environment: {}\nWarnings: {warning_count}\n{projection_summary}",
             imported.source.name,
             path.display(),
             loaded.workspace().request_count(),
@@ -106,6 +109,7 @@ pub(crate) fn import_postman(
             "path": path,
             "counts": workspace_counts(&loaded),
             "warnings": imported.diagnostics.iter().map(import_diagnostic_json).collect::<Vec<_>>(),
+            "projectionWarnings": projection_warnings(&loaded),
         }),
     })
 }
@@ -117,13 +121,34 @@ pub(crate) fn validate(
     let loaded = load(input, stdin)?;
     let workspace = loaded.workspace();
     let name = workspace.metadata().name.as_deref().unwrap_or("<unnamed>");
+    let mut human = format!(
+        "Valid OpenCollection workspace\nName: {name}\nRequests: {}\nFolders: {}\nEnvironments: {}\n",
+        workspace.request_count(),
+        workspace.folder_count(),
+        workspace.environments().len()
+    );
+    if !loaded.diagnostics().is_empty() {
+        human.push_str(&format!(
+            "Unsupported values: {}\n",
+            loaded.diagnostics().len()
+        ));
+        for diagnostic in loaded.diagnostics().iter().take(20) {
+            human.push_str(&format!(
+                "  {}: {} ({})\n",
+                diagnostic.path,
+                diagnostic.kind.as_str(),
+                diagnostic.value
+            ));
+        }
+        if loaded.diagnostics().len() > 20 {
+            human.push_str(&format!(
+                "  ... and {} more\n",
+                loaded.diagnostics().len() - 20
+            ));
+        }
+    }
     Ok(CommandOutput {
-        human: format!(
-            "Valid OpenCollection workspace\nName: {name}\nRequests: {}\nFolders: {}\nEnvironments: {}\n",
-            workspace.request_count(),
-            workspace.folder_count(),
-            workspace.environments().len()
-        ),
+        human,
         json: json!({
             "collection": {
                 "name": workspace.metadata().name,
@@ -132,8 +157,34 @@ pub(crate) fn validate(
             },
             "counts": workspace_counts(&loaded),
             "valid": true,
+            "warnings": projection_warnings(&loaded),
         }),
     })
+}
+
+fn projection_warnings(loaded: &LoadedWorkspace) -> Vec<Value> {
+    loaded
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            json!({
+                "path": diagnostic.path,
+                "code": diagnostic.kind.as_str(),
+                "value": diagnostic.value,
+            })
+        })
+        .collect()
+}
+
+fn projection_summary(loaded: &LoadedWorkspace) -> String {
+    if loaded.diagnostics().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Unsupported OpenCollection runtime values: {}\n",
+            loaded.diagnostics().len()
+        )
+    }
 }
 
 fn source_path_or(source_path: Option<&std::path::Path>, fallback: PathBuf) -> PathBuf {

@@ -59,6 +59,9 @@ The adapters do not own CLI prompts, GPUI state, or filesystem persistence. Both
 frontends invoke them and pass the converted domain value to the shared atomic writer.
 Shared import diagnostics live in the core so strict and partial behavior remains
 identical across providers and interfaces.
+OpenCollection projection diagnostics live in the repository adapter. They identify
+unsupported values retained in source YAML and travel with loaded workspaces so CLI
+validation and desktop loading can show them without rejecting the collection.
 
 
 ## Fundamental Rule

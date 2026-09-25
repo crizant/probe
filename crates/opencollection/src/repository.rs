@@ -15,7 +15,9 @@ use probe_core::{
 };
 use serde_yaml_ng::Value;
 
-use super::{EnvironmentDocument, ParseError, parse, project_item};
+use super::{
+    EnvironmentDocument, ParseError, ProjectionDiagnostic, parse, project_item, scan_item,
+};
 
 mod create;
 mod environment;
@@ -82,6 +84,7 @@ impl LocatedFolder {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedWorkspace {
     workspace: Workspace,
+    diagnostics: Vec<super::ProjectionDiagnostic>,
     requests: Vec<LocatedRequest>,
     folders: Vec<LocatedFolder>,
     request_indices_by_selector: BTreeMap<String, usize>,
@@ -105,6 +108,12 @@ impl LoadedWorkspace {
     #[must_use]
     pub const fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    /// Values retained in source YAML but unsupported by Probe's runtime.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[super::ProjectionDiagnostic] {
+        &self.diagnostics
     }
 
     /// Returns whether repository locators are workspace-relative filesystem paths.

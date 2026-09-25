@@ -36,6 +36,33 @@ fn validates_unbundled_workspace_as_json() {
 }
 
 #[test]
+fn validation_reports_preserved_unsupported_values() {
+    let path = fixture("unsupported-projection.yml");
+    let output = probe()
+        .args(["collection", "validate"])
+        .arg(&path)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["valid"], true);
+    assert_eq!(value["counts"]["requests"], 2);
+    assert_eq!(value["warnings"].as_array().unwrap().len(), 5);
+    assert_eq!(value["warnings"][0]["path"], "items/0/http/params/0/type");
+    assert_eq!(value["warnings"][0]["code"], "unsupported_parameter_type");
+    assert_eq!(value["warnings"][4]["code"], "unsupported_item_type");
+
+    let human = probe()
+        .args(["collection", "validate"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    assert!(String::from_utf8_lossy(&human.stdout).contains("Unsupported values: 5"));
+}
+
+#[test]
 fn creates_a_bundled_collection_as_json() {
     let path = temporary_path("pets.yml");
     let value = run_json(&[
@@ -110,6 +137,7 @@ fn imports_a_yaak_export_as_bundled_opencollection_json() {
     assert_eq!(value["counts"]["folders"], 1);
     assert_eq!(value["counts"]["environments"], 1);
     assert_eq!(value["defaultEnvironment"], "Global Variables");
+    assert!(value["projectionWarnings"].is_array());
     assert!(destination.is_file());
 
     let validate = probe()
@@ -148,6 +176,7 @@ fn imports_a_postman_v21_collection_as_bundled_opencollection_json() {
     assert_eq!(value["counts"]["requests"], 1);
     assert_eq!(value["counts"]["folders"], 1);
     assert_eq!(value["counts"]["environments"], 1);
+    assert!(value["projectionWarnings"].is_array());
     assert_eq!(
         value["collectionVariablesEnvironment"],
         "Postman Collection Variables"

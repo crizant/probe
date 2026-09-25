@@ -197,9 +197,16 @@ identity.
     "folders": 1,
     "requests": 2
   },
-  "valid": true
+  "valid": true,
+  "warnings": []
 }
 ```
+
+Validation succeeds when a valid collection contains future item, body, or parameter
+types or unsupported authentication fields. `warnings` identifies each retained YAML
+location with a structural `path`, a stable `code`, and the unsupported `value`.
+The human output lists up to 20 warnings and the total count. Unknown source values
+remain in the YAML when supported fields are edited and saved.
 
 Every JSON success and error document has top-level `schemaVersion: 1`. Fields may be
 added compatibly within schema version 1, but documented fields will not be removed or
@@ -234,6 +241,7 @@ change type without incrementing the version.
   "partial": false,
   "path": "/tmp/imported.yml",
   "sourceFormat": "yaak_export",
+  "projectionWarnings": [],
   "warnings": [],
   "workspace": { "id": "wk_1", "name": "Pets" }
 }
@@ -251,12 +259,16 @@ change type without incrementing the version.
   "partial": false,
   "path": "/tmp/imported.yml",
   "sourceFormat": "postman_collection_v2_1",
+  "projectionWarnings": [],
   "warnings": []
 }
 ```
 
 `collection.id`, `collection.name`, `collectionVariablesEnvironment`, and `defaultEnvironment` are nullable.
 Postman v2.0 uses `postman_collection_v2_0` as `sourceFormat`.
+`projectionWarnings` uses the same `{path, code, value}` shape as validation
+warnings for values preserved in the created OpenCollection file but unsupported
+by Probe's runtime.
 
 `request list --json` returns a `requests` array. Each entry has nullable `method`,
 `name`, and `url` fields plus a string `selector` and a `type` field (`http` or `graphql`).

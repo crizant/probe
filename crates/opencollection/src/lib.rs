@@ -39,6 +39,7 @@ pub struct ParsedCollection {
     collection: Collection,
     document: Value,
     bundled: bool,
+    diagnostics: Vec<ProjectionDiagnostic>,
 }
 
 impl ParsedCollection {
@@ -56,6 +57,12 @@ impl ParsedCollection {
         &self.collection
     }
 
+    /// Unsupported source values retained in YAML but absent from Probe's runtime behavior.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[ProjectionDiagnostic] {
+        &self.diagnostics
+    }
+
     /// Consumes the parsed document and returns its domain model.
     #[must_use]
     pub fn into_collection(self) -> Collection {
@@ -68,6 +75,41 @@ impl ParsedCollection {
     /// from the supported domain projection.
     pub fn to_yaml(&self) -> Result<String, ParseError> {
         serde_yaml_ng::to_string(&self.document).map_err(ParseError::new)
+    }
+}
+
+/// A source value preserved in YAML that Probe cannot currently project or execute.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectionDiagnostic {
+    /// Structural path within a bundled document, or a workspace-relative file path.
+    pub path: String,
+    /// Stable category of unsupported value.
+    pub kind: ProjectionDiagnosticKind,
+    /// The unsupported type or property name.
+    pub value: String,
+}
+
+/// Categories of unsupported OpenCollection projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectionDiagnosticKind {
+    ItemType,
+    BodyType,
+    ParameterType,
+    AuthenticationKind,
+    AuthenticationProperty,
+}
+
+impl ProjectionDiagnosticKind {
+    /// Stable machine-readable diagnostic code.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ItemType => "unsupported_item_type",
+            Self::BodyType => "unsupported_body_type",
+            Self::ParameterType => "unsupported_parameter_type",
+            Self::AuthenticationKind => "unsupported_authentication_kind",
+            Self::AuthenticationProperty => "unsupported_authentication_property",
+        }
     }
 }
 
@@ -97,8 +139,8 @@ impl StdError for ParseError {
 
 /// Parses a bundled OpenCollection YAML document.
 ///
-/// Items outside the currently supported folder and HTTP request subset remain in
-/// the retained YAML document but are not projected into the domain model.
+/// Unsupported items and fields remain in the retained YAML document. Projection
+/// diagnostics identify values that cannot be represented or executed by Probe.
 pub fn parse(source: &str) -> Result<ParsedCollection, ParseError> {
     let document: Value = serde_yaml_ng::from_str(source).map_err(ParseError::new)?;
     let wire: CollectionDocument =
@@ -113,6 +155,10 @@ pub fn parse(source: &str) -> Result<ParsedCollection, ParseError> {
     }
     let bundled = wire.bundled;
     let collection = wire.into_domain().map_err(ParseError::new)?;
+    let mut diagnostics = Vec::new();
+    if let Some(items) = document.get("items").and_then(Value::as_sequence) {
+        scan_items(items, "items", &mut diagnostics);
+    }
     validate_environments(&collection.environments).map_err(|error| {
         ParseError::new(<serde_yaml_ng::Error as serde::de::Error>::custom(
             error.to_string(),
@@ -123,6 +169,7 @@ pub fn parse(source: &str) -> Result<ParsedCollection, ParseError> {
         collection,
         document,
         bundled,
+        diagnostics,
     })
 }
 
@@ -293,7 +340,7 @@ struct HttpDetailsDocument {
     #[serde(default)]
     headers: Vec<HeaderDocument>,
     #[serde(default)]
-    params: Vec<ParameterDocument>,
+    params: Vec<Value>,
     body: Option<Value>,
     auth: Option<Value>,
 }
@@ -305,7 +352,7 @@ struct GraphqlDetailsDocument {
     #[serde(default)]
     headers: Vec<HeaderDocument>,
     #[serde(default)]
-    params: Vec<ParameterDocument>,
+    params: Vec<Value>,
     body: Option<Value>,
     auth: Option<Value>,
 }
@@ -349,8 +396,6 @@ impl HeaderDocument {
 struct ParameterDocument {
     name: String,
     value: String,
-    #[serde(rename = "type")]
-    parameter_type: String,
     #[serde(default)]
     disabled: bool,
 }
@@ -665,19 +710,181 @@ struct BodyVariantDocument {
     body: Value,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum AuthenticationDocument {
-    Inherit(String),
-    Scheme(AuthenticationSchemeDocument),
+fn scan_items(items: &[Value], prefix: &str, diagnostics: &mut Vec<ProjectionDiagnostic>) {
+    for (index, item) in items.iter().enumerate() {
+        scan_item(item, &format!("{prefix}/{index}"), diagnostics);
+    }
 }
 
-#[derive(Debug, Deserialize)]
-struct AuthenticationSchemeDocument {
-    #[serde(rename = "type")]
-    authentication_type: String,
-    #[serde(flatten)]
-    properties: BTreeMap<String, Value>,
+fn scan_item(item: &Value, path: &str, diagnostics: &mut Vec<ProjectionDiagnostic>) {
+    let item_type = item
+        .get("info")
+        .and_then(|info| info.get("type"))
+        .and_then(Value::as_str);
+    match item_type {
+        Some("folder") => {
+            if let Some(items) = item.get("items").and_then(Value::as_sequence) {
+                scan_items(items, &format!("{path}/items"), diagnostics);
+            }
+        }
+        Some("http" | "graphql") => {
+            let section = item_type.unwrap();
+            let Some(details) = item.get(section) else {
+                return;
+            };
+            let prefix = format!("{path}/{section}");
+            if section == "http"
+                && let Some(body) = details.get("body")
+            {
+                if let Some(variants) = body.as_sequence() {
+                    for (index, variant) in variants.iter().enumerate() {
+                        if let Some(body) = variant.get("body") {
+                            scan_body(body, &format!("{prefix}/body/{index}/body"), diagnostics);
+                        }
+                    }
+                } else {
+                    scan_body(body, &format!("{prefix}/body"), diagnostics);
+                }
+            }
+            if let Some(parameters) = details.get("params").and_then(Value::as_sequence) {
+                for (index, parameter) in parameters.iter().enumerate() {
+                    let kind = parameter.get("type").and_then(Value::as_str);
+                    if !matches!(kind, Some("query" | "path")) {
+                        diagnostic(
+                            diagnostics,
+                            format!("{prefix}/params/{index}/type"),
+                            ProjectionDiagnosticKind::ParameterType,
+                            kind.unwrap_or("<missing>"),
+                        );
+                    }
+                }
+            }
+            if let Some(auth) = details.get("auth") {
+                scan_authentication(auth, &format!("{prefix}/auth"), diagnostics);
+            }
+        }
+        _ => diagnostic(
+            diagnostics,
+            format!("{path}/info/type"),
+            ProjectionDiagnosticKind::ItemType,
+            item_type.unwrap_or("<missing>"),
+        ),
+    }
+}
+
+fn scan_body(body: &Value, path: &str, diagnostics: &mut Vec<ProjectionDiagnostic>) {
+    let kind = body.get("type").and_then(Value::as_str);
+    if !matches!(
+        kind,
+        Some("json" | "text" | "xml" | "sparql" | "form-urlencoded" | "multipart-form" | "file")
+    ) {
+        diagnostic(
+            diagnostics,
+            format!("{path}/type"),
+            ProjectionDiagnosticKind::BodyType,
+            kind.unwrap_or("<missing>"),
+        );
+    }
+}
+
+fn scan_authentication(auth: &Value, path: &str, diagnostics: &mut Vec<ProjectionDiagnostic>) {
+    if let Some(kind) = auth.as_str() {
+        if kind != "inherit" {
+            diagnostic(
+                diagnostics,
+                path.to_owned(),
+                ProjectionDiagnosticKind::AuthenticationKind,
+                kind,
+            );
+        }
+        return;
+    }
+    let Some(properties) = auth.as_mapping() else {
+        return;
+    };
+    let kind = auth
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("<missing>");
+    if !matches!(kind, "basic" | "bearer") {
+        diagnostic(
+            diagnostics,
+            format!("{path}/type"),
+            ProjectionDiagnosticKind::AuthenticationKind,
+            kind,
+        );
+    }
+    for (name, value) in properties {
+        let Some(name) = name.as_str() else {
+            diagnostic(
+                diagnostics,
+                path.to_owned(),
+                ProjectionDiagnosticKind::AuthenticationProperty,
+                format!("{name:?}"),
+            );
+            continue;
+        };
+        if name == "type" {
+            continue;
+        }
+        let supported = match kind {
+            "basic" => matches!(name, "username" | "password"),
+            "bearer" => name == "token",
+            _ => true,
+        };
+        if !supported || (matches!(kind, "basic" | "bearer") && !value.is_string()) {
+            diagnostic(
+                diagnostics,
+                format!("{path}/{name}"),
+                ProjectionDiagnosticKind::AuthenticationProperty,
+                name,
+            );
+        }
+        scan_authentication_keys(value, &format!("{path}/{name}"), diagnostics);
+    }
+}
+
+fn scan_authentication_keys(
+    value: &Value,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) {
+    match value {
+        Value::Mapping(entries) => {
+            for (name, value) in entries {
+                if let Some(name) = name.as_str() {
+                    scan_authentication_keys(value, &format!("{path}/{name}"), diagnostics);
+                } else {
+                    diagnostic(
+                        diagnostics,
+                        path.to_owned(),
+                        ProjectionDiagnosticKind::AuthenticationProperty,
+                        format!("{name:?}"),
+                    );
+                }
+            }
+        }
+        Value::Sequence(values) => {
+            for (index, value) in values.iter().enumerate() {
+                scan_authentication_keys(value, &format!("{path}/{index}"), diagnostics);
+            }
+        }
+        Value::Tagged(tagged) => scan_authentication_keys(&tagged.value, path, diagnostics),
+        _ => {}
+    }
+}
+
+fn diagnostic(
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+    path: String,
+    kind: ProjectionDiagnosticKind,
+    value: impl Into<String>,
+) {
+    diagnostics.push(ProjectionDiagnostic {
+        path,
+        kind,
+        value: value.into(),
+    });
 }
 
 fn project_request_body(value: Value) -> Result<Option<RequestBody>, serde_yaml_ng::Error> {
@@ -804,11 +1011,31 @@ fn project_body(value: Value) -> Result<Option<Body>, serde_yaml_ng::Error> {
     }
 }
 
-fn project_authentication(value: Value) -> Result<Authentication, serde_yaml_ng::Error> {
-    let auth: AuthenticationDocument = serde_yaml_ng::from_value(value)?;
+fn project_parameters(
+    parameters: Vec<Value>,
+) -> Result<(Vec<QueryParameter>, Vec<QueryParameter>), serde_yaml_ng::Error> {
+    let mut query = Vec::new();
+    let mut path = Vec::new();
+    for value in parameters {
+        let kind = value.get("type").and_then(Value::as_str);
+        match kind {
+            Some("query") => {
+                let parameter: ParameterDocument = serde_yaml_ng::from_value(value)?;
+                query.push(parameter.into_domain());
+            }
+            Some("path") => {
+                let parameter: ParameterDocument = serde_yaml_ng::from_value(value)?;
+                path.push(parameter.into_domain());
+            }
+            _ => {}
+        }
+    }
+    Ok((query, path))
+}
 
-    Ok(match auth {
-        AuthenticationDocument::Inherit(value) => Authentication {
+fn project_authentication(value: Value) -> Result<Authentication, serde_yaml_ng::Error> {
+    Ok(match value {
+        Value::String(value) => Authentication {
             kind: if value == "inherit" {
                 AuthenticationKind::Inherit
             } else {
@@ -816,25 +1043,45 @@ fn project_authentication(value: Value) -> Result<Authentication, serde_yaml_ng:
             },
             properties: BTreeMap::new(),
         },
-        AuthenticationDocument::Scheme(auth) => Authentication {
-            kind: match auth.authentication_type.as_str() {
-                "awsv4" => AuthenticationKind::AwsV4,
-                "basic" => AuthenticationKind::Basic,
-                "wsse" => AuthenticationKind::Wsse,
-                "bearer" => AuthenticationKind::Bearer,
-                "digest" => AuthenticationKind::Digest,
-                "ntlm" => AuthenticationKind::Ntlm,
-                "apikey" => AuthenticationKind::ApiKey,
-                "oauth1" => AuthenticationKind::OAuth1,
-                "oauth2" => AuthenticationKind::OAuth2,
-                other => AuthenticationKind::Other(other.to_owned()),
-            },
-            properties: auth
-                .properties
-                .into_iter()
-                .map(|(name, value)| (name, authentication_value(value)))
-                .collect(),
-        },
+        Value::Mapping(properties) => {
+            let kind = properties
+                .get(Value::String("type".to_owned()))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    <serde_yaml_ng::Error as serde::de::Error>::custom(
+                        "authentication type must be a string",
+                    )
+                })?
+                .to_owned();
+            Authentication {
+                kind: match kind.as_str() {
+                    "awsv4" => AuthenticationKind::AwsV4,
+                    "basic" => AuthenticationKind::Basic,
+                    "wsse" => AuthenticationKind::Wsse,
+                    "bearer" => AuthenticationKind::Bearer,
+                    "digest" => AuthenticationKind::Digest,
+                    "ntlm" => AuthenticationKind::Ntlm,
+                    "apikey" => AuthenticationKind::ApiKey,
+                    "oauth1" => AuthenticationKind::OAuth1,
+                    "oauth2" => AuthenticationKind::OAuth2,
+                    other => AuthenticationKind::Other(other.to_owned()),
+                },
+                properties: properties
+                    .into_iter()
+                    .filter_map(|(name, value)| {
+                        name.as_str()
+                            .filter(|name| *name != "type")
+                            .map(str::to_owned)
+                            .map(|name| (name, authentication_value(value)))
+                    })
+                    .collect(),
+            }
+        }
+        _ => {
+            return Err(<serde_yaml_ng::Error as serde::de::Error>::custom(
+                "authentication must be a string or mapping",
+            ));
+        }
     })
 }
 
@@ -886,15 +1133,7 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
             let http = item.http.unwrap_or_default();
             let body = http.body.map(project_request_body).transpose()?.flatten();
             let authentication = http.auth.map(project_authentication).transpose()?;
-            let mut query_parameters = Vec::new();
-            let mut path_parameters = Vec::new();
-            for parameter in http.params {
-                match parameter.parameter_type.as_str() {
-                    "query" => query_parameters.push(parameter.into_domain()),
-                    "path" => path_parameters.push(parameter.into_domain()),
-                    _ => {}
-                }
-            }
+            let (query_parameters, path_parameters) = project_parameters(http.params)?;
             Ok(Some(CollectionItem::HttpRequest(HttpRequest {
                 metadata: item.info.into_domain(),
                 method: http.method,
@@ -918,15 +1157,7 @@ fn project_item(value: Value) -> Result<Option<CollectionItem>, serde_yaml_ng::E
             let graphql = item.graphql.unwrap_or_default();
             let body = graphql.body.map(project_graphql_body).transpose()?;
             let authentication = graphql.auth.map(project_authentication).transpose()?;
-            let mut query_parameters = Vec::new();
-            let mut path_parameters = Vec::new();
-            for parameter in graphql.params {
-                match parameter.parameter_type.as_str() {
-                    "query" => query_parameters.push(parameter.into_domain()),
-                    "path" => path_parameters.push(parameter.into_domain()),
-                    _ => {}
-                }
-            }
+            let (query_parameters, path_parameters) = project_parameters(graphql.params)?;
             Ok(Some(CollectionItem::GraphqlRequest(GraphqlRequest {
                 metadata: item.info.into_domain(),
                 method: graphql.method,

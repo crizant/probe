@@ -57,7 +57,11 @@ impl ProbeApp {
                     view.loading = false;
                     match result {
                         Ok((canonical_path, workspace)) => {
+                            let projection_warning = projection_warning(&workspace);
                             view.set_workspace(canonical_path, workspace);
+                            if let Some(message) = projection_warning {
+                                view.show_toast(ToastIntent::Warning, message, cx);
+                            }
                             if let Some(state) = restored_state {
                                 view.session = state;
                                 view.restore_shell_state(cx);
@@ -922,6 +926,9 @@ impl ProbeApp {
         let Some(old) = self.loaded_workspace.as_ref() else {
             return;
         };
+        let projection_warning = (old.diagnostics() != reconciled.workspace.diagnostics())
+            .then(|| projection_warning(&reconciled.workspace))
+            .flatten();
         let selectors = self.snapshot_shell_selectors(old);
         let key_remaps =
             request_key_remaps(old, &reconciled.workspace, &reconciled.selector_remaps);
@@ -963,6 +970,20 @@ impl ProbeApp {
         }
         self.rebuild_visible_tree_rows();
         self.persist_session(cx);
+        if let Some(message) = projection_warning {
+            self.show_toast(ToastIntent::Warning, message, cx);
+        }
         cx.notify();
     }
+}
+
+pub(super) fn projection_warning(workspace: &LoadedWorkspace) -> Option<String> {
+    let diagnostics = workspace.diagnostics();
+    let first = diagnostics.first()?;
+    Some(format!(
+        "This collection contains {} unsupported OpenCollection value(s). First: {} ({}). The source YAML is preserved.",
+        diagnostics.len(),
+        first.path,
+        first.kind.as_str(),
+    ))
 }

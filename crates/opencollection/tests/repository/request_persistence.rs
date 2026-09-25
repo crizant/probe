@@ -176,6 +176,71 @@ fn bundled_update_save_reload_preserves_unknown_fields() {
 }
 
 #[test]
+fn supported_edit_preserves_unsupported_projection_and_diagnostics() {
+    let path = temporary_path("unsupported-projection.yml");
+    fs::copy(fixture("unsupported-projection.yml"), &path).unwrap();
+    let original: serde_yaml_ng::Value =
+        serde_yaml_ng::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let diagnostics = loaded.diagnostics().to_vec();
+    assert_eq!(diagnostics.len(), 5);
+
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                url: FieldPatch::Set("https://example.com/new".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(reloaded.diagnostics(), diagnostics);
+    assert_eq!(reloaded.workspace().request_count(), 2);
+    let key = reloaded.request_key("items/0").unwrap();
+    assert_eq!(
+        reloaded.workspace().request(key).unwrap().url.as_deref(),
+        Some("https://example.com/new")
+    );
+    let saved: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        saved["items"][0]["http"]["params"],
+        original["items"][0]["http"]["params"]
+    );
+    assert_eq!(
+        saved["items"][0]["http"]["auth"],
+        original["items"][0]["http"]["auth"]
+    );
+    assert_eq!(saved["items"][1], original["items"][1]);
+    assert_eq!(saved["items"][2], original["items"][2]);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn unbundled_diagnostics_use_workspace_relative_paths() {
+    let root = temporary_path("unsupported-unbundled");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("opencollection.yml"),
+        "opencollection: 1.0.0\ninfo:\n  name: Future collection\nbundled: false\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("future.yml"),
+        "info:\n  name: Future item\n  type: websocket\nwebsocket:\n  url: wss://example.com\n",
+    )
+    .unwrap();
+
+    let loaded = load_workspace(&root).unwrap();
+    assert_eq!(loaded.workspace().request_count(), 0);
+    assert_eq!(loaded.diagnostics().len(), 1);
+    assert_eq!(loaded.diagnostics()[0].path, "future.yml/item/info/type");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn bundled_graphql_update_save_reload_remains_native() {
     let path = temporary_path("graphql-bundled.yml");
     fs::copy(fixture("graphql-http.yml"), &path).unwrap();
