@@ -24,7 +24,7 @@ struct ResponseCacheInner {
     directory: PathBuf,
     quota_bytes: u64,
     session: Mutex<Option<ResponseCacheSession>>,
-    pending_cleanup: Mutex<BTreeSet<PathBuf>>,
+    pending_cleanup: Arc<Mutex<BTreeSet<PathBuf>>>,
 }
 
 #[derive(Debug)]
@@ -43,7 +43,7 @@ impl ResponseCache {
                 directory,
                 quota_bytes,
                 session: Mutex::new(None),
-                pending_cleanup: Mutex::new(BTreeSet::new()),
+                pending_cleanup: Arc::new(Mutex::new(BTreeSet::new())),
             }),
         }
     }
@@ -84,7 +84,7 @@ impl ResponseCache {
         {
             Some(reserved_bytes) => reserved_bytes,
             None => {
-                let reclaimed = reclaim_released_bodies(&self.inner)
+                let reclaimed = reclaim_released_bodies(&self.inner.pending_cleanup)
                     .map_err(ResponseCacheReservationError::Io)?;
                 if !reclaimed {
                     return Err(ResponseCacheReservationError::QuotaExceeded);
@@ -160,10 +160,11 @@ impl ResponseCache {
         };
         let lease = locked_file(&directory.join("session.lock"))?;
         let (cleanup, pending) = mpsc::channel();
-        let inner = Arc::clone(&self.inner);
+        let base = self.inner.directory.clone();
+        let pending_cleanup = Arc::clone(&self.inner.pending_cleanup);
         std::thread::Builder::new()
             .name("probe-response-cache-cleanup".to_owned())
-            .spawn(move || cleanup_released_bodies(&inner, pending))?;
+            .spawn(move || cleanup_released_bodies(&base, &pending_cleanup, pending))?;
         *session = Some(ResponseCacheSession {
             directory: directory.clone(),
             _lease: lease,
@@ -226,13 +227,17 @@ impl Drop for ResponseBodyFileInner {
     }
 }
 
-fn cleanup_released_bodies(inner: &ResponseCacheInner, pending: Receiver<PathBuf>) {
+fn cleanup_released_bodies(
+    base: &Path,
+    pending_cleanup: &Mutex<BTreeSet<PathBuf>>,
+    pending: Receiver<PathBuf>,
+) {
     for path in pending {
-        if let Ok(_quota_lock) = locked_file(&inner.directory.join("quota.lock")) {
-            let _ = std::fs::remove_file(&path);
-            if let Ok(mut queued) = inner.pending_cleanup.lock() {
-                queued.remove(&path);
-            }
+        if let Ok(_quota_lock) = locked_file(&base.join("quota.lock"))
+            && remove_released_body(&path)
+            && let Ok(mut queued) = pending_cleanup.lock()
+        {
+            queued.remove(&path);
         }
     }
 }
@@ -255,10 +260,9 @@ fn reservation_size(
     })
 }
 
-fn reclaim_released_bodies(inner: &ResponseCacheInner) -> io::Result<bool> {
+fn reclaim_released_bodies(pending_cleanup: &Mutex<BTreeSet<PathBuf>>) -> io::Result<bool> {
     let paths = {
-        let mut pending = inner
-            .pending_cleanup
+        let mut pending = pending_cleanup
             .lock()
             .map_err(|_| io::Error::other("response cache state is unavailable"))?;
         if pending.is_empty() {
@@ -266,10 +270,27 @@ fn reclaim_released_bodies(inner: &ResponseCacheInner) -> io::Result<bool> {
         }
         std::mem::take(&mut *pending)
     };
+    let mut failed = BTreeSet::new();
     for path in paths {
-        let _ = std::fs::remove_file(path);
+        if remove_released_body(&path) {
+            continue;
+        }
+        failed.insert(path);
+    }
+    if !failed.is_empty()
+        && let Ok(mut pending) = pending_cleanup.lock()
+    {
+        pending.extend(failed);
     }
     Ok(true)
+}
+
+fn remove_released_body(path: &Path) -> bool {
+    match std::fs::remove_file(path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
 }
 
 pub(crate) struct ResponseCacheReservation {
