@@ -52,7 +52,7 @@ impl ProbeApp {
         self.detached_requests.insert(key);
         self.transient.request_tab_add_menu_open = false;
         self.selected_tree_item = None;
-        self.request_editor.ensure_available_section(graphql);
+        self.request_editor.ensure_available_section(key, graphql);
         self.shell.open_request(key);
         self.response_viewer.ensure_available_tab(key);
         self.reveal_active_tab();
@@ -182,6 +182,8 @@ impl ProbeApp {
     pub(super) fn close_tab_now(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         let previous_active = self.shell.active_tab();
         self.shell.close_tab(key);
+        self.request_editor.remove(key);
+        self.response_viewer.remove_selection(key);
         if self.detached_requests.remove(&key) {
             self.committed_detached_requests.remove(&key);
             if let Some(loaded) = self.loaded_workspace.as_mut() {
@@ -681,7 +683,8 @@ impl ProbeApp {
             .as_ref()
             .and_then(|loaded| loaded.workspace().request(key))
             .is_some_and(|request| request.kind.is_graphql());
-        self.request_editor.ensure_available_section(is_graphql);
+        self.request_editor
+            .ensure_available_section(key, is_graphql);
         if self.detached_requests.contains(&key) {
             self.selected_tree_item = None;
         } else {

@@ -118,6 +118,35 @@ hardcodes nextest, `origin/main`, global `target/` paths, and runs duplicate
 checks; it also does not enforce coverage or CRAP thresholds from the YAML.
 Use the commands above and Probe's CI instead.
 
+On macOS with a Homebrew Rust toolchain, `rustup` and `llvm-tools-preview` may
+be unavailable. If `cargo llvm-cov` reports `failed to find llvm-tools-preview`,
+check that Xcode's `llvm-cov` and `llvm-profdata` are compatible with the LLVM
+version used by `rustc`:
+
+```bash
+rustc -vV
+"$(xcrun --find llvm-cov)" --version
+"$(xcrun --find llvm-profdata)" --version
+```
+
+Then use the Xcode tools for the coverage commands:
+
+```bash
+unset CARGO_TARGET_DIR
+export LLVM_COV="$(xcrun --find llvm-cov)"
+export LLVM_PROFDATA="$(xcrun --find llvm-profdata)"
+cargo llvm-cov --workspace --all-features --json --output-path target/coverage.json
+cargo llvm-cov report --lcov --output-path target/coverage.lcov
+python3 scripts/check-coverage.py target/coverage.json target/coverage.lcov
+cargo crap --workspace --lcov target/coverage.lcov --format json --output target/crap.json
+test -s target/crap.json
+```
+
+These commands passed with Homebrew `rustc` using LLVM 22.1.8 and Xcode 26.6.0's
+Apple LLVM 21.0.0 tools. Version numbers need not match exactly, but the tools
+must be able to read the generated coverage data. Run the commands outside the
+sandbox when tests need to bind local mock HTTP servers.
+
 ## Working Style
 
 - Inspect relevant architecture and pinned dependency source instead of guessing.

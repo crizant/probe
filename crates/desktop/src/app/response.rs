@@ -178,8 +178,8 @@ impl ProbeApp {
     }
 
     pub(super) fn set_response_tab(&mut self, tab: ResponseViewerTab, cx: &mut Context<Self>) {
-        self.response_viewer.set_tab(tab);
         if let Some(key) = self.shell.active_tab() {
+            self.response_viewer.set_tab(key, tab);
             self.start_base64_encoding(key, cx);
             self.start_hex_encoding(key, cx);
         }
@@ -187,8 +187,8 @@ impl ProbeApp {
     }
 
     pub(super) fn set_raw_body_view(&mut self, view: RawBodyView, cx: &mut Context<Self>) {
-        self.response_viewer.set_raw_view(view);
         if let Some(key) = self.shell.active_tab() {
+            self.response_viewer.set_raw_view(key, view);
             self.start_base64_encoding(key, cx);
             self.start_hex_encoding(key, cx);
         }

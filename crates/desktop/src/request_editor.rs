@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, QueryParameter, RawBody,
@@ -177,28 +177,47 @@ const fn hex(byte: u8) -> Option<u8> {
 
 #[derive(Debug, Default)]
 pub(crate) struct RequestEditorState {
-    pub(crate) section: EditorSection,
+    sections: HashMap<RequestKey, EditorSection>,
     body_drafts: BTreeMap<(RequestKey, BodyEditorKind), RequestBody>,
 }
 
 impl RequestEditorState {
     pub(crate) fn clear(&mut self) {
-        self.section = EditorSection::default();
+        self.sections.clear();
         self.body_drafts.clear();
     }
 
-    pub(crate) fn ensure_available_section(&mut self, is_graphql: bool) {
-        if self.section.available_for(is_graphql) {
+    pub(crate) fn section(&self, key: RequestKey) -> EditorSection {
+        self.sections.get(&key).copied().unwrap_or_default()
+    }
+
+    pub(crate) fn set_section(&mut self, key: RequestKey, section: EditorSection) {
+        self.sections.insert(key, section);
+    }
+
+    pub(crate) fn remove(&mut self, key: RequestKey) {
+        self.sections.remove(&key);
+    }
+
+    pub(crate) fn ensure_available_section(&mut self, key: RequestKey, is_graphql: bool) {
+        if self.section(key).available_for(is_graphql) {
             return;
         }
-        self.section = if is_graphql {
-            EditorSection::GraphqlQuery
-        } else {
-            EditorSection::Body
-        };
+        self.set_section(
+            key,
+            if is_graphql {
+                EditorSection::GraphqlQuery
+            } else {
+                EditorSection::Body
+            },
+        );
     }
 
     pub(crate) fn remap_requests(&mut self, keys: &BTreeMap<RequestKey, RequestKey>) {
+        self.sections = std::mem::take(&mut self.sections)
+            .into_iter()
+            .filter_map(|(old_key, section)| keys.get(&old_key).map(|new_key| (*new_key, section)))
+            .collect();
         self.body_drafts = std::mem::take(&mut self.body_drafts)
             .into_iter()
             .filter_map(|((old_key, kind), body)| {
@@ -584,35 +603,66 @@ mod tests {
     }
 
     #[test]
+    fn closing_a_tab_preserves_its_unsaved_body_kind_drafts() {
+        let key = request_key();
+        let mut editor = RequestEditorState::default();
+        let mut request = Request::default();
+        editor.switch_body_kind(key, &mut request, BodyEditorKind::Json);
+        raw_body_mut(&mut request)
+            .unwrap()
+            .push_str("{\"draft\":true}");
+        editor.switch_body_kind(key, &mut request, BodyEditorKind::Form);
+        editor.set_section(key, EditorSection::Body);
+
+        editor.remove(key);
+        assert_eq!(editor.section(key), EditorSection::Path);
+        editor.switch_body_kind(key, &mut request, BodyEditorKind::Json);
+        assert_eq!(raw_body_mut(&mut request).unwrap(), "{\"draft\":true}");
+    }
+
+    #[test]
     fn ensure_available_section_resets_http_only_sections_for_graphql() {
-        let mut editor = RequestEditorState {
-            section: EditorSection::Body,
-            ..RequestEditorState::default()
-        };
-        editor.ensure_available_section(true);
-        assert_eq!(editor.section, EditorSection::GraphqlQuery);
+        let key = request_key();
+        let mut editor = RequestEditorState::default();
+        editor.set_section(key, EditorSection::Body);
+        editor.ensure_available_section(key, true);
+        assert_eq!(editor.section(key), EditorSection::GraphqlQuery);
     }
 
     #[test]
     fn ensure_available_section_resets_graphql_only_sections_for_http() {
-        let mut editor = RequestEditorState {
-            section: EditorSection::GraphqlVariables,
-            ..RequestEditorState::default()
-        };
-        editor.ensure_available_section(false);
-        assert_eq!(editor.section, EditorSection::Body);
+        let key = request_key();
+        let mut editor = RequestEditorState::default();
+        editor.set_section(key, EditorSection::GraphqlVariables);
+        editor.ensure_available_section(key, false);
+        assert_eq!(editor.section(key), EditorSection::Body);
     }
 
     #[test]
     fn ensure_available_section_keeps_shared_sections() {
-        let mut editor = RequestEditorState {
-            section: EditorSection::Headers,
-            ..RequestEditorState::default()
-        };
-        editor.ensure_available_section(true);
-        assert_eq!(editor.section, EditorSection::Headers);
-        editor.ensure_available_section(false);
-        assert_eq!(editor.section, EditorSection::Headers);
+        let key = request_key();
+        let mut editor = RequestEditorState::default();
+        editor.set_section(key, EditorSection::Headers);
+        editor.ensure_available_section(key, true);
+        assert_eq!(editor.section(key), EditorSection::Headers);
+        editor.ensure_available_section(key, false);
+        assert_eq!(editor.section(key), EditorSection::Headers);
+    }
+
+    #[test]
+    fn sections_follow_open_request_keys_and_clear_on_close() {
+        let first = request_key();
+        let second = replacement_request_key();
+        let mut editor = RequestEditorState::default();
+        editor.set_section(first, EditorSection::Headers);
+        editor.set_section(second, EditorSection::Query);
+        assert_eq!(editor.section(first), EditorSection::Headers);
+        assert_eq!(editor.section(second), EditorSection::Query);
+
+        editor.remap_requests(&BTreeMap::from([(first, second)]));
+        assert_eq!(editor.section(second), EditorSection::Headers);
+        editor.remove(second);
+        assert_eq!(editor.section(second), EditorSection::Path);
     }
 
     fn request_key() -> probe_core::RequestKey {

@@ -22,7 +22,7 @@ fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
     for section in EditorSection::ALL_HTTP {
         window
             .update(cx, |view, _, cx| {
-                view.request_editor.section = section;
+                view.request_editor.set_section(request_key, section);
                 if section == EditorSection::Body {
                     view.change_body_kind(request_key, BodyEditorKind::Json, cx);
                 }
@@ -265,7 +265,10 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
     cx.run_until_parked();
     window
         .update(cx, |view, _, _| {
-            assert_eq!(view.response_viewer.raw_view(), RawBodyView::Base64);
+            assert_eq!(
+                view.response_viewer.raw_view(request_key),
+                RawBodyView::Base64
+            );
         })
         .expect("test window should remain open");
     {
@@ -284,7 +287,7 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
     cx.run_until_parked();
     window
         .update(cx, |view, _, _| {
-            assert_eq!(view.response_viewer.raw_view(), RawBodyView::Hex);
+            assert_eq!(view.response_viewer.raw_view(request_key), RawBodyView::Hex);
             let text = view.response_viewer.visible_text(request_key);
             assert!(text.contains("7b 22 63"));
         })
@@ -296,7 +299,8 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
 
     window
         .update(cx, |view, _, cx| {
-            view.response_viewer.set_tab(ResponseViewerTab::Headers);
+            view.response_viewer
+                .set_tab(request_key, ResponseViewerTab::Headers);
             cx.notify();
         })
         .expect("test window should remain open");
@@ -309,7 +313,8 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
 
     window
         .update(cx, |view, _, cx| {
-            view.response_viewer.set_tab(ResponseViewerTab::Pretty);
+            view.response_viewer
+                .set_tab(request_key, ResponseViewerTab::Pretty);
             cx.notify();
         })
         .expect("test window should remain open");
@@ -317,7 +322,8 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
 
     window
         .update(cx, |view, _, cx| {
-            view.response_viewer.set_tab(ResponseViewerTab::Inspect);
+            view.response_viewer
+                .set_tab(request_key, ResponseViewerTab::Inspect);
             cx.notify();
         })
         .expect("test window should remain open");
@@ -334,7 +340,10 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
     cx.run_until_parked();
     window
         .update(cx, |view, _, _| {
-            assert_eq!(view.response_viewer.tab(), ResponseViewerTab::Pretty);
+            assert_eq!(
+                view.response_viewer.tab(request_key),
+                ResponseViewerTab::Pretty
+            );
             assert_eq!(
                 view.pretty_reveal.get(),
                 Some(PrettyRevealState {
@@ -548,7 +557,8 @@ fn xml_response_inspects_values_and_keeps_syntax_after_visiting_raw(cx: &mut Tes
                 &document.pretty_text[document.inspection_ranges[0].range.clone()],
                 "1787482800"
             );
-            view.response_viewer.set_tab(ResponseViewerTab::Raw);
+            view.response_viewer
+                .set_tab(request_key, ResponseViewerTab::Raw);
             cx.notify();
         })
         .expect("test window should remain open");
@@ -556,7 +566,8 @@ fn xml_response_inspects_values_and_keeps_syntax_after_visiting_raw(cx: &mut Tes
 
     window
         .update(cx, |view, _, cx| {
-            view.response_viewer.set_tab(ResponseViewerTab::Pretty);
+            view.response_viewer
+                .set_tab(request_key, ResponseViewerTab::Pretty);
             cx.notify();
         })
         .expect("test window should remain open");
@@ -564,7 +575,10 @@ fn xml_response_inspects_values_and_keeps_syntax_after_visiting_raw(cx: &mut Tes
 
     window
         .update(cx, |view, _, _| {
-            assert_eq!(view.response_viewer.tab(), ResponseViewerTab::Pretty);
+            assert_eq!(
+                view.response_viewer.tab(request_key),
+                ResponseViewerTab::Pretty
+            );
             assert_eq!(
                 view.response_viewer
                     .document(request_key)
@@ -624,7 +638,8 @@ fn large_response_body_only_renders_visible_rows(cx: &mut TestAppContext) {
                 None,
                 cx,
             );
-            view.response_viewer.set_tab(ResponseViewerTab::Raw);
+            view.response_viewer
+                .set_tab(request_key, ResponseViewerTab::Raw);
             cx.notify();
         })
         .expect("test window should be open");

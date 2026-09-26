@@ -1760,7 +1760,8 @@ fn json_body_variables_show_resolved_tooltips(cx: &mut TestAppContext) {
             view.select_request(request_key, cx);
             view.shell
                 .select_environment(Some("development".to_owned()));
-            view.request_editor.section = EditorSection::Body;
+            view.request_editor
+                .set_section(request_key, EditorSection::Body);
             view.edit_request(
                 request_key,
                 |request| {
@@ -1839,7 +1840,8 @@ fn variable_context_resolves_once_per_frame_for_many_headers(cx: &mut TestAppCon
             view.set_workspace(fixture.clone(), workspace);
             view.select_request(request_key, cx);
             view.select_environment(Some("development".to_owned()), cx);
-            view.request_editor.section = EditorSection::Headers;
+            view.request_editor
+                .set_section(request_key, EditorSection::Headers);
             view.edit_request(
                 request_key,
                 |request| {
