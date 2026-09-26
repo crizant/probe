@@ -54,6 +54,8 @@ pub struct ResolvedEnvironment {
     variables: BTreeMap<String, String>,
     secrets_without_values: BTreeSet<String>,
     secrets: BTreeMap<String, SecretValue>,
+    provider_failures: BTreeSet<String>,
+    deferred_errors: BTreeMap<String, EnvironmentResolutionError>,
 }
 
 impl fmt::Debug for ResolvedEnvironment {
@@ -63,6 +65,11 @@ impl fmt::Debug for ResolvedEnvironment {
             .field("variables", &self.variables)
             .field("secrets_without_values", &self.secrets_without_values)
             .field("secret_names", &self.secrets.keys().collect::<Vec<_>>())
+            .field("provider_failure_names", &self.provider_failures)
+            .field(
+                "deferred_error_names",
+                &self.deferred_errors.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -92,6 +99,8 @@ impl ResolvedEnvironment {
     pub fn variable_status(&self, name: &str) -> VariableStatus {
         if self.secrets.contains_key(name) {
             VariableStatus::Resolved
+        } else if self.deferred_errors.contains_key(name) {
+            VariableStatus::SecretWithoutValue
         } else {
             variable_status(&self.variables, &self.secrets_without_values, name)
         }
@@ -110,7 +119,9 @@ impl ResolvedEnvironment {
     /// produce an error rather than being sent in place of their value.
     pub fn interpolate(&self, input: &str) -> Result<String, EnvironmentResolutionError> {
         interpolate(input, |name| {
-            if self.secrets_without_values.contains(name) {
+            if let Some(error) = self.interpolation_error(name) {
+                Err(error)
+            } else if self.secrets_without_values.contains(name) {
                 Err(EnvironmentResolutionError::SecretVariableUnavailable(
                     name.to_owned(),
                 ))
@@ -127,7 +138,9 @@ impl ResolvedEnvironment {
     /// Interpolates `{{variable}}` references and rejects any unavailable value.
     pub fn interpolate_strict(&self, input: &str) -> Result<String, EnvironmentResolutionError> {
         interpolate(input, |name| {
-            if self.secrets_without_values.contains(name) {
+            if let Some(error) = self.interpolation_error(name) {
+                Err(error)
+            } else if self.secrets_without_values.contains(name) {
                 Err(EnvironmentResolutionError::SecretVariableUnavailable(
                     name.to_owned(),
                 ))
@@ -149,7 +162,9 @@ impl ResolvedEnvironment {
         strict: bool,
     ) -> Result<String, EnvironmentResolutionError> {
         interpolate(input, |name| {
-            if self.secrets_without_values.contains(name) {
+            if let Some(error) = self.interpolation_error(name) {
+                Err(error)
+            } else if self.secrets_without_values.contains(name) {
                 Err(EnvironmentResolutionError::SecretVariableUnavailable(
                     name.to_owned(),
                 ))
@@ -165,11 +180,35 @@ impl ResolvedEnvironment {
         })
     }
 
-    /// Returns values for response redaction without exposing them through Debug.
-    pub fn secret_entries_for_redaction(&self) -> impl Iterator<Item = (&str, &SecretValue)> {
-        self.secrets
-            .iter()
-            .map(|(name, value)| (name.as_str(), value))
+    fn interpolation_error(&self, name: &str) -> Option<EnvironmentResolutionError> {
+        if self.provider_failures.contains(name) {
+            Some(EnvironmentResolutionError::SecretProviderFailure(
+                name.to_owned(),
+            ))
+        } else {
+            self.deferred_errors.get(name).cloned()
+        }
+    }
+
+    /// Reports whether runtime secret material was resolved.
+    #[must_use]
+    pub fn has_resolved_secrets(&self) -> bool {
+        !self.secrets.is_empty()
+    }
+
+    /// Redacts exact secret values without exposing them to callers.
+    #[must_use]
+    pub fn redact_secrets(&self, input: &str) -> String {
+        let mut values = self.secrets.values().collect::<Vec<_>>();
+        values.sort_by_key(|value| std::cmp::Reverse(value.expose_for_execution().len()));
+        let mut redacted = input.to_owned();
+        for secret in values {
+            let value = secret.expose_for_execution();
+            if !value.is_empty() {
+                redacted = redacted.replace(value, "[REDACTED]");
+            }
+        }
+        redacted
     }
 }
 
@@ -527,6 +566,7 @@ fn resolve_environment_internal(
         BTreeMap::new()
     };
     let mut secrets = BTreeMap::new();
+    let mut provider_failures = BTreeSet::new();
     let mut overridden_secrets = BTreeSet::new();
     for (name, value) in overrides {
         if name.is_empty() {
@@ -556,9 +596,7 @@ fn resolve_environment_internal(
                 }
                 Ok(None) => {}
                 Err(_) => {
-                    return Err(EnvironmentResolutionError::SecretProviderFailure(
-                        name.clone(),
-                    ));
+                    provider_failures.insert(name.clone());
                 }
             }
         }
@@ -567,10 +605,27 @@ fn resolve_environment_internal(
     // Resolve plain values against opaque secret material, then classify values
     // derived from secrets before publishing the public variable map.
     let mut variables = BTreeMap::new();
-    let mut resolving = Vec::new();
+    let mut deferred_errors = BTreeMap::new();
     for name in raw.keys() {
         if matches!(raw.get(name), Some(RawVariable::Value(_))) {
-            resolve_variable(name, &raw, &secrets, &mut variables, &mut resolving)?;
+            let result = resolve_variable(
+                name,
+                &raw,
+                &secrets,
+                &provider_failures,
+                &mut variables,
+                &mut Vec::new(),
+            );
+            match result {
+                Ok(_) => {}
+                Err(
+                    error @ (EnvironmentResolutionError::SecretProviderFailure(_)
+                    | EnvironmentResolutionError::SecretVariableUnavailable(_)),
+                ) => {
+                    deferred_errors.insert(name.clone(), error);
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
     // A plain value interpolating a secret is secret-derived and cannot enter the
@@ -616,6 +671,8 @@ fn resolve_environment_internal(
         variables,
         secrets_without_values,
         secrets,
+        provider_failures,
+        deferred_errors,
     })
 }
 
@@ -693,6 +750,7 @@ fn resolve_variable(
     name: &str,
     raw: &BTreeMap<String, RawVariable>,
     secrets: &BTreeMap<String, SecretValue>,
+    provider_failures: &BTreeSet<String>,
     resolved: &mut BTreeMap<String, String>,
     stack: &mut Vec<String>,
 ) -> Result<String, EnvironmentResolutionError> {
@@ -710,6 +768,11 @@ fn resolve_variable(
     let value = match raw.get(name) {
         Some(RawVariable::Value(value)) => value,
         Some(RawVariable::Secret) => {
+            if provider_failures.contains(name) {
+                return Err(EnvironmentResolutionError::SecretProviderFailure(
+                    name.to_owned(),
+                ));
+            }
             return secrets
                 .get(name)
                 .map(|value| value.expose_for_execution().to_owned())
@@ -723,7 +786,7 @@ fn resolve_variable(
     };
     stack.push(name.to_owned());
     let value = interpolate(value, |reference| {
-        resolve_variable(reference, raw, secrets, resolved, stack).map(Some)
+        resolve_variable(reference, raw, secrets, provider_failures, resolved, stack).map(Some)
     })?;
     stack.pop();
     resolved.insert(name.to_owned(), value.clone());

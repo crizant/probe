@@ -340,7 +340,7 @@ fn safe_http_error(
     environment: &probe_core::ResolvedEnvironment,
 ) -> CliError {
     let mut error = CliError::http(error);
-    if environment.secret_entries_for_redaction().next().is_some() {
+    if environment.has_resolved_secrets() {
         error.message = "HTTP request failed while using a secret variable".to_owned();
     }
     error
@@ -351,28 +351,18 @@ fn redact_response(
     environment: &probe_core::ResolvedEnvironment,
     display_url: &str,
 ) -> HttpResponse {
-    let mut secrets = environment
-        .secret_entries_for_redaction()
-        .collect::<Vec<_>>();
-    secrets.sort_by_key(|(_, value)| std::cmp::Reverse(value.expose_for_execution().len()));
-    if !secrets.is_empty() {
+    if environment.has_resolved_secrets() {
         // A redirect may encode or transform secret bytes. The request's
         // reference-aware URL is the only safe URL to present.
         response.url = display_url.to_owned();
     }
-    for (_, secret) in secrets {
-        let value = secret.expose_for_execution();
-        if value.is_empty() {
-            continue;
-        }
-        response.reason = response.reason.replace(value, "[REDACTED]");
-        for header in &mut response.headers {
-            header.name = header.name.replace(value, "[REDACTED]");
-            header.value = header.value.replace(value, "[REDACTED]");
-        }
-        if let Ok(body) = std::str::from_utf8(&response.body) {
-            response.body = body.replace(value, "[REDACTED]").into_bytes();
-        }
+    response.reason = environment.redact_secrets(&response.reason);
+    for header in &mut response.headers {
+        header.name = environment.redact_secrets(&header.name);
+        header.value = environment.redact_secrets(&header.value);
+    }
+    if let Ok(body) = std::str::from_utf8(&response.body) {
+        response.body = environment.redact_secrets(body).into_bytes();
     }
     response
 }

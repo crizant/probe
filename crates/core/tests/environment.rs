@@ -39,17 +39,12 @@ fn runtime_secrets_are_separate_and_follow_effective_inheritance() {
     .unwrap();
     assert_eq!(resolved.variable("token"), None);
     assert_eq!(resolved.variable("derived"), None);
-    let runtime_secrets = resolved
-        .secret_entries_for_redaction()
-        .map(|(name, value)| (name.to_owned(), value.expose_for_execution().to_owned()))
-        .collect::<BTreeMap<_, _>>();
+    assert!(resolved.has_resolved_secrets());
     assert_eq!(
-        runtime_secrets["token"],
-        "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
-    );
-    assert_eq!(
-        runtime_secrets["derived"],
-        "Bearer SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
+        resolved.redact_secrets(
+            "Bearer SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR; SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
+        ),
+        "[REDACTED]; [REDACTED]"
     );
     assert_eq!(resolved.variable_status("token"), VariableStatus::Resolved);
     assert_eq!(
@@ -159,14 +154,20 @@ fn provider_failure_is_distinct_and_never_formats_secret_material() {
         }
     }
     let environments = [environment("local", None, vec![secret("token")])];
-    let error = probe_core::resolve_environment_with_provider(
+    let resolved = probe_core::resolve_environment_with_provider(
         &environments,
         Some("local"),
         &[],
         &FailingProvider,
         None,
     )
-    .unwrap_err();
+    .unwrap();
+    assert!(!resolved.has_resolved_secrets());
+    assert_eq!(
+        resolved.redact_secrets("ordinary output"),
+        "ordinary output"
+    );
+    let error = resolved.interpolate("{{token}}").unwrap_err();
     assert_eq!(
         error,
         EnvironmentResolutionError::SecretProviderFailure("token".into())
@@ -175,6 +176,100 @@ fn provider_failure_is_distinct_and_never_formats_secret_material() {
     assert_eq!(
         error.to_string(),
         "secret provider failed for variable: token"
+    );
+    assert_eq!(
+        resolved.interpolate("ordinary value").unwrap(),
+        "ordinary value"
+    );
+    assert_eq!(
+        resolved
+            .interpolate_for_presentation("{{token}}", false)
+            .unwrap_err(),
+        error
+    );
+}
+
+#[test]
+fn provider_failure_is_deferred_through_unused_plain_variables() {
+    struct FailingProvider;
+    impl probe_core::SecretProvider for FailingProvider {
+        fn resolve_secret(
+            &self,
+            _: &probe_core::SecretContext<'_>,
+        ) -> Result<Option<probe_core::SecretValue>, probe_core::SecretError> {
+            Err(probe_core::SecretError)
+        }
+    }
+    let environments = [environment(
+        "local",
+        None,
+        vec![
+            secret("unusedToken"),
+            variable("authorization", "Bearer {{unusedToken}}"),
+            variable("chained", "{{authorization}}"),
+            variable("ordinary", "public"),
+        ],
+    )];
+    let resolved = probe_core::resolve_environment_with_provider(
+        &environments,
+        Some("local"),
+        &[],
+        &FailingProvider,
+        None,
+    )
+    .unwrap();
+    assert_eq!(resolved.variable("ordinary"), Some("public"));
+    assert_eq!(resolved.variable("authorization"), None);
+    assert_eq!(resolved.variable("chained"), None);
+    assert_eq!(
+        resolved.variable_status("authorization"),
+        VariableStatus::SecretWithoutValue
+    );
+    let unrelated = Request {
+        url: Some("https://example.test/{{ordinary}}".into()),
+        ..Request::default()
+    };
+    assert_eq!(
+        resolve_request(&unrelated, &resolved)
+            .unwrap()
+            .url
+            .as_deref(),
+        Some("https://example.test/public")
+    );
+    let error = EnvironmentResolutionError::SecretProviderFailure("unusedToken".into());
+    for name in ["unusedToken", "authorization", "chained"] {
+        assert_eq!(
+            resolved
+                .interpolate(&format!("{{{{{name}}}}}"))
+                .unwrap_err(),
+            error
+        );
+        assert_eq!(
+            resolved
+                .interpolate_for_presentation(&format!("{{{{{name}}}}}"), false)
+                .unwrap_err(),
+            error
+        );
+    }
+}
+
+#[test]
+fn missing_secret_in_unused_plain_variable_is_deferred_until_interpolation() {
+    let environments = [environment(
+        "local",
+        None,
+        vec![
+            secret("token"),
+            variable("authorization", "Bearer {{token}}"),
+            variable("ordinary", "public"),
+        ],
+    )];
+    let resolved = resolve_environment(&environments, "local").unwrap();
+    assert_eq!(resolved.variable("ordinary"), Some("public"));
+    assert_eq!(resolved.variable("authorization"), None);
+    assert_eq!(
+        resolved.interpolate("{{authorization}}").unwrap_err(),
+        EnvironmentResolutionError::SecretVariableUnavailable("token".into())
     );
 }
 

@@ -11,9 +11,9 @@ impl SecretValue {
         Self(value)
     }
 
-    /// Exposes the value only when constructing an outbound request.
+    /// Exposes the value only within core request resolution.
     #[must_use]
-    pub fn expose_for_execution(&self) -> &str {
+    pub(crate) fn expose_for_execution(&self) -> &str {
         &self.0
     }
 }

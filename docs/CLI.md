@@ -131,7 +131,9 @@ declaration named `apiToken` reads the process variable `apiToken`; the request
 continues to use `{{apiToken}}`. Inherited declarations and overrides follow the
 normal environment rules. No `.env` file is loaded automatically. If a referenced
 secret is missing, the run fails with `secret_variable_unavailable` before HTTP
-execution. A backend failure is reported without its diagnostic content.
+execution. A backend failure is reported without its diagnostic content only if
+the request uses that secret, directly or through another variable. Unused secret
+declarations do not prevent an unrelated request from running.
 
 The outbound request receives the runtime value. Request summaries, dry runs, and
 JSON retain the `{{name}}` reference for secret fields. Response fields that echo
