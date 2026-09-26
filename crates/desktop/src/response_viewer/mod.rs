@@ -157,20 +157,31 @@ pub(crate) enum ResponseImagePreview {
 
 #[derive(Debug, Default)]
 pub(crate) struct ResponseViewerState {
-    tab: ResponseViewerTab,
-    raw_view: RawBodyView,
+    selections: std::collections::HashMap<probe_core::RequestKey, ResponseSelection>,
     documents: std::collections::BTreeMap<probe_core::RequestKey, PreparedDocument>,
     image_scrolls: std::collections::BTreeMap<probe_core::RequestKey, ScrollHandle>,
     next_generation: u64,
 }
 
+#[derive(Debug, Default)]
+struct ResponseSelection {
+    tab: ResponseViewerTab,
+    raw_view: RawBodyView,
+}
+
 impl ResponseViewerState {
-    pub(crate) fn tab(&self) -> ResponseViewerTab {
-        self.tab
+    pub(crate) fn tab(&self, key: probe_core::RequestKey) -> ResponseViewerTab {
+        self.selections
+            .get(&key)
+            .map(|selection| selection.tab)
+            .unwrap_or_default()
     }
 
-    pub(crate) fn raw_view(&self) -> RawBodyView {
-        self.raw_view
+    pub(crate) fn raw_view(&self, key: probe_core::RequestKey) -> RawBodyView {
+        self.selections
+            .get(&key)
+            .map(|selection| selection.raw_view)
+            .unwrap_or_default()
     }
 
     pub(crate) fn document(&self, key: probe_core::RequestKey) -> Option<&PreparedDocument> {
@@ -210,11 +221,12 @@ impl ResponseViewerState {
         let Some(document) = self.documents.get(&key) else {
             return;
         };
-        if self.tab == ResponseViewerTab::Pretty && document.truncated {
-            self.tab = ResponseViewerTab::Raw;
+        let (truncated, binary) = (document.truncated, document.binary);
+        if self.tab(key) == ResponseViewerTab::Pretty && truncated {
+            self.set_tab(key, ResponseViewerTab::Raw);
         }
-        if document.binary && self.raw_view == RawBodyView::Text {
-            self.raw_view = RawBodyView::Hex;
+        if binary && self.raw_view(key) == RawBodyView::Text {
+            self.set_raw_view(key, RawBodyView::Hex);
         }
     }
 
@@ -223,17 +235,24 @@ impl ResponseViewerState {
         self.image_scrolls.remove(&key);
     }
 
+    pub(crate) fn remove_selection(&mut self, key: probe_core::RequestKey) {
+        self.selections.remove(&key);
+    }
+
     pub(crate) fn clear(&mut self) {
+        self.selections.clear();
         self.documents.clear();
         self.image_scrolls.clear();
-        self.tab = ResponseViewerTab::default();
-        self.raw_view = RawBodyView::default();
     }
 
     pub(crate) fn remap_requests(
         &mut self,
         key_remaps: &std::collections::BTreeMap<probe_core::RequestKey, probe_core::RequestKey>,
     ) {
+        self.selections = std::mem::take(&mut self.selections)
+            .into_iter()
+            .filter_map(|(key, selection)| key_remaps.get(&key).map(|new| (*new, selection)))
+            .collect();
         self.documents = std::mem::take(&mut self.documents)
             .into_iter()
             .filter_map(|(key, document)| key_remaps.get(&key).map(|new| (*new, document)))
@@ -244,19 +263,19 @@ impl ResponseViewerState {
             .collect();
     }
 
-    pub(crate) fn set_tab(&mut self, tab: ResponseViewerTab) {
-        self.tab = tab;
+    pub(crate) fn set_tab(&mut self, key: probe_core::RequestKey, tab: ResponseViewerTab) {
+        self.selections.entry(key).or_default().tab = tab;
     }
 
-    pub(crate) fn set_raw_view(&mut self, view: RawBodyView) {
-        self.raw_view = view;
+    pub(crate) fn set_raw_view(&mut self, key: probe_core::RequestKey, view: RawBodyView) {
+        self.selections.entry(key).or_default().raw_view = view;
     }
 
     pub(crate) fn take_base64_job(
         &mut self,
         key: probe_core::RequestKey,
     ) -> Option<(u64, Vec<u8>, u64)> {
-        if self.tab != ResponseViewerTab::Raw || self.raw_view != RawBodyView::Base64 {
+        if self.tab(key) != ResponseViewerTab::Raw || self.raw_view(key) != RawBodyView::Base64 {
             return None;
         }
         let document = self.documents.get_mut(&key)?;
@@ -281,7 +300,7 @@ impl ResponseViewerState {
         &mut self,
         key: probe_core::RequestKey,
     ) -> Option<(u64, Vec<u8>, usize, u64)> {
-        if self.tab != ResponseViewerTab::Raw || self.raw_view != RawBodyView::Hex {
+        if self.tab(key) != ResponseViewerTab::Raw || self.raw_view(key) != RawBodyView::Hex {
             return None;
         }
         let document = self.documents.get_mut(&key)?;
@@ -471,7 +490,7 @@ impl ResponseViewerState {
         let document = self.documents.get_mut(&key)?;
         let selection = inspection_selection_at_offset(&document.inspection_ranges, offset)?;
         document.inspection_selection = Some(selection);
-        self.tab = ResponseViewerTab::Inspect;
+        self.set_tab(key, ResponseViewerTab::Inspect);
         Some(selection)
     }
 
@@ -507,7 +526,7 @@ impl ResponseViewerState {
         if let Some(document) = self.documents.get_mut(&key) {
             document.inspection_selection = Some(selection);
         }
-        self.tab = ResponseViewerTab::Pretty;
+        self.set_tab(key, ResponseViewerTab::Pretty);
         Some(selection)
     }
 
@@ -515,9 +534,9 @@ impl ResponseViewerState {
         let Some(document) = self.documents.get(&key) else {
             return SharedString::default();
         };
-        match self.tab {
+        match self.tab(key) {
             ResponseViewerTab::Pretty => SharedString::from(document.pretty_text.as_str()),
-            ResponseViewerTab::Raw => match self.raw_view {
+            ResponseViewerTab::Raw => match self.raw_view(key) {
                 RawBodyView::Text => document.raw_text.clone(),
                 RawBodyView::Base64 => SharedString::from(document.base64_text.as_str()),
                 RawBodyView::Hex => SharedString::from(document.hex_text.as_str()),
@@ -538,8 +557,8 @@ impl ResponseViewerState {
 
     #[cfg(test)]
     fn show_raw_base64(&mut self, key: probe_core::RequestKey) {
-        self.set_tab(ResponseViewerTab::Raw);
-        self.set_raw_view(RawBodyView::Base64);
+        self.set_tab(key, ResponseViewerTab::Raw);
+        self.set_raw_view(key, RawBodyView::Base64);
         if let Some((generation, bytes, page_revision)) = self.take_base64_job(key) {
             self.apply_base64(key, generation, page_revision, encode_base64(&bytes));
         }
@@ -547,8 +566,8 @@ impl ResponseViewerState {
 
     #[cfg(test)]
     fn show_raw_hex(&mut self, key: probe_core::RequestKey) {
-        self.set_tab(ResponseViewerTab::Raw);
-        self.set_raw_view(RawBodyView::Hex);
+        self.set_tab(key, ResponseViewerTab::Raw);
+        self.set_raw_view(key, RawBodyView::Hex);
         if let Some((generation, bytes, offset, page_revision)) = self.take_hex_job(key) {
             self.apply_hex(
                 key,

@@ -181,19 +181,19 @@ impl ProbeApp {
                         | EditorSection::GraphqlExtensions => String::new(),
                     }
                 ),
-                self.request_editor.section == section,
+                self.request_editor.section(key) == section,
                 index + 1,
                 sections.len(),
                 move |_, _, cx| {
                     let _ = section_view.update(cx, |view, cx| {
-                        view.request_editor.section = section;
+                        view.request_editor.set_section(key, section);
                         cx.notify();
                     });
                 },
             ));
         }
 
-        let section = match self.request_editor.section {
+        let section = match self.request_editor.section(key) {
             EditorSection::Query => {
                 self.render_parameter_editor(key, &request, ParameterEditorKind::Query, theme, cx)
             }
@@ -357,8 +357,8 @@ impl ProbeApp {
                     .px(px(theme.metrics.spacing_2))
                     .pb(px(theme.metrics.spacing_2))
                     .when(
-                        self.request_editor.section != EditorSection::Body
-                            && !self.request_editor.section.is_graphql(),
+                        self.request_editor.section(key) != EditorSection::Body
+                            && !self.request_editor.section(key).is_graphql(),
                         |content| content.overflow_y_scroll(),
                     )
                     .child(section),

@@ -42,6 +42,39 @@ fn request_key() -> probe_core::RequestKey {
     key
 }
 
+fn replacement_request_key() -> probe_core::RequestKey {
+    let mut workspace = probe_core::Workspace::from_collection(probe_core::Collection {
+        items: vec![probe_core::CollectionItem::Request(
+            probe_core::Request::default(),
+        )],
+        ..probe_core::Collection::default()
+    });
+    let probe_core::WorkspaceItemRef::Request(old_key) = workspace.root_items()[0] else {
+        panic!("expected request key");
+    };
+    workspace.remove_request(old_key).unwrap();
+    workspace.add_root_request(probe_core::Request::default())
+}
+
+#[test]
+fn viewer_choices_follow_request_keys_and_clear_on_close() {
+    let first = request_key();
+    let second = replacement_request_key();
+    let mut viewer = super::ResponseViewerState::default();
+    viewer.set_tab(first, ResponseViewerTab::Headers);
+    viewer.set_tab(second, ResponseViewerTab::Raw);
+    viewer.set_raw_view(second, RawBodyView::Base64);
+    assert_eq!(viewer.tab(first), ResponseViewerTab::Headers);
+    assert_eq!(viewer.tab(second), ResponseViewerTab::Raw);
+    assert_eq!(viewer.raw_view(second), RawBodyView::Base64);
+
+    viewer.remove_selection(first);
+    assert_eq!(viewer.tab(first), ResponseViewerTab::Pretty);
+    viewer.remap_requests(&std::collections::BTreeMap::from([(second, first)]));
+    assert_eq!(viewer.tab(first), ResponseViewerTab::Raw);
+    assert_eq!(viewer.raw_view(first), RawBodyView::Base64);
+}
+
 fn viewer_with(document: PreparedDocument) -> (probe_core::RequestKey, super::ResponseViewerState) {
     let key = request_key();
     let mut viewer = super::ResponseViewerState::default();
@@ -311,7 +344,7 @@ fn raw_base64_view_encodes_the_response_body() {
         prepare_document(&response(BINARY_BODY, "application/octet-stream"), 2).0,
     );
     viewer.ensure_available_tab(key);
-    assert_eq!(viewer.raw_view(), RawBodyView::Base64);
+    assert_eq!(viewer.raw_view(key), RawBodyView::Base64);
     viewer.show_raw_base64(key);
     assert_eq!(viewer.visible_text(key), encode_base64(BINARY_BODY));
 }
@@ -320,19 +353,19 @@ fn raw_base64_view_encodes_the_response_body() {
 fn ensure_available_tab_switches_binary_from_text_to_hex() {
     let (key, mut viewer) =
         viewer_with(prepare_document(&response(BINARY_BODY, "application/octet-stream"), 1).0);
-    assert_eq!(viewer.raw_view(), RawBodyView::Text);
+    assert_eq!(viewer.raw_view(key), RawBodyView::Text);
     viewer.ensure_available_tab(key);
-    assert_eq!(viewer.raw_view(), RawBodyView::Hex);
+    assert_eq!(viewer.raw_view(key), RawBodyView::Hex);
 }
 
 #[test]
 fn ensure_available_tab_preserves_base64_for_binary() {
     let (key, mut viewer) =
         viewer_with(prepare_document(&response(BINARY_BODY, "application/octet-stream"), 1).0);
-    viewer.set_raw_view(RawBodyView::Base64);
-    assert_eq!(viewer.raw_view(), RawBodyView::Base64);
+    viewer.set_raw_view(key, RawBodyView::Base64);
+    assert_eq!(viewer.raw_view(key), RawBodyView::Base64);
     viewer.ensure_available_tab(key);
-    assert_eq!(viewer.raw_view(), RawBodyView::Base64);
+    assert_eq!(viewer.raw_view(key), RawBodyView::Base64);
 }
 
 #[test]
@@ -349,7 +382,7 @@ fn raw_hex_view_encodes_the_response_body() {
         prepare_document(&response(BINARY_BODY, "application/octet-stream"), 2).0,
     );
     viewer.ensure_available_tab(key);
-    assert_eq!(viewer.raw_view(), RawBodyView::Hex);
+    assert_eq!(viewer.raw_view(key), RawBodyView::Hex);
     viewer.show_raw_hex(key);
     let hex = viewer.visible_text(key);
     assert!(hex.contains("00 9f 92 96"));
@@ -364,8 +397,8 @@ fn paging_a_binary_body_replaces_bytes_and_invalidates_base64_and_hex() {
         "application/octet-stream",
     ));
     viewer.ensure_available_tab(key);
-    assert_eq!(viewer.tab(), ResponseViewerTab::Raw);
-    assert_eq!(viewer.raw_view(), RawBodyView::Hex);
+    assert_eq!(viewer.tab(key), ResponseViewerTab::Raw);
+    assert_eq!(viewer.raw_view(key), RawBodyView::Hex);
     assert!(viewer.take_hex_job(key).is_some());
     assert!(viewer.document(key).unwrap().hex_pending);
 
@@ -472,7 +505,7 @@ fn file_backed_pages_replace_only_the_bounded_view() {
     let first_page = vec![b'x'; RESPONSE_PAGE_BYTES];
     let (key, mut viewer) = viewer_with(file_backed_document(&first_page, 4, "text/plain"));
     viewer.ensure_available_tab(key);
-    assert_eq!(viewer.tab(), ResponseViewerTab::Raw);
+    assert_eq!(viewer.tab(key), ResponseViewerTab::Raw);
     assert!(!viewer.document(key).unwrap().can_load_previous_page());
     assert!(viewer.document(key).unwrap().can_load_next_page());
     assert_eq!(
@@ -485,7 +518,7 @@ fn file_backed_pages_replace_only_the_bounded_view() {
     );
 
     let (generation, offset) = viewer.begin_page(key, PageDirection::Next).unwrap();
-    viewer.set_tab(ResponseViewerTab::Headers);
+    viewer.set_tab(key, ResponseViewerTab::Headers);
     viewer.apply_page(key, generation, offset, b"last".to_vec());
 
     let document = viewer.document(key).unwrap();
@@ -494,7 +527,7 @@ fn file_backed_pages_replace_only_the_bounded_view() {
     assert!(document.pretty_text.is_empty());
     assert!(document.can_load_previous_page());
     assert!(!document.can_load_next_page());
-    assert_eq!(viewer.tab(), ResponseViewerTab::Headers);
+    assert_eq!(viewer.tab(key), ResponseViewerTab::Headers);
 }
 
 #[test]

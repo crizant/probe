@@ -66,7 +66,7 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
                 Some("query { viewer { login } }")
             );
             assert!(
-                view.request_editor.section.available_for(true),
+                view.request_editor.section(key).available_for(true),
                 "created GraphQL request should leave a GraphQL-available section selected"
             );
         })
@@ -300,13 +300,28 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
 
     window
         .update(cx, |view, _, cx| {
-            view.request_editor.section = EditorSection::Body;
+            view.request_editor
+                .set_section(http_key, EditorSection::Body);
             view.select_request(graphql_key, cx);
-            assert_eq!(view.request_editor.section, EditorSection::GraphqlQuery);
+            assert_eq!(
+                view.request_editor
+                    .section(view.shell.active_tab().unwrap()),
+                EditorSection::Path
+            );
 
-            view.request_editor.section = EditorSection::GraphqlExtensions;
+            view.request_editor
+                .set_section(graphql_key, EditorSection::GraphqlExtensions);
             view.select_request(http_key, cx);
-            assert_eq!(view.request_editor.section, EditorSection::Body);
+            assert_eq!(
+                view.request_editor
+                    .section(view.shell.active_tab().unwrap()),
+                EditorSection::Body
+            );
+            view.select_request(graphql_key, cx);
+            assert_eq!(
+                view.request_editor.section(graphql_key),
+                EditorSection::GraphqlExtensions
+            );
         })
         .unwrap();
 
@@ -378,18 +393,28 @@ fn closing_graphql_tab_resets_unavailable_editor_section(cx: &mut TestAppContext
         .update(cx, |view, _, cx| {
             view.select_request(http_key, cx);
             view.select_request(graphql_key, cx);
-            view.request_editor.section = EditorSection::GraphqlVariables;
+            view.request_editor
+                .set_section(graphql_key, EditorSection::GraphqlVariables);
             assert_eq!(view.shell.active_tab(), Some(graphql_key));
 
             view.close_tab_now(graphql_key, cx);
             assert_eq!(view.shell.active_tab(), Some(http_key));
-            assert_eq!(view.request_editor.section, EditorSection::Body);
+            assert_eq!(
+                view.request_editor
+                    .section(view.shell.active_tab().unwrap()),
+                EditorSection::Path
+            );
 
             view.select_request(graphql_key, cx);
-            view.request_editor.section = EditorSection::GraphqlExtensions;
+            view.request_editor
+                .set_section(graphql_key, EditorSection::GraphqlExtensions);
             view.close_other_tabs_now(http_key, cx);
             assert_eq!(view.shell.active_tab(), Some(http_key));
-            assert_eq!(view.request_editor.section, EditorSection::Body);
+            assert_eq!(
+                view.request_editor
+                    .section(view.shell.active_tab().unwrap()),
+                EditorSection::Path
+            );
         })
         .unwrap();
 

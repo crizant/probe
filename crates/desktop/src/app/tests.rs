@@ -294,7 +294,7 @@ fn assert_save_shortcut_after_clicking_remove_row_persists_removal(
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
             view.select_request(key, cx);
-            view.request_editor.section = section;
+            view.request_editor.set_section(key, section);
             cx.notify();
         })
         .unwrap();

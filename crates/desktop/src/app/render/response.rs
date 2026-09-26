@@ -272,6 +272,10 @@ impl ProbeApp {
         document: &PreparedDocument,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let key = self
+            .shell
+            .active_tab()
+            .expect("response tabs require an active request");
         let mut tabs = Tabs::new("response-view-tabs")
             .flex()
             .items_center()
@@ -283,7 +287,7 @@ impl ProbeApp {
         };
         for (index, tab) in available_tabs.iter().copied().enumerate() {
             let tab_view = cx.weak_entity();
-            let selected = self.response_viewer.tab() == tab;
+            let selected = self.response_viewer.tab(key) == tab;
             let label = if tab == ResponseViewerTab::Pretty && document.is_image() {
                 "Preview".to_owned()
             } else if tab == ResponseViewerTab::Inspect {
@@ -322,13 +326,17 @@ impl ProbeApp {
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let key = self
+            .shell
+            .active_tab()
+            .expect("response tabs require an active request");
         let mut raw_views = Tabs::new("response-raw-view-tabs")
             .flex()
             .items_center()
             .gap(px(theme.metrics.spacing_1));
         for (index, view) in RawBodyView::ALL.iter().copied().enumerate() {
             let view_entity = cx.weak_entity();
-            let selected = self.response_viewer.raw_view() == view;
+            let selected = self.response_viewer.raw_view(key) == view;
             raw_views = raw_views.child(
                 components::editor_subtab(
                     theme,
@@ -456,7 +464,7 @@ impl ProbeApp {
         }
         if let Some(notice) = &document.pretty_notice
             && !matches!(
-                self.response_viewer.tab(),
+                self.response_viewer.tab(key),
                 ResponseViewerTab::Headers | ResponseViewerTab::Inspect
             )
         {
@@ -469,7 +477,7 @@ impl ProbeApp {
             );
         }
 
-        let list = match self.response_viewer.tab() {
+        let list = match self.response_viewer.tab(key) {
             ResponseViewerTab::Headers => self.render_response_headers(theme, document, cx),
             ResponseViewerTab::Inspect => self.render_response_inspector(theme, key, document, cx),
             ResponseViewerTab::Pretty if document.is_image() => {
@@ -486,7 +494,7 @@ impl ProbeApp {
             .flex()
             .flex_col()
             .when(
-                self.response_viewer.tab() == ResponseViewerTab::Raw,
+                self.response_viewer.tab(key) == ResponseViewerTab::Raw,
                 |panel| {
                     panel.child(
                         div()
@@ -589,19 +597,19 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         if document.binary
-            && (self.response_viewer.tab() == ResponseViewerTab::Pretty
-                || self.response_viewer.raw_view() == RawBodyView::Text)
+            && (self.response_viewer.tab(key) == ResponseViewerTab::Pretty
+                || self.response_viewer.raw_view(key) == RawBodyView::Text)
         {
             return placeholder_message(theme, "Binary response body cannot be displayed as text.");
         }
-        if self.response_viewer.tab() == ResponseViewerTab::Raw
-            && self.response_viewer.raw_view() == RawBodyView::Base64
+        if self.response_viewer.tab(key) == ResponseViewerTab::Raw
+            && self.response_viewer.raw_view(key) == RawBodyView::Base64
             && document.base64_pending
         {
             return placeholder_message(theme, "Encoding Base64…");
         }
-        if self.response_viewer.tab() == ResponseViewerTab::Raw
-            && self.response_viewer.raw_view() == RawBodyView::Hex
+        if self.response_viewer.tab(key) == ResponseViewerTab::Raw
+            && self.response_viewer.raw_view(key) == RawBodyView::Hex
             && document.hex_pending
         {
             return placeholder_message(theme, "Encoding Hex…");
@@ -614,13 +622,13 @@ impl ProbeApp {
         let body_mouse_view = cx.weak_entity();
         let inspect_view = cx.weak_entity();
         let inspect_ranges = document.inspection_ranges.clone();
-        let inspect_context_enabled = self.response_viewer.tab() == ResponseViewerTab::Pretty
+        let inspect_context_enabled = self.response_viewer.tab(key) == ResponseViewerTab::Pretty
             && matches!(
                 document.syntax,
                 ResponseBodySyntax::Json | ResponseBodySyntax::Xml
             )
             && document.pretty_notice.is_none();
-        let pretty_reveal = if self.response_viewer.tab() == ResponseViewerTab::Pretty {
+        let pretty_reveal = if self.response_viewer.tab(key) == ResponseViewerTab::Pretty {
             self.pretty_reveal.get()
         } else {
             None
@@ -632,11 +640,11 @@ impl ProbeApp {
                     .map(|range| (range, reveal.scroll_pending))
             })
             .and_then(|reveal| {
-                (self.response_viewer.tab() == ResponseViewerTab::Pretty).then_some(reveal)
+                (self.response_viewer.tab(key) == ResponseViewerTab::Pretty).then_some(reveal)
             });
         if let Some(reveal) = pretty_reveal
             && reveal.scroll_pending
-            && self.response_viewer.tab() == ResponseViewerTab::Pretty
+            && self.response_viewer.tab(key) == ResponseViewerTab::Pretty
         {
             self.pretty_reveal.set(Some(PrettyRevealState {
                 selection: reveal.selection,
@@ -655,7 +663,7 @@ impl ProbeApp {
                 components::ResponseBodyInputOptions::new(
                     &[],
                     0,
-                    if self.response_viewer.tab() == ResponseViewerTab::Pretty {
+                    if self.response_viewer.tab(key) == ResponseViewerTab::Pretty {
                         document.syntax.language()
                     } else {
                         ""
@@ -674,7 +682,7 @@ impl ProbeApp {
                     },
                     move |_, cx| {
                         let _ = body_mouse_view.update(cx, |view, cx| {
-                            if view.response_viewer.tab() == ResponseViewerTab::Pretty
+                            if view.response_viewer.tab(key) == ResponseViewerTab::Pretty
                                 && view.pretty_reveal.take().is_some()
                             {
                                 cx.notify();
@@ -689,7 +697,7 @@ impl ProbeApp {
                     },
                     move |_, offset, _, cx| {
                         let _ = inspect_view.update(cx, |view, cx| {
-                            if view.response_viewer.tab() != ResponseViewerTab::Pretty {
+                            if view.response_viewer.tab(key) != ResponseViewerTab::Pretty {
                                 view.show_toast(
                                     ToastIntent::Info,
                                     "Inspect from the Pretty tab to select a response value.",
@@ -700,7 +708,8 @@ impl ProbeApp {
                                 .document(key)
                                 .is_some_and(|document| document.inspection_pending)
                             {
-                                view.response_viewer.set_tab(ResponseViewerTab::Inspect);
+                                view.response_viewer
+                                    .set_tab(key, ResponseViewerTab::Inspect);
                                 view.show_toast(
                                     ToastIntent::Info,
                                     "Inspection is still running.",
@@ -724,8 +733,8 @@ impl ProbeApp {
                     },
                 )
                 .soft_wrap(
-                    self.response_viewer.tab() == ResponseViewerTab::Pretty
-                        || self.response_viewer.raw_view() == RawBodyView::Base64,
+                    self.response_viewer.tab(key) == ResponseViewerTab::Pretty
+                        || self.response_viewer.raw_view(key) == RawBodyView::Base64,
                 )
                 .inspection_reveal(inspection_reveal),
             ))
