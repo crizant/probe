@@ -240,10 +240,8 @@ pub(crate) fn run(
         workspace_identity,
     )
     .map_err(CliError::configuration)?;
-    let interpolate = options.environment.is_some()
-        || !options.variables.is_empty()
-        || options.strict_variables
-        || options.secret_provider_env;
+    let interpolate =
+        options.environment.is_some() || !options.variables.is_empty() || options.strict_variables;
     let (request, display) = if interpolate {
         let request = if options.strict_variables {
             resolve_request_strict(source, &environment)

@@ -57,14 +57,14 @@ fn runtime_secrets_are_separate_and_follow_effective_inheritance() {
             .unwrap(),
         "{{derived}}"
     );
-    assert!(!format!("{resolved:?}").contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
-    assert!(
-        !format!(
-            "{:?}",
-            probe_core::SecretValue::new("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR".to_owned())
-        )
-        .contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR")
-    );
+    let debug = format!("{resolved:?}");
+    assert!(debug.contains("child"));
+    assert!(debug.contains("token"));
+    assert!(!debug.contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+    let secret_value =
+        probe_core::SecretValue::new("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR".to_owned());
+    assert_eq!(format!("{secret_value:?}"), "SecretValue([REDACTED])");
+    assert_eq!(format!("{secret_value}"), "[REDACTED]");
 
     let plain_child = environment("plain", Some("base"), vec![variable("token", "public")]);
     let plain = probe_core::resolve_environment_with_provider(

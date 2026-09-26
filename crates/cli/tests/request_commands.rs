@@ -7,7 +7,9 @@ const TEST_SECRET: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
 
 fn secret_runtime_fixture(server_url: &str) -> PathBuf {
     let path = runtime_variables_fixture(server_url);
-    let source = fs::read_to_string(&path).unwrap().replace(
+    let source = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    assert!(source.contains("- name: token\n          value: persisted-token"));
+    let source = source.replace(
         "- name: token\n          value: persisted-token",
         "- name: token\n          secret: true",
     );
@@ -118,6 +120,9 @@ fn graphql_runtime_secret_is_sent_and_presentation_retains_reference() {
     let workspace = graphql_runtime_fixture(&server_url);
     let source = fs::read_to_string(&workspace)
         .unwrap()
+        .replace("\r\n", "\n");
+    assert!(source.contains("- name: login\n      value: octocat"));
+    let source = source
         .replace(
             "- name: login\n      value: octocat",
             "- name: login\n      secret: true",
@@ -206,6 +211,15 @@ fn dry_run_without_resolution_options_preserves_literal_templates() {
         .unwrap();
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("{{unfinished"));
+    let provider_only = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--secret-provider", "env", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(provider_only.status.success());
+    assert!(String::from_utf8_lossy(&provider_only.stdout).contains("{{unfinished"));
     fs::remove_file(workspace).unwrap();
 }
 

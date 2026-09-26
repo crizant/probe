@@ -1,6 +1,6 @@
 use std::fmt;
 
-/// Runtime secret material. Formatting never exposes its contents.
+/// Runtime secret material. Formatting uses a redaction marker rather than its contents.
 #[derive(Clone, Eq, PartialEq)]
 pub struct SecretValue(String);
 

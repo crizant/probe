@@ -48,6 +48,7 @@ pub fn variable_status(
 }
 
 /// An environment selected and resolved entirely in memory.
+/// Its debug view identifies the environment and secret names without secret values.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ResolvedEnvironment {
     name: String,
