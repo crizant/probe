@@ -258,6 +258,33 @@ fn strict_mode_rejects_lossy_data_and_partial_is_explicit() {
 }
 
 #[test]
+fn unsupported_raw_body_options_require_partial_import_and_preserve_text() {
+    let preview = inspect_postman_source(fixture("collection-body-options.json")).unwrap();
+    let diagnostics = match preview.convert(false) {
+        Err(PostmanImportError::Unsupported(diagnostics)) => diagnostics,
+        other => panic!("expected strict compatibility failure, got {other:?}"),
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|item| item.code == "unsupported_raw_language")
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|item| item.code == "unknown_field" && item.field.as_deref() == Some("custom"))
+    );
+    let imported = preview.convert(true).unwrap();
+    let CollectionItem::Request(request) = &imported.collection.items[0] else {
+        panic!("expected request")
+    };
+    let Some(RequestBody::Single(Body::Raw(body))) = request.http_body() else {
+        panic!("expected raw body")
+    };
+    assert_eq!(body.data, "a: 1");
+}
+
+#[test]
 fn rejects_malformed_json_and_unknown_schema() {
     let malformed = inspect_postman_source(fixture("malformed.json")).unwrap_err();
     assert!(matches!(malformed, PostmanImportError::Invalid(_)));

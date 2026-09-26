@@ -1,0 +1,12 @@
+{
+  "yaakSchema": 4,
+  "resources": {
+    "workspaces": [{"model": "workspace", "id": "wk_1", "name": "Bodies"}],
+    "httpRequests": [
+      {"model": "http_request", "id": "form", "workspaceId": "wk_1", "name": "Form", "bodyType": "application/x-www-form-urlencoded", "body": {"form": [{"name": "enabled", "value": "${[TOKEN]}"}, {"name": "disabled", "value": "skip", "enabled": false}]}},
+      {"model": "http_request", "id": "multipart", "workspaceId": "wk_1", "name": "Multipart", "bodyType": "multipart/form-data", "body": {"form": [{"name": "note", "value": "hello"}, {"name": "upload", "file": "/tmp/report.txt", "contentType": "text/plain", "enabled": false}]}},
+      {"model": "http_request", "id": "binary", "workspaceId": "wk_1", "name": "Binary", "bodyType": "binary", "body": {"filePath": "/tmp/payload.bin"}},
+      {"model": "http_request", "id": "unsupported", "workspaceId": "wk_1", "name": "Unsupported", "bodyType": "application/x-custom", "body": {"text": "opaque"}}
+    ]
+  }
+}

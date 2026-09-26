@@ -144,3 +144,32 @@ impl From<SaveError> for StructureError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ItemKind, SaveError, StructureError};
+    use std::{io, path::PathBuf};
+
+    #[test]
+    fn save_failures_keep_structural_categories_and_io_source() {
+        let path = PathBuf::from("collection.yml");
+        let stale = StructureError::from(SaveError::ConcurrentModification(path.clone()));
+        assert_eq!(stale.category(), "workspace_modified");
+        assert!(matches!(stale, StructureError::ConcurrentModification(found) if found == path));
+
+        let missing = StructureError::from(SaveError::RequestNotFound("items/2".to_owned()));
+        assert_eq!(missing.category(), "request_not_found");
+        assert!(
+            matches!(missing, StructureError::ItemNotFound { kind: ItemKind::Request, selector } if selector == "items/2")
+        );
+
+        let io_error = StructureError::from(SaveError::Io {
+            path: path.clone(),
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
+        });
+        assert_eq!(io_error.category(), "persistence_error");
+        assert!(
+            matches!(io_error, StructureError::Io { path: found, source } if found == path && source.kind() == io::ErrorKind::PermissionDenied)
+        );
+    }
+}

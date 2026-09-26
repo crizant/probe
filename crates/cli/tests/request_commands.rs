@@ -856,6 +856,30 @@ fn executes_request_as_deterministic_json() {
 }
 
 #[test]
+fn relative_file_body_is_read_from_the_workspace_directory() {
+    let (server_url, server) = serve_once(Vec::new(), "text/plain");
+    let output = probe()
+        .args(["request", "run"])
+        .arg(fixture("relative-file-body.yml"))
+        .args([
+            "items/0",
+            "--var",
+            &format!("serverUrl={server_url}"),
+            "--json",
+        ])
+        .output()
+        .expect("file body request should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let captured = server.join().unwrap();
+    assert!(captured.head.starts_with("POST /upload HTTP/1.1\r\n"));
+    assert!(captured.head.contains("content-type: text/plain"));
+}
+
+#[test]
 fn executes_graphql_json_envelopes_and_preserves_application_errors() {
     let response =
         r#"{"data":{"viewer":{"login":"octocat"}},"errors":[{"message":"viewer is unavailable"}]}"#;

@@ -563,6 +563,66 @@ fn set_environment_variable_updates_overrides_and_rejects_secrets() {
 }
 
 #[test]
+fn setting_a_variant_variable_preserves_its_type_and_other_choices() {
+    let variants = |selected: bool| {
+        EnvironmentVariable::Plain(Variable {
+            name: Some("mode".to_owned()),
+            value: Some(VariableValueSet::Variants(vec![
+                VariableValueVariant {
+                    title: "primary".to_owned(),
+                    selected,
+                    value: VariableValue::Typed {
+                        kind: probe_core::VariableValueType::String,
+                        data: "old".to_owned(),
+                    },
+                },
+                VariableValueVariant {
+                    title: "fallback".to_owned(),
+                    selected: !selected,
+                    value: VariableValue::String("untouched".to_owned()),
+                },
+            ])),
+            disabled: false,
+        })
+    };
+    for selected in [true, false] {
+        let mut environments = vec![environment("local", None, vec![variants(selected)])];
+        probe_core::set_environment_variable(&mut environments, "local", "mode", "new".to_owned())
+            .unwrap();
+        let EnvironmentVariable::Plain(variable) = &environments[0].variables[0] else {
+            panic!("expected plain variable")
+        };
+        let Some(VariableValueSet::Variants(values)) = &variable.value else {
+            panic!("expected variants")
+        };
+        assert_eq!(values[0].selected, selected);
+        assert_eq!(values[1].selected, !selected);
+        if selected {
+            assert_eq!(
+                values[0].value,
+                VariableValue::Typed {
+                    kind: probe_core::VariableValueType::String,
+                    data: "new".to_owned()
+                }
+            );
+            assert_eq!(
+                values[1].value,
+                VariableValue::String("untouched".to_owned())
+            );
+        } else {
+            assert_eq!(
+                values[0].value,
+                VariableValue::Typed {
+                    kind: probe_core::VariableValueType::String,
+                    data: "old".to_owned()
+                }
+            );
+            assert_eq!(values[1].value, VariableValue::String("new".to_owned()));
+        }
+    }
+}
+
+#[test]
 fn unset_environment_variable_removes_local_entry_and_restores_parent() {
     let mut environments = vec![
         environment(

@@ -1,0 +1,12 @@
+{
+  "info": {"name": "Body options", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+  "item": [{
+    "id": "request_options",
+    "name": "Raw options",
+    "request": {
+      "method": "POST",
+      "url": "https://example.com",
+      "body": {"mode": "raw", "raw": "a: 1", "options": {"raw": {"language": "yaml", "custom": true}}}
+    }
+  }]
+}
