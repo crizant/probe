@@ -882,7 +882,10 @@ fn relative_file_body_is_read_from_the_workspace_directory() {
             .split("\r\n")
             .any(|line| line.eq_ignore_ascii_case("content-type: text/plain"))
     );
-    assert_eq!(captured.body, b"uploaded from the workspace\n");
+    assert_eq!(
+        captured.body,
+        fs::read(fixture("relative-upload.txt")).unwrap()
+    );
 }
 
 #[test]
