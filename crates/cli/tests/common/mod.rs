@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 pub(crate) use std::{
     fs,
     io::{BufRead, Read, Write},
@@ -5,7 +7,6 @@ pub(crate) use std::{
     path::PathBuf,
     process::{Command, Stdio},
     thread::{self, JoinHandle},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 pub(crate) use probe_http::MAX_IN_MEMORY_RESPONSE_BYTES;
@@ -150,10 +151,11 @@ pub(crate) fn runtime_variables_fixture(server_url: &str) -> PathBuf {
 }
 
 pub(crate) fn temporary_path(suffix: &str) -> PathBuf {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    // Windows file time often does not advance between parallel tests, so a
+    // timestamp alone lets two tests share a path and delete each other's file.
+    static NEXT_TEMPORARY_PATH: AtomicU64 = AtomicU64::new(0);
+
+    let unique = NEXT_TEMPORARY_PATH.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
         "probe-cli-{}-{unique}-{suffix}",
         std::process::id()
