@@ -877,6 +877,7 @@ fn relative_file_body_is_read_from_the_workspace_directory() {
     let captured = server.join().unwrap();
     assert!(captured.head.starts_with("POST /upload HTTP/1.1\r\n"));
     assert!(captured.head.contains("content-type: text/plain"));
+    assert_eq!(captured.body, b"uploaded from the workspace\n");
 }
 
 #[test]
