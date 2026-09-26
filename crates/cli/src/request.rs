@@ -308,6 +308,8 @@ pub(crate) fn run(
     )
 }
 
+/// Use only with trusted collections: their secret names select process variables
+/// whose values can be sent to collection-defined request destinations.
 struct ProcessEnvironmentSecretProvider;
 impl SecretProvider for ProcessEnvironmentSecretProvider {
     fn resolve_secret(

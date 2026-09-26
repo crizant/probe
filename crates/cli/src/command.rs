@@ -266,9 +266,7 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
             }
             "--dry-run" => parser.flag(&mut options.dry_run, "--dry-run")?,
             "--secret-provider" => {
-                let value = parser
-                    .bump()
-                    .ok_or_else(|| CliError::invalid_arguments("--secret-provider requires env"))?;
+                let value = parser.value("--secret-provider")?;
                 if value != "env" || options.secret_provider_env {
                     return Err(CliError::invalid_arguments(
                         "--secret-provider accepts env once",
@@ -836,6 +834,7 @@ fn is_known_option(argument: &str) -> bool {
     matches!(
         argument,
         "--environment"
+            | "--secret-provider"
             | "--output"
             | "--name"
             | "--method"

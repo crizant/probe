@@ -129,20 +129,23 @@ collection file. For `request run --environment <name> --secret-provider env`, P
 reads its effective logical name from the process environment. For example, a
 declaration named `apiToken` reads the process variable `apiToken`; the request
 continues to use `{{apiToken}}`. Inherited declarations and overrides follow the
-normal environment rules. No `.env` file is loaded automatically. If a referenced
+normal environment rules. Enable this provider only for trusted collections: a
+collection controls both the process-variable names it reads and the outbound
+request destination. No `.env` file is loaded automatically. If a referenced
 secret is missing, the run fails with `secret_variable_unavailable` before HTTP
 execution. A backend failure is reported without its diagnostic content only if
 the request uses that secret, directly or through another variable. Unused secret
 declarations do not prevent an unrelated request from running.
 
 The outbound request receives the runtime value. Request summaries, dry runs, and
-JSON retain the `{{name}}` reference for secret fields. Response fields that echo
-secret text are redacted. When a runtime secret is used, the reported final URL is
-the presentation request URL because redirects can encode or transform secret text.
-`--output <file>` intentionally saves the original server
+JSON retain the `{{name}}` reference for secret fields. Exact occurrences of secret
+values in UTF-8 response reason, headers, and body are redacted. Encoded or otherwise
+transformed echoes may remain visible in CLI output. When a runtime secret is used,
+the reported final URL is the presentation request URL because redirects can encode
+or transform secret text. `--output <file>` intentionally saves the original server
 response bytes; that file can contain echoed secrets and must be handled as sensitive.
-A `--var name=value` override of a declared secret also
-stays secret, but process environment injection is preferred: command-line
+A `--var name=value` override of a declared secret also stays secret, but process
+environment injection is preferred: command-line
 arguments may appear in shell history or process inspection. Native OS credential
 storage is not yet supported.
 

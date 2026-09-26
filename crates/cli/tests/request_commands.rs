@@ -232,6 +232,39 @@ fn secret_provider_accepts_only_one_supported_backend() {
 }
 
 #[test]
+fn secret_provider_and_environment_options_require_values_before_another_option() {
+    let workspace = runtime_variables_fixture("http://example.invalid");
+    for (arguments, message) in [
+        (
+            vec!["--environment", "--secret-provider", "env"],
+            "--environment requires a non-empty value",
+        ),
+        (
+            vec!["--secret-provider", "--dry-run"],
+            "--secret-provider requires a non-empty value",
+        ),
+        (
+            vec!["--secret-provider"],
+            "--secret-provider requires a non-empty value",
+        ),
+    ] {
+        let output = probe()
+            .args(["request", "run"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(arguments)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments");
+        assert_eq!(value["error"]["message"], message);
+    }
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
 fn lists_requests_deterministically_as_json() {
     let path = fixture("unbundled");
     let first = probe()
