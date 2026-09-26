@@ -120,7 +120,16 @@ Use the commands above and Probe's CI instead.
 
 On macOS with a Homebrew Rust toolchain, `rustup` and `llvm-tools-preview` may
 be unavailable. If `cargo llvm-cov` reports `failed to find llvm-tools-preview`,
-use the installed Xcode LLVM tools for the coverage commands:
+check that Xcode's `llvm-cov` and `llvm-profdata` are compatible with the LLVM
+version used by `rustc`:
+
+```bash
+rustc -vV
+"$(xcrun --find llvm-cov)" --version
+"$(xcrun --find llvm-profdata)" --version
+```
+
+Then use the Xcode tools for the coverage commands:
 
 ```bash
 unset CARGO_TARGET_DIR
@@ -133,8 +142,10 @@ cargo crap --workspace --lcov target/coverage.lcov --format json --output target
 test -s target/crap.json
 ```
 
-These commands passed on macOS with Xcode 26.6.0's LLVM tools. Run them outside
-the sandbox when tests need to bind local mock HTTP servers.
+These commands passed with Homebrew `rustc` using LLVM 22.1.8 and Xcode 26.6.0's
+Apple LLVM 21.0.0 tools. Version numbers need not match exactly, but the tools
+must be able to read the generated coverage data. Run the commands outside the
+sandbox when tests need to bind local mock HTTP servers.
 
 ## Working Style
 
