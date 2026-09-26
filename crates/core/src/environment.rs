@@ -630,9 +630,11 @@ fn resolve_environment_internal(
         }
     }
     // A plain value interpolating a secret is secret-derived and cannot enter the
-    // public variable map. Reuse resolved strings, then move them to the secret map.
+    // public variable map. Each changing pass taints at least one raw variable,
+    // so the number of raw variables bounds propagation. Reuse resolved strings,
+    // then move them to the secret map.
     let mut tainted = secrets.keys().cloned().collect::<BTreeSet<_>>();
-    loop {
+    for _ in 0..raw.len() {
         let mut changed = false;
         for (name, declaration) in &raw {
             if tainted.contains(name) {

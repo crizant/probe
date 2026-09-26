@@ -98,6 +98,38 @@ fn runtime_secrets_are_separate_and_follow_effective_inheritance() {
 }
 
 #[test]
+fn transitive_secret_derivation_never_enters_the_public_variable_map() {
+    let environments = [environment(
+        "local",
+        None,
+        vec![
+            secret("token"),
+            variable("z_authorization", "Bearer {{token}}"),
+            variable("a_derived", "{{z_authorization}}"),
+        ],
+    )];
+    let resolved = probe_core::resolve_environment_with_provider(
+        &environments,
+        Some("local"),
+        &[],
+        &FakeProvider,
+        None,
+    )
+    .unwrap();
+    assert_eq!(resolved.variable("a_derived"), None);
+    assert_eq!(
+        resolved.interpolate("{{a_derived}}").unwrap(),
+        "Bearer SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
+    );
+    assert_eq!(
+        resolved
+            .interpolate_for_presentation("{{a_derived}}", false)
+            .unwrap(),
+        "{{a_derived}}"
+    );
+}
+
+#[test]
 fn secret_runtime_override_is_never_public() {
     let environments = [environment("local", None, vec![secret("token")])];
     let resolved = probe_core::resolve_environment_with_provider(
