@@ -13,7 +13,7 @@ probe collection validate <path> [--json]
 probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--strict-variables] [--json]
 probe request variables <path> <selector> [--environment <name>] [--json]
-probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--output <file>] [--dry-run] [--expect <expr>]... [--json]
+probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--secret-provider env] [--output <file>] [--dry-run] [--expect <expr>]... [--json]
 probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request rename <path> <selector> --name <name> [--json]
@@ -123,6 +123,31 @@ Repeatable `--var <name=value>` arguments provide invocation-only variables for 
 They override selected and inherited environment values before dependent variables are
 interpolated, and also work without `--environment`. If a name is repeated, the last value
 wins. Runtime variables are never written to the environment or collection source.
+
+An enabled OpenCollection variable declared with `secret: true` has no value in the
+collection file. For `request run --environment <name> --secret-provider env`, Probe
+reads its effective logical name from the process environment. For example, a
+declaration named `apiToken` reads the process variable `apiToken`; the request
+continues to use `{{apiToken}}`. Inherited declarations and overrides follow the
+normal environment rules. Enable this provider only for trusted collections: a
+collection controls both the process-variable names it reads and the outbound
+request destination. No `.env` file is loaded automatically. If a referenced
+secret is missing, the run fails with `secret_variable_unavailable` before HTTP
+execution. A backend failure is reported without its diagnostic content only if
+the request uses that secret, directly or through another variable. Unused secret
+declarations do not prevent an unrelated request from running.
+
+The outbound request receives the runtime value. Request summaries, dry runs, and
+JSON retain the `{{name}}` reference for secret fields. Exact occurrences of secret
+values in UTF-8 response reason, headers, and body are redacted. Encoded or otherwise
+transformed echoes may remain visible in CLI output. When a runtime secret is used,
+the reported final URL is the presentation request URL because redirects can encode
+or transform secret text. `--output <file>` intentionally saves the original server
+response bytes; that file can contain echoed secrets and must be handled as sensitive.
+A `--var name=value` override of a declared secret also stays secret, but process
+environment injection is preferred: command-line
+arguments may appear in shell history or process inspection. Native OS credential
+storage is not yet supported.
 
 Use `-` instead of `<path>` to read a bundled OpenCollection YAML document from
 stdin. Stdin does not represent an unbundled directory, and requests loaded this way
@@ -445,8 +470,9 @@ Environment failures use exit code 5 and stable categories including
 `missing_variable`, `variable_not_found`,
 `secret_variable_unavailable`, and
 `environment_resolution`. Secret variables declared by OpenCollection do not contain
-their values; until a secure runtime provider is added, referencing one reports
-`secret_variable_unavailable` rather than silently substituting an empty value.
+their values; a referenced secret with no invocation override or selected runtime
+provider value reports `secret_variable_unavailable` rather than silently substituting
+an empty value.
 
 HTTP request configuration errors use exit code 5 and category
 `request_configuration`. Timeout, cancellation, connection, protocol, and response

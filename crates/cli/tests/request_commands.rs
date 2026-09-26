@@ -3,6 +3,281 @@ mod common;
 
 use common::*;
 
+const TEST_SECRET: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
+
+fn secret_runtime_fixture(server_url: &str) -> PathBuf {
+    let path = runtime_variables_fixture(server_url);
+    let source = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    assert!(source.contains("- name: token\n          value: persisted-token"));
+    let source = source.replace(
+        "- name: token\n          value: persisted-token",
+        "- name: token\n          secret: true",
+    );
+    fs::write(&path, source).unwrap();
+    path
+}
+
+#[test]
+fn runtime_environment_secret_reaches_http_but_is_redacted_everywhere_presented() {
+    let (server_url, server) = serve_once(TEST_SECRET.as_bytes().to_vec(), "text/plain");
+    let workspace = secret_runtime_fixture(&server_url);
+    let source = fs::read(&workspace).unwrap();
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--secret-provider",
+            "env",
+            "--json",
+        ])
+        .env("token", TEST_SECRET)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let captured = server.join().unwrap();
+    assert!(
+        captured
+            .head
+            .contains(&format!("authorization: Bearer {TEST_SECRET}"))
+    );
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(!rendered.contains(TEST_SECRET));
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["response"]["body"]["content"], "[REDACTED]");
+    assert_eq!(fs::read(&workspace).unwrap(), source);
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn secret_dry_run_override_and_missing_value_fail_closed() {
+    let workspace = secret_runtime_fixture("http://127.0.0.1:1");
+    let dry = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--secret-provider",
+            "env",
+            "--dry-run",
+            "--json",
+        ])
+        .env("token", TEST_SECRET)
+        .output()
+        .unwrap();
+    assert!(dry.status.success());
+    assert!(!String::from_utf8_lossy(&dry.stdout).contains(TEST_SECRET));
+
+    let override_output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--var",
+            &format!("token={TEST_SECRET}"),
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+    assert!(override_output.status.success());
+    assert!(!String::from_utf8_lossy(&override_output.stdout).contains(TEST_SECRET));
+
+    let missing = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--secret-provider",
+            "env",
+            "--dry-run",
+            "--json",
+        ])
+        .env_remove("token")
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(5));
+    let error: Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(error["error"]["category"], "secret_variable_unavailable");
+    assert!(!String::from_utf8_lossy(&missing.stdout).contains(TEST_SECRET));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn graphql_runtime_secret_is_sent_and_presentation_retains_reference() {
+    let (server_url, server) = serve_once(b"{}".to_vec(), "application/json");
+    let workspace = graphql_runtime_fixture(&server_url);
+    let source = fs::read_to_string(&workspace)
+        .unwrap()
+        .replace("\r\n", "\n");
+    assert!(source.contains("- name: login\n      value: octocat"));
+    let source = source
+        .replace(
+            "- name: login\n      value: octocat",
+            "- name: login\n      secret: true",
+        )
+        .replace(
+            "query Viewer($login: String!)",
+            "query Viewer($login: String!) # {{login}}",
+        )
+        .replace("operationName: Viewer", "operationName: '{{login}}'")
+        .replace("enabled\\\":true", "enabled\\\":\\\"{{login}}\\\"");
+    fs::write(&workspace, source).unwrap();
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--secret-provider",
+            "env",
+            "--json",
+        ])
+        .env("login", TEST_SECRET)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let captured = server.join().unwrap();
+    let body: Value = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(body["variables"]["login"], TEST_SECRET);
+    assert_eq!(body["operationName"], TEST_SECRET);
+    assert!(body["query"].as_str().unwrap().contains(TEST_SECRET));
+    let presented: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        presented["request"]["graphql"]["variables"]["login"],
+        "{{login}}"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(TEST_SECRET));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn failed_http_execution_does_not_print_secret_url_or_diagnostic() {
+    let workspace = secret_runtime_fixture("http://127.0.0.1:1");
+    let source = fs::read_to_string(&workspace)
+        .unwrap()
+        .replace("/users/{{userId}}", "/users/{{token}}");
+    fs::write(&workspace, source).unwrap();
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args([
+            "--environment",
+            "local",
+            "--secret-provider",
+            "env",
+            "--json",
+        ])
+        .env("token", TEST_SECRET)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(TEST_SECRET));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(TEST_SECRET));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn dry_run_without_resolution_options_preserves_literal_templates() {
+    let workspace = runtime_variables_fixture("http://example.invalid");
+    let source = fs::read_to_string(&workspace).unwrap().replace(
+        "{{serverUrl}}/users/{{userId}}",
+        "http://example.invalid/{{unfinished",
+    );
+    fs::write(&workspace, source).unwrap();
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("{{unfinished"));
+    let provider_only = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .arg("items/0")
+        .args(["--secret-provider", "env", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(provider_only.status.success());
+    assert!(String::from_utf8_lossy(&provider_only.stdout).contains("{{unfinished"));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn secret_provider_accepts_only_one_supported_backend() {
+    let workspace = runtime_variables_fixture("http://example.invalid");
+    for arguments in [
+        vec!["--secret-provider", "file"],
+        vec!["--secret-provider", "env", "--secret-provider", "env"],
+    ] {
+        let output = probe()
+            .args(["request", "run"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(arguments)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments");
+    }
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn secret_provider_and_environment_options_require_values_before_another_option() {
+    let workspace = runtime_variables_fixture("http://example.invalid");
+    for (arguments, message) in [
+        (
+            vec!["--environment", "--secret-provider", "env"],
+            "--environment requires a non-empty value",
+        ),
+        (
+            vec!["--secret-provider", "--dry-run"],
+            "--secret-provider requires a non-empty value",
+        ),
+        (
+            vec!["--secret-provider"],
+            "--secret-provider requires a non-empty value",
+        ),
+    ] {
+        let output = probe()
+            .args(["request", "run"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(arguments)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments");
+        assert_eq!(value["error"]["message"], message);
+    }
+    fs::remove_file(workspace).unwrap();
+}
+
 #[test]
 fn lists_requests_deterministically_as_json() {
     let path = fixture("unbundled");
