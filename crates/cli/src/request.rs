@@ -335,3 +335,35 @@ fn response_output(
         json,
     })
 }
+
+#[cfg(test)]
+mod usage_json_tests {
+    use super::{VariableUsage, variable_usage_json};
+    use serde_json::json;
+
+    #[test]
+    fn structured_usage_locations_keep_the_documented_names_and_field_names() {
+        let cases = [
+            (
+                VariableUsage::GraphqlExtensions,
+                json!({"location": "graphql_extensions"}),
+            ),
+            (
+                VariableUsage::FormUrlEncoded {
+                    name: "key".to_owned(),
+                },
+                json!({"location": "form_urlencoded", "name": "key"}),
+            ),
+            (
+                VariableUsage::Multipart {
+                    name: "upload".to_owned(),
+                },
+                json!({"location": "multipart", "name": "upload"}),
+            ),
+            (VariableUsage::File, json!({"location": "file"})),
+        ];
+        for (usage, expected) in cases {
+            assert_eq!(variable_usage_json(&usage), expected);
+        }
+    }
+}

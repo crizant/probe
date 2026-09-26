@@ -1,0 +1,17 @@
+opencollection: 1.0.0
+info:
+  name: Relative file body
+bundled: true
+items:
+  - info:
+      name: Upload
+      type: http
+    http:
+      method: POST
+      url: "{{serverUrl}}/upload"
+      body:
+        type: file
+        data:
+          - filePath: relative-upload.txt
+            contentType: text/plain
+            selected: true

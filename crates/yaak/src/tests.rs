@@ -1,6 +1,7 @@
 use crate::{ImportDiagnosticSeverity, YaakImportError, YaakSourceFormat, inspect_yaak_source};
 use probe_core::{
-    AuthenticationKind, Body, CollectionItem, GraphqlBody, RequestBody, WorkspaceItemRef,
+    AuthenticationKind, Body, CollectionItem, GraphqlBody, MultipartPartKind, MultipartValue,
+    RequestBody, WorkspaceItemRef,
 };
 use probe_opencollection::create_bundled_workspace_from_collection;
 use std::{fs, path::PathBuf, time::SystemTime};
@@ -44,6 +45,66 @@ fn converts_export_http_hierarchy_and_environment() {
         panic!("expected raw body");
     };
     assert!(body.data.contains("{{TOKEN}}"));
+}
+
+#[test]
+fn imports_form_file_bodies_and_reports_unsupported_body_types() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/yaak/export-bodies-v4.json");
+    let preview = inspect_yaak_source(path).unwrap();
+    assert!(matches!(
+        preview.convert(None, false),
+        Err(YaakImportError::Unsupported(_))
+    ));
+    let imported = preview.convert(None, true).unwrap();
+    assert!(imported.partial);
+    assert!(imported.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "unsupported_body_type"
+            && diagnostic.resource_id.as_deref() == Some("unsupported")
+    }));
+    let requests = imported
+        .collection
+        .items
+        .iter()
+        .map(|item| {
+            let CollectionItem::Request(request) = item else {
+                panic!("expected request")
+            };
+            request
+        })
+        .collect::<Vec<_>>();
+    let named = |name| {
+        requests
+            .iter()
+            .find(|request| request.metadata.name.as_deref() == Some(name))
+            .unwrap()
+    };
+    let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) = named("Form").http_body() else {
+        panic!("expected form body")
+    };
+    assert_eq!(fields[0].value, "{{TOKEN}}");
+    assert!(!fields[0].disabled);
+    assert!(fields[1].disabled);
+    let Some(RequestBody::Single(Body::Multipart(parts))) = named("Multipart").http_body() else {
+        panic!("expected multipart body")
+    };
+    assert_eq!(parts[0].kind, MultipartPartKind::Text);
+    assert_eq!(parts[1].kind, MultipartPartKind::File);
+    assert_eq!(
+        parts[1].value,
+        MultipartValue::Single("/tmp/report.txt".to_owned())
+    );
+    assert_eq!(parts[1].content_type.as_deref(), Some("text/plain"));
+    assert!(parts[1].disabled);
+    let Some(RequestBody::Single(Body::File(files))) = named("Binary").http_body() else {
+        panic!("expected binary file body")
+    };
+    assert_eq!(files[0].file_path, "/tmp/payload.bin");
+    assert!(files[0].selected);
+    let Some(RequestBody::Single(Body::Raw(raw))) = named("Unsupported").http_body() else {
+        panic!("expected fallback text body")
+    };
+    assert_eq!(raw.data, "opaque");
 }
 
 #[test]

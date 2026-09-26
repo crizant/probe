@@ -1,6 +1,6 @@
 pub(crate) use std::{
     fs,
-    io::{Read, Write},
+    io::{BufRead, Read, Write},
     net::TcpListener,
     path::PathBuf,
     process::{Command, Stdio},
@@ -75,14 +75,47 @@ pub(crate) fn serve_once_with_status(
             .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
             .map(|(_, value)| value.trim().parse::<usize>().unwrap())
             .unwrap_or(0);
-        while request.len() - header_end < content_length {
-            let count = stream.read(&mut buffer).unwrap();
-            assert!(count > 0);
-            request.extend_from_slice(&buffer[..count]);
-        }
+        let chunked = head
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .any(|(name, value)| {
+                name.eq_ignore_ascii_case("transfer-encoding")
+                    && value
+                        .split(',')
+                        .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+            });
+        let request_body = if chunked {
+            let mut reader = std::io::BufReader::new(
+                std::io::Cursor::new(request[header_end..].to_vec()).chain(&mut stream),
+            );
+            let mut body = Vec::new();
+            loop {
+                let mut size = String::new();
+                reader.read_line(&mut size).unwrap();
+                let size =
+                    usize::from_str_radix(size.trim().split(';').next().unwrap(), 16).unwrap();
+                if size == 0 {
+                    break;
+                }
+                let start = body.len();
+                body.resize(start + size, 0);
+                reader.read_exact(&mut body[start..]).unwrap();
+                let mut end = [0; 2];
+                reader.read_exact(&mut end).unwrap();
+                assert_eq!(end, *b"\r\n");
+            }
+            body
+        } else {
+            while request.len() - header_end < content_length {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            request[header_end..header_end + content_length].to_vec()
+        };
         let captured = CapturedRequest {
             head,
-            body: request[header_end..header_end + content_length].to_vec(),
+            body: request_body,
         };
         let response = format!(
             "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
