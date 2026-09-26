@@ -110,6 +110,17 @@ pub fn resolve_request_strict(
     resolve_request_with(request, |value| environment.interpolate_strict(value))
 }
 
+/// Resolves a request for display while retaining references to secret values.
+pub fn resolve_request_for_presentation(
+    request: &Request,
+    environment: &ResolvedEnvironment,
+    strict: bool,
+) -> Result<Request, EnvironmentResolutionError> {
+    resolve_request_with(request, |value| {
+        environment.interpolate_for_presentation(value, strict)
+    })
+}
+
 fn resolve_request_with(
     request: &Request,
     interpolate: impl Fn(&str) -> Result<String, EnvironmentResolutionError>,

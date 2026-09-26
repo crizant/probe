@@ -9,6 +9,262 @@ use probe_core::{
     resolve_environment_with_overrides, resolve_request, variable_status,
 };
 
+struct FakeProvider;
+impl probe_core::SecretProvider for FakeProvider {
+    fn resolve_secret(
+        &self,
+        context: &probe_core::SecretContext<'_>,
+    ) -> Result<Option<probe_core::SecretValue>, probe_core::SecretError> {
+        Ok((context.variable_name == "token").then(|| {
+            probe_core::SecretValue::new("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR".to_owned())
+        }))
+    }
+}
+
+#[test]
+fn runtime_secrets_are_separate_and_follow_effective_inheritance() {
+    let base = environment(
+        "base",
+        None,
+        vec![secret("token"), variable("derived", "Bearer {{token}}")],
+    );
+    let child = environment("child", Some("base"), vec![]);
+    let resolved = probe_core::resolve_environment_with_provider(
+        &[base.clone(), child],
+        Some("child"),
+        &[],
+        &FakeProvider,
+        None,
+    )
+    .unwrap();
+    assert_eq!(resolved.variable("token"), None);
+    assert_eq!(resolved.variable("derived"), None);
+    let runtime_secrets = resolved
+        .secret_entries_for_redaction()
+        .map(|(name, value)| (name.to_owned(), value.expose_for_execution().to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        runtime_secrets["token"],
+        "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
+    );
+    assert_eq!(
+        runtime_secrets["derived"],
+        "Bearer SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
+    );
+    assert_eq!(resolved.variable_status("token"), VariableStatus::Resolved);
+    assert_eq!(
+        resolved.interpolate("{{derived}}").unwrap(),
+        "Bearer SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
+    );
+    assert_eq!(
+        resolved
+            .interpolate_for_presentation("{{derived}}", true)
+            .unwrap(),
+        "{{derived}}"
+    );
+    assert!(!format!("{resolved:?}").contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+    assert!(
+        !format!(
+            "{:?}",
+            probe_core::SecretValue::new("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR".to_owned())
+        )
+        .contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR")
+    );
+
+    let plain_child = environment("plain", Some("base"), vec![variable("token", "public")]);
+    let plain = probe_core::resolve_environment_with_provider(
+        &[base.clone(), plain_child],
+        Some("plain"),
+        &[],
+        &FakeProvider,
+        None,
+    )
+    .unwrap();
+    assert_eq!(plain.variable("token"), Some("public"));
+    assert_eq!(plain.variable("derived"), Some("Bearer public"));
+    let secret_child = environment(
+        "secret",
+        Some("base"),
+        vec![variable("token", "public"), secret("token2")],
+    );
+    let secret = probe_core::resolve_environment_with_provider(
+        &[base, secret_child],
+        Some("secret"),
+        &[],
+        &FakeProvider,
+        None,
+    )
+    .unwrap();
+    assert_eq!(secret.variable("token"), Some("public"));
+    assert_eq!(
+        secret.variable_status("token2"),
+        VariableStatus::SecretWithoutValue
+    );
+}
+
+#[test]
+fn secret_runtime_override_is_never_public() {
+    let environments = [environment("local", None, vec![secret("token")])];
+    let resolved = probe_core::resolve_environment_with_provider(
+        &environments,
+        Some("local"),
+        &[(
+            "token".into(),
+            "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR".into(),
+        )],
+        &FakeProvider,
+        None,
+    )
+    .unwrap();
+    assert_eq!(resolved.variable("token"), None);
+    assert_eq!(
+        resolved.interpolate("{{token}}").unwrap(),
+        "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
+    );
+    assert_eq!(
+        resolved
+            .interpolate_for_presentation("{{token}}", false)
+            .unwrap(),
+        "{{token}}"
+    );
+    assert!(!format!("{resolved:?}").contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+    let without_provider = resolve_environment_with_overrides(
+        &environments,
+        Some("local"),
+        &[(
+            "token".into(),
+            "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR".into(),
+        )],
+    )
+    .unwrap();
+    assert_eq!(without_provider.variable("token"), None);
+    assert_eq!(
+        without_provider
+            .interpolate_for_presentation("{{token}}", false)
+            .unwrap(),
+        "{{token}}"
+    );
+    assert!(!format!("{without_provider:?}").contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+}
+
+#[test]
+fn provider_failure_is_distinct_and_never_formats_secret_material() {
+    struct FailingProvider;
+    impl probe_core::SecretProvider for FailingProvider {
+        fn resolve_secret(
+            &self,
+            _: &probe_core::SecretContext<'_>,
+        ) -> Result<Option<probe_core::SecretValue>, probe_core::SecretError> {
+            Err(probe_core::SecretError)
+        }
+    }
+    let environments = [environment("local", None, vec![secret("token")])];
+    let error = probe_core::resolve_environment_with_provider(
+        &environments,
+        Some("local"),
+        &[],
+        &FailingProvider,
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        EnvironmentResolutionError::SecretProviderFailure("token".into())
+    );
+    assert!(!format!("{error:?} {error}").contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+    assert_eq!(
+        error.to_string(),
+        "secret provider failed for variable: token"
+    );
+}
+
+#[test]
+fn request_presentation_retains_secret_references_instead_of_execution_values() {
+    let environments = [environment("local", None, vec![secret("token")])];
+    let resolved = probe_core::resolve_environment_with_provider(
+        &environments,
+        Some("local"),
+        &[],
+        &FakeProvider,
+        None,
+    )
+    .unwrap();
+    let request = Request {
+        url: Some("https://example.test/{{token}}".into()),
+        headers: vec![Header {
+            name: "Authorization".into(),
+            value: "Bearer {{token}}".into(),
+            disabled: false,
+        }],
+        ..Request::default()
+    };
+    let execution = resolve_request(&request, &resolved).unwrap();
+    let display = probe_core::resolve_request_for_presentation(&request, &resolved, true).unwrap();
+    assert!(
+        execution
+            .url
+            .unwrap()
+            .contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR")
+    );
+    assert_eq!(
+        display.url.as_deref(),
+        Some("https://example.test/{{token}}")
+    );
+    assert_eq!(display.headers[0].value, "Bearer {{token}}");
+    assert!(!format!("{display:?}").contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+}
+
+#[test]
+fn plain_to_secret_override_uses_the_effective_declaration() {
+    let environments = [
+        environment("base", None, vec![variable("token", "public")]),
+        environment("child", Some("base"), vec![secret("token")]),
+    ];
+    let resolved = probe_core::resolve_environment_with_provider(
+        &environments,
+        Some("child"),
+        &[],
+        &FakeProvider,
+        None,
+    )
+    .unwrap();
+    assert_eq!(resolved.variable("token"), None);
+    assert_eq!(
+        resolved.interpolate("{{token}}").unwrap(),
+        "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
+    );
+}
+
+#[test]
+fn runtime_secret_text_is_opaque_even_when_it_looks_like_a_template() {
+    let environments = [environment(
+        "local",
+        None,
+        vec![secret("token"), variable("derived", "Bearer {{token}}")],
+    )];
+    let literal = "abc{{nonce}}";
+    let resolved = probe_core::resolve_environment_with_provider(
+        &environments,
+        Some("local"),
+        &[("token".into(), literal.into())],
+        &FakeProvider,
+        None,
+    )
+    .unwrap();
+    assert_eq!(resolved.interpolate("{{token}}").unwrap(), literal);
+    assert_eq!(
+        resolved.interpolate("{{derived}}").unwrap(),
+        "Bearer abc{{nonce}}"
+    );
+    assert_eq!(resolved.variable("derived"), None);
+    assert_eq!(
+        resolved
+            .interpolate_for_presentation("{{derived}}", false)
+            .unwrap(),
+        "{{derived}}"
+    );
+}
+
 fn variable(name: &str, value: &str) -> EnvironmentVariable {
     EnvironmentVariable::Plain(Variable {
         name: Some(name.to_owned()),

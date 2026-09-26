@@ -54,6 +54,7 @@ pub(crate) enum Command {
         output: Option<PathBuf>,
         strict_variables: bool,
         dry_run: bool,
+        secret_provider_env: bool,
         expectations: Vec<StatusExpectation>,
     },
     Set {
@@ -240,6 +241,7 @@ struct RunOptions {
     variables: Vec<(String, String)>,
     strict_variables: bool,
     dry_run: bool,
+    secret_provider_env: bool,
     expectations: Vec<StatusExpectation>,
 }
 
@@ -251,6 +253,7 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         variables: Vec::new(),
         strict_variables: false,
         dry_run: false,
+        secret_provider_env: false,
         expectations: Vec::new(),
     };
     while let Some(argument) = parser.bump() {
@@ -262,6 +265,17 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
                 parser.flag(&mut options.strict_variables, "--strict-variables")?
             }
             "--dry-run" => parser.flag(&mut options.dry_run, "--dry-run")?,
+            "--secret-provider" => {
+                let value = parser
+                    .bump()
+                    .ok_or_else(|| CliError::invalid_arguments("--secret-provider requires env"))?;
+                if value != "env" || options.secret_provider_env {
+                    return Err(CliError::invalid_arguments(
+                        "--secret-provider accepts env once",
+                    ));
+                }
+                options.secret_provider_env = true;
+            }
             "--expect" => options.expectations.push(parser.expectation()?),
             other => push_positional(&mut positionals, other, 2)?,
         }
@@ -285,6 +299,7 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         output: options.output,
         strict_variables: options.strict_variables,
         dry_run: options.dry_run,
+        secret_provider_env: options.secret_provider_env,
         expectations: options.expectations,
     })
 }

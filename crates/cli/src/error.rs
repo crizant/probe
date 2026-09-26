@@ -92,6 +92,7 @@ impl CliError {
             EnvironmentResolutionError::SecretVariableUnavailable(_) => {
                 "secret_variable_unavailable"
             }
+            EnvironmentResolutionError::SecretProviderFailure(_) => "environment_resolution",
             EnvironmentResolutionError::DuplicateVariable { .. } => "duplicate_variable",
             EnvironmentResolutionError::EnvironmentInUse(_) => "environment_in_use",
             _ => "environment_resolution",

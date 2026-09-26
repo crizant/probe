@@ -336,6 +336,16 @@ the domain remains independent of filesystem APIs.
 
 Execution preparation lives in `probe-core`. `Request::into_http()` consumes a resolved
 native request and returns a `PreparedHttpRequest`, which can only be constructed there.
+Runtime secret values are separate from public resolved environment variables. The
+core `SecretProvider` receives a logical variable name, selected environment, and
+optional workspace identity; `SecretValue` redacts formatting and exposes its text
+only for outbound execution. Providers are consulted only for effective enabled
+secret declarations after inheritance and invocation overrides. The CLI offers a
+process-environment provider through `--secret-provider env`; OpenCollection stores
+only `secret: true`, never the value. Request resolution produces an execution
+request and a presentation request that keeps secret references. Unavailable
+referenced secrets fail closed. The core does not manage native credential storage.
+
 HTTP requests pass through unchanged. GraphQL requests become GraphQL-over-HTTP: `GET`
 carries the selected operation in query parameters, and other methods carry a JSON
 envelope body. The engine therefore never sees GraphQL.
