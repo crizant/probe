@@ -1,5 +1,43 @@
 use super::*;
+use crate::app::chrome::environment_variable_text;
 use crate::credentials::CredentialStore;
+use gpui::ScrollStrategy;
+use std::rc::Rc;
+
+#[test]
+fn environment_manager_row_ids_follow_insertions_and_removals() {
+    let environment = Environment {
+        name: "empty".to_owned(),
+        color: None,
+        extends: None,
+        dot_env_file_path: None,
+        variables: Vec::new(),
+    };
+    let variable = || {
+        EnvironmentVariable::Plain(Variable {
+            name: Some("name".to_owned()),
+            value: None,
+            disabled: false,
+        })
+    };
+    let mut dialog = super::super::EnvironmentManagerDialog::new(&environment);
+    dialog.add_variable(variable());
+    dialog.add_variable(variable());
+    assert_eq!(dialog.variable_row_ids, [0, 1]);
+
+    dialog.draft.variables.push(variable());
+    dialog.draft.variables.push(variable());
+    dialog.sync_variable_row_ids();
+    assert_eq!(dialog.variable_row_ids, [0, 1, 2, 3]);
+    assert_eq!(dialog.next_variable_row_id, 4);
+
+    dialog.remove_variable(1);
+    assert_eq!(dialog.variable_row_ids, [0, 2, 3]);
+    assert_eq!(dialog.draft.variables.len(), 3);
+    dialog.remove_variable(dialog.draft.variables.len());
+    dialog.remove_variable(99);
+    assert_eq!(dialog.variable_row_ids, [0, 2, 3]);
+}
 
 #[gpui::test]
 fn environment_switcher_is_visible_without_a_selected_request(cx: &mut TestAppContext) {
@@ -170,6 +208,217 @@ fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut Te
     visual
         .debug_bounds("environment-manager-dirty")
         .expect("unsaved environment changes should show a dirty indicator");
+}
+
+#[gpui::test]
+fn environment_manager_virtualizes_variables_and_preserves_row_identity(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_environment(Some("base".to_owned()), cx);
+            view.open_environment_manager_dialog(window, cx);
+            view.apply_environment_manager_draft(cx, |dialog| {
+                for index in 0..500 {
+                    dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                        name: Some(format!("virtual-{index}")),
+                        value: Some(VariableValueSet::Single(VariableValue::String(format!(
+                            "value-{index}"
+                        )))),
+                        disabled: false,
+                    }));
+                }
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let first_value = visual
+        .debug_bounds("environment-variable-value-virtual-0")
+        .expect("first variable should render");
+    visual.simulate_click(first_value.center(), Modifiers::default());
+    cx.simulate_input(window.into(), "draft");
+    visual.run_until_parked();
+    let first_draft = window
+        .update(cx, |view, _, _| {
+            let dialog = view.environment_manager_dialog.as_ref().unwrap();
+            environment_variable_text(
+                match &dialog.draft.variables[dialog.draft.variables.len() - 500] {
+                    EnvironmentVariable::Plain(variable) => variable,
+                    EnvironmentVariable::Secret(_) => panic!("expected a plain variable"),
+                },
+            )
+            .0
+        })
+        .unwrap();
+    assert!(first_draft.contains("draft"));
+    assert!(
+        visual
+            .debug_bounds("environment-variable-value-virtual-499")
+            .is_none(),
+        "offscreen rows should not render"
+    );
+    assert!(
+        visual
+            .debug_bounds("environment-manager-add-variable")
+            .is_none(),
+        "the add action should scroll with the rows"
+    );
+    let rendered = window
+        .update(cx, |view, _, _| view.rendered_environment_variable_rows)
+        .unwrap();
+    assert!(rendered > 0 && rendered < 40, "rendered {rendered} rows");
+
+    window
+        .update(cx, |view, _, cx| {
+            let add_row_index = view
+                .environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft
+                .variables
+                .len();
+            view.environment_variables_scroll
+                .scroll_to_item_strict(add_row_index, ScrollStrategy::Bottom);
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual
+        .debug_bounds("environment-variable-value-virtual-499")
+        .expect("scrolling should render the last variable");
+    visual
+        .debug_bounds("environment-manager-add-variable")
+        .expect("scrolling should reveal the add action");
+    assert!(
+        visual
+            .debug_bounds("environment-variable-value-virtual-0")
+            .is_none()
+    );
+
+    window
+        .update(cx, |view, _, cx| {
+            let dialog = view.environment_manager_dialog.as_mut().unwrap();
+            let retained_id = dialog.variable_row_ids[2];
+            dialog.remove_variable(1);
+            assert_eq!(dialog.variable_row_ids[1], retained_id);
+            view.environment_variables_scroll
+                .scroll_to_item_strict(0, ScrollStrategy::Top);
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let first_value = visual
+        .debug_bounds("environment-variable-value-virtual-0")
+        .expect("remaining first variable should render");
+    let retained_draft = window
+        .update(cx, |view, _, _| {
+            let dialog = view.environment_manager_dialog.as_ref().unwrap();
+            let variable = dialog
+                .draft
+                .variables
+                .iter()
+                .find(|variable| matches!(variable, EnvironmentVariable::Plain(variable) if variable.name.as_deref() == Some("virtual-0")))
+                .unwrap();
+            let EnvironmentVariable::Plain(variable) = variable else {
+                unreachable!()
+            };
+            environment_variable_text(variable).0
+        })
+        .unwrap();
+    assert_eq!(retained_draft, first_draft);
+    visual.simulate_click(first_value.center(), Modifiers::default());
+    cx.simulate_input(window.into(), "more");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view.environment_manager_dialog.as_ref().unwrap();
+            let values = dialog
+                .draft
+                .variables
+                .iter()
+                .filter_map(|variable| match variable {
+                    EnvironmentVariable::Plain(variable) => Some((
+                        variable.name.as_deref().unwrap_or(""),
+                        environment_variable_text(variable).0,
+                    )),
+                    EnvironmentVariable::Secret(_) => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                values
+                    .iter()
+                    .find(|(name, _)| *name == "virtual-0")
+                    .unwrap()
+                    .1
+                    .contains("draft")
+            );
+            assert!(
+                values
+                    .iter()
+                    .find(|(name, _)| *name == "virtual-0")
+                    .unwrap()
+                    .1
+                    .contains("more")
+            );
+            assert_eq!(
+                values
+                    .iter()
+                    .find(|(name, _)| *name == "virtual-1")
+                    .unwrap()
+                    .1,
+                "value-1"
+            );
+        })
+        .unwrap();
+    visual
+        .debug_bounds("environment-variable-value-virtual-1")
+        .expect("remaining second variable should render");
+
+    window
+        .update(cx, |view, _, cx| {
+            let original = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .workspace()
+                .environments()
+                .iter()
+                .find(|environment| environment.name == "base")
+                .unwrap()
+                .clone();
+            view.environment_manager_dialog.as_mut().unwrap().draft = original;
+            let previous_scroll = view.environment_variables_scroll.0.clone();
+            view.select_environment_manager_environment("development", cx);
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .original_name,
+                "development"
+            );
+            assert!(!Rc::ptr_eq(
+                &previous_scroll,
+                &view.environment_variables_scroll.0
+            ));
+            assert_eq!(
+                view.environment_variables_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y,
+                px(0.0)
+            );
+        })
+        .unwrap();
 }
 
 #[gpui::test]

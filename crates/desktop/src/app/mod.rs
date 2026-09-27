@@ -333,6 +333,7 @@ pub(crate) struct ProbeApp {
     response_viewer: ResponseViewerState,
     tree_scroll: UniformListScrollHandle,
     inspector_scroll: UniformListScrollHandle,
+    environment_variables_scroll: UniformListScrollHandle,
     inspector_list_width: f32,
     inspector_resize_start: Option<(f32, f32)>,
     pending_inspector_reveal: Cell<Option<InspectSelection>>,
@@ -351,6 +352,8 @@ pub(crate) struct ProbeApp {
     rendered_sidebar_rows: usize,
     #[cfg(test)]
     rendered_response_rows: usize,
+    #[cfg(test)]
+    rendered_environment_variable_rows: usize,
     _caret_blink: Task<()>,
     _response_elapsed_refresh: Task<()>,
     _keystrokes: gpui::Subscription,
@@ -459,6 +462,7 @@ impl ProbeApp {
             response_viewer: ResponseViewerState::default(),
             tree_scroll: UniformListScrollHandle::new(),
             inspector_scroll: UniformListScrollHandle::new(),
+            environment_variables_scroll: UniformListScrollHandle::new(),
             inspector_list_width: DEFAULT_INSPECT_LIST_WIDTH,
             inspector_resize_start: None,
             pending_inspector_reveal: Cell::new(None),
@@ -477,6 +481,8 @@ impl ProbeApp {
             rendered_sidebar_rows: 0,
             #[cfg(test)]
             rendered_response_rows: 0,
+            #[cfg(test)]
+            rendered_environment_variable_rows: 0,
             _caret_blink: Self::spawn_caret_blink(cx),
             _response_elapsed_refresh: Self::spawn_response_elapsed_refresh(cx),
             _keystrokes: keystrokes,

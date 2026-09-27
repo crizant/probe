@@ -121,6 +121,7 @@ impl ProbeApp {
             return;
         };
         self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(selected));
+        self.environment_variables_scroll = UniformListScrollHandle::new();
         self.refresh_secret_statuses(cx);
         self.clear_environment_dialog_error(cx);
         self.environment_manager_dialog_focus.focus(window, cx);
@@ -163,6 +164,7 @@ impl ProbeApp {
         self.transient.environment_manager_context_menu = None;
         self.environment_manager_close_after_save = false;
         self.environment_manager_dialog = None;
+        self.environment_variables_scroll = UniformListScrollHandle::new();
     }
 
     pub(super) fn environment_manager_reload_snapshot(
@@ -231,7 +233,9 @@ impl ProbeApp {
             return;
         }
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
+            dialog.sync_variable_row_ids();
             update(dialog);
+            dialog.sync_variable_row_ids();
             cx.notify();
         }
     }
@@ -274,6 +278,7 @@ impl ProbeApp {
             .find(|environment| environment.name == name)
         {
             self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(environment));
+            self.environment_variables_scroll = UniformListScrollHandle::new();
             self.refresh_secret_statuses(cx);
             self.clear_environment_dialog_error(cx);
             cx.notify();

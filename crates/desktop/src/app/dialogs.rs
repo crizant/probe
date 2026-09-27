@@ -21,6 +21,8 @@ pub(crate) struct EnvironmentManagerDialog {
     pub(crate) original_name: String,
     pub(crate) draft: Environment,
     pub(crate) secret_statuses: BTreeMap<String, SecretUiStatus>,
+    pub(crate) variable_row_ids: Vec<u64>,
+    pub(crate) next_variable_row_id: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,10 +35,33 @@ pub(crate) enum SecretUiStatus {
 
 impl EnvironmentManagerDialog {
     pub(crate) fn new(environment: &Environment) -> Self {
+        let next_variable_row_id = environment.variables.len() as u64;
         Self {
             original_name: environment.name.clone(),
             draft: environment.clone(),
             secret_statuses: BTreeMap::new(),
+            variable_row_ids: (0..next_variable_row_id).collect(),
+            next_variable_row_id,
+        }
+    }
+
+    pub(crate) fn add_variable(&mut self, variable: probe_core::EnvironmentVariable) {
+        self.draft.variables.push(variable);
+        self.variable_row_ids.push(self.next_variable_row_id);
+        self.next_variable_row_id += 1;
+    }
+
+    pub(crate) fn sync_variable_row_ids(&mut self) {
+        while self.variable_row_ids.len() < self.draft.variables.len() {
+            self.variable_row_ids.push(self.next_variable_row_id);
+            self.next_variable_row_id += 1;
+        }
+    }
+
+    pub(crate) fn remove_variable(&mut self, index: usize) {
+        if index < self.draft.variables.len() {
+            self.draft.variables.remove(index);
+            self.variable_row_ids.remove(index);
         }
     }
 }
