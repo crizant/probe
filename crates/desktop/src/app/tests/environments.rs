@@ -1138,7 +1138,7 @@ fn environment_manager_delete_selects_a_neighbor(cx: &mut TestAppContext) {
         .expect("test window should be open");
     cx.run_until_parked();
 
-    window
+    let previous_scroll = window
         .update(cx, |view, window, cx| {
             assert!(
                 view.environment_save_task.is_none(),
@@ -1146,7 +1146,9 @@ fn environment_manager_delete_selects_a_neighbor(cx: &mut TestAppContext) {
                 toast_debug(view)
             );
             view.select_environment_manager_environment("development", cx);
+            let previous_scroll = view.environment_variables_scroll.0.clone();
             view.delete_environment("development".to_owned(), window, cx);
+            previous_scroll
         })
         .expect("test window should remain open");
     cx.run_until_parked();
@@ -1164,6 +1166,10 @@ fn environment_manager_delete_selects_a_neighbor(cx: &mut TestAppContext) {
                     .map(|dialog| dialog.original_name.as_str()),
                 Some("staging")
             );
+            assert!(!Rc::ptr_eq(
+                &previous_scroll,
+                &view.environment_variables_scroll.0
+            ));
         })
         .expect("test window should remain open");
     fs::remove_file(fixture).unwrap();

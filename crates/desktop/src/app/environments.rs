@@ -596,6 +596,7 @@ impl ProbeApp {
         match next {
             Some(environment) => {
                 self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(&environment));
+                self.environment_variables_scroll = UniformListScrollHandle::new();
                 false
             }
             None => true,

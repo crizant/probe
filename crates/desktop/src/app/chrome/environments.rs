@@ -214,6 +214,7 @@ impl ProbeApp {
         };
         let mut row_element = div()
             .id(format!("environment-manager-variable-row-{row_id}"))
+            .w_full()
             .h(px(theme.metrics.control_height + theme.metrics.spacing_2))
             .flex_none()
             .overflow_hidden()
@@ -499,6 +500,7 @@ impl ProbeApp {
         let add_variable_view = cx.weak_entity();
         let add_secret_view = cx.weak_entity();
         div()
+            .w_full()
             .h(px(theme.metrics.control_height + theme.metrics.spacing_2))
             .px(px(theme.metrics.spacing_2))
             .py(px(theme.metrics.spacing_1))
@@ -630,6 +632,7 @@ impl ProbeApp {
                         if rows_empty && index == 0 {
                             return Some(
                                 div()
+                                    .w_full()
                                     .h(px(theme.metrics.control_height + theme.metrics.spacing_2))
                                     .px(px(theme.metrics.spacing_2))
                                     .flex()
