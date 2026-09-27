@@ -64,7 +64,8 @@ use dialogs::{
     ApplicationDialog, ApplicationDialogAction, CANCEL_DIALOG_ACTION, DesktopMenu,
     DesktopMenuDefinition, DesktopMenuItem, DesktopSubmenu, DialogActionSpec,
     EnvironmentManagerDialog, ImportSource, PendingClose, PostmanConversionResult, SecretUiStatus,
-    YaakConversionResult, format_import_diagnostics, suggested_collection_filename,
+    StoredSecretRename, YaakConversionResult, format_import_diagnostics,
+    suggested_collection_filename,
 };
 use presentation::{
     InspectListRow, PrettyRevealState, ShellSelectors, inspect_list_rows, inspect_row_index,

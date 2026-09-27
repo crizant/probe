@@ -389,8 +389,11 @@ initially empty dialog and is never revealed by Probe. Deleting a stored value k
 the declaration; removing the declaration does not delete the native credential.
 Inherited declarations show their defining environment, while the credential is
 scoped to the selected effective environment. A workspace move, environment rename,
-or variable rename changes credential identity in v1. Probe does not migrate old
-credentials automatically. Credential operations are disabled while the environment
+or variable rename changes credential identity in v1. Saving an environment rename
+or a direct secret-variable rename asks for confirmation when that change would
+leave stored values under the previous identity. The prompt is based on the
+declaration edit and does not read the credential store. Probe does not migrate or
+delete old credentials automatically. Credential operations are disabled while the environment
 draft is unsaved, and there is no plaintext fallback. The input and request value
 exist temporarily in ordinary process memory during submission and execution.
 

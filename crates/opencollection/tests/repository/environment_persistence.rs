@@ -528,11 +528,18 @@ fn environment_update_rejects_stdin_workspaces() {
 #[test]
 fn environment_replace_updates_plain_and_existing_secret_without_leaking_value() {
     let path = temporary_path("env-secret-update.yml");
-    let fixture_text = fs::read_to_string(fixture("phase4-environments.yml")).unwrap();
+    let fixture_text = fs::read_to_string(fixture("phase4-environments.yml"))
+        .unwrap()
+        .replace("\r\n", "\n");
+    let declaration = "name: secretToken\n          type: string";
+    assert!(
+        fixture_text.contains(declaration),
+        "the fixture secret declaration should be present before adding an unknown field"
+    );
     fs::write(
         &path,
         fixture_text.replace(
-            "name: secretToken\n          type: string",
+            declaration,
             "name: secretToken\n          type: string\n          x-extra: keep",
         ),
     )

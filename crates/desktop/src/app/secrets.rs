@@ -215,14 +215,20 @@ impl ProbeApp {
                 .await;
             let _ = view.update_in(window, |view, window, cx| {
                 view.secret_write_in_progress = false;
+                if let Some(dialog) = view.secret_value_dialog.as_mut()
+                    && dialog.name == name
+                    && dialog.environment == environment
+                {
+                    dialog.busy = false;
+                }
                 if view.secret_status_generation != generation || !view.can_manage_secret(&name) {
+                    cx.notify();
                     return;
                 }
                 if let Some(dialog) = view.secret_value_dialog.as_mut() {
                     if dialog.name != name || dialog.environment != environment {
                         return;
                     }
-                    dialog.busy = false;
                     if result.is_err() {
                         dialog.error = Some("Could not save to the system credential store.");
                         cx.notify();
@@ -280,7 +286,6 @@ impl ProbeApp {
         let Some(path) = self.workspace_path.clone() else {
             return;
         };
-        let generation = self.secret_status_generation;
         self.secret_write_in_progress = true;
         let store = Arc::clone(&self.credential_store);
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
@@ -299,7 +304,11 @@ impl ProbeApp {
                 .await;
             let _ = view.update_in(window, |view, _, cx| {
                 view.secret_write_in_progress = false;
-                if view.secret_status_generation != generation || !view.can_manage_secret(&name) {
+                let same_environment = view
+                    .environment_manager_dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.draft.name == environment);
+                if !same_environment || !view.can_manage_secret(&name) {
                     return;
                 }
                 if result.is_err() && result != Err(CredentialStoreError::NotFound) {

@@ -1998,6 +1998,8 @@ struct FakeManagerCredentials {
     fail_set: std::sync::atomic::AtomicBool,
     slow_status: std::sync::atomic::AtomicBool,
     slow_set: std::sync::atomic::AtomicBool,
+    hold_delete_until_status_reads: std::sync::atomic::AtomicBool,
+    status_read_during_hold: std::sync::atomic::AtomicBool,
 }
 
 impl crate::credentials::CredentialStore for FakeManagerCredentials {
@@ -2014,7 +2016,15 @@ impl crate::credentials::CredentialStore for FakeManagerCredentials {
         if self.fail_status.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(crate::credentials::CredentialStoreError::Unavailable);
         }
-        Ok(if self.values.lock().unwrap().contains_key(id) {
+        let stored = self.values.lock().unwrap().contains_key(id);
+        if self
+            .hold_delete_until_status_reads
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.status_read_during_hold
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(if stored {
             crate::credentials::CredentialStatus::Stored
         } else {
             crate::credentials::CredentialStatus::NotStored
@@ -2041,6 +2051,19 @@ impl crate::credentials::CredentialStore for FakeManagerCredentials {
         &self,
         id: &crate::credentials::CredentialId,
     ) -> Result<(), crate::credentials::CredentialStoreError> {
+        if self
+            .hold_delete_until_status_reads
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let started = std::time::Instant::now();
+            while !self
+                .status_read_during_hold
+                .load(std::sync::atomic::Ordering::Relaxed)
+                && started.elapsed() < std::time::Duration::from_millis(500)
+            {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
         self.values
             .lock()
             .unwrap()
@@ -2475,6 +2498,41 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
             });
             assert!(!view.can_manage_secret("secretToken"));
             view.save_environment_manager_dialog(window, cx);
+            let dialog = view.application_dialog.as_ref().unwrap();
+            assert_eq!(dialog.title(), "Rename environment?");
+            assert_eq!(
+                dialog.description(),
+                "Stored secret values are associated with the environment name.\nAfter renaming, affected secrets will need to be stored again.\n\nThe existing stored credentials will not be migrated."
+            );
+            assert_eq!(
+                dialog.primary_action(),
+                Some(ApplicationDialogAction::Rename)
+            );
+            assert!(view.environment_save_task.is_none());
+            view.handle_application_dialog_action(ApplicationDialogAction::Cancel, window, cx);
+            assert!(view.application_dialog.is_none());
+            assert!(view.environment_save_task.is_none());
+            assert_eq!(
+                view.environment_manager_dialog.as_ref().unwrap().draft.name,
+                "production"
+            );
+        })
+        .unwrap();
+    assert!(
+        fs::read_to_string(&fixture)
+            .unwrap()
+            .contains("name: development"),
+        "cancel must leave the saved environment name unchanged"
+    );
+    assert!(
+        !fs::read_to_string(&fixture)
+            .unwrap()
+            .contains("name: production")
+    );
+    window
+        .update(cx, |view, window, cx| {
+            view.save_environment_manager_dialog(window, cx);
+            view.handle_application_dialog_action(ApplicationDialogAction::Rename, window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -2528,6 +2586,17 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
             });
             assert!(!view.can_manage_secret("renamedToken"));
             view.save_environment_manager_dialog(window, cx);
+            assert!(matches!(
+                &view.application_dialog,
+                Some(ApplicationDialog::RenameStoredSecrets {
+                    kind: StoredSecretRename::Variable { from, to },
+                }) if from == "secretToken" && to == "renamedToken"
+            ));
+            assert_eq!(
+                view.application_dialog.as_ref().unwrap().description(),
+                "Stored secret values are associated with the variable name.\nAfter renaming secretToken to renamedToken, its value will need to be stored again."
+            );
+            view.handle_application_dialog_action(ApplicationDialogAction::Rename, window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -2675,6 +2744,175 @@ fn manager_secret_keyboard_enter_submits_and_escape_discards(cx: &mut TestAppCon
                 0
             );
             cx.notify();
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn environment_manager_close_save_confirms_secret_rename_before_closing(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_environment_fixture("secret-rename-close")
+        .canonicalize()
+        .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.open_environment_manager_dialog(window, cx);
+            view.apply_environment_manager_draft(cx, |dialog| {
+                dialog.draft.name = "production".into()
+            });
+            view.request_close_environment_manager_dialog(window, cx);
+            view.handle_application_dialog_action(ApplicationDialogAction::Save, window, cx);
+            assert!(matches!(
+                view.application_dialog,
+                Some(ApplicationDialog::RenameStoredSecrets {
+                    kind: StoredSecretRename::Environment,
+                })
+            ));
+            assert!(view.environment_manager_close_after_save);
+            assert!(view.environment_manager_dialog.is_some());
+            view.handle_application_dialog_action(ApplicationDialogAction::Cancel, window, cx);
+            assert!(!view.environment_manager_close_after_save);
+            assert!(view.environment_manager_dialog.is_some());
+            assert!(view.application_dialog.is_none());
+            view.request_close_environment_manager_dialog(window, cx);
+            view.handle_application_dialog_action(ApplicationDialogAction::Save, window, cx);
+            view.handle_application_dialog_action(ApplicationDialogAction::Rename, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.environment_manager_dialog.is_none());
+            assert!(view.application_dialog.is_none());
+        })
+        .unwrap();
+    assert!(
+        fs::read_to_string(&fixture)
+            .unwrap()
+            .contains("name: production")
+    );
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
+fn secret_save_clears_busy_when_status_refresh_advances_generation(cx: &mut TestAppContext) {
+    use std::sync::Arc;
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture, workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.open_environment_manager_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            view.open_secret_value_dialog("secretToken".into(), window, cx);
+            let input = view.secret_value_dialog.as_ref().unwrap().input.clone();
+            input.update(cx, |input, cx| {
+                input.set_value("stored-during-refresh", window, cx)
+            });
+            view.save_secret_value(window, cx);
+            assert!(view.secret_value_dialog.as_ref().unwrap().busy);
+            view.refresh_secret_statuses(cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view
+                .secret_value_dialog
+                .as_ref()
+                .expect("a stale refresh must not leave Save stuck, and must not close the dialog");
+            assert!(!dialog.busy);
+            assert!(dialog.error.is_none());
+            assert!(!view.secret_write_in_progress);
+            let path = view.workspace_path.as_ref().unwrap();
+            let id =
+                crate::credentials::CredentialId::for_workspace(path, "development", "secretToken")
+                    .unwrap();
+            assert_eq!(
+                store.values.lock().unwrap().get(&id).map(String::as_str),
+                Some("stored-during-refresh")
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn secret_delete_refreshes_status_when_a_refresh_overlaps_deletion(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    store.set(&id, "private").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture, workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.open_environment_manager_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .secret_statuses
+                    .get("secretToken"),
+                Some(&super::super::SecretUiStatus::Stored)
+            );
+            store
+                .hold_delete_until_status_reads
+                .store(true, Ordering::Relaxed);
+            store
+                .status_read_during_hold
+                .store(false, Ordering::Relaxed);
+            view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
+            view.refresh_secret_statuses(cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(store.status_read_during_hold.load(Ordering::Relaxed));
+            assert!(!store.values.lock().unwrap().contains_key(&id));
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .secret_statuses
+                    .get("secretToken"),
+                Some(&super::super::SecretUiStatus::NotStored)
+            );
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
 }

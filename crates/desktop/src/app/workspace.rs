@@ -523,7 +523,12 @@ impl ProbeApp {
             (ApplicationDialog::UnsavedEnvironment, ApplicationDialogAction::Save) => {
                 self.environment_manager_close_after_save = true;
                 self.save_environment_manager_dialog(window, cx);
-                if self.environment_save_task.is_none() {
+                if self.environment_save_task.is_none()
+                    && !matches!(
+                        self.application_dialog,
+                        Some(ApplicationDialog::RenameStoredSecrets { .. })
+                    )
+                {
                     self.environment_manager_close_after_save = false;
                     self.restore_environment_dialog_focus(window, cx);
                 }
@@ -548,6 +553,14 @@ impl ProbeApp {
                 },
                 ApplicationDialogAction::Delete,
             ) => self.delete_stored_secret(name, environment, window, cx),
+            (ApplicationDialog::RenameStoredSecrets { .. }, ApplicationDialogAction::Rename) => {
+                self.confirm_stored_secret_rename(window, cx)
+            }
+            (ApplicationDialog::RenameStoredSecrets { .. }, ApplicationDialogAction::Cancel) => {
+                self.environment_manager_close_after_save = false;
+                self.restore_environment_dialog_focus(window, cx);
+                cx.notify();
+            }
             (
                 ApplicationDialog::FilesystemConflict { path, .. },
                 ApplicationDialogAction::UseDisk,

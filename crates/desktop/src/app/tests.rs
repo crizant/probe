@@ -10,8 +10,8 @@ use gpui::{
     point, px, size,
 };
 use probe_core::{
-    EnvironmentVariable, QueryParameter, Request, Variable, VariableValue, VariableValueSet,
-    WorkspaceItemRef,
+    Environment, EnvironmentVariable, QueryParameter, Request, SecretVariable, Variable,
+    VariableValue, VariableValueSet, WorkspaceItemRef,
 };
 use probe_http::{HttpResponse, ResponseHeader};
 use probe_postman::{COLLECTION_VARIABLES_ENVIRONMENT, inspect_postman_source};
@@ -22,8 +22,8 @@ use super::imports::{CollectionPathResolution, resolve_collection_path};
 use super::{
     ApplicationDialog, ApplicationDialogAction, CloseImportSubmenu, DesktopMenu,
     IMPORT_DIAGNOSTIC_GROUP_LIMIT, ImportSource, OpenFileMenu, OpenImportSubmenu, PendingClose,
-    PrettyRevealState, ProbeApp, SubmitEnvironmentManagerDialog, bind_platform_hotkeys,
-    format_import_diagnostics, request_key_remaps,
+    PrettyRevealState, ProbeApp, StoredSecretRename, SubmitEnvironmentManagerDialog,
+    bind_platform_hotkeys, format_import_diagnostics, request_key_remaps,
 };
 use crate::{
     request_editor::{BodyEditorKind, EditorSection},
@@ -221,6 +221,237 @@ fn unsaved_environment_dialog_warns_before_discard() {
         dialog.destructive_action(),
         Some(ApplicationDialogAction::Discard)
     );
+}
+
+#[test]
+fn secret_rename_dialogs_explain_that_credentials_stay_behind() {
+    let environment = ApplicationDialog::RenameStoredSecrets {
+        kind: StoredSecretRename::Environment,
+    };
+    assert_eq!(environment.title(), "Rename environment?");
+    assert_eq!(
+        environment.description(),
+        "Stored secret values are associated with the environment name.\nAfter renaming, affected secrets will need to be stored again.\n\nThe existing stored credentials will not be migrated."
+    );
+    assert_eq!(
+        environment.primary_action(),
+        Some(ApplicationDialogAction::Rename)
+    );
+    assert_eq!(environment.destructive_action(), None);
+    assert_eq!(environment.action_specs().unwrap()[0].label, "Cancel");
+    assert_eq!(environment.action_specs().unwrap()[1].label, "Rename");
+
+    let variable = ApplicationDialog::RenameStoredSecrets {
+        kind: StoredSecretRename::Variable {
+            from: "apiToken".to_owned(),
+            to: "accessToken".to_owned(),
+        },
+    };
+    assert_eq!(variable.title(), "Rename secret variable?");
+    assert_eq!(
+        variable.description(),
+        "Stored secret values are associated with the variable name.\nAfter renaming apiToken to accessToken, its value will need to be stored again."
+    );
+
+    let variables = ApplicationDialog::RenameStoredSecrets {
+        kind: StoredSecretRename::Variables,
+    };
+    assert_eq!(variables.title(), "Rename secret variables?");
+    assert_eq!(
+        variables.description(),
+        "Stored secret values are associated with the variable name.\nAfter renaming, affected secrets will need to be stored again.\n\nThe existing stored credentials will not be migrated."
+    );
+}
+
+#[test]
+fn stored_secret_rename_warning_follows_declaration_identity() {
+    let base = sample_environment("base", None, vec![sample_secret("secretToken")]);
+    let development = sample_environment("development", Some("base"), vec![sample_plain("host")]);
+    let mut renamed = development.clone();
+    renamed.name = "production".to_owned();
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            &[base.clone(), development.clone()],
+            &development,
+            &renamed
+        ),
+        Some(StoredSecretRename::Environment),
+        "an inherited secret uses the effective environment name"
+    );
+
+    let plain_base = sample_environment("base", None, vec![sample_plain("host")]);
+    let plain_child = sample_environment("development", Some("base"), vec![]);
+    let mut renamed_plain = plain_child.clone();
+    renamed_plain.name = "production".to_owned();
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            &[plain_base, plain_child.clone()],
+            &plain_child,
+            &renamed_plain
+        ),
+        None
+    );
+
+    let original = sample_environment(
+        "base",
+        None,
+        vec![sample_secret("secretToken"), sample_plain("host")],
+    );
+    let mut renamed_secret = original.clone();
+    let EnvironmentVariable::Secret(secret) = &mut renamed_secret.variables[0] else {
+        panic!("fixture secret");
+    };
+    secret.name = Some("accessToken".to_owned());
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            std::slice::from_ref(&original),
+            &original,
+            &renamed_secret
+        ),
+        Some(StoredSecretRename::Variable {
+            from: "secretToken".to_owned(),
+            to: "accessToken".to_owned(),
+        })
+    );
+
+    let two = sample_environment(
+        "base",
+        None,
+        vec![sample_secret("apiToken"), sample_secret("otherToken")],
+    );
+    let two_renamed = sample_environment(
+        "base",
+        None,
+        vec![sample_secret("accessToken"), sample_secret("refreshToken")],
+    );
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            std::slice::from_ref(&two),
+            &two,
+            &two_renamed
+        ),
+        Some(StoredSecretRename::Variables)
+    );
+
+    let plain_renamed = sample_environment(
+        "base",
+        None,
+        vec![sample_secret("secretToken"), sample_plain("hostname")],
+    );
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            std::slice::from_ref(&original),
+            &original,
+            &plain_renamed
+        ),
+        None
+    );
+    let added = sample_environment(
+        "base",
+        None,
+        vec![sample_secret("secretToken"), sample_secret("newToken")],
+    );
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            std::slice::from_ref(&original),
+            &original,
+            &added
+        ),
+        None
+    );
+    let deleted = sample_environment("base", None, vec![sample_plain("host")]);
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            std::slice::from_ref(&original),
+            &original,
+            &deleted
+        ),
+        None
+    );
+
+    let mut spaced = original.clone();
+    let EnvironmentVariable::Secret(secret) = &mut spaced.variables[0] else {
+        panic!("fixture secret");
+    };
+    secret.name = Some(" secretToken ".to_owned());
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            std::slice::from_ref(&original),
+            &original,
+            &spaced
+        ),
+        None
+    );
+
+    let both = sample_environment("production", None, vec![sample_secret("accessToken")]);
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            std::slice::from_ref(&original),
+            &original,
+            &both
+        ),
+        Some(StoredSecretRename::Environment)
+    );
+
+    let mut disabled = sample_secret("secretToken");
+    let EnvironmentVariable::Secret(secret) = &mut disabled else {
+        panic!("fixture secret");
+    };
+    secret.disabled = true;
+    let disabled_environment = sample_environment("development", None, vec![disabled]);
+    let mut disabled_renamed = disabled_environment.clone();
+    disabled_renamed.name = "production".to_owned();
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            std::slice::from_ref(&disabled_environment),
+            &disabled_environment,
+            &disabled_renamed
+        ),
+        Some(StoredSecretRename::Environment)
+    );
+
+    let mut unextended = development.clone();
+    unextended.extends = None;
+    assert_eq!(
+        super::environments::stored_secret_rename_warning(
+            &[base, development.clone()],
+            &development,
+            &unextended
+        ),
+        None
+    );
+}
+
+fn sample_environment(
+    name: &str,
+    extends: Option<&str>,
+    variables: Vec<EnvironmentVariable>,
+) -> Environment {
+    Environment {
+        name: name.to_owned(),
+        color: None,
+        extends: extends.map(str::to_owned),
+        dot_env_file_path: None,
+        variables,
+    }
+}
+
+fn sample_secret(name: &str) -> EnvironmentVariable {
+    EnvironmentVariable::Secret(SecretVariable {
+        name: Some(name.to_owned()),
+        value_type: None,
+        disabled: false,
+    })
+}
+
+fn sample_plain(name: &str) -> EnvironmentVariable {
+    EnvironmentVariable::Plain(Variable {
+        name: Some(name.to_owned()),
+        value: Some(VariableValueSet::Single(VariableValue::String(
+            "value".to_owned(),
+        ))),
+        disabled: false,
+    })
 }
 
 #[cfg(target_os = "macos")]
