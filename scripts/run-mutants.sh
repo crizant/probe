@@ -11,6 +11,7 @@ if [ "$#" -ne 1 ] || [ -z "$1" ]; then
 fi
 
 diff_file=$1
+mutant_jobs=2
 
 if [ -n "${MUTANTS_JOBSERVER_TASKS:-}" ]; then
   case "$MUTANTS_JOBSERVER_TASKS" in
@@ -51,4 +52,24 @@ else
   fi
 fi
 
-exec cargo mutants --workspace --in-diff "$diff_file" -j 2 --jobserver-tasks "$tasks"
+if [ -n "${MUTANTS_TEST_THREADS:-}" ]; then
+  case "$MUTANTS_TEST_THREADS" in
+    *[!0-9]* | '')
+      echo "error: MUTANTS_TEST_THREADS must be a positive integer" >&2
+      exit 2
+      ;;
+  esac
+  test_threads=$MUTANTS_TEST_THREADS
+  if [ "$test_threads" -lt 1 ]; then
+    echo "error: MUTANTS_TEST_THREADS must be at least 1" >&2
+    exit 2
+  fi
+else
+  test_threads=$((tasks / mutant_jobs))
+  if [ "$test_threads" -lt 1 ]; then
+    test_threads=1
+  fi
+fi
+
+exec cargo mutants --workspace --in-diff "$diff_file" -j "$mutant_jobs" \
+  --jobserver-tasks "$tasks" -- -- --test-threads "$test_threads"
