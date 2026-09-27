@@ -23,6 +23,7 @@ static SIDEBAR_COLLAPSE_SVG: LazyLock<Vec<u8>> =
 static SIDEBAR_EXPAND_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuPanelLeftOpen));
 static HOME_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuHouse));
+static LOCK_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLock));
 
 fn icon_svg_bytes(icon: icondata::Icon) -> Vec<u8> {
     format!(
@@ -88,6 +89,11 @@ pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
         )
     };
     icon.text_color(theme.colors.text.muted)
+}
+
+pub(crate) fn lock_icon(theme: Theme) -> gpui::Div {
+    library_icon("lucide-lock", &LOCK_SVG, theme.metrics.icon_small)
+        .text_color(theme.colors.text.muted)
 }
 
 fn tree_item_icon_color(theme: Theme, selected: bool) -> gpui::Rgba {

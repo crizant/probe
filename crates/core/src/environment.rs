@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    Environment, EnvironmentVariable, SecretContext, SecretProvider, SecretValue, Variable,
-    VariableValue, VariableValueSet,
+    Environment, EnvironmentVariable, SecretContext, SecretProvider, SecretValue, VariableValue,
+    VariableValueSet,
 };
 
 /// Whether a `{{name}}` reference would be substituted in a resolved environment.
@@ -302,11 +302,11 @@ pub enum EnvironmentResolutionError {
     EnvironmentInUse(String),
 }
 
-/// A plain environment variable as it appears after inheritance, together with its source.
+/// An environment variable as it appears after inheritance, together with its source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EffectiveEnvironmentVariable {
-    /// Plain variable definition that currently wins for this name.
-    pub variable: Variable,
+    /// Variable declaration that currently wins for this name.
+    pub variable: EnvironmentVariable,
     /// Environment that defines this effective value.
     pub defined_in: String,
     /// Index in the selected environment's variable list when this entry is local.

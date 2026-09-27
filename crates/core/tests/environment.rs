@@ -1252,7 +1252,11 @@ fn effective_names(rows: &[probe_core::EffectiveEnvironmentVariable]) -> Vec<(&s
     rows.iter()
         .map(|row| {
             (
-                row.variable.name.as_deref().unwrap_or(""),
+                match &row.variable {
+                    EnvironmentVariable::Plain(variable) => variable.name.as_deref(),
+                    EnvironmentVariable::Secret(variable) => variable.name.as_deref(),
+                }
+                .unwrap_or(""),
                 row.defined_in.as_str(),
                 row.direct_index.is_some(),
             )
@@ -1294,15 +1298,17 @@ fn effective_environment_variables_resolve_inheritance_overrides_and_secrets() {
     assert_eq!(
         effective_names(&rows),
         vec![
+            ("token", "development", true),
             ("local", "development", true),
             ("host", "base", false),
             ("region", "base", false),
             ("disabled", "base", false),
+            ("shadowed", "root", false),
         ]
     );
     assert!(
         rows.iter().any(|row| {
-            row.variable.name.as_deref() == Some("disabled") && row.variable.disabled
+            matches!(&row.variable, EnvironmentVariable::Plain(variable) if variable.name.as_deref() == Some("disabled") && variable.disabled)
         })
     );
 }

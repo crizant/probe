@@ -229,10 +229,9 @@ pub fn validate_unique_variable_names(
     Ok(())
 }
 
-/// Returns effective plain variables for `selected`, including inherited values.
+/// Returns effective variables for `selected`, including inherited values.
 ///
-/// Child entries override parents by name. Disabled variables remain visible. Secrets
-/// are omitted from the result but still shadow inherited plains with the same name.
+/// Child entries override parents by name. Disabled variables remain visible.
 #[must_use]
 pub fn effective_environment_variables(
     environments: &[Environment],
@@ -241,23 +240,14 @@ pub fn effective_environment_variables(
     let mut rows = Vec::new();
     let mut seen = BTreeSet::new();
     for (index, variable) in selected.variables.iter().enumerate() {
-        match variable {
-            EnvironmentVariable::Plain(variable) => {
-                if let Some(name) = &variable.name {
-                    seen.insert(name.clone());
-                }
-                rows.push(EffectiveEnvironmentVariable {
-                    variable: variable.clone(),
-                    defined_in: selected.name.clone(),
-                    direct_index: Some(index),
-                });
-            }
-            EnvironmentVariable::Secret(variable) => {
-                if let Some(name) = &variable.name {
-                    seen.insert(name.clone());
-                }
-            }
+        if let Some(name) = variable_entry_name(variable) {
+            seen.insert(name.to_owned());
         }
+        rows.push(EffectiveEnvironmentVariable {
+            variable: variable.clone(),
+            defined_in: selected.name.clone(),
+            direct_index: Some(index),
+        });
     }
 
     let mut visited_parents = BTreeSet::new();
@@ -279,13 +269,11 @@ pub fn effective_environment_variables(
             if !seen.insert(name.to_owned()) {
                 continue;
             }
-            if let EnvironmentVariable::Plain(variable) = variable {
-                rows.push(EffectiveEnvironmentVariable {
-                    variable: variable.clone(),
-                    defined_in: environment.name.clone(),
-                    direct_index: None,
-                });
-            }
+            rows.push(EffectiveEnvironmentVariable {
+                variable: variable.clone(),
+                defined_in: environment.name.clone(),
+                direct_index: None,
+            });
         }
         parent = environment.extends.as_deref();
     }

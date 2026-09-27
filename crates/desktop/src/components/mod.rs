@@ -40,9 +40,9 @@ mod editor;
 use controls::{EditorInsets, TextContextMenuExtraAction, VisibleRangeHandler, text_input_base};
 pub(crate) use controls::{
     ResponseBodyInputOptions, browse_file_button, compact_icon_button, dialog_text_input, dropdown,
-    dropdown_with_option_colors, editor_add_button, editor_button, editor_key_value_row,
-    editor_subtab, icon_button, remove_row_button, sidebar_search_input, text_tab, url_text_input,
-    variable_text_input,
+    dropdown_with_option_colors, editor_action_button, editor_add_button, editor_button,
+    editor_key_value_row, editor_subtab, icon_button, remove_row_button, sidebar_search_input,
+    text_tab, url_text_input, variable_text_input,
 };
 
 mod icons;
@@ -78,8 +78,8 @@ pub(crate) use buttons::{
 use icons::{CHECK_SVG, CHEVRON_RIGHT_SVG, SEARCH_SVG, folder_open_icon, library_icon};
 pub(crate) use icons::{
     add_menu_button, add_menu_button_with_id, chevron_icon, close_icon, download_icon, home_button,
-    hover_fill, locate_icon, menu_folder_icon, plus_icon, save_icon, sidebar_toggle, trash_icon,
-    tree_folder_icon,
+    hover_fill, locate_icon, lock_icon, menu_folder_icon, plus_icon, save_icon, sidebar_toggle,
+    trash_icon, tree_folder_icon,
 };
 use menus::{MenuButtonContent, MenuButtonStyle, context_menu_separator, menu_button_with_style};
 pub(crate) use menus::{

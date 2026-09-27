@@ -20,6 +20,15 @@ pub(crate) enum ImportSource {
 pub(crate) struct EnvironmentManagerDialog {
     pub(crate) original_name: String,
     pub(crate) draft: Environment,
+    pub(crate) secret_statuses: BTreeMap<String, SecretUiStatus>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SecretUiStatus {
+    Loading,
+    Stored,
+    NotStored,
+    Unavailable,
 }
 
 impl EnvironmentManagerDialog {
@@ -27,6 +36,7 @@ impl EnvironmentManagerDialog {
         Self {
             original_name: environment.name.clone(),
             draft: environment.clone(),
+            secret_statuses: BTreeMap::new(),
         }
     }
 }
@@ -63,6 +73,11 @@ pub(crate) enum ApplicationDialog {
     },
     DeleteEnvironment {
         name: String,
+        detail: String,
+    },
+    DeleteStoredSecret {
+        name: String,
+        environment: String,
         detail: String,
     },
     UnsavedEnvironment,
@@ -153,6 +168,7 @@ impl ApplicationDialog {
             Self::Delete { name, .. } | Self::DeleteEnvironment { name, .. } => {
                 Cow::Owned(format!("Delete “{name}”?"))
             }
+            Self::DeleteStoredSecret { .. } => Cow::Borrowed("Delete stored secret?"),
             Self::FilesystemConflict { .. } => {
                 Cow::Borrowed("Collection changes conflict with local edits")
             }
@@ -179,6 +195,7 @@ impl ApplicationDialog {
             }
             Self::Delete { detail, .. }
             | Self::DeleteEnvironment { detail, .. }
+            | Self::DeleteStoredSecret { detail, .. }
             | Self::FilesystemConflict { detail, .. }
             | Self::ConfirmPartialYaakImport { detail, .. }
             | Self::ConfirmPartialPostmanImport { detail, .. } => detail,
@@ -205,7 +222,9 @@ impl ApplicationDialog {
         match self {
             Self::About => Some(ABOUT_DIALOG_ACTIONS),
             Self::Unsaved { .. } | Self::UnsavedEnvironment => Some(UNSAVED_DIALOG_ACTIONS),
-            Self::Delete { .. } | Self::DeleteEnvironment { .. } => Some(DELETE_DIALOG_ACTIONS),
+            Self::Delete { .. }
+            | Self::DeleteEnvironment { .. }
+            | Self::DeleteStoredSecret { .. } => Some(DELETE_DIALOG_ACTIONS),
             Self::FilesystemConflict { .. } => Some(FILESYSTEM_CONFLICT_DIALOG_ACTIONS),
             Self::SelectYaakWorkspace { .. } => None,
             Self::SelectCollectionFile { .. } => None,

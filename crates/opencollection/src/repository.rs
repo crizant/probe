@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -384,7 +384,7 @@ impl LoadedWorkspace {
                     original_name.to_owned(),
                 ))
             })?;
-        let replacement = environment_replacement_with_retained_secrets(&original, replacement)?;
+        let replacement = validate_environment_replacement(&original, replacement)?;
         let mut candidate = self.workspace.environments().to_vec();
         probe_core::replace_environment(&mut candidate, original_name, replacement.clone())
             .map_err(SaveError::Environment)?;

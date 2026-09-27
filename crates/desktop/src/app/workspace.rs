@@ -543,6 +543,12 @@ impl ProbeApp {
                 ApplicationDialogAction::Delete,
             ) => self.delete_environment(name, window, cx),
             (
+                ApplicationDialog::DeleteStoredSecret {
+                    name, environment, ..
+                },
+                ApplicationDialogAction::Delete,
+            ) => self.delete_stored_secret(name, environment, window, cx),
+            (
                 ApplicationDialog::FilesystemConflict { path, .. },
                 ApplicationDialogAction::UseDisk,
             ) => self.reload_conflicted_workspace(path, window, cx),
@@ -956,6 +962,9 @@ impl ProbeApp {
         self.remap_structure_dialog(&reconciled.selector_remaps);
         self.create_environment_dialog = None;
         self.sync_environment_manager_after_reload(environment_manager_reload, cx);
+        if self.environment_manager_dialog.is_some() && !self.environment_manager_is_dirty() {
+            self.refresh_secret_statuses(cx);
+        }
         if self.shell.selected_environment().is_some_and(|name| {
             !self
                 .loaded_workspace

@@ -320,7 +320,7 @@ future interfaces share exactly the same behavior. Resolution operates on the lo
 in-memory workspace: parent environments are applied before children, child variables
 override by name, and variable values may reference other variables. Cyclic
 inheritance, cyclic interpolation, missing variables, and invalid variant selection
-produce typed errors. The same crate also exposes the effective plain variables for a
+produce typed errors. The same crate also exposes the effective variable declarations for a
 selected environment, together with the environment that currently defines each name,
 so desktop presentation does not reimplement inheritance, overrides, or secret
 shadowing.
@@ -328,8 +328,8 @@ shadowing.
 The resolver returns a cloned, resolved request and leaves the canonical parsed model
 unchanged. It currently interpolates method, URL, headers, query and path parameters, supported
 body fields, file references, and authentication string/number values. OpenCollection
-secret declarations contain no value, so references fail until a separate secure
-runtime value provider is introduced. The resolver does not load `dotEnvFilePath`;
+secret declarations contain no value, so references require a runtime secret
+provider. The resolver does not load `dotEnvFilePath`;
 the domain remains independent of filesystem APIs.
 
 ## HTTP Execution
@@ -379,8 +379,20 @@ and resolved. Desktop redacts secret byte sequences even in binary response prev
 Direct desktop response-to-file execution is rejected for secret-bearing requests,
 because that streaming path would write response bytes before redaction. The normal
 viewer can save a complete redacted in-memory response; oversized previews cannot
-be saved as complete bodies without retained storage. Desktop secret editing and
-management UI are deferred.
+be saved as complete bodies without retained storage.
+
+The desktop Environment Manager shows secret declarations alongside plain variables.
+Adding a secret creates a draft `secret: true` declaration in OpenCollection; the
+declaration must be saved before a native value can be set. Status checks and Set,
+Replace, and Delete run off the GPUI thread. The value is entered in a masked,
+initially empty dialog and is never revealed by Probe. Deleting a stored value keeps
+the declaration; removing the declaration does not delete the native credential.
+Inherited declarations show their defining environment, while the credential is
+scoped to the selected effective environment. A workspace move, environment rename,
+or variable rename changes credential identity in v1. Probe does not migrate old
+credentials automatically. Credential operations are disabled while the environment
+draft is unsaved, and there is no plaintext fallback. The input and request value
+exist temporarily in ordinary process memory during submission and execution.
 
 `keyring` 4.2.0 was selected for its maintained, portable synchronous v1 API,
 MIT/Apache-2.0 license, and supported native Keychain Services on macOS, Windows

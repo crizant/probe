@@ -169,7 +169,7 @@ fn environment_update_refuses_externally_modified_document() {
 }
 
 #[test]
-fn environment_replace_preserves_unknown_and_secret_fields() {
+fn environment_replace_preserves_unknown_fields_and_edits_secret_declarations() {
     let path = temporary_path("env-replace.yml");
     fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
     let mut loaded = load_workspace(&path).unwrap();
@@ -231,14 +231,71 @@ fn environment_replace_preserves_unknown_and_secret_fields() {
         reloaded.workspace().environments()[0]
     );
     assert!(
-        reloaded.workspace().environments()[0]
+        !reloaded.workspace().environments()[0]
             .variables
             .iter()
-            .any(|variable| matches!(
-                variable,
-                probe_core::EnvironmentVariable::Secret(secret)
-                    if secret.name.as_deref() == Some("secretToken")
-            ))
+            .any(|variable| matches!(variable,
+            probe_core::EnvironmentVariable::Secret(secret)
+                if secret.name.as_deref() == Some("secretToken")))
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn environment_replace_adds_and_renames_secret_declarations_without_values() {
+    let path = temporary_path("env-secret-edit.yml");
+    fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let mut development = loaded.workspace().environments()[1].clone();
+    development
+        .variables
+        .push(probe_core::EnvironmentVariable::Secret(
+            probe_core::SecretVariable {
+                name: Some("signingKey".to_owned()),
+                value_type: None,
+                disabled: false,
+            },
+        ));
+    let saved = loaded
+        .prepare_environment_replace("development", development)
+        .unwrap()
+        .execute()
+        .unwrap();
+    loaded.complete_environment_replace(saved);
+    let source = fs::read_to_string(&path).unwrap();
+    assert!(source.contains("name: signingKey"));
+    assert!(source.contains("secret: true"));
+    assert!(!source.contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+    let mut reloaded = load_workspace(&path).unwrap();
+    let mut development = reloaded.workspace().environments()[1].clone();
+    let secret = development
+        .variables
+        .iter_mut()
+        .find_map(|variable| match variable {
+            probe_core::EnvironmentVariable::Secret(secret)
+                if secret.name.as_deref() == Some("signingKey") =>
+            {
+                Some(secret)
+            }
+            _ => None,
+        })
+        .unwrap();
+    secret.name = Some("newSigningKey".to_owned());
+    secret.disabled = true;
+    let saved = reloaded
+        .prepare_environment_replace("development", development)
+        .unwrap()
+        .execute()
+        .unwrap();
+    reloaded.complete_environment_replace(saved);
+    let source = fs::read_to_string(&path).unwrap();
+    assert!(source.contains("name: newSigningKey"));
+    assert!(!source.contains("name: signingKey"));
+    assert!(!source.contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+    let again = load_workspace(&path).unwrap();
+    assert_eq!(
+        again.workspace().environments()[1],
+        reloaded.workspace().environments()[1]
     );
     fs::remove_file(path).unwrap();
 }
@@ -466,4 +523,95 @@ fn environment_update_rejects_stdin_workspaces() {
         resolved_variable(&loaded, "development", "token").as_deref(),
         Some("rotated")
     );
+}
+
+#[test]
+fn environment_replace_updates_plain_and_existing_secret_without_leaking_value() {
+    let path = temporary_path("env-secret-update.yml");
+    let fixture_text = fs::read_to_string(fixture("phase4-environments.yml")).unwrap();
+    fs::write(
+        &path,
+        fixture_text.replace(
+            "name: secretToken\n          type: string",
+            "name: secretToken\n          type: string\n          x-extra: keep",
+        ),
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let mut base = loaded.workspace().environments()[0].clone();
+    for variable in &mut base.variables {
+        match variable {
+            probe_core::EnvironmentVariable::Plain(plain)
+                if plain.name.as_deref() == Some("host") =>
+            {
+                plain.value = Some(probe_core::VariableValueSet::Single(
+                    probe_core::VariableValue::String("changed.example".into()),
+                ));
+            }
+            probe_core::EnvironmentVariable::Secret(secret)
+                if secret.name.as_deref() == Some("secretToken") =>
+            {
+                secret.disabled = true;
+            }
+            _ => {}
+        }
+    }
+    let saved = loaded
+        .prepare_environment_replace("base", base)
+        .unwrap()
+        .execute()
+        .unwrap();
+    loaded.complete_environment_replace(saved);
+    let source = fs::read_to_string(&path).unwrap();
+    assert!(source.contains("changed.example"));
+    assert!(source.contains("x-extra: keep"));
+    assert!(!source.contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(
+        loaded.workspace().environments()[0],
+        reloaded.workspace().environments()[0]
+    );
+    assert!(reloaded.workspace().environments()[0].variables.iter().any(
+        |variable| matches!(variable,
+        probe_core::EnvironmentVariable::Secret(secret)
+            if secret.name.as_deref() == Some("secretToken") && secret.disabled)
+    ));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn environment_replace_plain_with_secret_removes_plaintext_value() {
+    let path = temporary_path("env-plain-to-secret.yml");
+    fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let mut development = loaded.workspace().environments()[1].clone();
+    let token = development
+        .variables
+        .iter_mut()
+        .find(|variable| {
+            matches!(variable,
+        probe_core::EnvironmentVariable::Plain(plain) if plain.name.as_deref() == Some("token"))
+        })
+        .unwrap();
+    *token = probe_core::EnvironmentVariable::Secret(probe_core::SecretVariable {
+        name: Some("token".to_owned()),
+        value_type: None,
+        disabled: false,
+    });
+    let saved = loaded
+        .prepare_environment_replace("development", development)
+        .unwrap()
+        .execute()
+        .unwrap();
+    loaded.complete_environment_replace(saved);
+    let source = fs::read_to_string(&path).unwrap();
+    assert!(source.contains("secret: true"));
+    assert!(!source.contains("development-token"));
+    assert!(!source.contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(
+        reloaded.workspace().environments()[1],
+        loaded.workspace().environments()[1]
+    );
+    fs::remove_file(path).unwrap();
 }

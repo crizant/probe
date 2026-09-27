@@ -4,6 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
     time::Duration,
 };
 
@@ -18,17 +19,18 @@ use gpui::{
 };
 #[cfg(target_os = "macos")]
 use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
-use gpui_base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+use gpui_base::input::{Copy, Cut, InputEvent, InputState, Paste, Redo, SelectAll, Undo};
 use gpui_base::{
-    AutoScroll, Button, POPUP_PRIORITY, Popover, Positioner, Scrollbar, ScrollbarMode, Tab, Tabs,
-    ToastStack,
+    AutoScroll, Button, Input, POPUP_PRIORITY, Popover, Positioner, Scrollbar, ScrollbarMode, Tab,
+    Tabs, ToastStack,
 };
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, Collection, Environment, EnvironmentVariable,
     FileReference, FormField, Header, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBodyKind, Request, RequestBody, RequestKey, Variable, VariableValue,
-    VariableValueSet, WorkspaceItemRef, add_path_parameter, ensure_path_parameters_from_url,
-    remove_path_parameter_at, rename_path_parameter_at, resolve_environment, resolve_request,
+    QueryParameter, RawBodyKind, Request, RequestBody, RequestKey, SecretVariable, Variable,
+    VariableValue, VariableValueSet, WorkspaceItemRef, add_path_parameter,
+    ensure_path_parameters_from_url, remove_path_parameter_at, rename_path_parameter_at,
+    resolve_environment, resolve_request,
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
 use probe_opencollection::{
@@ -48,6 +50,7 @@ mod interactions;
 mod presentation;
 mod render;
 mod response;
+mod secrets;
 mod session_state;
 mod structure;
 mod tabs;
@@ -60,7 +63,7 @@ pub(crate) use dialogs::IMPORT_DIAGNOSTIC_GROUP_LIMIT;
 use dialogs::{
     ApplicationDialog, ApplicationDialogAction, CANCEL_DIALOG_ACTION, DesktopMenu,
     DesktopMenuDefinition, DesktopMenuItem, DesktopSubmenu, DialogActionSpec,
-    EnvironmentManagerDialog, ImportSource, PendingClose, PostmanConversionResult,
+    EnvironmentManagerDialog, ImportSource, PendingClose, PostmanConversionResult, SecretUiStatus,
     YaakConversionResult, format_import_diagnostics, suggested_collection_filename,
 };
 use presentation::{
@@ -313,6 +316,11 @@ pub(crate) struct ProbeApp {
     structure_dialog: Option<StructureDialog>,
     create_environment_dialog: Option<String>,
     environment_manager_dialog: Option<EnvironmentManagerDialog>,
+    secret_value_dialog: Option<secrets::SecretValueDialog>,
+    secret_status_generation: u64,
+    secret_status_task: Option<Task<()>>,
+    secret_write_in_progress: bool,
+    credential_store: Arc<dyn crate::credentials::CredentialStore>,
     environment_dialog_error: Option<EnvironmentDialogError>,
     application_dialog: Option<ApplicationDialog>,
     pending_application_dialogs: VecDeque<ApplicationDialog>,
@@ -434,6 +442,11 @@ impl ProbeApp {
             structure_dialog: None,
             create_environment_dialog: None,
             environment_manager_dialog: None,
+            secret_value_dialog: None,
+            secret_status_generation: 0,
+            secret_status_task: None,
+            secret_write_in_progress: false,
+            credential_store: secrets::default_credential_store(),
             environment_dialog_error: None,
             application_dialog: None,
             pending_application_dialogs: VecDeque::new(),

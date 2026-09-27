@@ -50,13 +50,20 @@ impl ProbeApp {
             .as_ref()
             .is_some_and(|dialog| {
                 !dialog.draft.name.trim().is_empty()
-                    && dialog.draft.variables.iter().all(|variable| {
-                        !matches!(
-                            variable,
-                            EnvironmentVariable::Plain(variable)
-                                if variable.name.as_deref().is_none_or(|name| name.trim().is_empty())
-                        )
-                    })
+                    && dialog
+                        .draft
+                        .variables
+                        .iter()
+                        .all(|variable| match variable {
+                            EnvironmentVariable::Plain(variable) => variable
+                                .name
+                                .as_deref()
+                                .is_some_and(|name| !name.trim().is_empty()),
+                            EnvironmentVariable::Secret(variable) => variable
+                                .name
+                                .as_deref()
+                                .is_some_and(|name| !name.trim().is_empty()),
+                        })
             })
     }
 
@@ -114,6 +121,7 @@ impl ProbeApp {
             return;
         };
         self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(selected));
+        self.refresh_secret_statuses(cx);
         self.clear_environment_dialog_error(cx);
         self.environment_manager_dialog_focus.focus(window, cx);
         cx.notify();
@@ -149,6 +157,9 @@ impl ProbeApp {
     }
 
     pub(super) fn discard_environment_manager_dialog(&mut self) {
+        self.secret_status_task = None;
+        self.secret_status_generation = self.secret_status_generation.wrapping_add(1);
+        self.secret_value_dialog = None;
         self.transient.environment_manager_context_menu = None;
         self.environment_manager_close_after_save = false;
         self.environment_manager_dialog = None;
@@ -263,6 +274,7 @@ impl ProbeApp {
             .find(|environment| environment.name == name)
         {
             self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(environment));
+            self.refresh_secret_statuses(cx);
             self.clear_environment_dialog_error(cx);
             cx.notify();
         }
@@ -292,18 +304,21 @@ impl ProbeApp {
         let mut replacement = dialog.draft.clone();
         replacement.name = replacement.name.trim().to_owned();
         for variable in &mut replacement.variables {
-            if let EnvironmentVariable::Plain(variable) = variable
-                && let Some(name) = variable.name.as_mut()
-            {
+            let name = match variable {
+                EnvironmentVariable::Plain(variable) => &mut variable.name,
+                EnvironmentVariable::Secret(variable) => &mut variable.name,
+            };
+            if let Some(name) = name.as_mut() {
                 *name = name.trim().to_owned();
             }
         }
-        let invalid_variable = replacement.variables.iter().any(|variable| {
-            matches!(
-                variable,
-                EnvironmentVariable::Plain(variable)
-                    if variable.name.as_deref().is_none_or(str::is_empty)
-            )
+        let invalid_variable = replacement.variables.iter().any(|variable| match variable {
+            EnvironmentVariable::Plain(variable) => {
+                variable.name.as_deref().is_none_or(str::is_empty)
+            }
+            EnvironmentVariable::Secret(variable) => {
+                variable.name.as_deref().is_none_or(str::is_empty)
+            }
         });
         if replacement.name.is_empty() || invalid_variable {
             self.show_environment_dialog_error(
@@ -360,6 +375,7 @@ impl ProbeApp {
                                 } else {
                                     view.environment_manager_dialog =
                                         Some(EnvironmentManagerDialog::new(&environment));
+                                    view.refresh_secret_statuses(cx);
                                 }
                             }
                         }

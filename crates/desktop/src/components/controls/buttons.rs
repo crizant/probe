@@ -56,6 +56,18 @@ pub(crate) fn editor_button(
     editor_button_base(theme, id, selected, on_click).child(label.into())
 }
 
+pub(crate) fn editor_action_button(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<String>,
+    disabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Button {
+    editor_button_base(theme, id, false, on_click)
+        .child(label.into())
+        .disabled(disabled)
+}
+
 pub(crate) fn editor_subtab(
     theme: Theme,
     id: impl Into<ElementId>,

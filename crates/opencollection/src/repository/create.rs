@@ -365,7 +365,7 @@ pub(super) fn environment_value(environment: &Environment) -> Value {
     Value::Mapping(value)
 }
 
-fn environment_variable_value(variable: &EnvironmentVariable) -> Value {
+pub(super) fn environment_variable_value(variable: &EnvironmentVariable) -> Value {
     match variable {
         EnvironmentVariable::Plain(variable) => new_environment_variable_value(variable),
         EnvironmentVariable::Secret(variable) => {

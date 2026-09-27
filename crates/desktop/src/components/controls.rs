@@ -5,8 +5,8 @@ mod dropdown;
 mod input;
 
 pub(crate) use buttons::{
-    browse_file_button, compact_icon_button, editor_add_button, editor_button,
-    editor_key_value_row, editor_subtab, icon_button, remove_row_button, text_tab,
+    browse_file_button, compact_icon_button, editor_action_button, editor_add_button,
+    editor_button, editor_key_value_row, editor_subtab, icon_button, remove_row_button, text_tab,
 };
 pub(crate) use dropdown::{dropdown, dropdown_with_option_colors};
 pub(super) use input::{

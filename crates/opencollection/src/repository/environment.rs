@@ -231,75 +231,30 @@ pub(super) fn apply_environment_mutation(
     }
 }
 
-pub(super) fn environment_replacement_with_retained_secrets(
+pub(super) fn validate_environment_replacement(
     original: &Environment,
-    mut replacement: Environment,
+    replacement: Environment,
 ) -> Result<Environment, SaveError> {
     validate_unique_variable_names(&replacement).map_err(SaveError::Environment)?;
-    let mut merged = Vec::new();
-    let mut seen = BTreeSet::new();
     for variable in &original.variables {
-        match variable {
-            EnvironmentVariable::Secret(secret) => {
-                if let Some(name) = secret.name.as_deref().filter(|name| !name.is_empty()) {
-                    if replacement.variables.iter().any(|variable| {
-                        matches!(
-                            variable,
-                            EnvironmentVariable::Plain(variable)
-                                if variable.name.as_deref() == Some(name)
-                        )
-                    }) {
-                        return Err(SaveError::Environment(
-                            EnvironmentResolutionError::DuplicateVariable {
-                                environment: replacement.name.clone(),
-                                variable: name.to_owned(),
-                            },
-                        ));
-                    }
-                    seen.insert(name.to_owned());
-                }
-                merged.push(variable.clone());
-            }
-            EnvironmentVariable::Plain(plain) => {
-                let Some(name) = plain.name.as_deref().filter(|name| !name.is_empty()) else {
-                    merged.push(variable.clone());
-                    continue;
-                };
-                let Some(updated) =
-                    replacement
-                        .variables
-                        .iter()
-                        .find_map(|variable| match variable {
-                            EnvironmentVariable::Plain(variable)
-                                if variable.name.as_deref() == Some(name) =>
-                            {
-                                Some(variable.clone())
-                            }
-                            _ => None,
-                        })
-                else {
-                    continue;
-                };
-                seen.insert(name.to_owned());
-                merged.push(EnvironmentVariable::Plain(updated));
-            }
-        }
-    }
-    for variable in replacement.variables {
-        let EnvironmentVariable::Plain(plain) = &variable else {
+        let EnvironmentVariable::Secret(secret) = variable else {
             continue;
         };
-        let Some(name) = plain.name.as_deref().filter(|name| !name.is_empty()) else {
-            merged.push(variable);
+        let Some(name) = secret.name.as_deref().filter(|name| !name.is_empty()) else {
             continue;
         };
-        if seen.contains(name) {
-            continue;
+        if replacement.variables.iter().any(|variable| {
+            matches!(variable,
+            EnvironmentVariable::Plain(plain) if plain.name.as_deref() == Some(name))
+        }) {
+            return Err(SaveError::Environment(
+                EnvironmentResolutionError::DuplicateVariable {
+                    environment: replacement.name.clone(),
+                    variable: name.to_owned(),
+                },
+            ));
         }
-        seen.insert(name.to_owned());
-        merged.push(variable);
     }
-    replacement.variables = merged;
     Ok(replacement)
 }
 
@@ -321,47 +276,65 @@ pub(super) fn apply_environment_replace(
     }
 
     let variables = sequence_child(mapping, "variables")?;
-    let plain = replacement
-        .variables
-        .iter()
-        .filter_map(|variable| match variable {
-            EnvironmentVariable::Plain(variable) => Some(variable),
-            EnvironmentVariable::Secret(_) => None,
-        })
-        .collect::<Vec<_>>();
     let mut retained = Vec::new();
     for mut entry in std::mem::take(variables) {
         let Some(existing) = entry.as_mapping_mut() else {
             retained.push(entry);
             continue;
         };
-        if yaml_bool_field(existing, "secret") == Some(true) {
-            retained.push(entry);
-            continue;
-        }
+        let was_secret = yaml_bool_field(existing, "secret") == Some(true);
         let Some(name) = yaml_string_field(existing, "name").map(str::to_owned) else {
             retained.push(entry);
             continue;
         };
-        let Some(variable) = plain
+        let Some(variable) = replacement
+            .variables
             .iter()
-            .find(|variable| variable.name.as_deref() == Some(name.as_str()))
+            .find(|variable| match variable {
+                EnvironmentVariable::Plain(variable) => {
+                    variable.name.as_deref() == Some(name.as_str())
+                }
+                EnvironmentVariable::Secret(variable) => {
+                    variable.name.as_deref() == Some(name.as_str())
+                }
+            })
         else {
             continue;
         };
-        existing.insert(string_key("disabled"), Value::Bool(variable.disabled));
-        merge_environment_variable_value(existing, variable);
+        match variable {
+            EnvironmentVariable::Plain(variable) => {
+                existing.insert(string_key("disabled"), Value::Bool(variable.disabled));
+                merge_environment_variable_value(existing, variable);
+            }
+            EnvironmentVariable::Secret(variable) if was_secret => {
+                existing.insert(string_key("disabled"), Value::Bool(variable.disabled));
+                existing.remove(string_key("value"));
+                match &variable.value_type {
+                    Some(kind) => {
+                        existing
+                            .insert(string_key("type"), Value::String(kind.as_str().to_owned()));
+                    }
+                    None => {
+                        existing.remove(string_key("type"));
+                    }
+                }
+            }
+            _ => continue,
+        }
         retained.push(entry);
     }
-    for variable in plain {
-        let name = variable.name.as_deref();
+    for variable in &replacement.variables {
+        let name = match variable {
+            EnvironmentVariable::Plain(variable) => variable.name.as_deref(),
+            EnvironmentVariable::Secret(variable) => variable.name.as_deref(),
+        };
         let already_retained = retained.iter().any(|entry| {
             entry
                 .as_mapping()
                 .is_some_and(|entry| yaml_string_field(entry, "name") == name)
         });
         if !already_retained {
-            retained.push(new_environment_variable_value(variable));
+            retained.push(super::create::environment_variable_value(variable));
         }
     }
     *variables = retained;
