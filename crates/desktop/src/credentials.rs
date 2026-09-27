@@ -86,7 +86,7 @@ impl fmt::Display for CredentialStoreError {
 
 impl std::error::Error for CredentialStoreError {}
 
-pub trait CredentialStore {
+pub trait CredentialStore: Send + Sync {
     fn status(&self, id: &CredentialId) -> Result<CredentialStatus, CredentialStoreError>;
     /// Creates or replaces a credential.
     fn set(&self, id: &CredentialId, value: &str) -> Result<(), CredentialStoreError>;
@@ -147,12 +147,12 @@ fn map_error(error: KeyringError) -> CredentialStoreError {
 }
 
 /// Adapter from Probe's credential service to core's safe runtime provider boundary.
-pub struct NativeSecretProvider<'a, S: CredentialStore> {
+pub struct NativeSecretProvider<'a, S: CredentialStore + ?Sized> {
     pub store: &'a S,
     pub workspace: &'a Path,
 }
 
-impl<S: CredentialStore> SecretProvider for NativeSecretProvider<'_, S> {
+impl<S: CredentialStore + ?Sized> SecretProvider for NativeSecretProvider<'_, S> {
     fn resolve_secret(
         &self,
         context: &SecretContext<'_>,

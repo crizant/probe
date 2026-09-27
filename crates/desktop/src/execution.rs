@@ -3,10 +3,11 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-use crate::credentials::{NativeCredentialStore, NativeSecretProvider};
+use crate::credentials::{CredentialStore, NativeCredentialStore, NativeSecretProvider};
 use crate::filesystem::workspace_base_directory;
 use atomic_write_file::AtomicWriteFile;
 use directories::{ProjectDirs, UserDirs};
@@ -280,6 +281,7 @@ pub(crate) fn body_file_path_for_storage(selected: &Path, workspace_path: Option
 pub(crate) struct ExecutionService {
     runtime: Option<tokio::runtime::Runtime>,
     engine: HttpEngine,
+    credentials: Arc<dyn CredentialStore>,
 }
 
 type ExecutionResult = Result<(HttpResponse, Option<SavedResponseBody>), HttpError>;
@@ -298,6 +300,10 @@ impl Drop for ExecutionService {
 
 impl ExecutionService {
     pub(crate) fn new() -> Result<Self, HttpError> {
+        Self::with_credentials(Arc::new(NativeCredentialStore))
+    }
+
+    fn with_credentials(credentials: Arc<dyn CredentialStore>) -> Result<Self, HttpError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -310,6 +316,7 @@ impl ExecutionService {
         Ok(Self {
             runtime: Some(runtime),
             engine,
+            credentials,
         })
     }
 
@@ -324,6 +331,7 @@ impl ExecutionService {
         let (result_sender, result_receiver) = oneshot::channel();
         let (progress_sender, progress_receiver) = mpsc::unbounded_channel();
         let engine = self.engine.clone();
+        let credentials = Arc::clone(&self.credentials);
         self.runtime
             .as_ref()
             .expect("execution runtime is active")
@@ -332,9 +340,8 @@ impl ExecutionService {
                     native_environment
                 {
                     match tokio::task::spawn_blocking(move || {
-                        let store = NativeCredentialStore;
                         let provider = NativeSecretProvider {
-                            store: &store,
+                            store: credentials.as_ref(),
                             workspace: &workspace,
                         };
                         resolve_environment_for_request_with_provider(
@@ -712,13 +719,26 @@ pub(crate) fn format_transfer_progress(received: u64, total: Option<u64>) -> Str
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, HashMap},
         fs,
+        io::{Read, Write},
+        net::TcpListener,
+        path::Path,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
-    use probe_core::Request;
-    use probe_http::ExecutionOptions;
+    use crate::credentials::{
+        CredentialId, CredentialStatus, CredentialStore, CredentialStoreError,
+    };
+    use probe_core::{
+        Environment, EnvironmentVariable, Header, Request, SecretValue, SecretVariable, Variable,
+        VariableValue, VariableValueSet,
+    };
+    use probe_http::{ExecutionOptions, ResponseCache};
     use probe_http::{HttpError, HttpProgress, HttpResponse, ResponseHeader};
     use sha2::{Digest, Sha256};
     use tokio::sync::oneshot;
@@ -1052,6 +1072,201 @@ mod tests {
             .block_on(result)
             .expect("execution should complete");
         assert_eq!(result, Err(HttpError::Cancelled));
+    }
+
+    struct FakeCredentials {
+        values: Mutex<HashMap<CredentialId, String>>,
+        reads: AtomicUsize,
+        fail: bool,
+    }
+
+    impl FakeCredentials {
+        fn new(fail: bool) -> Self {
+            Self {
+                values: Mutex::new(HashMap::new()),
+                reads: AtomicUsize::new(0),
+                fail,
+            }
+        }
+    }
+
+    impl CredentialStore for FakeCredentials {
+        fn status(&self, id: &CredentialId) -> Result<CredentialStatus, CredentialStoreError> {
+            Ok(if self.values.lock().unwrap().contains_key(id) {
+                CredentialStatus::Stored
+            } else {
+                CredentialStatus::NotStored
+            })
+        }
+        fn set(&self, id: &CredentialId, value: &str) -> Result<(), CredentialStoreError> {
+            self.values
+                .lock()
+                .unwrap()
+                .insert(id.clone(), value.to_owned());
+            Ok(())
+        }
+        fn delete(&self, id: &CredentialId) -> Result<(), CredentialStoreError> {
+            self.values
+                .lock()
+                .unwrap()
+                .remove(id)
+                .map(|_| ())
+                .ok_or(CredentialStoreError::NotFound)
+        }
+        fn get(&self, id: &CredentialId) -> Result<Option<SecretValue>, CredentialStoreError> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            if self.fail {
+                return Err(CredentialStoreError::Unavailable);
+            }
+            Ok(self
+                .values
+                .lock()
+                .unwrap()
+                .get(id)
+                .cloned()
+                .map(SecretValue::new))
+        }
+    }
+
+    fn native_test_environment() -> Vec<Environment> {
+        vec![Environment {
+            name: "production".into(),
+            color: None,
+            extends: None,
+            dot_env_file_path: None,
+            variables: vec![
+                EnvironmentVariable::Secret(SecretVariable {
+                    name: Some("token".into()),
+                    value_type: None,
+                    disabled: false,
+                }),
+                EnvironmentVariable::Secret(SecretVariable {
+                    name: Some("unused".into()),
+                    value_type: None,
+                    disabled: false,
+                }),
+                EnvironmentVariable::Plain(Variable {
+                    name: Some("outer".into()),
+                    value: Some(VariableValueSet::Single(VariableValue::String(
+                        "Bearer {{token}}".into(),
+                    ))),
+                    disabled: false,
+                }),
+            ],
+        }]
+    }
+
+    #[test]
+    fn desktop_send_uses_fake_credentials_and_redacts_echo_without_caching() {
+        let secret = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
+        let workspace = std::env::temp_dir();
+        let store = Arc::new(FakeCredentials::new(false));
+        let id = CredentialId::for_workspace(&workspace, "production", "token").unwrap();
+        store.set(&id, secret).unwrap();
+        let service = ExecutionService::with_credentials(store.clone()).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut received = Vec::new();
+            let mut buffer = [0; 4096];
+            while !received.windows(4).any(|part| part == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                received.extend_from_slice(&buffer[..count]);
+            }
+            assert!(
+                received
+                    .windows(secret.len())
+                    .any(|part| part == secret.as_bytes())
+            );
+            let mut body = vec![b'x'; 16 * 1024 * 1024 + 1024];
+            body[..secret.len()].copy_from_slice(secret.as_bytes());
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Echo: {secret}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
+        });
+        let request = Request {
+            method: Some("GET".into()),
+            url: Some(format!("http://{address}/{{{{token}}}}")),
+            headers: vec![Header {
+                name: "Authorization".into(),
+                value: "{{outer}}".into(),
+                disabled: false,
+            }],
+            ..Request::default()
+        };
+        let cache_path = workspace.join(format!(
+            "probe-native-cache-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (cancel_sender, cancellation) = oneshot::channel();
+        let (receiver, _) = service.execute(
+            request,
+            Some((native_test_environment(), "production".into(), workspace)),
+            ExecutionOptions {
+                response_cache: Some(ResponseCache::new(cache_path.clone(), 64 * 1024 * 1024)),
+                ..ExecutionOptions::default()
+            },
+            None,
+            cancellation,
+        );
+        let (response, _) = service
+            .runtime
+            .as_ref()
+            .unwrap()
+            .block_on(receiver)
+            .unwrap()
+            .unwrap();
+        drop(cancel_sender);
+        server.join().unwrap();
+        assert_eq!(store.reads.load(Ordering::Relaxed), 1);
+        assert!(response.url.contains("{{token}}"));
+        assert!(!format!("{response:?}").contains(secret));
+        assert!(!response.body_complete);
+        assert!(response.body_file.is_none());
+        assert!(!cache_path.exists());
+    }
+
+    #[test]
+    fn desktop_send_fails_closed_on_used_provider_failure() {
+        let store = Arc::new(FakeCredentials::new(true));
+        let service = ExecutionService::with_credentials(store.clone()).unwrap();
+        let request = Request {
+            method: Some("GET".into()),
+            url: Some("http://127.0.0.1:1/{{token}}".into()),
+            ..Request::default()
+        };
+        let (_cancel_sender, cancellation) = oneshot::channel();
+        let (receiver, _) = service.execute(
+            request,
+            Some((
+                native_test_environment(),
+                "production".into(),
+                Path::new("/").to_owned(),
+            )),
+            ExecutionOptions::default(),
+            None,
+            cancellation,
+        );
+        let result = service
+            .runtime
+            .as_ref()
+            .unwrap()
+            .block_on(receiver)
+            .unwrap();
+        assert!(matches!(result, Err(HttpError::InvalidBody(_))));
+        assert_eq!(store.reads.load(Ordering::Relaxed), 1);
     }
 
     fn response(status: u16) -> HttpResponse {
