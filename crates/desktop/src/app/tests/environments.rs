@@ -2802,7 +2802,7 @@ fn environment_manager_close_save_confirms_secret_rename_before_closing(cx: &mut
 }
 
 #[gpui::test]
-fn secret_save_clears_busy_when_status_refresh_advances_generation(cx: &mut TestAppContext) {
+fn secret_save_completes_when_status_refresh_advances_generation(cx: &mut TestAppContext) {
     use std::sync::Arc;
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -2836,13 +2836,19 @@ fn secret_save_clears_busy_when_status_refresh_advances_generation(cx: &mut Test
     cx.run_until_parked();
     window
         .update(cx, |view, _, _| {
-            let dialog = view
-                .secret_value_dialog
-                .as_ref()
-                .expect("a stale refresh must not leave Save stuck, and must not close the dialog");
-            assert!(!dialog.busy);
-            assert!(dialog.error.is_none());
+            assert!(
+                view.secret_value_dialog.is_none(),
+                "a successful write closes its dialog even if a status refresh advanced the generation"
+            );
             assert!(!view.secret_write_in_progress);
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .secret_statuses
+                    .get("secretToken"),
+                Some(&super::super::SecretUiStatus::Stored)
+            );
             let path = view.workspace_path.as_ref().unwrap();
             let id =
                 crate::credentials::CredentialId::for_workspace(path, "development", "secretToken")

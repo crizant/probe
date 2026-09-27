@@ -195,7 +195,6 @@ impl ProbeApp {
         };
         let name = dialog.name.clone();
         let environment = dialog.environment.clone();
-        let generation = self.secret_status_generation;
         let store = Arc::clone(&self.credential_store);
         let dialog = self.secret_value_dialog.as_mut().unwrap();
         self.secret_write_in_progress = true;
@@ -204,6 +203,7 @@ impl ProbeApp {
         dialog
             .input
             .update(cx, |input, cx| input.set_value("", window, cx));
+        let workspace_path = path.clone();
         cx.spawn_in(window, async move |view, window| {
             let lookup_name = name.clone();
             let lookup_environment = environment.clone();
@@ -213,33 +213,45 @@ impl ProbeApp {
                         .and_then(|id| store.set(&id, &value))
                 })
                 .await;
-            let _ = view.update_in(window, |view, window, cx| {
-                view.secret_write_in_progress = false;
-                if let Some(dialog) = view.secret_value_dialog.as_mut()
-                    && dialog.name == name
-                    && dialog.environment == environment
-                {
-                    dialog.busy = false;
-                }
-                if view.secret_status_generation != generation || !view.can_manage_secret(&name) {
-                    cx.notify();
-                    return;
-                }
-                if let Some(dialog) = view.secret_value_dialog.as_mut() {
-                    if dialog.name != name || dialog.environment != environment {
+            let _ =
+                view.update_in(window, |view, window, cx| {
+                    view.secret_write_in_progress = false;
+                    // Status generation only drops stale status queries. A finished write
+                    // still completes when this workspace, environment, and secret are current.
+                    let same_context = view.workspace_path.as_ref() == Some(&workspace_path)
+                        && view
+                            .environment_manager_dialog
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.draft.name == environment)
+                        && view.can_manage_secret(&name);
+                    if !same_context {
+                        if let Some(dialog) = view.secret_value_dialog.as_mut()
+                            && dialog.name == name
+                            && dialog.environment == environment
+                        {
+                            dialog.busy = false;
+                            cx.notify();
+                        }
                         return;
                     }
                     if result.is_err() {
-                        dialog.error = Some("Could not save to the system credential store.");
-                        cx.notify();
+                        if let Some(dialog) = view.secret_value_dialog.as_mut()
+                            && dialog.name == name
+                            && dialog.environment == environment
+                        {
+                            dialog.busy = false;
+                            dialog.error = Some("Could not save to the system credential store.");
+                            cx.notify();
+                        }
                         return;
                     }
-                }
-                if view.secret_value_dialog.is_some() {
-                    view.close_secret_value_dialog(window, cx);
-                }
-                view.refresh_secret_statuses(cx);
-            });
+                    if view.secret_value_dialog.as_ref().is_some_and(|dialog| {
+                        dialog.name == name && dialog.environment == environment
+                    }) {
+                        view.close_secret_value_dialog(window, cx);
+                    }
+                    view.refresh_secret_statuses(cx);
+                });
         })
         .detach();
         cx.notify();
