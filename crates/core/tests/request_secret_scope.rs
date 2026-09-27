@@ -181,3 +181,33 @@ fn plain_override_changes_the_secret_dependency_closure() {
         Some("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR")
     );
 }
+
+#[test]
+fn binary_response_redaction_preserves_other_bytes() {
+    let environments = environment();
+    let provider = Provider {
+        calls: RefCell::new(Vec::new()),
+        fail: false,
+    };
+    let request = Request {
+        url: Some("{{token}}".into()),
+        ..Request::default()
+    };
+    let resolved = resolve_environment_for_request_with_provider(
+        &request,
+        &environments,
+        Some("production"),
+        &[],
+        &provider,
+        None,
+    )
+    .unwrap();
+    let secret = b"SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
+    let mut body = vec![0xff, 0x00];
+    body.extend_from_slice(secret);
+    body.push(0xfe);
+    body.extend_from_slice(secret);
+    let redacted = resolved.redact_secret_bytes(&body);
+    assert_eq!(redacted, b"\xff\x00[REDACTED]\xfe[REDACTED]");
+    assert!(!redacted.windows(secret.len()).any(|part| part == secret));
+}

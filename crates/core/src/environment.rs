@@ -211,6 +211,33 @@ impl ResolvedEnvironment {
         }
         redacted
     }
+
+    /// Redacts exact secret byte sequences while preserving unrelated binary response data.
+    #[must_use]
+    pub fn redact_secret_bytes(&self, input: &[u8]) -> Vec<u8> {
+        let mut values = self.secrets.values().collect::<Vec<_>>();
+        values.sort_by_key(|value| std::cmp::Reverse(value.expose_for_execution().len()));
+        let mut redacted = input.to_vec();
+        for secret in values {
+            let value = secret.expose_for_execution().as_bytes();
+            if value.is_empty() {
+                continue;
+            }
+            let mut output = Vec::with_capacity(redacted.len());
+            let mut remaining = redacted.as_slice();
+            while let Some(start) = remaining
+                .windows(value.len())
+                .position(|bytes| bytes == value)
+            {
+                output.extend_from_slice(&remaining[..start]);
+                output.extend_from_slice(b"[REDACTED]");
+                remaining = &remaining[start + value.len()..];
+            }
+            output.extend_from_slice(remaining);
+            redacted = output;
+        }
+        redacted
+    }
 }
 
 /// A deterministic environment-selection or interpolation failure.

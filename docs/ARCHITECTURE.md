@@ -375,7 +375,12 @@ Tokio blocking worker before sending the request, not on GPUI's event thread.
 Native operations may invoke OS services or permission UI. The native adapter maps
 backend diagnostics to safe Probe errors and then to core's diagnostic-free
 `SecretError`. Secret material remains in ordinary process memory while submitted
-and resolved. Desktop secret editing and management UI are deferred.
+and resolved. Desktop redacts secret byte sequences even in binary response previews.
+Direct desktop response-to-file execution is rejected for secret-bearing requests,
+because that streaming path would write response bytes before redaction. The normal
+viewer can save a complete redacted in-memory response; oversized previews cannot
+be saved as complete bodies without retained storage. Desktop secret editing and
+management UI are deferred.
 
 `keyring` 4.2.0 was selected for its maintained, portable synchronous v1 API,
 MIT/Apache-2.0 license, and supported native Keychain Services on macOS, Windows

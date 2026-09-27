@@ -379,11 +379,17 @@ impl ExecutionService {
                 } else {
                     (request, None)
                 };
-                let mut options = options;
-                if disclosure
+                let secret_bearing = disclosure
                     .as_ref()
-                    .is_some_and(|(environment, _)| environment.has_resolved_secrets())
-                {
+                    .is_some_and(|(environment, _)| environment.has_resolved_secrets());
+                if secret_bearing && output.is_some() {
+                    let _ = result_sender.send(Err(HttpError::InvalidBody(
+                        "saving a response directly to a file is unavailable for requests using secret variables".into(),
+                    )));
+                    return;
+                }
+                let mut options = options;
+                if secret_bearing {
                     options.response_cache = None;
                 }
                 let result = execute_http_request(
@@ -407,9 +413,7 @@ impl ExecutionService {
                             header.name = environment.redact_secrets(&header.name);
                             header.value = environment.redact_secrets(&header.value);
                         }
-                        if let Ok(body) = std::str::from_utf8(&response.body) {
-                            response.body = environment.redact_secrets(body).into_bytes();
-                        }
+                        response.body = environment.redact_secret_bytes(&response.body);
                         Ok((response, saved))
                     }
                     (Err(_), Some((environment, _))) if environment.has_resolved_secrets() => {
@@ -1185,6 +1189,7 @@ mod tests {
             );
             let mut body = vec![b'x'; 16 * 1024 * 1024 + 1024];
             body[..secret.len()].copy_from_slice(secret.as_bytes());
+            body[secret.len()] = 0xff;
             let headers = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Echo: {secret}\r\nConnection: close\r\n\r\n",
                 body.len()
@@ -1233,6 +1238,13 @@ mod tests {
         assert_eq!(store.reads.load(Ordering::Relaxed), 1);
         assert!(response.url.contains("{{token}}"));
         assert!(!format!("{response:?}").contains(secret));
+        assert!(
+            !response
+                .body
+                .windows(secret.len())
+                .any(|part| part == secret.as_bytes())
+        );
+        assert_eq!(response.body[b"[REDACTED]".len()], 0xff);
         assert!(!response.body_complete);
         assert!(response.body_file.is_none());
         assert!(!cache_path.exists());
@@ -1266,6 +1278,47 @@ mod tests {
             .block_on(receiver)
             .unwrap();
         assert!(matches!(result, Err(HttpError::InvalidBody(_))));
+        assert_eq!(store.reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn secret_send_rejects_direct_file_output_before_network_or_disk_io() {
+        let workspace = std::env::temp_dir();
+        let store = Arc::new(FakeCredentials::new(false));
+        let id = CredentialId::for_workspace(&workspace, "production", "token").unwrap();
+        store
+            .set(&id, "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR")
+            .unwrap();
+        let service = ExecutionService::with_credentials(store.clone()).unwrap();
+        let output = workspace.join(format!(
+            "probe-secret-output-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let request = Request {
+            method: Some("GET".into()),
+            url: Some("http://127.0.0.1:1/{{token}}".into()),
+            ..Request::default()
+        };
+        let (_cancel_sender, cancellation) = oneshot::channel();
+        let (receiver, _) = service.execute(
+            request,
+            Some((native_test_environment(), "production".into(), workspace)),
+            ExecutionOptions::default(),
+            Some(output.clone()),
+            cancellation,
+        );
+        let result = service
+            .runtime
+            .as_ref()
+            .unwrap()
+            .block_on(receiver)
+            .unwrap();
+        assert!(matches!(result, Err(HttpError::InvalidBody(_))));
+        assert!(!output.exists());
         assert_eq!(store.reads.load(Ordering::Relaxed), 1);
     }
 
