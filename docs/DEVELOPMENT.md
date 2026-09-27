@@ -101,8 +101,13 @@ diff. Then:
 
 ```bash
 git diff --unified=0 HEAD > target/mutants.diff
-cargo mutants --workspace --in-diff target/mutants.diff -j 2
+scripts/run-mutants.sh target/mutants.diff
 ```
+
+The wrapper uses about half of the detected logical CPUs for cargo-mutants'
+jobserver tasks, with a minimum of one, to avoid fully saturating developer
+machines during long mutation runs. Set `MUTANTS_JOBSERVER_TASKS` to override
+the count when needed. The separate mutant-job concurrency remains `-j 2`.
 
 For a PR branch, use `git diff --unified=0 origin/main...HEAD` to include
 committed changes. CI runs this gate only on PRs that change Rust source in the
