@@ -15,21 +15,35 @@ impl ProbeApp {
         else {
             return;
         };
-        let selected_environment = self.shell.selected_environment().map(str::to_owned);
-        let request = if let Some(environment_name) = selected_environment {
-            let Some(loaded) = &self.loaded_workspace else {
-                return;
-            };
-            match resolve_environment(loaded.workspace().environments(), &environment_name)
-                .and_then(|environment| resolve_request(&request, &environment))
-            {
-                Ok(request) => request,
-                Err(error) => {
-                    self.execution.fail(key, error.to_string());
-                    self.response_viewer.remove(key);
-                    cx.notify();
+        let native_environment = self.shell.selected_environment().and_then(|name| {
+            self.loaded_workspace.as_ref().and_then(|loaded| {
+                loaded.source_path().map(|path| {
+                    (
+                        loaded.workspace().environments().to_vec(),
+                        name.to_owned(),
+                        path.to_owned(),
+                    )
+                })
+            })
+        });
+        let request = if native_environment.is_none() {
+            if let Some(name) = self.shell.selected_environment() {
+                let Some(loaded) = &self.loaded_workspace else {
                     return;
+                };
+                match resolve_environment(loaded.workspace().environments(), name)
+                    .and_then(|environment| resolve_request(&request, &environment))
+                {
+                    Ok(request) => request,
+                    Err(error) => {
+                        self.execution.fail(key, error.to_string());
+                        self.response_viewer.remove(key);
+                        cx.notify();
+                        return;
+                    }
                 }
+            } else {
+                request
             }
         } else {
             request
@@ -55,11 +69,14 @@ impl ProbeApp {
         }
         let (cancellation_sender, cancellation_receiver) = tokio::sync::oneshot::channel();
         let generation = self.execution.begin(key, cancellation_sender);
-        let (result_receiver, mut progress_receiver) = self
-            .execution_service
-            .as_ref()
-            .unwrap()
-            .execute(request, options, output, cancellation_receiver);
+        let (result_receiver, mut progress_receiver) =
+            self.execution_service.as_ref().unwrap().execute(
+                request,
+                native_environment,
+                options,
+                output,
+                cancellation_receiver,
+            );
 
         cx.spawn(async move |view, cx| {
             while let Some(progress) = progress_receiver.recv().await {

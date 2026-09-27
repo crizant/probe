@@ -6,10 +6,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::credentials::{NativeCredentialStore, NativeSecretProvider};
 use crate::filesystem::workspace_base_directory;
 use atomic_write_file::AtomicWriteFile;
 use directories::{ProjectDirs, UserDirs};
-use probe_core::{Request, RequestKey};
+use probe_core::{
+    Environment, Request, RequestKey, resolve_environment_for_request_with_provider,
+    resolve_request, resolve_request_for_presentation,
+};
 use probe_http::{
     ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse, ResponseBodyFile,
     ResponseCache,
@@ -312,6 +316,7 @@ impl ExecutionService {
     pub(crate) fn execute(
         &self,
         request: Request,
+        native_environment: Option<(Vec<Environment>, String, PathBuf)>,
         options: ExecutionOptions,
         output: Option<PathBuf>,
         cancellation: oneshot::Receiver<()>,
@@ -323,6 +328,57 @@ impl ExecutionService {
             .as_ref()
             .expect("execution runtime is active")
             .spawn(async move {
+                let (request, disclosure) = if let Some((environments, selected, workspace)) =
+                    native_environment
+                {
+                    match tokio::task::spawn_blocking(move || {
+                        let store = NativeCredentialStore;
+                        let provider = NativeSecretProvider {
+                            store: &store,
+                            workspace: &workspace,
+                        };
+                        resolve_environment_for_request_with_provider(
+                            &request,
+                            &environments,
+                            Some(&selected),
+                            &[],
+                            &provider,
+                            None,
+                        )
+                        .and_then(|environment| {
+                            let display =
+                                resolve_request_for_presentation(&request, &environment, false)?;
+                            let request = resolve_request(&request, &environment)?;
+                            Ok((request, environment, display.url))
+                        })
+                        .map_err(|error| HttpError::InvalidBody(error.to_string()))
+                    })
+                    .await
+                    {
+                        Ok(Ok((request, environment, display_url))) => {
+                            (request, Some((environment, display_url)))
+                        }
+                        Ok(Err(error)) => {
+                            let _ = result_sender.send(Err(error));
+                            return;
+                        }
+                        Err(_) => {
+                            let _ = result_sender.send(Err(HttpError::InvalidBody(
+                                "request resolution failed".into(),
+                            )));
+                            return;
+                        }
+                    }
+                } else {
+                    (request, None)
+                };
+                let mut options = options;
+                if disclosure
+                    .as_ref()
+                    .is_some_and(|(environment, _)| environment.has_resolved_secrets())
+                {
+                    options.response_cache = None;
+                }
                 let result = execute_http_request(
                     &engine,
                     request,
@@ -334,6 +390,28 @@ impl ExecutionService {
                     },
                 )
                 .await;
+                let result = match (result, disclosure) {
+                    (Ok((mut response, saved)), Some((environment, display_url)))
+                        if environment.has_resolved_secrets() =>
+                    {
+                        response.url = display_url.unwrap_or_default();
+                        response.reason = environment.redact_secrets(&response.reason);
+                        for header in &mut response.headers {
+                            header.name = environment.redact_secrets(&header.name);
+                            header.value = environment.redact_secrets(&header.value);
+                        }
+                        if let Ok(body) = std::str::from_utf8(&response.body) {
+                            response.body = environment.redact_secrets(body).into_bytes();
+                        }
+                        Ok((response, saved))
+                    }
+                    (Err(_), Some((environment, _))) if environment.has_resolved_secrets() => {
+                        Err(HttpError::Transport(
+                            "HTTP request failed while using a secret variable".into(),
+                        ))
+                    }
+                    (result, _) => result,
+                };
                 let _ = result_sender.send(result);
             });
         (result_receiver, progress_receiver)
@@ -962,6 +1040,7 @@ mod tests {
                 url: Some("http://127.0.0.1:1/phase-12".to_owned()),
                 ..Request::default()
             },
+            None,
             ExecutionOptions::default(),
             None,
             cancellation,

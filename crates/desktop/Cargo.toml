@@ -54,6 +54,7 @@ chrono = "0.4.45"
 roxmltree = "0.21.1"
 quick-xml = "0.42.0"
 sha2 = "0.11.0"
+keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
 
 [dev-dependencies]
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["test-support"] }

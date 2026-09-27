@@ -532,7 +532,7 @@ pub fn resolve_environment_with_overrides(
     selected: Option<&str>,
     overrides: &[(String, String)],
 ) -> Result<ResolvedEnvironment, EnvironmentResolutionError> {
-    resolve_environment_internal(environments, selected, overrides, None, None)
+    resolve_environment_internal(environments, selected, overrides, None, None, None)
 }
 
 /// Resolves effective secrets through a runtime provider; overrides to declared secrets
@@ -550,6 +550,49 @@ pub fn resolve_environment_with_provider(
         overrides,
         Some(provider),
         workspace_identity,
+        None,
+    )
+}
+
+/// Resolves only secrets reachable from this request, including references through plain variables.
+/// Native providers may perform blocking I/O; callers must invoke this away from UI threads.
+pub fn resolve_environment_for_request_with_provider(
+    request: &crate::Request,
+    environments: &[Environment],
+    selected: Option<&str>,
+    overrides: &[(String, String)],
+    provider: &dyn SecretProvider,
+    workspace_identity: Option<&str>,
+) -> Result<ResolvedEnvironment, EnvironmentResolutionError> {
+    let mut raw = if let Some(name) = selected {
+        raw_variables(environments, name)?
+    } else {
+        EnvironmentIndex::new(environments)?;
+        BTreeMap::new()
+    };
+    for (name, value) in overrides {
+        if !matches!(raw.get(name), Some(RawVariable::Secret)) {
+            raw.insert(name.clone(), RawVariable::Value(value.clone()));
+        }
+    }
+    let mut needed = crate::request_resolution::request_references(request)?;
+    let mut pending = needed.iter().cloned().collect::<Vec<_>>();
+    while let Some(name) = pending.pop() {
+        if let Some(RawVariable::Value(value)) = raw.get(&name) {
+            for reference in crate::request_resolution::interpolation_references(value)? {
+                if needed.insert(reference.clone()) {
+                    pending.push(reference);
+                }
+            }
+        }
+    }
+    resolve_environment_internal(
+        environments,
+        selected,
+        overrides,
+        Some(provider),
+        workspace_identity,
+        Some(&needed),
     )
 }
 
@@ -559,6 +602,7 @@ fn resolve_environment_internal(
     overrides: &[(String, String)],
     provider: Option<&dyn SecretProvider>,
     workspace_identity: Option<&str>,
+    needed: Option<&BTreeSet<String>>,
 ) -> Result<ResolvedEnvironment, EnvironmentResolutionError> {
     let mut raw = if let Some(selected) = selected {
         raw_variables(environments, selected)?
@@ -583,7 +627,10 @@ fn resolve_environment_internal(
 
     if let Some(provider) = provider {
         for (name, declaration) in &raw {
-            if !matches!(declaration, RawVariable::Secret) || overridden_secrets.contains(name) {
+            if !matches!(declaration, RawVariable::Secret)
+                || overridden_secrets.contains(name)
+                || needed.is_some_and(|names| !names.contains(name))
+            {
                 continue;
             }
             let context = SecretContext {

@@ -8,6 +8,7 @@
 mod app;
 mod caret;
 mod components;
+pub mod credentials;
 mod execution;
 mod filesystem;
 mod persistence;

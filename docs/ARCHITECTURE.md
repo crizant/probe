@@ -347,9 +347,47 @@ only `secret: true`, never the value. Request resolution produces an execution
 request and a presentation request that keeps secret references. Missing secret
 values and provider failures are retained until a request references the affected
 secret, including through a dependent plain variable; then resolution fails closed.
-The core does not manage native credential storage. The CLI currently supplies its
-input path as workspace identity; a future credential store must define a stable
-scope rather than treating that path as a permanent credential key.
+The core does not manage native credential storage. The CLI continues to use the
+process environment provider and its existing workspace context. Desktop uses the
+Probe-owned `credentials` service over `keyring` 4's native store. The service
+offers `CredentialId::for_workspace`, `CredentialStore::{status,set,delete,get}`,
+`NativeCredentialStore`, and `NativeSecretProvider`. Setting an existing key replaces
+it; deleting a missing key returns `NotFound`. The portable keyring API has no
+existence-only call, so `status` reads and immediately discards the value.
+
+Credential identity v1 is a SHA-256 digest of length-prefixed canonical workspace
+path, effective environment name, and variable name. The keyring service is
+`dev.probe.desktop.credentials.v1`; the account is `v1-` plus the digest. Neither
+the raw path nor variable names appear in the native entry key. The canonical path
+survives relative paths and symlinks, but a workspace move or rename changes its
+identity and leaves the old credential behind. Environment names are the only
+durable environment identity, so renaming one likewise requires the user to store
+its credential again; Probe does not migrate or delete credentials implicitly.
+The OpenCollection collection and desktop session carry no credential plaintext or
+provider-specific references. No plaintext file or process-environment fallback is
+used when the native store is unavailable.
+
+`resolve_environment_for_request_with_provider` finds the request's variable
+references and follows transitive plain-variable dependencies before consulting a
+provider. It reads each reachable effective secret once per execution. Unused
+declarations cause no native calls. Desktop performs this synchronous work on a
+Tokio blocking worker before sending the request, not on GPUI's event thread.
+Native operations may invoke OS services or permission UI. The native adapter maps
+backend diagnostics to safe Probe errors and then to core's diagnostic-free
+`SecretError`. Secret material remains in ordinary process memory while submitted
+and resolved. Desktop secret editing and management UI are deferred.
+
+`keyring` 4.2.0 was selected for its maintained, portable synchronous v1 API,
+MIT/Apache-2.0 license, and supported native Keychain Services on macOS, Windows
+Credential Manager, and Secret Service via zbus on Linux. It requires Rust 1.88,
+below Probe's 1.95 minimum. It is a desktop-only dependency, leaving the CLI
+dependency graph unchanged. The Linux backend needs a working user DBus session
+and Secret Service implementation; headless or locked sessions return an error,
+without fallback. `oo7` targets Secret Service rather than all three systems;
+manual platform bindings would multiply platform-specific code. `keyring-core`
+with individually selected stores offers more control, but the v1 API meets this
+service's narrow operations with less Probe-owned setup. Native platform builds
+remain CI-gated on macOS, Windows, and Linux.
 
 HTTP requests pass through unchanged. GraphQL requests become GraphQL-over-HTTP: `GET`
 carries the selected operation in query parameters, and other methods carry a JSON

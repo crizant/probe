@@ -329,11 +329,25 @@ fn transform_authentication_value<E>(
     Ok(())
 }
 
-fn interpolation_references(input: &str) -> Result<Vec<String>, EnvironmentResolutionError> {
+pub(crate) fn interpolation_references(
+    input: &str,
+) -> Result<Vec<String>, EnvironmentResolutionError> {
     let mut references = Vec::new();
     crate::environment::interpolate(input, |name| {
         references.push(name.to_owned());
         Ok(Some(String::new()))
     })?;
     Ok(references)
+}
+
+pub(crate) fn request_references(
+    request: &Request,
+) -> Result<BTreeSet<String>, EnvironmentResolutionError> {
+    let mut names = BTreeSet::new();
+    let mut request = request.clone();
+    transform_request_strings(&mut request, |value, _| {
+        names.extend(interpolation_references(value)?);
+        Ok(())
+    })?;
+    Ok(names)
 }
