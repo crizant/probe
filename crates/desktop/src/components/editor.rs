@@ -10,7 +10,7 @@ mod variables;
 
 #[cfg(not(test))]
 use core::ProbeEditor;
-pub(super) use core::editor_paint_style;
+pub(crate) use core::editor_paint_style;
 #[cfg(test)]
 pub(super) use core::{ProbeEditor, editor_value_needs_refresh};
 pub(crate) use response::{

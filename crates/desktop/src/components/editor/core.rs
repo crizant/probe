@@ -80,7 +80,7 @@ impl EditorField {
 
 /// gpui-base paints caret, selection, and gutter from `InputEditorStyle`.
 /// Its `Default` is fully transparent, so Probe must supply visible tokens.
-pub(in crate::components) fn editor_paint_style(theme: Theme) -> InputEditorStyle {
+pub(crate) fn editor_paint_style(theme: Theme) -> InputEditorStyle {
     InputEditorStyle {
         foreground: theme.colors.text.primary.into(),
         muted_foreground: theme.colors.text.muted.into(),

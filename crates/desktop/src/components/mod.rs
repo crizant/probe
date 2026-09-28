@@ -46,15 +46,14 @@ pub(crate) use controls::{
 };
 
 mod icons;
+pub(crate) use editor::editor_paint_style;
 pub(crate) use editor::{
     BodySyntax, body_text_input, response_body_input, response_headers_input,
     response_inspector_input, single_line,
 };
 #[cfg(test)]
 use editor::{ProbeEditor, editor_value_needs_refresh};
-use editor::{
-    VariableTooltipPresentation, editor_paint_style, input_variable_ranges, variable_input_overlay,
-};
+use editor::{VariableTooltipPresentation, input_variable_ranges, variable_input_overlay};
 mod menus;
 mod splitter;
 mod surfaces;

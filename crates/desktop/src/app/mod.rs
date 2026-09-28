@@ -184,6 +184,7 @@ gpui::actions!(
         SubmitStructureDialog,
         SubmitCreateEnvironmentDialog,
         SubmitEnvironmentManagerDialog,
+        SubmitSecretValueDialog,
         SubmitApplicationDialog,
         SubmitApplicationDialogDestructive,
         CancelStructureDialog,
@@ -826,6 +827,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
             Some("CreateEnvironmentDialog"),
         ),
         KeyBinding::new("enter", SubmitApplicationDialog, Some("ApplicationDialog")),
+        KeyBinding::new("enter", SubmitSecretValueDialog, Some("SecretValueDialog")),
         KeyBinding::new("escape", CancelStructureDialog, Some("StructureDialog")),
         KeyBinding::new(
             "escape",
@@ -836,6 +838,11 @@ fn bind_platform_hotkeys(cx: &mut App) {
             "escape",
             CancelEnvironmentManagerDialog,
             Some("EnvironmentManagerDialog"),
+        ),
+        KeyBinding::new(
+            "escape",
+            CancelEnvironmentManagerDialog,
+            Some("SecretValueDialog"),
         ),
         KeyBinding::new("escape", CancelApplicationDialog, Some("ApplicationDialog")),
         KeyBinding::new("ctrl-tab", FocusNextControl, None),

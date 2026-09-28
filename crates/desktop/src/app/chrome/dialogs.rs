@@ -53,16 +53,63 @@ impl ProbeApp {
         let Some(dialog) = self.application_dialog.as_ref() else {
             return div().into_any_element();
         };
+        let description = if let ApplicationDialog::DeleteStoredSecret {
+            name, environment, ..
+        } = dialog
+        {
+            div()
+                .id("application-dialog-description")
+                .mt(px(theme.metrics.spacing_2))
+                .max_h(px(280.0))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(theme.metrics.spacing_2))
+                .child(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .px(px(theme.metrics.spacing_2))
+                        .py(px(theme.metrics.spacing_2))
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_2))
+                        .rounded(px(theme.metrics.radius_small))
+                        .border_1()
+                        .border_color(theme.colors.borders.subtle)
+                        .bg(theme.colors.surfaces.raised)
+                        .child(components::lock_icon(theme).flex_none())
+                        .child(
+                            components::truncated_label(name.clone())
+                                .font_family(theme.typography.monospace_family)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.colors.text.primary),
+                        )
+                        .child(div().flex_none().text_color(theme.colors.text.muted).child("in"))
+                        .child(
+                            components::truncated_label(environment.clone())
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.colors.actions.accent),
+                        ),
+                )
+                .child(
+                    components::dialog_description(
+                        theme,
+                        "Requests using this secret will fail until another value is stored. The secret declaration will remain.",
+                    )
+                    .line_height(relative(theme.typography.body_line_height)),
+                )
+        } else {
+            components::dialog_description(theme, dialog.description())
+                .id("application-dialog-description")
+                .mt(px(theme.metrics.spacing_2))
+                .max_h(px(280.0))
+                .overflow_y_scroll()
+                .line_height(relative(theme.typography.body_line_height))
+        };
         let mut content = components::dialog_surface(theme, "application-dialog", dialog.width())
             .child(components::dialog_title(theme, dialog.title()))
-            .child(
-                components::dialog_description(theme, dialog.description())
-                    .id("application-dialog-description")
-                    .mt(px(theme.metrics.spacing_2))
-                    .max_h(px(280.0))
-                    .overflow_y_scroll()
-                    .line_height(relative(theme.typography.body_line_height)),
-            );
+            .child(description);
 
         if let Some(specs) = dialog.action_specs() {
             content = content.child(Self::render_application_dialog_actions(

@@ -37,6 +37,7 @@ impl CredentialStore for TestCredentialStore {
 pub(super) struct SecretValueDialog {
     pub(super) name: String,
     pub(super) environment: String,
+    pub(super) replacing: bool,
     pub(super) input: gpui::Entity<InputState>,
     pub(super) busy: bool,
     pub(super) error: Option<&'static str>,
@@ -142,21 +143,30 @@ impl ProbeApp {
             .draft
             .name
             .clone();
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Secret value")
-                .masked(true)
-        });
-        let subscription =
-            cx.subscribe_in(&input, window, |view, _, event, window, cx| match event {
-                InputEvent::PressEnter { .. } => view.save_secret_value(window, cx),
-                InputEvent::Change => cx.notify(),
-                _ => {}
+        let replacing = self
+            .environment_manager_dialog
+            .as_ref()
+            .is_some_and(|dialog| {
+                dialog.secret_statuses.get(&name) == Some(&SecretUiStatus::Stored)
             });
+        let theme = Theme::for_window_appearance(window.appearance());
+        let input = cx.new(|cx| {
+            let mut input = InputState::new(window, cx)
+                .placeholder("Secret value")
+                .masked(true);
+            input.set_editor_style(components::editor_paint_style(theme));
+            input
+        });
+        let subscription = cx.subscribe_in(&input, window, |_, _, event, _, cx| {
+            if let InputEvent::Change = event {
+                cx.notify();
+            }
+        });
         input.update(cx, |input, cx| input.focus(window, cx));
         self.secret_value_dialog = Some(SecretValueDialog {
             name,
             environment,
+            replacing,
             input,
             busy: false,
             error: None,
@@ -263,7 +273,13 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.secret_write_in_progress || !self.can_manage_secret(&name) {
+        if self.secret_write_in_progress
+            || !self.can_manage_secret(&name)
+            || self
+                .secret_value_dialog
+                .as_ref()
+                .is_none_or(|dialog| !dialog.replacing || dialog.name != name)
+        {
             return;
         }
         let environment = self
@@ -298,6 +314,7 @@ impl ProbeApp {
         let Some(path) = self.workspace_path.clone() else {
             return;
         };
+        self.close_secret_value_dialog(window, cx);
         self.secret_write_in_progress = true;
         let store = Arc::clone(&self.credential_store);
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {

@@ -379,6 +379,11 @@ impl Render for ProbeApp {
                 }),
             )
             .on_action(
+                cx.listener(|view, _: &SubmitSecretValueDialog, window, cx| {
+                    view.save_secret_value(window, cx);
+                }),
+            )
+            .on_action(
                 cx.listener(|view, _: &SubmitApplicationDialog, window, cx| {
                     view.submit_application_dialog_primary(window, cx);
                 }),
@@ -484,7 +489,7 @@ impl Render for ProbeApp {
             .child(self.render_structure_dialog(theme, window, cx))
             .child(self.render_save_folder_dialog(theme, window, cx))
             .child(self.render_environment_manager_dialog(theme, window, cx))
-            .child(self.render_secret_value_dialog(theme, cx))
+            .child(self.render_secret_value_dialog(theme, window, cx))
             .child(self.render_environment_manager_context_menu(theme, window, cx))
             .child(self.render_create_environment_dialog(theme, window, cx))
             .child(self.render_application_dialog(theme, window, cx))

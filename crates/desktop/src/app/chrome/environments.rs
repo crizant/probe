@@ -1,5 +1,7 @@
 use super::*;
 
+const ENABLED_COLUMN_WIDTH: f32 = 44.0;
+
 impl ProbeApp {
     pub(super) fn render_environment_manager_sidebar(
         theme: Theme,
@@ -225,7 +227,7 @@ impl ProbeApp {
             .border_b_1()
             .border_color(theme.colors.borders.subtle)
             .when(inherited, |row| row.text_color(theme.colors.text.muted))
-            .child(div().w(px(68.0)).child(components::switch(
+            .child(div().w(px(ENABLED_COLUMN_WIDTH)).child(components::switch(
                 theme,
                 format!("environment-variable-enabled-{row_id}"),
                 format!("Enable {name}"),
@@ -248,15 +250,27 @@ impl ProbeApp {
                     });
                 },
             )))
+            .child(
+                div()
+                    .id(format!("environment-variable-type-{row_id}"))
+                    .debug_selector({
+                        let selector = format!("environment-variable-type-{name}");
+                        move || selector.clone()
+                    })
+                    .w(px(theme.metrics.icon_standard))
+                    .flex_none()
+                    .when(secret, |slot| slot.child(components::lock_icon(theme))),
+            )
             .child(if inherited {
                 div()
                     .w(px(155.0))
+                    .flex_none()
+                    .min_w(px(0.0))
                     .flex()
                     .items_center()
-                    .gap(px(theme.metrics.spacing_1))
-                    .when(secret, |row| row.child(components::lock_icon(theme)))
                     .child(
                         components::truncated_label(name.clone())
+                            .min_w(px(0.0))
                             .font_family(theme.typography.monospace_family)
                             .text_color(theme.colors.text.muted),
                     )
@@ -274,10 +288,9 @@ impl ProbeApp {
                         move || selector
                     })
                     .w(px(155.0))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(theme.metrics.spacing_1))
-                    .when(secret, |row| row.child(components::lock_icon(theme)))
                     .child(
                         div().flex_1().min_w(px(0.0)).child(
                             components::dialog_text_input(
@@ -352,107 +365,17 @@ impl ProbeApp {
                     )
                     .into_any_element()
             } else if secret {
-                let credential_ready = !dirty && !busy && !name.is_empty();
-                let status = if dirty {
-                    "Save changes to manage secret"
-                } else if busy {
-                    "Saving changes…"
-                } else {
-                    match dialog
-                        .secret_statuses
-                        .get(&name)
-                        .copied()
-                        .unwrap_or(SecretUiStatus::Loading)
-                    {
-                        SecretUiStatus::Loading => "Checking credential store…",
-                        SecretUiStatus::Stored => "● Stored securely",
-                        SecretUiStatus::NotStored => "○ Not set",
-                        SecretUiStatus::Unavailable => "⚠ Credential store unavailable",
-                    }
-                };
-                let actionable = credential_ready && !self.secret_write_in_progress;
-                let current_status = dialog.secret_statuses.get(&name).copied();
-                let set_view = cx.weak_entity();
-                let delete_view = cx.weak_entity();
-                let set_name = name.clone();
-                let delete_name = name.clone();
-                let retry = current_status == Some(SecretUiStatus::Unavailable);
-                let button_label = match current_status {
-                    Some(SecretUiStatus::Stored) => "Replace",
-                    Some(SecretUiStatus::Unavailable) => "Retry",
-                    _ => "Set",
-                };
-                let set_selector = match current_status {
-                    Some(SecretUiStatus::Stored) => {
-                        format!("environment-secret-replace-{name}")
-                    }
-                    Some(SecretUiStatus::Unavailable) => {
-                        format!("environment-secret-retry-{name}")
-                    }
-                    _ => format!("environment-secret-set-{name}"),
-                };
-                div()
-                    .id(format!("environment-secret-status-{name}"))
-                    .debug_selector({
-                        let selector = format!("environment-secret-status-{name}");
-                        move || selector.clone()
-                    })
-                    .flex_1()
-                    .min_w(px(120.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(theme.metrics.spacing_2))
-                    .child(
-                        div()
-                            .text_size(px(theme.typography.caption_size))
-                            .child(status),
-                    )
-                    .child(components::editor_action_button(
-                        theme,
-                        set_selector,
-                        button_label,
-                        !actionable
-                            || !matches!(
-                                current_status,
-                                Some(
-                                    SecretUiStatus::Stored
-                                        | SecretUiStatus::NotStored
-                                        | SecretUiStatus::Unavailable
-                                )
-                            ),
-                        move |_, window, cx| {
-                            let _ = set_view.update(cx, |view, cx| {
-                                if retry {
-                                    view.refresh_secret_statuses(cx);
-                                } else {
-                                    view.open_secret_value_dialog(set_name.clone(), window, cx);
-                                }
-                            });
-                        },
-                    ))
-                    .when(current_status == Some(SecretUiStatus::Stored), |row| {
-                        row.child(components::editor_action_button(
-                            theme,
-                            format!("environment-secret-delete-{name}"),
-                            "Delete",
-                            !actionable,
-                            move |_, window, cx| {
-                                let _ = delete_view.update(cx, |view, cx| {
-                                    view.confirm_delete_stored_secret(
-                                        delete_name.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                });
-                            },
-                        ))
-                    })
-                    .into_any_element()
+                self.render_secret_variable_value_cell(theme, dialog, name.clone(), busy, dirty, cx)
             } else {
                 environment_variant_value(theme, &name, row_index, value, inherited)
             })
             .child(
                 div()
+                    .id(format!("environment-variable-defined-in-{row_id}"))
+                    .debug_selector({
+                        let selector = format!("environment-variable-defined-in-{name}");
+                        move || selector.clone()
+                    })
                     .w(px(140.0))
                     .flex()
                     .flex_col()
@@ -474,7 +397,7 @@ impl ProbeApp {
                 components::remove_row_button(
                     theme,
                     format!("environment-variable-delete-{row_id}"),
-                    format!("Delete {name}"),
+                    format!("Remove {name} from this environment"),
                     move |_, _, cx| {
                         let _ = remove_view.update(cx, |view, cx| {
                             view.apply_environment_manager_draft(cx, |dialog| {
@@ -489,6 +412,111 @@ impl ProbeApp {
             row_element.child(div().w(px(32.0)))
         };
         row_element.into_any_element()
+    }
+
+    fn render_secret_variable_value_cell(
+        &self,
+        theme: Theme,
+        dialog: &EnvironmentManagerDialog,
+        name: String,
+        busy: bool,
+        dirty: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let credential_ready = !dirty && !busy && !name.is_empty();
+        let current_status = dialog.secret_statuses.get(&name).copied();
+        let status = if dirty {
+            "Save changes to manage secret"
+        } else if busy {
+            "Saving changes…"
+        } else {
+            match current_status.unwrap_or(SecretUiStatus::Loading) {
+                SecretUiStatus::Loading => "Checking credential store…",
+                SecretUiStatus::Stored => "● Stored securely",
+                SecretUiStatus::NotStored => "○ Not set",
+                SecretUiStatus::Unavailable => "⚠ Credential store unavailable",
+            }
+        };
+        let actionable = credential_ready && !self.secret_write_in_progress;
+        let set_view = cx.weak_entity();
+        let set_name = name.clone();
+        let retry = current_status == Some(SecretUiStatus::Unavailable);
+        let button_label = match current_status {
+            Some(SecretUiStatus::Stored) => "Replace",
+            Some(SecretUiStatus::Unavailable) => "Retry",
+            _ => "Set",
+        };
+        let set_selector = match current_status {
+            Some(SecretUiStatus::Stored) => {
+                format!("environment-secret-replace-{name}")
+            }
+            Some(SecretUiStatus::Unavailable) => {
+                format!("environment-secret-retry-{name}")
+            }
+            _ => format!("environment-secret-set-{name}"),
+        };
+        div()
+            .id(format!("environment-secret-status-{name}"))
+            .debug_selector({
+                let selector = format!("environment-secret-status-{name}");
+                move || selector.clone()
+            })
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_2))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(px(theme.typography.caption_size))
+                    .text_color(match current_status {
+                        Some(SecretUiStatus::Stored) if credential_ready => {
+                            theme.colors.status.success
+                        }
+                        Some(SecretUiStatus::Unavailable) if credential_ready => {
+                            theme.colors.status.warning
+                        }
+                        _ => theme.colors.text.muted,
+                    })
+                    .child(status),
+            )
+            .when(
+                credential_ready
+                    && matches!(
+                        current_status,
+                        Some(
+                            SecretUiStatus::Stored
+                                | SecretUiStatus::NotStored
+                                | SecretUiStatus::Unavailable
+                        )
+                    ),
+                |row| {
+                    row.child(
+                        components::editor_action_button(
+                            theme,
+                            set_selector,
+                            button_label,
+                            !actionable,
+                            move |_, window, cx| {
+                                let _ = set_view.update(cx, |view, cx| {
+                                    if retry {
+                                        view.refresh_secret_statuses(cx);
+                                    } else {
+                                        view.open_secret_value_dialog(set_name.clone(), window, cx);
+                                    }
+                                });
+                            },
+                        )
+                        .flex_none(),
+                    )
+                },
+            )
+            .into_any_element()
     }
 
     fn render_environment_variable_add_row(
@@ -603,7 +631,8 @@ impl ProbeApp {
             .text_size(px(theme.typography.caption_size))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.colors.text.muted)
-            .child(div().w(px(68.0)).child("ENABLED"))
+            .child(div().w(px(ENABLED_COLUMN_WIDTH)).child("ON"))
+            .child(div().w(px(theme.metrics.icon_standard)))
             .child(div().w(px(155.0)).child("NAME"))
             .child(div().flex_1().child("VALUE"))
             .child(div().w(px(140.0)).child("DEFINED IN"))
@@ -866,6 +895,7 @@ impl ProbeApp {
     pub(in crate::app) fn render_secret_value_dialog(
         &self,
         theme: Theme,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let Some(dialog) = &self.secret_value_dialog else {
@@ -873,11 +903,39 @@ impl ProbeApp {
         };
         let cancel_view = cx.weak_entity();
         let save_view = cx.weak_entity();
+        let delete_view = cx.weak_entity();
+        let delete_name = dialog.name.clone();
+        let input = dialog.input.clone();
         let content = components::dialog_surface(theme, "secret-value-dialog", components::COMPACT_DIALOG_WIDTH)
             .debug_selector(|| "secret-value-dialog".into())
-            .child(components::dialog_title(theme, "Set secret"))
-            .child(components::dialog_description(theme, format!("{} in {}", dialog.name, dialog.environment))
-                .mt(px(theme.metrics.spacing_2)))
+            .child(components::dialog_title(theme, if dialog.replacing { "Replace secret" } else { "Set secret" }))
+            .child(div()
+                .id("secret-value-identity")
+                .debug_selector(|| "secret-value-identity".into())
+                .mt(px(theme.metrics.spacing_2))
+                .w_full()
+                .min_w(px(0.0))
+                .px(px(theme.metrics.spacing_2))
+                .py(px(theme.metrics.spacing_2))
+                .flex()
+                .items_center()
+                .gap(px(theme.metrics.spacing_2))
+                .rounded(px(theme.metrics.radius_small))
+                .border_1()
+                .border_color(theme.colors.borders.subtle)
+                .bg(theme.colors.surfaces.raised)
+                .child(components::lock_icon(theme).flex_none())
+                .child(components::truncated_label(dialog.name.clone())
+                    .font_family(theme.typography.monospace_family)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.colors.text.primary))
+                .child(div()
+                    .flex_none()
+                    .text_color(theme.colors.text.muted)
+                    .child("in"))
+                .child(components::truncated_label(dialog.environment.clone())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.colors.actions.accent)))
             .child(div().mt(px(theme.metrics.spacing_3)).child(components::dialog_field_label(theme, "Secret value")))
             .child(div()
                 .id("secret-value-input")
@@ -891,6 +949,10 @@ impl ProbeApp {
                 .border_1()
                 .border_color(theme.colors.borders.standard)
                 .bg(theme.colors.surfaces.raised)
+                .cursor_text()
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    input.update(cx, |input, cx| input.focus(window, cx));
+                })
                 .child(Input::new(&dialog.input)))
             .child(components::dialog_description(theme, "Stored in your system credential store. The value is never saved to this collection or displayed by Probe.")
                 .mt(px(theme.metrics.spacing_2)))
@@ -898,16 +960,21 @@ impl ProbeApp {
                 components::dialog_description(theme, error).mt(px(theme.metrics.spacing_2)).text_color(theme.colors.status.error)
             ))
             .child(components::dialog_actions(theme)
+                .when(dialog.replacing, |actions| actions.child(
+                    components::dialog_action_button(theme, "secret-value-delete-stored", "Delete stored value", components::DialogActionStyle::Destructive, None, dialog.busy || self.secret_write_in_progress, move |_, window, cx| {
+                        let _ = delete_view.update(cx, |view, cx| view.confirm_delete_stored_secret(delete_name.clone(), window, cx));
+                    })
+                ))
                 .child(components::dialog_action_button(theme, "secret-value-cancel", "Cancel", components::DialogActionStyle::Secondary, None, false, move |_, window, cx| {
                     let _ = cancel_view.update(cx, |view, cx| view.close_secret_value_dialog(window, cx));
                 }))
-                .child(components::dialog_action_button(theme, "secret-value-save", if dialog.busy { "Saving…" } else { "Save Secret" }, components::DialogActionStyle::Primary, None, dialog.busy || dialog.input.read(cx).value().is_empty(), move |_, window, cx| {
+                .child(components::dialog_action_button(theme, "secret-value-save", if dialog.busy { "Saving…" } else { "Save Secret" }, components::DialogActionStyle::Primary, components::shortcut_label_for_action_in_context(window, &SubmitSecretValueDialog, "SecretValueDialog"), dialog.busy || dialog.input.read(cx).value().is_empty(), move |_, window, cx| {
                     let _ = save_view.update(cx, |view, cx| view.save_secret_value(window, cx));
                 })));
         components::dialog_layer(
             theme,
             &self.environment_manager_dialog_focus,
-            "EnvironmentManagerDialog",
+            "SecretValueDialog",
             content,
         )
         .into_any_element()
