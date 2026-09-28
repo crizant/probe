@@ -11,6 +11,7 @@ impl ProbeApp {
         self.detached_requests.clear();
         self.committed_detached_requests.clear();
         self.workspace_path = None;
+        self.clear_secret_availability();
         self.shell.reset_for_workspace();
         self.shell.select_environment(None);
         self.reset_collection_ui();
@@ -158,7 +159,6 @@ impl ProbeApp {
     }
 
     pub(super) fn discard_environment_manager_dialog(&mut self) {
-        self.secret_status_task = None;
         self.secret_status_generation = self.secret_status_generation.wrapping_add(1);
         self.secret_value_dialog = None;
         self.transient.environment_manager_context_menu = None;

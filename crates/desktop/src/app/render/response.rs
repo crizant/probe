@@ -1107,9 +1107,12 @@ impl ProbeApp {
         match resolve_environment(loaded.workspace().environments(), selected) {
             Ok(environment) => {
                 let view = cx.weak_entity();
+                let (secrets, resolved_secrets) =
+                    self.editor_secret_sets(selected, environment.secrets_without_values());
                 components::VariableContext {
                     values: environment.variables().clone(),
-                    secrets: environment.secrets_without_values().clone(),
+                    secrets,
+                    resolved_secrets,
                     unavailable_message: "Variable value is unavailable".to_owned(),
                     on_change: Some(Rc::new(move |name, value, window, cx| {
                         let name = name.to_owned();

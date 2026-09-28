@@ -605,6 +605,14 @@ pub(in crate::components) fn variable_tooltip_presentation(
     variables: &VariableContext,
 ) -> VariableTooltipPresentation {
     match variables.status(name) {
+        VariableStatus::Resolved if variables.resolved_secrets.contains(name) => {
+            VariableTooltipPresentation {
+                value: String::new(),
+                placeholder: "Secret value",
+                editable: false,
+                hint: Some("Secret value stored securely"),
+            }
+        }
         VariableStatus::Resolved => VariableTooltipPresentation {
             value: variables
                 .values

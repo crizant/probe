@@ -422,6 +422,7 @@ impl ProbeApp {
                                 view.shell.select_environment(Some(environment));
                                 view.capture_selected_environment();
                             }
+                            view.revalidate_selected_secret_availability(cx);
                             view.start_workspace_watcher(window, cx);
                             view.persist_session(cx);
                             if warning_count > 0 {

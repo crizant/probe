@@ -1,5 +1,63 @@
+use std::path::Path;
+
 use super::*;
 use crate::credentials::{CredentialId, CredentialStatus, CredentialStore, CredentialStoreError};
+
+/// Credential availability for request highlighting. Values are never stored.
+#[derive(Default)]
+pub(super) struct SecretAvailabilityCache {
+    statuses: BTreeMap<SecretAvailabilityKey, SecretUiStatus>,
+    queries: BTreeMap<SecretAvailabilityScope, SecretAvailabilityQuery>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct SecretAvailabilityKey {
+    workspace: PathBuf,
+    environment: String,
+    name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct SecretAvailabilityScope {
+    workspace: PathBuf,
+    environment: String,
+}
+
+struct SecretAvailabilityQuery {
+    generation: u64,
+    names: BTreeSet<String>,
+    updates_dialog: bool,
+    dialog_generation: u64,
+    _task: Task<()>,
+}
+
+impl SecretAvailabilityCache {
+    fn clear(&mut self) {
+        self.statuses.clear();
+        self.queries.clear();
+    }
+
+    fn status(&self, workspace: &Path, environment: &str, name: &str) -> Option<SecretUiStatus> {
+        self.statuses
+            .get(&SecretAvailabilityKey {
+                workspace: workspace.to_path_buf(),
+                environment: environment.to_owned(),
+                name: name.to_owned(),
+            })
+            .copied()
+    }
+
+    fn record(&mut self, workspace: &Path, environment: &str, name: &str, status: SecretUiStatus) {
+        self.statuses.insert(
+            SecretAvailabilityKey {
+                workspace: workspace.to_path_buf(),
+                environment: environment.to_owned(),
+                name: name.to_owned(),
+            },
+            status,
+        );
+    }
+}
 
 pub(super) fn default_credential_store() -> Arc<dyn CredentialStore> {
     #[cfg(test)]
@@ -60,10 +118,61 @@ impl ProbeApp {
         })
     }
 
+    pub(super) fn clear_secret_availability(&mut self) {
+        self.secret_availability.clear();
+    }
+
+    /// Re-check the selected environment even when a previous answer is cached.
+    /// Terminal answers stay visible until the new check finishes.
+    pub(super) fn revalidate_selected_secret_availability(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.workspace_path.clone() else {
+            return;
+        };
+        let Some(environment) = self.shell.selected_environment().map(str::to_owned) else {
+            return;
+        };
+        let Some(names) = self.selected_enabled_secret_names() else {
+            return;
+        };
+        if names.is_empty() {
+            return;
+        }
+        if self.secret_query_covers(&path, &environment, &names) {
+            return;
+        }
+        self.schedule_secret_availability(path, environment, names, false, cx);
+    }
+
+    /// Fill availability gaps for the secrets already classified in this frame.
+    /// Does not read the credential store on the GPUI thread.
+    pub(super) fn ensure_editor_secret_availability(
+        &mut self,
+        context: &components::VariableContext,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.workspace_path.clone() else {
+            return;
+        };
+        let Some(environment) = self.shell.selected_environment().map(str::to_owned) else {
+            return;
+        };
+        let mut names = context.secrets.clone();
+        names.extend(context.resolved_secrets.iter().cloned());
+        if names.is_empty()
+            || names.iter().all(|name| {
+                self.secret_availability
+                    .status(&path, &environment, name)
+                    .is_some_and(SecretUiStatus::is_terminal)
+            })
+            || self.secret_query_covers(&path, &environment, &names)
+        {
+            return;
+        }
+        self.schedule_secret_availability(path, environment, names, false, cx);
+    }
+
     pub(super) fn refresh_secret_statuses(&mut self, cx: &mut Context<Self>) {
-        self.secret_status_task = None;
         self.secret_status_generation = self.secret_status_generation.wrapping_add(1);
-        let generation = self.secret_status_generation;
         let Some(dialog) = self.environment_manager_dialog.as_mut() else {
             return;
         };
@@ -75,7 +184,7 @@ impl ProbeApp {
             return;
         };
         let environment = dialog.draft.name.clone();
-        let names: Vec<String> = loaded
+        let names: BTreeSet<String> = loaded
             .workspace()
             .effective_environment_variables(&dialog.draft)
             .into_iter()
@@ -85,6 +194,12 @@ impl ProbeApp {
             })
             .collect();
         if names.is_empty() {
+            self.secret_availability
+                .queries
+                .remove(&SecretAvailabilityScope {
+                    workspace: path,
+                    environment,
+                });
             cx.notify();
             return;
         }
@@ -93,15 +208,111 @@ impl ProbeApp {
                 .secret_statuses
                 .insert(name.clone(), SecretUiStatus::Loading);
         }
+        self.schedule_secret_availability(path, environment, names, true, cx);
+        cx.notify();
+    }
+
+    fn selected_enabled_secret_names(&self) -> Option<BTreeSet<String>> {
+        let selected = self.shell.selected_environment()?;
+        let loaded = self.loaded_workspace.as_ref()?;
+        let environment = resolve_environment(loaded.workspace().environments(), selected).ok()?;
+        Some(environment.secrets_without_values().clone())
+    }
+
+    fn secret_query_covers(
+        &self,
+        workspace: &Path,
+        environment: &str,
+        names: &BTreeSet<String>,
+    ) -> bool {
+        self.secret_availability
+            .queries
+            .get(&SecretAvailabilityScope {
+                workspace: workspace.to_path_buf(),
+                environment: environment.to_owned(),
+            })
+            .is_some_and(|query| names.is_subset(&query.names))
+    }
+
+    pub(super) fn editor_secret_sets(
+        &self,
+        selected: &str,
+        secrets_without_values: &BTreeSet<String>,
+    ) -> (BTreeSet<String>, BTreeSet<String>) {
+        let Some(workspace) = &self.workspace_path else {
+            return (secrets_without_values.clone(), BTreeSet::new());
+        };
+        let mut unresolved = secrets_without_values.clone();
+        let mut resolved = BTreeSet::new();
+        for name in secrets_without_values {
+            if self.secret_availability.status(workspace, selected, name)
+                == Some(SecretUiStatus::Stored)
+            {
+                unresolved.remove(name);
+                resolved.insert(name.clone());
+            }
+        }
+        (unresolved, resolved)
+    }
+
+    fn record_secret_availability(
+        &mut self,
+        workspace: &Path,
+        environment: &str,
+        name: &str,
+        status: SecretUiStatus,
+    ) {
+        self.secret_availability
+            .record(workspace, environment, name, status);
+    }
+
+    /// `status` is availability only. Callers must not read secret values here.
+    fn schedule_secret_availability(
+        &mut self,
+        workspace: PathBuf,
+        environment: String,
+        names: BTreeSet<String>,
+        updates_dialog: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let scope = SecretAvailabilityScope {
+            workspace: workspace.clone(),
+            environment: environment.clone(),
+        };
+        let generation = self
+            .secret_availability
+            .queries
+            .get(&scope)
+            .map(|query| query.generation)
+            .unwrap_or(0)
+            .wrapping_add(1);
+        let (updates_dialog, dialog_generation) = if updates_dialog {
+            (true, self.secret_status_generation)
+        } else if let Some(existing) = self.secret_availability.queries.get(&scope) {
+            (existing.updates_dialog, existing.dialog_generation)
+        } else {
+            (false, self.secret_status_generation)
+        };
         let store = Arc::clone(&self.credential_store);
-        self.secret_status_task = Some(cx.spawn(async move |view, cx| {
+        let names_for_task = names.clone();
+        let task_workspace = workspace;
+        let task_environment = environment;
+        let task_scope = scope.clone();
+        let query_generation = generation;
+        let write_dialog = updates_dialog;
+        let write_dialog_generation = dialog_generation;
+        let task = cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    names
+                    names_for_task
                         .into_iter()
                         .map(|name| {
-                            let status = CredentialId::for_workspace(&path, &environment, &name)
-                                .and_then(|id| store.status(&id));
+                            let status = CredentialId::for_workspace(
+                                &task_workspace,
+                                &task_environment,
+                                &name,
+                            )
+                            .and_then(|id| store.status(&id));
                             let status = match status {
                                 Ok(CredentialStatus::Stored) => SecretUiStatus::Stored,
                                 Ok(CredentialStatus::NotStored)
@@ -114,17 +325,44 @@ impl ProbeApp {
                 })
                 .await;
             let _ = view.update(cx, |view, cx| {
-                if view.secret_status_generation != generation {
+                let current = view
+                    .secret_availability
+                    .queries
+                    .get(&task_scope)
+                    .map(|query| query.generation);
+                if current != Some(query_generation) {
                     return;
                 }
-                view.secret_status_task = None;
-                if let Some(dialog) = view.environment_manager_dialog.as_mut() {
-                    dialog.secret_statuses = result.into_iter().collect();
-                    cx.notify();
+                view.secret_availability.queries.remove(&task_scope);
+                for (name, status) in &result {
+                    view.secret_availability.record(
+                        &task_scope.workspace,
+                        &task_scope.environment,
+                        name,
+                        *status,
+                    );
                 }
+                if write_dialog
+                    && view.secret_status_generation == write_dialog_generation
+                    && view.workspace_path.as_deref() == Some(task_scope.workspace.as_path())
+                    && let Some(dialog) = view.environment_manager_dialog.as_mut()
+                    && dialog.draft.name == task_scope.environment
+                {
+                    dialog.secret_statuses = result.into_iter().collect();
+                }
+                cx.notify();
             });
-        }));
-        cx.notify();
+        });
+        self.secret_availability.queries.insert(
+            scope,
+            SecretAvailabilityQuery {
+                generation,
+                names,
+                updates_dialog,
+                dialog_generation,
+                _task: task,
+            },
+        );
     }
 
     pub(super) fn open_secret_value_dialog(
@@ -260,6 +498,12 @@ impl ProbeApp {
                     }) {
                         view.close_secret_value_dialog(window, cx);
                     }
+                    view.record_secret_availability(
+                        &workspace_path,
+                        &environment,
+                        &name,
+                        SecretUiStatus::Stored,
+                    );
                     view.refresh_secret_statuses(cx);
                 });
         })
@@ -326,6 +570,9 @@ impl ProbeApp {
         self.close_secret_value_dialog(window, cx);
         self.secret_write_in_progress = true;
         let store = Arc::clone(&self.credential_store);
+        if let Some(path) = self.workspace_path.clone() {
+            self.record_secret_availability(&path, &environment, &name, SecretUiStatus::Loading);
+        }
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
             dialog
                 .secret_statuses

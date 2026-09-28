@@ -351,7 +351,11 @@ type ManageEnvironmentsHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 #[derive(Clone, Default)]
 pub(crate) struct VariableContext {
     pub(crate) values: BTreeMap<String, String>,
+    /// Enabled secrets with no known stored credential.
     pub(crate) secrets: BTreeSet<String>,
+    /// Enabled secrets whose credential is known to be stored.
+    /// Names only: secret values never enter this set or `values`.
+    pub(crate) resolved_secrets: BTreeSet<String>,
     /// Enabled path-parameter names with a non-empty value.
     ///
     /// `None` means this field does not highlight path placeholders, so every
@@ -364,6 +368,9 @@ pub(crate) struct VariableContext {
 
 impl VariableContext {
     pub(crate) fn status(&self, name: &str) -> probe_core::VariableStatus {
+        if self.resolved_secrets.contains(name) {
+            return probe_core::VariableStatus::Resolved;
+        }
         probe_core::variable_status(&self.values, &self.secrets, name)
     }
 
@@ -397,6 +404,7 @@ impl std::fmt::Debug for VariableContext {
             .debug_struct("VariableContext")
             .field("values", &self.values)
             .field("secrets", &self.secrets)
+            .field("resolved_secrets", &self.resolved_secrets)
             .field("path_values", &self.path_values)
             .field("unavailable_message", &self.unavailable_message)
             .finish_non_exhaustive()

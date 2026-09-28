@@ -384,7 +384,14 @@ be saved as complete bodies without retained storage.
 The desktop Environment Manager shows secret declarations alongside plain variables.
 Adding a secret creates a draft `secret: true` declaration in OpenCollection; the
 declaration must be saved before a native value can be set. Status checks and Set,
-Replace, and Delete run off the GPUI thread. The value is entered in a masked,
+Replace, and Delete run off the GPUI thread. The same status check fills an
+availability cache keyed by workspace path, environment name, and secret name.
+Switching workspace or environment never reuses another key's answer. The request
+editor reads that cache when classifying `{{name}}`: stored is resolved, missing or
+unavailable stays unresolved, and an unknown answer stays unresolved until the
+off-thread check completes and the editor repaints. The cache holds availability
+only. Secret values stay inside the credential store and are read on the execution
+path through `NativeSecretProvider`. The value is entered in a masked,
 initially empty dialog and is never revealed by Probe. Deleting a stored value keeps
 the declaration; removing the declaration does not delete the native credential.
 Inherited declarations show their defining environment, while the credential is

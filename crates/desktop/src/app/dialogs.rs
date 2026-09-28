@@ -33,6 +33,13 @@ pub(crate) enum SecretUiStatus {
     Unavailable,
 }
 
+impl SecretUiStatus {
+    /// A finished credential-store answer. `Loading` is still unknown.
+    pub(super) const fn is_terminal(self) -> bool {
+        matches!(self, Self::Stored | Self::NotStored | Self::Unavailable)
+    }
+}
+
 impl EnvironmentManagerDialog {
     pub(crate) fn new(environment: &Environment) -> Self {
         let next_variable_row_id = environment.variables.len() as u64;

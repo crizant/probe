@@ -161,8 +161,10 @@ visible without color.
 Unresolved covers an environment variable that is absent or disabled, a secret with
 no runtime value, a path-parameter row that is missing, disabled, or still blank, and
 every `{{name}}` when no environment is selected or environment resolution failed. An
-environment variable set to an empty string is resolved. A blank path parameter is
-not, because those rows are created empty as soon as `:name` is typed.
+environment variable set to an empty string is resolved. A secret whose credential is
+already stored is resolved too, without displaying the value; until that availability
+is known, the placeholder stays unresolved. A blank path parameter is not, because
+those rows are created empty as soon as `:name` is typed.
 
 `:name` is never classified against the environment, and `{{name}}` is never
 classified against path parameters, even when the names coincide. Highlights and

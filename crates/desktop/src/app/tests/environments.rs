@@ -3495,3 +3495,401 @@ fn secret_delete_refreshes_status_when_a_refresh_overlaps_deletion(cx: &mut Test
         })
         .unwrap();
 }
+
+const EDITOR_SECRET_SENTINEL: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
+
+fn assert_secret_stays_out_of_editor_context(context: &crate::components::VariableContext) {
+    assert!(!context.values.contains_key("secretToken"));
+    assert!(
+        !format!("{context:?}").contains(EDITOR_SECRET_SENTINEL),
+        "editor variable context must not contain the secret value: {context:?}"
+    );
+}
+
+#[gpui::test]
+fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
+    cx: &mut TestAppContext,
+) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+    let store = Arc::new(FakeManagerCredentials::default());
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            view.edit_request(
+                request_key,
+                |request| {
+                    request.headers = (0..8)
+                        .map(|index| probe_core::Header {
+                            name: format!("X-{index}"),
+                            value: "{{secretToken}} {{token}}".to_owned(),
+                            disabled: false,
+                        })
+                        .collect();
+                },
+                cx,
+            );
+            view.select_environment(Some("development".into()), cx);
+            let pending = view.variable_context(cx);
+            assert_eq!(
+                pending.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue,
+                "availability is unknown until the credential check finishes"
+            );
+            assert!(pending.resolved_secrets.is_empty());
+            assert_eq!(
+                pending.status("token"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_eq!(
+                pending.values.get("token").map(String::as_str),
+                Some("development-token")
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert_eq!(
+                context.status("baseUrl"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_eq!(
+                context.values.get("baseUrl").map(String::as_str),
+                Some("https://dev.example.com")
+            );
+            assert_eq!(
+                context.status("disabledValue"),
+                probe_core::VariableStatus::Missing
+            );
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 1);
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        store.status_calls.load(Ordering::Relaxed),
+        1,
+        "rendering repeated placeholders must not query the credential store again"
+    );
+
+    window
+        .update(cx, |view, window, cx| {
+            view.open_environment_manager_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            view.open_secret_value_dialog("secretToken".into(), window, cx);
+            let input = view.secret_value_dialog.as_ref().unwrap().input.clone();
+            input.update(cx, |input, cx| {
+                input.set_value(EDITOR_SECRET_SENTINEL, window, cx)
+            });
+            view.save_secret_value(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let calls_after_save = store.status_calls.load(Ordering::Relaxed);
+    window
+        .update(cx, |view, _, cx| {
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert!(context.resolved_secrets.contains("secretToken"));
+            assert!(!context.secrets.contains("secretToken"));
+            assert_secret_stays_out_of_editor_context(&context);
+            assert_eq!(
+                context.status("token"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_eq!(
+                context.values.get("token").map(String::as_str),
+                Some("development-token")
+            );
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(store.status_calls.load(Ordering::Relaxed), calls_after_save);
+    assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+}
+
+#[gpui::test]
+fn empty_stored_secret_is_resolved_without_entering_the_variable_map(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    store.set(&id, "").unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture, workspace);
+            view.select_environment(Some("development".into()), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert!(!context.values.contains_key("secretToken"));
+            assert_eq!(
+                context.status("token"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+            assert!(store.status_calls.load(Ordering::Relaxed) >= 1);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn deleting_a_stored_secret_makes_the_editor_placeholder_unresolved(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    store.set(&id, EDITOR_SECRET_SENTINEL).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture, workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.open_environment_manager_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_secret_stays_out_of_editor_context(&context);
+            view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
+            let pending = view.variable_context(cx);
+            assert_eq!(
+                pending.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue,
+                "deleting a stored secret clears resolved highlighting immediately"
+            );
+            assert!(!pending.resolved_secrets.contains("secretToken"));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert_secret_stays_out_of_editor_context(&context);
+            assert_eq!(
+                context.status("baseUrl"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert!(!store.values.lock().unwrap().contains_key(&id));
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let first = writable_environment_fixture("editor-secret-a")
+        .canonicalize()
+        .unwrap();
+    let second = writable_environment_fixture("editor-secret-b")
+        .canonicalize()
+        .unwrap();
+    let first_workspace = probe_opencollection::load_workspace(&first).unwrap();
+    let second_workspace = probe_opencollection::load_workspace(&second).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    let development_id =
+        crate::credentials::CredentialId::for_workspace(&first, "development", "secretToken")
+            .unwrap();
+    store.set(&development_id, EDITOR_SECRET_SENTINEL).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(first.clone(), first_workspace);
+            view.select_environment(Some("development".into()), cx);
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let development = view.variable_context(cx);
+            assert_eq!(
+                development.status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_secret_stays_out_of_editor_context(&development);
+            assert_eq!(
+                development.status("token"),
+                probe_core::VariableStatus::Resolved
+            );
+
+            view.select_environment(Some("base".into()), cx);
+            let base = view.variable_context(cx);
+            assert_eq!(
+                base.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue,
+                "another environment must not reuse a stored secret status"
+            );
+            assert!(base.resolved_secrets.is_empty());
+            assert_eq!(base.status("host"), probe_core::VariableStatus::Resolved);
+            assert_eq!(base.status("token"), probe_core::VariableStatus::Missing);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let base = view.variable_context(cx);
+            assert_eq!(
+                base.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert_secret_stays_out_of_editor_context(&base);
+
+            view.select_environment(Some("development".into()), cx);
+            let development = view.variable_context(cx);
+            assert_eq!(
+                development.status("secretToken"),
+                probe_core::VariableStatus::Resolved,
+                "returning to an environment should keep its cached stored status"
+            );
+            assert_secret_stays_out_of_editor_context(&development);
+
+            view.set_workspace(second.clone(), second_workspace);
+            view.select_environment(Some("development".into()), cx);
+            let other_workspace = view.variable_context(cx);
+            assert_eq!(
+                other_workspace.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue,
+                "a different workspace must not reuse the previous workspace status"
+            );
+            assert!(other_workspace.resolved_secrets.is_empty());
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let other_workspace = view.variable_context(cx);
+            assert_eq!(
+                other_workspace.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert_eq!(
+                other_workspace.status("token"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_secret_stays_out_of_editor_context(&other_workspace);
+            let reloaded = probe_opencollection::load_workspace(&first).unwrap();
+            view.set_workspace(first.clone(), reloaded);
+            view.select_environment(Some("development".into()), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let development = view.variable_context(cx);
+            assert_eq!(
+                development.status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_secret_stays_out_of_editor_context(&development);
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+        })
+        .unwrap();
+    fs::remove_file(first).unwrap();
+    fs::remove_file(second).unwrap();
+}
+
+#[gpui::test]
+fn unavailable_credential_status_keeps_the_secret_unresolved(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    store.fail_status.store(true, Ordering::Relaxed);
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture, workspace);
+            view.select_environment(Some("development".into()), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert!(context.resolved_secrets.is_empty());
+            assert_eq!(
+                context.status("token"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+        })
+        .unwrap();
+}

@@ -93,6 +93,26 @@ fn variable_tooltip_presentation_creates_missing_writable_variables() {
     assert_eq!(secret.value, "unavailable");
     assert!(!secret.editable);
     assert_eq!(secret.hint, Some("Secret has no value in this environment"));
+
+    let stored = VariableContext {
+        resolved_secrets: ["apiKey".to_owned()].into_iter().collect(),
+        on_change: Some(std::rc::Rc::new(|_, _, _, _| {})),
+        ..VariableContext::default()
+    };
+    assert_eq!(stored.status("apiKey"), VariableStatus::Resolved);
+    assert_eq!(
+        reference_status(&stored, ReferenceKind::Environment, "apiKey"),
+        VariableStatus::Resolved
+    );
+    let stored_tooltip = variable_tooltip_presentation("apiKey", &stored);
+    assert!(stored_tooltip.value.is_empty());
+    assert!(!stored_tooltip.editable);
+    assert_eq!(stored_tooltip.hint, Some("Secret value stored securely"));
+    assert!(!stored.values.contains_key("apiKey"));
+    let palette = variable_highlight_palette(Theme::light());
+    let (color, underline) = super::variables::placeholder_paint(stored.status("apiKey"), palette);
+    assert!(underline.is_none());
+    assert_eq!(color, palette.resolved);
 }
 
 #[test]
