@@ -64,7 +64,7 @@ fn load_bundled_source(
         loaded.documents.insert(
             path.to_owned(),
             SourceDocument {
-                original_source: source.as_bytes().to_vec(),
+                original_source: source.as_bytes().into(),
             },
         );
         loaded.source = WorkspaceSource::Bundled(path.to_owned());
@@ -92,7 +92,7 @@ fn load_unbundled(root: &Path) -> Result<LoadedWorkspace, LoadError> {
     documents.insert(
         root_config.clone(),
         SourceDocument {
-            original_source: source.as_bytes().to_vec(),
+            original_source: source.as_bytes().into(),
         },
     );
     let loaded_items = read_items(
@@ -244,7 +244,7 @@ fn read_items(
 struct ReadItem {
     item: Option<CollectionItem>,
     diagnostics: Vec<ProjectionDiagnostic>,
-    original_source: Vec<u8>,
+    original_source: Arc<[u8]>,
 }
 
 fn read_item(path: &Path) -> Result<ReadItem, LoadError> {
@@ -262,7 +262,7 @@ fn read_item(path: &Path) -> Result<ReadItem, LoadError> {
     Ok(ReadItem {
         item,
         diagnostics,
-        original_source: source.into_bytes(),
+        original_source: source.into_bytes().into(),
     })
 }
 
@@ -300,7 +300,7 @@ fn read_environments(
         documents.insert(
             path.clone(),
             SourceDocument {
-                original_source: source.into_bytes(),
+                original_source: source.into_bytes().into(),
             },
         );
         environments.push((environment.into_domain(), path));

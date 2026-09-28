@@ -317,34 +317,7 @@ fn tree_context_menu_duplicate_keeps_keyboard_rename_dialog_open_after_reconcile
                 })
             ));
             let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
-            let disk_baselines = fresh
-                .requests()
-                .iter()
-                .filter_map(|located| {
-                    fresh
-                        .workspace()
-                        .request(located.key())
-                        .cloned()
-                        .map(|request| (located.selector().to_owned(), request))
-                })
-                .collect();
-            let selector_remaps =
-                fresh
-                    .requests()
-                    .iter()
-                    .map(|located| (located.selector().to_owned(), located.selector().to_owned()))
-                    .chain(fresh.folders().iter().map(|located| {
-                        (located.selector().to_owned(), located.selector().to_owned())
-                    }))
-                    .collect();
-            view.apply_reconciled_workspace(
-                ReconciledWorkspace {
-                    workspace: fresh,
-                    disk_baselines,
-                    selector_remaps,
-                },
-                cx,
-            );
+            view.apply_reconciled_workspace(reconciled_workspace(fresh), cx);
         })
         .expect("test window should remain open");
     cx.run_until_parked();

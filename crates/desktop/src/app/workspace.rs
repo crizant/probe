@@ -380,7 +380,7 @@ impl ProbeApp {
         }));
     }
 
-    pub(super) fn local_request_states(&self) -> Vec<LocalRequestState> {
+    pub(super) fn local_request_states(&self) -> Vec<LocalRequestState<'_>> {
         let Some(loaded) = &self.loaded_workspace else {
             return Vec::new();
         };
@@ -389,9 +389,9 @@ impl ProbeApp {
             .iter()
             .filter_map(|located| {
                 Some(LocalRequestState {
-                    selector: located.selector().to_owned(),
-                    baseline: self.persistence.saved_request(located.key())?.clone(),
-                    local: loaded.workspace().request(located.key())?.clone(),
+                    selector: located.selector(),
+                    baseline: self.persistence.saved_request(located.key())?,
+                    local: loaded.workspace().request(located.key())?,
                 })
             })
             .collect()
@@ -404,7 +404,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match reconcile(self.local_request_states(), fresh, &rename_hints) {
+        match reconcile(&self.local_request_states(), fresh, &rename_hints) {
             ReconcileResult::Applied(reconciled) => {
                 self.apply_reconciled_workspace(*reconciled, cx);
             }
@@ -657,14 +657,13 @@ impl ProbeApp {
                             let clean_local = view
                                 .local_request_states()
                                 .into_iter()
-                                .map(|mut state| {
-                                    state.local.clone_from(&state.baseline);
-                                    state
+                                .map(|state| LocalRequestState {
+                                    local: state.baseline,
+                                    ..state
                                 })
-                                .collect();
-                            if let ReconcileResult::Applied(reconciled) =
-                                reconcile(clean_local, workspace, &BTreeMap::new())
-                            {
+                                .collect::<Vec<_>>();
+                            let result = reconcile(&clean_local, workspace, &BTreeMap::new());
+                            if let ReconcileResult::Applied(reconciled) = result {
                                 view.apply_reconciled_workspace(*reconciled, cx);
                                 view.show_toast(
                                     ToastIntent::Warning,
@@ -939,7 +938,7 @@ impl ProbeApp {
 
     pub(super) fn apply_reconciled_workspace(
         &mut self,
-        mut reconciled: ReconciledWorkspace,
+        reconciled: ReconciledWorkspace,
         cx: &mut Context<Self>,
     ) {
         let Some(old) = self.loaded_workspace.as_ref() else {
@@ -951,23 +950,16 @@ impl ProbeApp {
         let selectors = self.snapshot_shell_selectors(old);
         let key_remaps =
             request_key_remaps(old, &reconciled.workspace, &reconciled.selector_remaps);
-        let baselines = reconciled
-            .workspace
-            .requests()
-            .iter()
-            .filter_map(|located| {
-                reconciled
-                    .disk_baselines
-                    .remove(located.selector())
-                    .map(|request| (located.key(), request))
-            })
-            .collect::<Vec<_>>();
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
         let active_detached = self
             .shell
             .active_tab()
             .filter(|key| self.detached_requests.contains(key));
-        let remaps = self.install_reloaded_workspace(reconciled.workspace, baselines, &key_remaps);
+        let remaps = self.install_reloaded_workspace(
+            reconciled.workspace,
+            reconciled.baselines,
+            &key_remaps,
+        );
         self.restore_shell_selectors(&reconciled.selector_remaps, selectors);
         if let Some(key) = active_detached.and_then(|key| remaps.get(&key).copied()) {
             self.shell.activate_tab(key);

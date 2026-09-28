@@ -24,7 +24,8 @@ pub use repository::{
     load_workspace_from_str,
 };
 pub use structure::{
-    CreatedRequestProtocol, ItemKind, StructureError, StructureOperation, StructureResult,
+    CreatedRequestProtocol, ItemKind, PreparedStructureEdit, StructureError, StructureOperation,
+    StructureResult,
 };
 
 /// An OpenCollection document together with its supported domain projection.

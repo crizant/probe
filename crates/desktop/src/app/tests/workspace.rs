@@ -312,6 +312,60 @@ fn saving_detached_request_keeps_unrelated_request_dirty(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn editing_detached_request_during_save_keeps_the_edit_dirty(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("save-detached-edit-in-flight");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.edit_request(
+                key,
+                |request| request.url = Some("https://example.test/saved".to_owned()),
+                cx,
+            );
+            view.persist_detached_request(key, "In Flight".to_owned(), None, window, cx);
+            view.edit_request(
+                key,
+                |request| request.url = Some("https://example.test/edited".to_owned()),
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            let key = view.shell.active_tab().unwrap();
+            assert!(!view.detached_requests.contains(&key));
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            assert!(loaded.request_selector(key).is_some());
+            let request = loaded.workspace().request(key).unwrap();
+            assert_eq!(request.metadata.name.as_deref(), Some("In Flight"));
+            assert_eq!(request.url.as_deref(), Some("https://example.test/edited"));
+            assert!(view.persistence.is_dirty(key, request));
+        })
+        .unwrap();
+    let disk = probe_opencollection::load_workspace(&fixture).unwrap();
+    let persisted = disk
+        .requests()
+        .iter()
+        .find_map(|located| {
+            let request = disk.workspace().request(located.key())?;
+            (request.metadata.name.as_deref() == Some("In Flight")).then_some(request)
+        })
+        .unwrap();
+    assert_eq!(persisted.url.as_deref(), Some("https://example.test/saved"));
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
 fn close_other_tabs_keeps_a_detached_tab_after_key_remap(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2082,6 +2136,80 @@ fn application_dialogs_queue_without_repeating_the_same_filesystem_conflict(
             assert!(view.pending_application_dialogs.is_empty());
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_bundled_fixture("filesystem-reload");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let selector = workspace.requests()[0].selector().to_owned();
+    let key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.edit_request(
+                key,
+                |request| request.url = Some("https://local.example/draft".to_owned()),
+                cx,
+            );
+        })
+        .unwrap();
+
+    let source = fs::read_to_string(&fixture).unwrap();
+    fs::write(&fixture, source.replacen("method: GET", "method: PATCH", 1)).unwrap();
+    let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx);
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let key = loaded.request_key(&selector).unwrap();
+            let request = loaded.workspace().request(key).unwrap();
+            assert_eq!(request.method.as_deref(), Some("PATCH"));
+            assert_eq!(request.url.as_deref(), Some("https://local.example/draft"));
+            let baseline = view.persistence.saved_request(key).unwrap();
+            assert_eq!(baseline.method.as_deref(), Some("PATCH"));
+            assert_eq!(
+                baseline.url.as_deref(),
+                Some("https://api.example.com/pets")
+            );
+            assert!(view.persistence.is_dirty(key, request));
+            view.edit_request(key, |request| request.method = Some("POST".to_owned()), cx);
+        })
+        .unwrap();
+
+    let source = fs::read_to_string(&fixture).unwrap();
+    fs::write(&fixture, source.replacen("method: PATCH", "method: PUT", 1)).unwrap();
+    let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx);
+            assert!(matches!(
+                view.application_dialog,
+                Some(ApplicationDialog::FilesystemConflict { .. })
+            ));
+            view.handle_application_dialog_action(ApplicationDialogAction::UseDisk, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let key = loaded.request_key(&selector).unwrap();
+            let request = loaded.workspace().request(key).unwrap();
+            assert_eq!(request.method.as_deref(), Some("PUT"));
+            assert_eq!(request.url.as_deref(), Some("https://api.example.com/pets"));
+            assert!(!view.persistence.is_dirty(key, request));
+        })
+        .unwrap();
+    fs::remove_file(fixture).unwrap();
 }
 
 #[gpui::test]

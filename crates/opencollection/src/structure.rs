@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use atomic_write_file::AtomicWriteFile;
@@ -205,139 +206,172 @@ pub struct StructureResult {
 
 impl LoadedWorkspace {
     /// Applies a structural edit and refreshes all runtime keys and repository selectors.
+    ///
+    /// In-memory request drafts are carried to their remapped selectors.
     pub fn apply_structure(
         &mut self,
         operation: StructureOperation,
     ) -> Result<StructureResult, StructureError> {
-        self.apply_structure_internal(operation, false)
-            .map(|(result, _)| result)
-    }
-
-    /// Applies a structural edit and returns the reloaded on-disk workspace before
-    /// any in-memory request drafts are replayed. Desktop persistence uses this as
-    /// its conflict baseline after creating an unsaved request.
-    pub fn apply_structure_with_disk_snapshot(
-        &mut self,
-        operation: StructureOperation,
-    ) -> Result<(StructureResult, LoadedWorkspace), StructureError> {
-        let (result, disk) = self.apply_structure_internal(operation, true)?;
-        Ok((result, disk.expect("disk snapshot was requested")))
-    }
-
-    fn apply_structure_internal(
-        &mut self,
-        operation: StructureOperation,
-        capture_disk: bool,
-    ) -> Result<(StructureResult, Option<LoadedWorkspace>), StructureError> {
-        validate_operation_selectors(self, &operation)?;
-        let source = self.source.clone();
-        let request_snapshots = self
+        let renamed = match &operation {
+            StructureOperation::RenameRequest { selector, name } => {
+                Some((selector.clone(), name.clone()))
+            }
+            _ => None,
+        };
+        let (result, mut fresh) = self.prepare_structure(operation)?.execute()?;
+        let moves = self
             .requests()
             .iter()
-            .map(|located| {
-                (
-                    located.selector().to_owned(),
-                    self.workspace()
-                        .request(located.key())
-                        .expect("repository request key must resolve")
-                        .clone(),
-                )
+            .filter_map(|located| {
+                let new_key = result
+                    .selector_remaps
+                    .get(located.selector())
+                    .and_then(|selector| fresh.request_key(selector))?;
+                let renamed_to = renamed
+                    .as_ref()
+                    .filter(|(selector, _)| selector == located.selector())
+                    .map(|(_, name)| name.clone());
+                Some((located.key(), new_key, renamed_to))
             })
             .collect::<Vec<_>>();
-        let old_items = self
-            .requests()
-            .iter()
-            .map(|located| (located.selector().to_owned(), ItemKind::Request))
-            .chain(
-                self.folders()
-                    .iter()
-                    .map(|located| (located.selector().to_owned(), ItemKind::Folder)),
-            )
-            .collect::<Vec<_>>();
-        let mut result = match &source {
-            WorkspaceSource::Bundled(path) => self.apply_bundled(path, operation.clone())?,
-            WorkspaceSource::Unbundled(root) => self.apply_unbundled(root, operation.clone())?,
-            WorkspaceSource::Memory => return Err(StructureError::ReadOnlySource),
-        };
-        result.selector_remaps = build_selector_remaps(&source, &operation, &result, &old_items)?;
-        let path = match source {
-            WorkspaceSource::Bundled(path) | WorkspaceSource::Unbundled(path) => path,
-            WorkspaceSource::Memory => unreachable!(),
-        };
-        let mut fresh = reload_committed_workspace(path, &result, |path| {
-            load_workspace(path).map_err(|error| error.to_string())
-        })?;
-        let disk = capture_disk.then(|| fresh.clone());
-        for (old_selector, mut request) in request_snapshots {
-            let Some(new_selector) = result.selector_remaps.get(&old_selector) else {
-                continue;
-            };
-            if let StructureOperation::RenameRequest { selector, name } = &operation
-                && selector == &old_selector
-            {
-                request.metadata.name = Some(name.clone());
-            }
-            if let Some(key) = fresh.request_key(new_selector) {
-                let fresh_request = fresh
-                    .request_mut(key)
-                    .expect("fresh repository request key must resolve");
-                request.metadata.sequence = fresh_request.metadata.sequence;
-                *fresh_request = request;
+        for (old_key, new_key, renamed_to) in moves {
+            let draft = self
+                .request_mut(old_key)
+                .expect("repository request key must resolve");
+            let target = fresh
+                .request_mut(new_key)
+                .expect("fresh repository request key must resolve");
+            std::mem::swap(draft, target);
+            target.metadata.sequence = draft.metadata.sequence;
+            if renamed_to.is_some() {
+                target.metadata.name = renamed_to;
             }
         }
         *self = fresh;
-        Ok((result, disk))
-    }
-
-    fn apply_bundled(
-        &self,
-        path: &Path,
-        operation: StructureOperation,
-    ) -> Result<StructureResult, StructureError> {
-        let baseline = self
-            .documents
-            .get(path)
-            .ok_or_else(|| StructureError::InvalidDocument("missing bundled baseline".to_owned()))?
-            .original_source
-            .clone();
-        let _lock = SaveLock::acquire(path)?;
-        verify_source(path, &baseline)?;
-        let mut document: Value = serde_yaml_ng::from_slice(&baseline)
-            .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;
-        let result = mutate_bundled(&mut document, operation)?;
-        let serialized = serde_yaml_ng::to_string(&document)
-            .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;
-        atomic_write(path, serialized.as_bytes(), &baseline)?;
         Ok(result)
     }
 
-    fn apply_unbundled(
+    /// Validates a structural edit and captures only the state needed to persist it.
+    ///
+    /// Preparing is in-memory only. [`PreparedStructureEdit::execute`] performs the
+    /// exact-source checks, atomic writes, and reload away from the UI thread.
+    pub fn prepare_structure(
         &self,
-        root: &Path,
         operation: StructureOperation,
-    ) -> Result<StructureResult, StructureError> {
-        let root_config = root.join("opencollection.yml");
-        let lock_path = if root_config.exists() {
-            root_config
-        } else {
-            root.join("opencollection.yaml")
+    ) -> Result<PreparedStructureEdit, StructureError> {
+        validate_operation_selectors(self, &operation)?;
+        let baselines = match &self.source {
+            WorkspaceSource::Bundled(path) => {
+                let document = self.documents.get(path).ok_or_else(|| {
+                    StructureError::InvalidDocument("missing bundled baseline".to_owned())
+                })?;
+                BTreeMap::from([(path.clone(), document.original_source.clone())])
+            }
+            WorkspaceSource::Unbundled(_) => self
+                .documents
+                .iter()
+                .map(|(path, document)| (path.clone(), document.original_source.clone()))
+                .collect(),
+            WorkspaceSource::Memory => return Err(StructureError::ReadOnlySource),
         };
-        let _lock = SaveLock::acquire(&lock_path)?;
-        let expected_paths: BTreeSet<_> = self.documents.keys().cloned().collect();
-        let current_paths = discover_documents(root)?;
-        if expected_paths != current_paths {
-            let changed = expected_paths
-                .symmetric_difference(&current_paths)
-                .next()
-                .expect("different sets have a symmetric difference")
-                .clone();
-            return Err(StructureError::ConcurrentModification(changed));
-        }
-        for (path, document) in &self.documents {
-            verify_source(path, &document.original_source)?;
-        }
-        mutate_unbundled(root, operation)
+        let old_selectors = self
+            .requests()
+            .iter()
+            .map(|located| located.selector().to_owned())
+            .chain(
+                self.folders()
+                    .iter()
+                    .map(|located| located.selector().to_owned()),
+            )
+            .collect();
+        Ok(PreparedStructureEdit {
+            operation,
+            source: self.source.clone(),
+            baselines,
+            old_selectors,
+        })
     }
+}
+
+/// A structural edit captured from a loaded workspace for background execution.
+#[derive(Debug)]
+pub struct PreparedStructureEdit {
+    operation: StructureOperation,
+    source: WorkspaceSource,
+    baselines: BTreeMap<PathBuf, Arc<[u8]>>,
+    old_selectors: Vec<String>,
+}
+
+impl PreparedStructureEdit {
+    /// Performs the exact-source checks and atomic writes, then reloads the workspace.
+    ///
+    /// The returned workspace is the committed on-disk state with fresh runtime keys.
+    /// It contains none of the source workspace's in-memory request drafts.
+    pub fn execute(self) -> Result<(StructureResult, LoadedWorkspace), StructureError> {
+        let mut result = match &self.source {
+            WorkspaceSource::Bundled(path) => {
+                apply_bundled(path, &self.baselines[path], self.operation.clone())?
+            }
+            WorkspaceSource::Unbundled(root) => {
+                apply_unbundled(root, &self.baselines, self.operation.clone())?
+            }
+            WorkspaceSource::Memory => unreachable!("memory workspaces are rejected when prepared"),
+        };
+        result.selector_remaps =
+            build_selector_remaps(&self.source, &self.operation, &result, &self.old_selectors)?;
+        let path = match self.source {
+            WorkspaceSource::Bundled(path) | WorkspaceSource::Unbundled(path) => path,
+            WorkspaceSource::Memory => unreachable!(),
+        };
+        let fresh = reload_committed_workspace(path, &result, |path| {
+            load_workspace(path).map_err(|error| error.to_string())
+        })?;
+        Ok((result, fresh))
+    }
+}
+
+fn apply_bundled(
+    path: &Path,
+    baseline: &[u8],
+    operation: StructureOperation,
+) -> Result<StructureResult, StructureError> {
+    let _lock = SaveLock::acquire(path)?;
+    verify_source(path, baseline)?;
+    let mut document: Value = serde_yaml_ng::from_slice(baseline)
+        .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;
+    let result = mutate_bundled(&mut document, operation)?;
+    let serialized = serde_yaml_ng::to_string(&document)
+        .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;
+    atomic_write(path, serialized.as_bytes(), baseline)?;
+    Ok(result)
+}
+
+fn apply_unbundled(
+    root: &Path,
+    baselines: &BTreeMap<PathBuf, Arc<[u8]>>,
+    operation: StructureOperation,
+) -> Result<StructureResult, StructureError> {
+    let root_config = root.join("opencollection.yml");
+    let lock_path = if root_config.exists() {
+        root_config
+    } else {
+        root.join("opencollection.yaml")
+    };
+    let _lock = SaveLock::acquire(&lock_path)?;
+    let expected_paths: BTreeSet<_> = baselines.keys().cloned().collect();
+    let current_paths = discover_documents(root)?;
+    if expected_paths != current_paths {
+        let changed = expected_paths
+            .symmetric_difference(&current_paths)
+            .next()
+            .expect("different sets have a symmetric difference")
+            .clone();
+        return Err(StructureError::ConcurrentModification(changed));
+    }
+    for (path, baseline) in baselines {
+        verify_source(path, baseline)?;
+    }
+    mutate_unbundled(root, operation)
 }
 
 fn reload_committed_workspace(
@@ -379,12 +413,12 @@ fn build_selector_remaps(
     source: &WorkspaceSource,
     operation: &StructureOperation,
     result: &StructureResult,
-    old_items: &[(String, ItemKind)],
+    old_selectors: &[String],
 ) -> Result<BTreeMap<String, String>, StructureError> {
     match source {
-        WorkspaceSource::Bundled(_) => bundled_selector_remaps(operation, result, old_items),
+        WorkspaceSource::Bundled(_) => bundled_selector_remaps(operation, result, old_selectors),
         WorkspaceSource::Unbundled(_) => {
-            Ok(unbundled_selector_remaps(operation, result, old_items))
+            Ok(unbundled_selector_remaps(operation, result, old_selectors))
         }
         WorkspaceSource::Memory => Ok(BTreeMap::new()),
     }
@@ -393,16 +427,16 @@ fn build_selector_remaps(
 fn unbundled_selector_remaps(
     operation: &StructureOperation,
     result: &StructureResult,
-    old_items: &[(String, ItemKind)],
+    old_selectors: &[String],
 ) -> BTreeMap<String, String> {
     let source = operation.source();
     let deleted = matches!(
         operation,
         StructureOperation::DeleteRequest { .. } | StructureOperation::DeleteFolder { .. }
     );
-    old_items
+    old_selectors
         .iter()
-        .filter_map(|(selector, _)| {
+        .filter_map(|selector| {
             let Some((source_selector, source_kind)) = source else {
                 return Some((selector.clone(), selector.clone()));
             };
@@ -427,7 +461,7 @@ fn unbundled_selector_remaps(
 fn bundled_selector_remaps(
     operation: &StructureOperation,
     result: &StructureResult,
-    old_items: &[(String, ItemKind)],
+    old_selectors: &[String],
 ) -> Result<BTreeMap<String, String>, StructureError> {
     let source_path = operation
         .source()
@@ -442,7 +476,7 @@ fn bundled_selector_remaps(
     };
     let moved_source = removes_source && inserts_item;
     let mut remaps = BTreeMap::new();
-    for (selector, _) in old_items {
+    for selector in old_selectors {
         let mut path = parse_selector(selector)?;
         if removes_source
             && let Some(source_path) = &source_path
