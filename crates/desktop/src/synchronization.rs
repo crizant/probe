@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use probe_core::{Request, RequestKey};
 use probe_opencollection::LoadedWorkspace;
@@ -70,10 +70,17 @@ pub(crate) fn reconcile(
     let mut conflicts = Vec::new();
     // Merges are applied after matching so every lookup sees the disk version.
     let mut merges = BTreeMap::new();
+    let index = MatchIndex::new(local, &fresh);
 
     for state in local {
-        let target =
-            find_target_selector(state, local, &fresh, rename_hints, &claimed, &mut conflicts);
+        let target = find_target_selector(
+            state,
+            &index,
+            &fresh,
+            rename_hints,
+            &claimed,
+            &mut conflicts,
+        );
         let Some(target) = target else {
             if state.local != state.baseline {
                 conflicts.push(SynchronizationConflict::Deleted {
@@ -142,9 +149,73 @@ fn disk_request<'a>(fresh: &'a LoadedWorkspace, selector: &str) -> Option<&'a Re
         .and_then(|key| fresh.workspace().request(key))
 }
 
+/// Fields that `Request` equality compares exactly, so equal requests always share
+/// a key. Keys only narrow the search; every match is still confirmed with `==`.
+type MatchKey<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
+
+fn match_key(request: &Request) -> MatchKey<'_> {
+    (
+        request.metadata.name.as_deref(),
+        request.method.as_deref(),
+        request.url.as_deref(),
+    )
+}
+
+/// Former baselines and fresh disk requests grouped by [`MatchKey`], preserving
+/// local and repository order within each group.
+struct MatchIndex<'a> {
+    baselines: HashMap<MatchKey<'a>, Vec<&'a LocalRequestState<'a>>>,
+    disk: HashMap<MatchKey<'a>, Vec<(&'a str, &'a Request)>>,
+}
+
+impl<'a> MatchIndex<'a> {
+    fn new(local: &'a [LocalRequestState<'a>], fresh: &'a LoadedWorkspace) -> Self {
+        let mut baselines = HashMap::<_, Vec<_>>::with_capacity(local.len());
+        for state in local {
+            baselines
+                .entry(match_key(state.baseline))
+                .or_default()
+                .push(state);
+        }
+        let mut disk = HashMap::<_, Vec<_>>::with_capacity(fresh.requests().len());
+        for located in fresh.requests() {
+            if let Some(request) = fresh.workspace().request(located.key()) {
+                disk.entry(match_key(request))
+                    .or_default()
+                    .push((located.selector(), request));
+            }
+        }
+        Self { baselines, disk }
+    }
+
+    fn states_with_baseline<'r>(
+        &'r self,
+        request: &'r Request,
+    ) -> impl Iterator<Item = &'a LocalRequestState<'a>> + 'r {
+        self.baselines
+            .get(&match_key(request))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(move |state| state.baseline == request)
+    }
+
+    fn disk_selectors_equal_to<'r>(
+        &'r self,
+        request: &'r Request,
+    ) -> impl Iterator<Item = &'a str> + 'r {
+        self.disk
+            .get(&match_key(request))
+            .into_iter()
+            .flatten()
+            .filter(move |(_, disk)| *disk == request)
+            .map(|(selector, _)| *selector)
+    }
+}
+
 fn find_target_selector(
     state: &LocalRequestState<'_>,
-    local: &[LocalRequestState<'_>],
+    index: &MatchIndex<'_>,
     fresh: &LoadedWorkspace,
     rename_hints: &BTreeMap<String, String>,
     claimed: &BTreeSet<String>,
@@ -157,26 +228,20 @@ fn find_target_selector(
         return Some(target);
     }
     if let Some(exact) = disk_request(fresh, state.selector) {
-        let belongs_to_another_request = local
-            .iter()
-            .any(|other| other.selector != state.selector && other.baseline == exact);
+        let belongs_to_another_request = index
+            .states_with_baseline(exact)
+            .any(|other| other.selector != state.selector);
         if !belongs_to_another_request {
             return Some(state.selector.to_owned());
         }
     }
 
-    let candidates: Vec<_> = fresh
-        .requests()
-        .iter()
-        .filter(|located| {
-            !claimed.contains(located.selector())
-                && fresh.workspace().request(located.key()) == Some(state.baseline)
-        })
-        .map(|located| located.selector())
-        .collect();
-    match candidates.as_slice() {
-        [selector] => Some((*selector).to_owned()),
-        [] => None,
+    let mut candidates = index
+        .disk_selectors_equal_to(state.baseline)
+        .filter(|selector| !claimed.contains(*selector));
+    match (candidates.next(), candidates.next()) {
+        (Some(selector), None) => Some(selector.to_owned()),
+        (None, _) => None,
         _ if state.local != state.baseline => {
             conflicts.push(SynchronizationConflict::AmbiguousRename {
                 selector: state.selector.to_owned(),
@@ -187,17 +252,16 @@ fn find_target_selector(
     }
 }
 
+/// Applies the longest hint whose source is the selector or one of its `/`-separated
+/// ancestors.
 fn hinted_selector(selector: &str, rename_hints: &BTreeMap<String, String>) -> Option<String> {
-    rename_hints
-        .iter()
-        .filter(|(from, _)| {
-            selector == from.as_str()
-                || selector
-                    .strip_prefix(from.as_str())
-                    .is_some_and(|suffix| suffix.starts_with('/'))
+    std::iter::once(selector.len())
+        .chain(selector.rmatch_indices('/').map(|(end, _)| end))
+        .find_map(|end| {
+            rename_hints
+                .get(&selector[..end])
+                .map(|to| format!("{to}{}", &selector[end..]))
         })
-        .max_by_key(|(from, _)| from.len())
-        .map(|(from, to)| format!("{to}{}", &selector[from.len()..]))
 }
 
 fn merge_request(
@@ -574,5 +638,106 @@ mod tests {
         );
         assert!(!result.selector_remaps.contains_key("items/0"));
         assert_eq!(result.workspace.workspace().request_count(), 1);
+    }
+
+    fn bundled(items: &[&str]) -> probe_opencollection::LoadedWorkspace {
+        let mut source =
+            "opencollection: 1.0.0\ninfo: { name: Test }\nbundled: true\nitems:\n".to_owned();
+        for item in items {
+            source.push_str(item);
+        }
+        probe_opencollection::load_workspace_from_str(&source).unwrap()
+    }
+
+    const SAME: &str = "  - info: { name: Same, type: http }\n    http: { method: GET, url: https://same.example }\n";
+    const SAME_WITH_HEADER: &str = "  - info: { name: Same, type: http }\n    http: { method: GET, url: https://same.example, headers: [{ name: X-Id, value: \"1\" }] }\n";
+    const OTHER: &str = "  - info: { name: Other, type: http }\n    http: { method: GET, url: https://other.example }\n";
+
+    fn request_at<'a>(
+        workspace: &'a probe_opencollection::LoadedWorkspace,
+        selector: &str,
+    ) -> &'a probe_core::Request {
+        workspace
+            .workspace()
+            .request(workspace.request_key(selector).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn deleting_one_of_two_equal_requests_remaps_the_later_dirty_request() {
+        let original = bundled(&[SAME, SAME, OTHER]);
+        let mut local = [0, 1, 2].map(|index| request_state(&original, index));
+        local[2].local.url = Some("https://local.example".to_owned());
+        let fresh = bundled(&[SAME, OTHER]);
+
+        let ReconcileResult::Applied(result) = reconcile(
+            &local.iter().map(OwnedState::state).collect::<Vec<_>>(),
+            fresh,
+            &BTreeMap::new(),
+        ) else {
+            panic!("deleting a clean duplicate should apply")
+        };
+        assert_eq!(
+            result.selector_remaps.get("items/0").map(String::as_str),
+            Some("items/0")
+        );
+        assert!(!result.selector_remaps.contains_key("items/1"));
+        assert_eq!(
+            result.selector_remaps.get("items/2").map(String::as_str),
+            Some("items/1")
+        );
+        assert_eq!(
+            request_at(&result.workspace, "items/1").url.as_deref(),
+            Some("https://local.example")
+        );
+    }
+
+    #[test]
+    fn equal_disk_candidates_make_only_a_dirty_rename_ambiguous() {
+        let original = bundled(&[OTHER, OTHER, SAME]);
+        let mut state = request_state(&original, 2);
+
+        let fresh = bundled(&[SAME, SAME]);
+        let ReconcileResult::Applied(result) = reconcile(&[state.state()], fresh, &BTreeMap::new())
+        else {
+            panic!("a clean request with equal candidates should be dropped without conflict")
+        };
+        assert!(result.selector_remaps.is_empty());
+
+        state.local.url = Some("https://local.example".to_owned());
+        let fresh = bundled(&[SAME, SAME]);
+        let ReconcileResult::Conflicted(conflicts) =
+            reconcile(&[state.state()], fresh, &BTreeMap::new())
+        else {
+            panic!("a dirty request with equal candidates should conflict")
+        };
+        assert!(matches!(
+            conflicts.as_slice(),
+            [
+                SynchronizationConflict::AmbiguousRename { selector },
+                SynchronizationConflict::Deleted { .. },
+            ] if selector == "items/2"
+        ));
+    }
+
+    #[test]
+    fn rename_matching_requires_full_equality_beyond_name_method_and_url() {
+        let original = bundled(&[OTHER, OTHER, SAME_WITH_HEADER]);
+        let mut state = request_state(&original, 2);
+        state.local.url = Some("https://local.example".to_owned());
+        let fresh = bundled(&[SAME, SAME_WITH_HEADER]);
+
+        let ReconcileResult::Applied(result) = reconcile(&[state.state()], fresh, &BTreeMap::new())
+        else {
+            panic!("only one disk request equals the baseline")
+        };
+        assert_eq!(
+            result.selector_remaps.get("items/2").map(String::as_str),
+            Some("items/1")
+        );
+        assert_eq!(
+            request_at(&result.workspace, "items/0").url.as_deref(),
+            Some("https://same.example")
+        );
     }
 }
