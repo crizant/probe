@@ -363,9 +363,32 @@ survives relative paths and symlinks, but a workspace move or rename changes its
 identity and leaves the old credential behind. Environment names are the only
 durable environment identity, so renaming one likewise requires the user to store
 its credential again; Probe does not migrate or delete credentials implicitly.
-The OpenCollection collection and desktop session carry no credential plaintext or
-provider-specific references. No plaintext file or process-environment fallback is
-used when the native store is unavailable.
+The OpenCollection collection carries no credential plaintext. The desktop session may
+store opaque credential-presence keys (`v1-` plus the digest) as a rebuildable UI hint.
+That index contains no secret values, workspace paths, environment names, or variable
+names. No plaintext file or process-environment fallback is used when the native store
+is unavailable.
+
+Request rendering and editor highlighting never access native credential values and
+never query the operating-system credential store solely for presentation. The editor
+treats a secret as resolved only when its opaque `CredentialId` is present in that
+machine-local metadata, and treats every other secret as unresolved. The metadata is
+only a UI hint. `NativeSecretProvider` and the native credential store remain the
+source of truth when a request actually runs. A successful Set records the identity;
+a successful Delete, or a Delete that returns not found, removes it. Those updates
+are applied when the credential operation finishes, including when the Environment
+Manager has already closed. If execution looks up an identity that presence calls
+stored and the native store returns not found, Probe removes the stale entry and
+repaints the placeholder as unresolved. A successful execution lookup may record the
+identity, because that native read already happened for execution. Credentials created
+outside Probe are not discovered automatically. If a user deletes a Probe credential
+in Keychain Access, Windows Credential Manager, or a Linux secret-service UI, presence
+can stay positive until the next execution finds it missing. That tradeoff avoids a
+Keychain, Credential Manager, or Secret Service query every time a variable is painted.
+Missing or corrupt session state leaves presence empty and does not block execution;
+highlighting stays unresolved until Probe learns the identity again from Set or from
+execution. An empty stored secret still counts as present and follows the existing
+execution rule that an explicit empty value is substituted.
 
 `resolve_environment_for_request_with_provider` finds the request's variable
 references and follows transitive plain-variable dependencies before consulting a
@@ -383,15 +406,17 @@ be saved as complete bodies without retained storage.
 
 The desktop Environment Manager shows secret declarations alongside plain variables.
 Adding a secret creates a draft `secret: true` declaration in OpenCollection; the
-declaration must be saved before a native value can be set. Status checks and Set,
-Replace, and Delete run off the GPUI thread. The same status check fills an
-availability cache keyed by workspace path, environment name, and secret name.
-Switching workspace or environment never reuses another key's answer. The request
-editor reads that cache when classifying `{{name}}`: stored is resolved, missing or
-unavailable stays unresolved, and an unknown answer stays unresolved until the
-off-thread check completes and the editor repaints. The cache holds availability
-only. Secret values stay inside the credential store and are read on the execution
-path through `NativeSecretProvider`. The value is entered in a masked,
+declaration must be saved before a native value can be set. Set, Replace, and Delete
+run off the GPUI thread and update credential-presence metadata when they finish.
+Opening the manager, switching environments, or painting the request editor reads
+that metadata only. It does not call `CredentialStore::status` or `get`, and it does
+not retrieve native credential values to decide a label. Stored means the opaque
+identity is known present; otherwise the row says the secret is not set. Explicit
+Set, Replace, and Delete still use the native store, because the user asked for a
+credential change. The request editor uses the same presence metadata when
+classifying `{{name}}`: a known stored secret is resolved, and anything absent stays
+unresolved. Secret values stay inside the credential store and are read on the
+execution path through `NativeSecretProvider`. The value is entered in a masked,
 initially empty dialog and is never revealed by Probe. Deleting a stored value keeps
 the declaration; removing the declaration does not delete the native credential.
 Inherited declarations show their defining environment, while the credential is

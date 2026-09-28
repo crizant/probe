@@ -1,19 +1,20 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use crate::credentials::{CredentialStore, NativeCredentialStore, NativeSecretProvider};
+use crate::credentials::{CredentialId, CredentialStore, NativeSecretProvider};
 use crate::filesystem::workspace_base_directory;
 use atomic_write_file::AtomicWriteFile;
 use directories::{ProjectDirs, UserDirs};
 use probe_core::{
-    Environment, Request, RequestKey, resolve_environment_for_request_with_provider,
-    resolve_request, resolve_request_for_presentation,
+    Environment, Request, RequestKey, SecretContext, SecretError, SecretProvider,
+    resolve_environment_for_request_with_provider, resolve_request,
+    resolve_request_for_presentation,
 };
 use probe_http::{
     ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse, ResponseBodyFile,
@@ -288,7 +289,63 @@ type ExecutionResult = Result<(HttpResponse, Option<SavedResponseBody>), HttpErr
 type ExecutionReceivers = (
     oneshot::Receiver<ExecutionResult>,
     mpsc::UnboundedReceiver<HttpProgress>,
+    oneshot::Receiver<SecretPresenceReconciliation>,
 );
+
+/// Opaque credential identities observed while resolving a request.
+///
+/// `found` secrets were returned by the native store. `missing` secrets were
+/// looked up and absent. Store errors are omitted so a transient failure does
+/// not erase presence metadata.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SecretPresenceReconciliation {
+    pub(crate) found: BTreeSet<String>,
+    pub(crate) missing: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct SecretPresenceObserver {
+    found: Mutex<BTreeSet<String>>,
+    missing: Mutex<BTreeSet<String>>,
+}
+
+impl SecretPresenceObserver {
+    fn snapshot(&self) -> SecretPresenceReconciliation {
+        SecretPresenceReconciliation {
+            found: self.found.lock().unwrap().clone(),
+            missing: self.missing.lock().unwrap().clone(),
+        }
+    }
+}
+
+struct ObservingSecretProvider<'a, S: CredentialStore + ?Sized> {
+    inner: NativeSecretProvider<'a, S>,
+    observer: &'a SecretPresenceObserver,
+}
+
+impl<S: CredentialStore + ?Sized> SecretProvider for ObservingSecretProvider<'_, S> {
+    fn resolve_secret(
+        &self,
+        context: &SecretContext<'_>,
+    ) -> Result<Option<probe_core::SecretValue>, SecretError> {
+        let value = self.inner.resolve_secret(context)?;
+        if let Some(environment) = context.environment_name
+            && let Ok(id) = CredentialId::for_workspace(
+                self.inner.workspace,
+                environment,
+                context.variable_name,
+            )
+        {
+            let key = id.persistence_key().to_owned();
+            if value.is_some() {
+                self.observer.found.lock().unwrap().insert(key);
+            } else {
+                self.observer.missing.lock().unwrap().insert(key);
+            }
+        }
+        Ok(value)
+    }
+}
 
 impl Drop for ExecutionService {
     fn drop(&mut self) {
@@ -299,11 +356,9 @@ impl Drop for ExecutionService {
 }
 
 impl ExecutionService {
-    pub(crate) fn new() -> Result<Self, HttpError> {
-        Self::with_credentials(Arc::new(NativeCredentialStore))
-    }
-
-    fn with_credentials(credentials: Arc<dyn CredentialStore>) -> Result<Self, HttpError> {
+    pub(crate) fn with_credentials(
+        credentials: Arc<dyn CredentialStore>,
+    ) -> Result<Self, HttpError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -330,19 +385,25 @@ impl ExecutionService {
     ) -> ExecutionReceivers {
         let (result_sender, result_receiver) = oneshot::channel();
         let (progress_sender, progress_receiver) = mpsc::unbounded_channel();
+        let (presence_sender, presence_receiver) = oneshot::channel();
         let engine = self.engine.clone();
         let credentials = Arc::clone(&self.credentials);
         self.runtime
             .as_ref()
             .expect("execution runtime is active")
             .spawn(async move {
+                let observer = Arc::new(SecretPresenceObserver::default());
                 let (request, disclosure) = if let Some((environments, selected, workspace)) =
                     native_environment
                 {
+                    let observer_for_resolution = Arc::clone(&observer);
                     match tokio::task::spawn_blocking(move || {
-                        let provider = NativeSecretProvider {
-                            store: credentials.as_ref(),
-                            workspace: &workspace,
+                        let provider = ObservingSecretProvider {
+                            inner: NativeSecretProvider {
+                                store: credentials.as_ref(),
+                                workspace: &workspace,
+                            },
+                            observer: &observer_for_resolution,
                         };
                         resolve_environment_for_request_with_provider(
                             &request,
@@ -366,10 +427,12 @@ impl ExecutionService {
                             (request, Some((environment, display_url)))
                         }
                         Ok(Err(error)) => {
+                            let _ = presence_sender.send(observer.snapshot());
                             let _ = result_sender.send(Err(error));
                             return;
                         }
                         Err(_) => {
+                            let _ = presence_sender.send(observer.snapshot());
                             let _ = result_sender.send(Err(HttpError::InvalidBody(
                                 "request resolution failed".into(),
                             )));
@@ -379,6 +442,7 @@ impl ExecutionService {
                 } else {
                     (request, None)
                 };
+                let _ = presence_sender.send(observer.snapshot());
                 let secret_bearing = disclosure
                     .as_ref()
                     .is_some_and(|(environment, _)| environment.has_resolved_secrets());
@@ -425,7 +489,7 @@ impl ExecutionService {
                 };
                 let _ = result_sender.send(result);
             });
-        (result_receiver, progress_receiver)
+        (result_receiver, progress_receiver, presence_receiver)
     }
 }
 
@@ -737,6 +801,7 @@ mod tests {
 
     use crate::credentials::{
         CredentialId, CredentialStatus, CredentialStore, CredentialStoreError,
+        NativeCredentialStore,
     };
     use probe_core::{
         Environment, EnvironmentVariable, Header, Request, SecretValue, SecretVariable, Variable,
@@ -1057,8 +1122,9 @@ mod tests {
     fn desktop_adapter_forwards_cancellation_to_the_shared_http_engine() {
         let (cancel, cancellation) = oneshot::channel();
         cancel.send(()).expect("cancellation should be delivered");
-        let service = ExecutionService::new().expect("execution service should start");
-        let (result, _) = service.execute(
+        let service = ExecutionService::with_credentials(Arc::new(NativeCredentialStore))
+            .expect("execution service should start");
+        let (result, _, _) = service.execute(
             Request {
                 method: Some("GET".to_owned()),
                 url: Some("http://127.0.0.1:1/phase-12".to_owned()),
@@ -1095,12 +1161,8 @@ mod tests {
     }
 
     impl CredentialStore for FakeCredentials {
-        fn status(&self, id: &CredentialId) -> Result<CredentialStatus, CredentialStoreError> {
-            Ok(if self.values.lock().unwrap().contains_key(id) {
-                CredentialStatus::Stored
-            } else {
-                CredentialStatus::NotStored
-            })
+        fn status(&self, _: &CredentialId) -> Result<CredentialStatus, CredentialStoreError> {
+            panic!("execution resolves secrets through get, not status")
         }
         fn set(&self, id: &CredentialId, value: &str) -> Result<(), CredentialStoreError> {
             self.values
@@ -1216,7 +1278,7 @@ mod tests {
                 .as_nanos()
         ));
         let (cancel_sender, cancellation) = oneshot::channel();
-        let (receiver, _) = service.execute(
+        let (receiver, _, _) = service.execute(
             request,
             Some((native_test_environment(), "production".into(), workspace)),
             ExecutionOptions {
@@ -1260,7 +1322,7 @@ mod tests {
             ..Request::default()
         };
         let (_cancel_sender, cancellation) = oneshot::channel();
-        let (receiver, _) = service.execute(
+        let (receiver, _, presence) = service.execute(
             request,
             Some((
                 native_test_environment(),
@@ -1271,13 +1333,109 @@ mod tests {
             None,
             cancellation,
         );
-        let result = service
-            .runtime
-            .as_ref()
-            .unwrap()
-            .block_on(receiver)
-            .unwrap();
+        let runtime = service.runtime.as_ref().unwrap();
+        let presence = runtime.block_on(presence).unwrap();
+        let result = runtime.block_on(receiver).unwrap();
         assert!(matches!(result, Err(HttpError::InvalidBody(_))));
+        assert!(presence.found.is_empty());
+        assert!(
+            presence.missing.is_empty(),
+            "a store error must not clear credential presence"
+        );
+        assert_eq!(store.reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn execution_reports_a_missing_credential_without_calling_status() {
+        let workspace = std::env::temp_dir();
+        let store = Arc::new(FakeCredentials::new(false));
+        let service = ExecutionService::with_credentials(store.clone()).unwrap();
+        let request = Request {
+            method: Some("GET".into()),
+            url: Some("http://127.0.0.1:1/{{token}}".into()),
+            ..Request::default()
+        };
+        let (_cancel_sender, cancellation) = oneshot::channel();
+        let (receiver, _, presence) = service.execute(
+            request,
+            Some((
+                native_test_environment(),
+                "production".into(),
+                workspace.clone(),
+            )),
+            ExecutionOptions::default(),
+            None,
+            cancellation,
+        );
+        let runtime = service.runtime.as_ref().unwrap();
+        let presence = runtime.block_on(presence).unwrap();
+        let result = runtime.block_on(receiver).unwrap();
+        assert!(result.is_err());
+        let id = CredentialId::for_workspace(&workspace, "production", "token").unwrap();
+        assert!(presence.missing.contains(id.persistence_key()));
+        assert!(presence.found.is_empty());
+        assert!(!id.persistence_key().contains("token"));
+        assert_eq!(store.reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn execution_marks_an_empty_stored_secret_present_and_substitutes_it() {
+        use std::net::TcpListener;
+        let workspace = std::env::temp_dir();
+        let store = Arc::new(FakeCredentials::new(false));
+        let id = CredentialId::for_workspace(&workspace, "production", "token").unwrap();
+        store.set(&id, "").unwrap();
+        let service = ExecutionService::with_credentials(store.clone()).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut received = Vec::new();
+            let mut buffer = [0; 1024];
+            while !received.windows(4).any(|part| part == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                received.extend_from_slice(&buffer[..count]);
+            }
+            let request = String::from_utf8_lossy(&received);
+            assert!(
+                request.contains("X-Empty: \r\n") || request.contains("x-empty: \r\n"),
+                "an empty stored secret is substituted as an empty value: {request}"
+            );
+            stream
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+        let request = Request {
+            method: Some("GET".into()),
+            url: Some(format!("http://{address}/")),
+            headers: vec![Header {
+                name: "X-Empty".into(),
+                value: "{{token}}".into(),
+                disabled: false,
+            }],
+            ..Request::default()
+        };
+        let (_cancel_sender, cancellation) = oneshot::channel();
+        let (receiver, _, presence) = service.execute(
+            request,
+            Some((native_test_environment(), "production".into(), workspace)),
+            ExecutionOptions::default(),
+            None,
+            cancellation,
+        );
+        let runtime = service.runtime.as_ref().unwrap();
+        let presence = runtime.block_on(presence).unwrap();
+        let result = runtime.block_on(receiver).unwrap();
+        server.join().unwrap();
+        assert!(result.is_ok());
+        assert!(presence.found.contains(id.persistence_key()));
+        assert!(presence.missing.is_empty());
         assert_eq!(store.reads.load(Ordering::Relaxed), 1);
     }
 
@@ -1304,7 +1462,7 @@ mod tests {
             ..Request::default()
         };
         let (_cancel_sender, cancellation) = oneshot::channel();
-        let (receiver, _) = service.execute(
+        let (receiver, _, _) = service.execute(
             request,
             Some((native_test_environment(), "production".into(), workspace)),
             ExecutionOptions::default(),

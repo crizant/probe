@@ -66,7 +66,6 @@ impl ProbeApp {
                                 view.session = state;
                                 view.restore_shell_state(cx);
                             }
-                            view.revalidate_selected_secret_availability(cx);
                             view.start_workspace_watcher(window, cx);
                             view.persist_session(cx);
                         }
@@ -174,7 +173,6 @@ impl ProbeApp {
                     match result {
                         Ok((canonical_path, workspace)) => {
                             view.set_workspace(canonical_path, workspace);
-                            view.revalidate_selected_secret_availability(cx);
                             view.start_workspace_watcher(window, cx);
                             view.persist_session(cx);
                         }
@@ -248,7 +246,6 @@ impl ProbeApp {
         self.loaded_workspace = Some(workspace);
         self.detached_requests.clear();
         self.committed_detached_requests.clear();
-        self.clear_secret_availability();
         self.workspace_path = Some(path);
         self.shell.reset_for_workspace();
         self.reset_collection_ui();
@@ -978,9 +975,7 @@ impl ProbeApp {
         self.remap_structure_dialog(&reconciled.selector_remaps);
         self.create_environment_dialog = None;
         self.sync_environment_manager_after_reload(environment_manager_reload, cx);
-        if self.environment_manager_dialog.is_some() && !self.environment_manager_is_dirty() {
-            self.refresh_secret_statuses(cx);
-        }
+        self.sync_secret_statuses_from_presence();
         if self.shell.selected_environment().is_some_and(|name| {
             !self
                 .loaded_workspace
@@ -993,7 +988,6 @@ impl ProbeApp {
         }) {
             self.shell.select_environment(None);
         }
-        self.revalidate_selected_secret_availability(cx);
         self.rebuild_visible_tree_rows();
         self.persist_session(cx);
         if let Some(message) = projection_warning {

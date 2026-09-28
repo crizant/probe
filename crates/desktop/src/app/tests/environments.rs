@@ -2258,41 +2258,22 @@ struct FakeManagerCredentials {
     values: std::sync::Mutex<std::collections::HashMap<crate::credentials::CredentialId, String>>,
     status_calls: std::sync::atomic::AtomicUsize,
     get_calls: std::sync::atomic::AtomicUsize,
-    fail_status: std::sync::atomic::AtomicBool,
     fail_set: std::sync::atomic::AtomicBool,
-    slow_status: std::sync::atomic::AtomicBool,
+    fail_get: std::sync::atomic::AtomicBool,
+    allow_get: std::sync::atomic::AtomicBool,
     slow_set: std::sync::atomic::AtomicBool,
-    hold_delete_until_status_reads: std::sync::atomic::AtomicBool,
-    status_read_during_hold: std::sync::atomic::AtomicBool,
+    slow_delete: std::sync::atomic::AtomicBool,
 }
 
 impl crate::credentials::CredentialStore for FakeManagerCredentials {
     fn status(
         &self,
-        id: &crate::credentials::CredentialId,
+        _: &crate::credentials::CredentialId,
     ) -> Result<crate::credentials::CredentialStatus, crate::credentials::CredentialStoreError>
     {
         self.status_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if self.slow_status.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        if self.fail_status.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(crate::credentials::CredentialStoreError::Unavailable);
-        }
-        let stored = self.values.lock().unwrap().contains_key(id);
-        if self
-            .hold_delete_until_status_reads
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            self.status_read_during_hold
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        Ok(if stored {
-            crate::credentials::CredentialStatus::Stored
-        } else {
-            crate::credentials::CredentialStatus::NotStored
-        })
+        panic!("presentation must not query credential status")
     }
     fn set(
         &self,
@@ -2315,18 +2296,8 @@ impl crate::credentials::CredentialStore for FakeManagerCredentials {
         &self,
         id: &crate::credentials::CredentialId,
     ) -> Result<(), crate::credentials::CredentialStoreError> {
-        if self
-            .hold_delete_until_status_reads
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            let started = std::time::Instant::now();
-            while !self
-                .status_read_during_hold
-                .load(std::sync::atomic::Ordering::Relaxed)
-                && started.elapsed() < std::time::Duration::from_millis(500)
-            {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+        if self.slow_delete.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
         self.values
             .lock()
@@ -2337,11 +2308,23 @@ impl crate::credentials::CredentialStore for FakeManagerCredentials {
     }
     fn get(
         &self,
-        _: &crate::credentials::CredentialId,
+        id: &crate::credentials::CredentialId,
     ) -> Result<Option<probe_core::SecretValue>, crate::credentials::CredentialStoreError> {
         self.get_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        panic!("Environment Manager must use status, never get")
+        if !self.allow_get.load(std::sync::atomic::Ordering::Relaxed) {
+            panic!("presentation must not read credential values")
+        }
+        if self.fail_get.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(crate::credentials::CredentialStoreError::Unavailable);
+        }
+        Ok(self
+            .values
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .map(probe_core::SecretValue::new))
     }
 }
 
@@ -2358,13 +2341,13 @@ fn manager_secret_status_uses_effective_environment_and_never_gets_value(cx: &mu
     let development_id =
         crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
             .unwrap();
-    store
-        .set(&development_id, "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR")
-        .unwrap();
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(development_id.persistence_key().to_owned());
             view.set_workspace(fixture.clone(), workspace);
             view.select_environment(Some("development".into()), cx);
             view.open_environment_manager_dialog(window, cx);
@@ -2375,7 +2358,7 @@ fn manager_secret_status_uses_effective_environment_and_never_gets_value(cx: &mu
         let dialog = view.environment_manager_dialog.as_ref().unwrap();
         assert_eq!(dialog.secret_statuses.get("secretToken"), Some(&super::super::SecretUiStatus::Stored));
         assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
-        assert_eq!(store.status_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         assert_eq!(view.loaded_workspace.as_ref().unwrap().workspace().effective_environment_variables(&dialog.draft).iter().find(|row| matches!(&row.variable, EnvironmentVariable::Secret(secret) if secret.name.as_deref() == Some("secretToken"))).unwrap().defined_in, "base");
         cx.notify();
     }).unwrap();
@@ -2393,7 +2376,7 @@ fn manager_secret_status_uses_effective_environment_and_never_gets_value(cx: &mu
     visual.run_until_parked();
     assert_eq!(
         store.status_calls.load(Ordering::Relaxed),
-        1,
+        0,
         "rerender should not query the store"
     );
     window
@@ -2742,6 +2725,9 @@ fn manager_replaces_and_deletes_native_value_without_changing_declaration(cx: &m
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture.clone(), workspace);
             view.select_environment(Some("development".into()), cx);
             view.open_environment_manager_dialog(window, cx);
@@ -2896,7 +2882,6 @@ fn manager_store_failure_and_unsaved_rename_never_write_collection(cx: &mut Test
     let before = fs::read_to_string(&fixture).unwrap();
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
     let store = Arc::new(FakeManagerCredentials::default());
-    store.fail_status.store(true, Ordering::Relaxed);
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
@@ -2910,7 +2895,7 @@ fn manager_store_failure_and_unsaved_rename_never_write_collection(cx: &mut Test
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     assert!(
         visual
-            .debug_bounds("environment-secret-retry-secretToken")
+            .debug_bounds("environment-secret-set-secretToken")
             .is_some()
     );
     window
@@ -2921,8 +2906,9 @@ fn manager_store_failure_and_unsaved_rename_never_write_collection(cx: &mut Test
                     .unwrap()
                     .secret_statuses
                     .get("secretToken"),
-                Some(&super::super::SecretUiStatus::Unavailable)
+                Some(&super::super::SecretUiStatus::NotStored)
             );
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             view.apply_environment_manager_draft(cx, |dialog| dialog.draft.name = "renamed".into());
             assert!(!view.can_manage_secret("secretToken"));
             view.open_secret_value_dialog("secretToken".into(), window, cx);
@@ -2930,7 +2916,6 @@ fn manager_store_failure_and_unsaved_rename_never_write_collection(cx: &mut Test
             view.apply_environment_manager_draft(cx, |dialog| {
                 dialog.draft.name = "development".into()
             });
-            store.fail_status.store(false, Ordering::Relaxed);
             store.fail_set.store(true, Ordering::Relaxed);
             view.open_secret_value_dialog("secretToken".into(), window, cx);
             let input = view.secret_value_dialog.as_ref().unwrap().input.clone();
@@ -2957,6 +2942,12 @@ fn manager_store_failure_and_unsaved_rename_never_write_collection(cx: &mut Test
                     .is_empty()
             );
             view.close_secret_value_dialog(window, cx);
+            assert!(view.session.stored_credentials.is_empty());
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
     assert_eq!(fs::read_to_string(&fixture).unwrap(), before);
@@ -2978,16 +2969,24 @@ fn manager_ignores_status_from_previous_environment(cx: &mut TestAppContext) {
         crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
             .unwrap();
     store.set(&id, "private").unwrap();
-    store
-        .slow_status
-        .store(true, std::sync::atomic::Ordering::Relaxed);
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.credential_store = store;
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture, workspace);
             view.select_environment(Some("development".into()), cx);
             view.open_environment_manager_dialog(window, cx);
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .secret_statuses
+                    .get("secretToken"),
+                Some(&super::super::SecretUiStatus::Stored)
+            );
             view.select_environment_manager_environment("base", cx);
         })
         .unwrap();
@@ -3375,7 +3374,7 @@ fn environment_manager_close_save_confirms_secret_rename_before_closing(cx: &mut
 }
 
 #[gpui::test]
-fn secret_save_completes_when_status_refresh_advances_generation(cx: &mut TestAppContext) {
+fn slow_set_records_presence_after_the_environment_manager_closes(cx: &mut TestAppContext) {
     use std::sync::Arc;
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -3384,6 +3383,9 @@ fn secret_save_completes_when_status_refresh_advances_generation(cx: &mut TestAp
     let fixture = environment_fixture().canonicalize().unwrap();
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
     let store = Arc::new(FakeManagerCredentials::default());
+    store
+        .slow_set
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
@@ -3393,104 +3395,99 @@ fn secret_save_completes_when_status_refresh_advances_generation(cx: &mut TestAp
             view.open_environment_manager_dialog(window, cx);
         })
         .unwrap();
-    cx.run_until_parked();
     window
         .update(cx, |view, window, cx| {
             view.open_secret_value_dialog("secretToken".into(), window, cx);
             let input = view.secret_value_dialog.as_ref().unwrap().input.clone();
             input.update(cx, |input, cx| {
-                input.set_value("stored-during-refresh", window, cx)
+                input.set_value("stored-after-close", window, cx)
             });
             view.save_secret_value(window, cx);
             assert!(view.secret_value_dialog.as_ref().unwrap().busy);
-            view.refresh_secret_statuses(cx);
+            view.close_environment_manager_dialog(window, cx);
+            assert!(view.environment_manager_dialog.is_none());
+            assert!(view.session.stored_credentials.is_empty());
         })
         .unwrap();
     cx.run_until_parked();
     window
-        .update(cx, |view, _, _| {
-            assert!(
-                view.secret_value_dialog.is_none(),
-                "a successful write closes its dialog even if a status refresh advanced the generation"
-            );
+        .update(cx, |view, _, cx| {
+            assert!(view.environment_manager_dialog.is_none());
             assert!(!view.secret_write_in_progress);
-            assert_eq!(
-                view.environment_manager_dialog
-                    .as_ref()
-                    .unwrap()
-                    .secret_statuses
-                    .get("secretToken"),
-                Some(&super::super::SecretUiStatus::Stored)
-            );
             let path = view.workspace_path.as_ref().unwrap();
             let id =
                 crate::credentials::CredentialId::for_workspace(path, "development", "secretToken")
                     .unwrap();
+            assert!(
+                view.session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
             assert_eq!(
-                store.values.lock().unwrap().get(&id).map(String::as_str),
-                Some("stored-during-refresh")
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_eq!(
+                store
+                    .status_calls
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert_eq!(
+                store.get_calls.load(std::sync::atomic::Ordering::Relaxed),
+                0
             );
         })
         .unwrap();
 }
 
 #[gpui::test]
-fn secret_delete_refreshes_status_when_a_refresh_overlaps_deletion(cx: &mut TestAppContext) {
-    use std::sync::{Arc, atomic::Ordering};
+fn delete_not_found_clears_presence_without_reading_the_secret(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
         ProbeApp::new(window, cx)
     });
     let fixture = environment_fixture().canonicalize().unwrap();
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let store = Arc::new(FakeManagerCredentials::default());
+    let store = std::sync::Arc::new(FakeManagerCredentials::default());
     let id =
         crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
             .unwrap();
-    store.set(&id, "private").unwrap();
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture, workspace);
             view.select_environment(Some("development".into()), cx);
             view.open_environment_manager_dialog(window, cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(cx, |view, window, cx| {
             assert_eq!(
-                view.environment_manager_dialog
-                    .as_ref()
-                    .unwrap()
-                    .secret_statuses
-                    .get("secretToken"),
-                Some(&super::super::SecretUiStatus::Stored)
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::Resolved
             );
-            store
-                .hold_delete_until_status_reads
-                .store(true, Ordering::Relaxed);
-            store
-                .status_read_during_hold
-                .store(false, Ordering::Relaxed);
             view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
-            view.refresh_secret_statuses(cx);
+            view.close_environment_manager_dialog(window, cx);
         })
         .unwrap();
     cx.run_until_parked();
     window
-        .update(cx, |view, _, _| {
-            assert!(store.status_read_during_hold.load(Ordering::Relaxed));
-            assert!(!store.values.lock().unwrap().contains_key(&id));
-            assert_eq!(
-                view.environment_manager_dialog
-                    .as_ref()
-                    .unwrap()
-                    .secret_statuses
-                    .get("secretToken"),
-                Some(&super::super::SecretUiStatus::NotStored)
+        .update(cx, |view, _, cx| {
+            assert!(view.environment_manager_dialog.is_none());
+            assert!(
+                !view
+                    .session
+                    .stored_credentials
+                    .contains(id.persistence_key())
             );
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert!(store.values.lock().unwrap().is_empty());
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
@@ -3543,7 +3540,7 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
             assert_eq!(
                 pending.status("secretToken"),
                 probe_core::VariableStatus::SecretWithoutValue,
-                "availability is unknown until the credential check finishes"
+                "a secret absent from presence metadata stays unresolved"
             );
             assert!(pending.resolved_secrets.is_empty());
             assert_eq!(
@@ -3576,7 +3573,7 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
                 context.status("disabledValue"),
                 probe_core::VariableStatus::Missing
             );
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 1);
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
             cx.notify();
         })
@@ -3584,8 +3581,8 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
     cx.run_until_parked();
     assert_eq!(
         store.status_calls.load(Ordering::Relaxed),
-        1,
-        "rendering repeated placeholders must not query the credential store again"
+        0,
+        "rendering repeated placeholders must not query the credential store"
     );
 
     window
@@ -3605,7 +3602,6 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
         })
         .unwrap();
     cx.run_until_parked();
-    let calls_after_save = store.status_calls.load(Ordering::Relaxed);
     window
         .update(cx, |view, _, cx| {
             let context = view.variable_context(cx);
@@ -3616,6 +3612,21 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
             assert!(context.resolved_secrets.contains("secretToken"));
             assert!(!context.secrets.contains("secretToken"));
             assert_secret_stays_out_of_editor_context(&context);
+            let path = view.workspace_path.as_ref().unwrap();
+            let id =
+                crate::credentials::CredentialId::for_workspace(path, "development", "secretToken")
+                    .unwrap();
+            assert!(
+                view.session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
+            assert!(!id.persistence_key().contains("secretToken"));
+            assert!(!id.persistence_key().contains(EDITOR_SECRET_SENTINEL));
+            let presence = serde_json::to_string(&view.session.stored_credentials).unwrap();
+            assert!(!presence.contains(EDITOR_SECRET_SENTINEL));
+            assert!(!presence.contains("secretToken"));
+            assert!(!presence.contains(path.to_str().unwrap()));
             assert_eq!(
                 context.status("token"),
                 probe_core::VariableStatus::Resolved
@@ -3625,11 +3636,12 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
                 Some("development-token")
             );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             cx.notify();
         })
         .unwrap();
     cx.run_until_parked();
-    assert_eq!(store.status_calls.load(Ordering::Relaxed), calls_after_save);
+    assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
     assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
 }
 
@@ -3651,11 +3663,13 @@ fn empty_stored_secret_is_resolved_without_entering_the_variable_map(cx: &mut Te
         .update(cx, |view, _, cx| {
             view.session_store = None;
             view.credential_store = store.clone();
-            view.set_workspace(fixture, workspace);
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
+            view.set_workspace(fixture.clone(), workspace);
             view.select_environment(Some("development".into()), cx);
         })
         .unwrap();
-    cx.run_until_parked();
     window
         .update(cx, |view, _, cx| {
             let context = view.variable_context(cx);
@@ -3668,8 +3682,16 @@ fn empty_stored_secret_is_resolved_without_entering_the_variable_map(cx: &mut Te
                 context.status("token"),
                 probe_core::VariableStatus::Resolved
             );
+            let presence = serde_json::to_string(&view.session.stored_credentials).unwrap();
+            assert!(presence.contains(id.persistence_key()));
+            assert!(!presence.contains("secretToken"));
+            assert!(
+                !fs::read_to_string(&fixture)
+                    .unwrap()
+                    .contains(id.persistence_key())
+            );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
-            assert!(store.status_calls.load(Ordering::Relaxed) >= 1);
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
 }
@@ -3692,14 +3714,12 @@ fn deleting_a_stored_secret_makes_the_editor_placeholder_unresolved(cx: &mut Tes
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture, workspace);
             view.select_environment(Some("development".into()), cx);
             view.open_environment_manager_dialog(window, cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(cx, |view, window, cx| {
             let context = view.variable_context(cx);
             assert_eq!(
                 context.status("secretToken"),
@@ -3707,13 +3727,11 @@ fn deleting_a_stored_secret_makes_the_editor_placeholder_unresolved(cx: &mut Tes
             );
             assert_secret_stays_out_of_editor_context(&context);
             view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
-            let pending = view.variable_context(cx);
             assert_eq!(
-                pending.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue,
-                "deleting a stored secret clears resolved highlighting immediately"
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::Resolved,
+                "presence stays stored until delete finishes"
             );
-            assert!(!pending.resolved_secrets.contains("secretToken"));
         })
         .unwrap();
     cx.run_until_parked();
@@ -3730,7 +3748,14 @@ fn deleting_a_stored_secret_makes_the_editor_placeholder_unresolved(cx: &mut Tes
                 probe_core::VariableStatus::Resolved
             );
             assert!(!store.values.lock().unwrap().contains_key(&id));
+            assert!(
+                !view
+                    .session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
 }
@@ -3759,12 +3784,17 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
         .update(cx, |view, _, cx| {
             view.session_store = None;
             view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(development_id.persistence_key().to_owned());
             view.set_workspace(first.clone(), first_workspace);
             view.select_environment(Some("development".into()), cx);
             assert_eq!(
                 view.variable_context(cx).status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
+                probe_core::VariableStatus::Resolved
             );
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
     cx.run_until_parked();
@@ -3851,6 +3881,7 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
             );
             assert_secret_stays_out_of_editor_context(&development);
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
     fs::remove_file(first).unwrap();
@@ -3858,7 +3889,9 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
 }
 
 #[gpui::test]
-fn unavailable_credential_status_keeps_the_secret_unresolved(cx: &mut TestAppContext) {
+fn unknown_presence_keeps_the_secret_unresolved_without_querying_the_store(
+    cx: &mut TestAppContext,
+) {
     use std::sync::{Arc, atomic::Ordering};
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -3867,7 +3900,6 @@ fn unavailable_credential_status_keeps_the_secret_unresolved(cx: &mut TestAppCon
     let fixture = environment_fixture().canonicalize().unwrap();
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
     let store = Arc::new(FakeManagerCredentials::default());
-    store.fail_status.store(true, Ordering::Relaxed);
     window
         .update(cx, |view, _, cx| {
             view.session_store = None;
@@ -3890,6 +3922,283 @@ fn unavailable_credential_status_keeps_the_secret_unresolved(cx: &mut TestAppCon
                 probe_core::VariableStatus::Resolved
             );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
+}
+
+fn reference_secret(
+    view: &mut ProbeApp,
+    key: probe_core::RequestKey,
+    cx: &mut gpui::Context<ProbeApp>,
+) {
+    view.edit_request(
+        key,
+        |request| {
+            request.url = Some("http://127.0.0.1:1/{{secretToken}}".to_owned());
+        },
+        cx,
+    );
+}
+
+#[gpui::test]
+fn execution_invalidates_stale_presence_when_the_native_secret_is_missing(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+    let store = Arc::new(FakeManagerCredentials::default());
+    store.allow_get.store(true, Ordering::Relaxed);
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
+            view.set_workspace(fixture, workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.select_request(request_key, cx);
+            reference_secret(view, request_key, cx);
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            view.send_request(request_key, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(
+                !view
+                    .session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert_secret_stays_out_of_editor_context(&context);
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
+            assert!(matches!(
+                view.execution.response(request_key),
+                Some(crate::execution::ResponseState::Failed(_))
+            ));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+    let store = Arc::new(FakeManagerCredentials::default());
+    store.allow_get.store(true, Ordering::Relaxed);
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    store.set(&id, EDITOR_SECRET_SENTINEL).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture, workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.select_request(request_key, cx);
+            reference_secret(view, request_key, cx);
+            assert!(view.session.stored_credentials.is_empty());
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            view.send_request(request_key, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(
+                view.session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_secret_stays_out_of_editor_context(&context);
+            let presence = serde_json::to_string(&view.session.stored_credentials).unwrap();
+            assert!(!presence.contains(EDITOR_SECRET_SENTINEL));
+            assert!(!presence.contains("secretToken"));
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
+            match view.execution.response(request_key) {
+                Some(crate::execution::ResponseState::Failed(message)) => {
+                    assert!(!message.contains(EDITOR_SECRET_SENTINEL));
+                }
+                other => panic!("expected a failed send after resolution, got {other:?}"),
+            }
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = loaded.requests()[0].key();
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let session_store = crate::session::SessionStore::at(std::env::temp_dir().join(format!(
+        "probe-presence-{unique}-{}/desktop-session.json",
+        std::process::id()
+    )));
+    let mut saved = crate::session::SessionState::default();
+    saved
+        .stored_credentials
+        .insert(id.persistence_key().to_owned());
+    session_store.save(&saved).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    store.set(&id, EDITOR_SECRET_SENTINEL).unwrap();
+    store.allow_get.store(true, Ordering::Relaxed);
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = Some(session_store.clone());
+            view.credential_store = store.clone();
+            view.restore_session(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(
+                view.session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
+            view.set_workspace(fixture.clone(), loaded);
+            view.select_environment(Some("development".into()), cx);
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    std::fs::remove_file(session_store.path()).unwrap();
+    window
+        .update(cx, |view, window, cx| view.restore_session(window, cx))
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(view.session.stored_credentials.is_empty());
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            view.select_request(request_key, cx);
+            reference_secret(view, request_key, cx);
+            view.send_request(request_key, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
+            assert!(
+                view.session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            assert_secret_stays_out_of_editor_context(&context);
+            match view.execution.response(request_key) {
+                Some(crate::execution::ResponseState::Failed(message)) => {
+                    assert!(!message.contains(EDITOR_SECRET_SENTINEL));
+                }
+                other => {
+                    panic!("execution should finish after missing presence metadata, got {other:?}")
+                }
+            }
+        })
+        .unwrap();
+
+    std::fs::write(session_store.path(), b"{not-json").unwrap();
+    let corrupt = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let reloaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    corrupt
+        .update(cx, |view, window, cx| {
+            view.session_store = Some(session_store.clone());
+            view.credential_store = store.clone();
+            view.restore_session(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    corrupt
+        .update(cx, |view, _, cx| {
+            assert!(
+                view.session.stored_credentials.is_empty(),
+                "corrupt presence metadata is ignored"
+            );
+            view.set_workspace(fixture, reloaded);
+            let key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
+            view.select_environment(Some("development".into()), cx);
+            view.select_request(key, cx);
+            reference_secret(view, key, cx);
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            view.send_request(key, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    corrupt
+        .update(cx, |view, _, _| {
+            let key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
+            assert!(store.get_calls.load(Ordering::Relaxed) >= 2);
+            assert!(matches!(
+                view.execution.response(key),
+                Some(crate::execution::ResponseState::Failed(_))
+            ));
+        })
+        .unwrap();
+    let _ = std::fs::remove_file(session_store.path());
 }

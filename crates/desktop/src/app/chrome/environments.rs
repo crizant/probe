@@ -431,7 +431,7 @@ impl ProbeApp {
             "Saving changes…"
         } else {
             match current_status.unwrap_or(SecretUiStatus::Loading) {
-                SecretUiStatus::Loading => "Checking credential store…",
+                SecretUiStatus::Loading => "Removing stored secret…",
                 SecretUiStatus::Stored => "● Stored securely",
                 SecretUiStatus::NotStored => "○ Not set",
                 SecretUiStatus::Unavailable => "⚠ Credential store unavailable",
@@ -505,7 +505,8 @@ impl ProbeApp {
                             move |_, window, cx| {
                                 let _ = set_view.update(cx, |view, cx| {
                                     if retry {
-                                        view.refresh_secret_statuses(cx);
+                                        view.sync_secret_statuses_from_presence();
+                                        cx.notify();
                                     } else {
                                         view.open_secret_value_dialog(set_name.clone(), window, cx);
                                     }

@@ -44,7 +44,10 @@ impl CredentialId {
         Ok(Self(format!("v1-{account}")))
     }
 
-    fn account(&self) -> &str {
+    /// Opaque `v1-` identity persisted as non-secret presence metadata.
+    ///
+    /// This is the account string already derived by [`Self::for_workspace`].
+    pub(crate) fn persistence_key(&self) -> &str {
         &self.0
     }
 }
@@ -100,7 +103,7 @@ pub struct NativeCredentialStore;
 
 impl NativeCredentialStore {
     fn entry(id: &CredentialId) -> Result<Entry, CredentialStoreError> {
-        Entry::new(SERVICE, id.account()).map_err(map_error)
+        Entry::new(SERVICE, id.persistence_key()).map_err(map_error)
     }
 }
 
@@ -174,24 +177,26 @@ mod tests {
 
     impl CredentialStore for FakeStore {
         fn status(&self, id: &CredentialId) -> Result<CredentialStatus, CredentialStoreError> {
-            Ok(if self.0.lock().unwrap().contains_key(id.account()) {
-                CredentialStatus::Stored
-            } else {
-                CredentialStatus::NotStored
-            })
+            Ok(
+                if self.0.lock().unwrap().contains_key(id.persistence_key()) {
+                    CredentialStatus::Stored
+                } else {
+                    CredentialStatus::NotStored
+                },
+            )
         }
         fn set(&self, id: &CredentialId, value: &str) -> Result<(), CredentialStoreError> {
             self.0
                 .lock()
                 .unwrap()
-                .insert(id.account().to_owned(), value.to_owned());
+                .insert(id.persistence_key().to_owned(), value.to_owned());
             Ok(())
         }
         fn delete(&self, id: &CredentialId) -> Result<(), CredentialStoreError> {
             self.0
                 .lock()
                 .unwrap()
-                .remove(id.account())
+                .remove(id.persistence_key())
                 .map(|_| ())
                 .ok_or(CredentialStoreError::NotFound)
         }
@@ -200,7 +205,7 @@ mod tests {
                 .0
                 .lock()
                 .unwrap()
-                .get(id.account())
+                .get(id.persistence_key())
                 .cloned()
                 .map(SecretValue::new))
         }
@@ -221,7 +226,8 @@ mod tests {
         assert_ne!(a, other_workspace);
         let secret = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
         assert!(!format!("{a:?}").contains(secret));
-        assert!(!a.account().contains(secret));
+        assert!(!a.persistence_key().contains(secret));
+        assert!(a.persistence_key().starts_with("v1-"));
         let store = FakeStore::default();
         assert_eq!(store.status(&a), Ok(CredentialStatus::NotStored));
         assert!(store.get(&a).unwrap().is_none());

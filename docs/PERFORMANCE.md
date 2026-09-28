@@ -36,8 +36,10 @@ while painting a request. `ProbeApp` resolves the selected environment once at t
 start of each frame and reuses that context for every variable-bearing field. The
 memo is cleared before the frame returns, so event handlers and other calls outside
 that render resolve the current selection instead of a previous frame. Secret
-availability is a cached status, refreshed off the GPUI thread once per secret name
-for a workspace and environment, not once per placeholder or frame.
+highlighting reads in-memory credential-presence metadata. Rendering does not query
+the operating-system credential store and does not read secret values. Opaque
+credential identities for the current workspace, environment, and secret names are
+derived once, then reused for later frames until that set changes.
 
 Criterion stores machine-local reports under `target/criterion`. Compare results on
 the same machine and build profile; absolute timings from different machines are not

@@ -177,7 +177,6 @@ impl Render for ProbeApp {
         self.variable_context_frames
             .set(self.variable_context_frames.get() + 1);
         let variable_context = self.resolve_variable_context(cx);
-        self.ensure_editor_secret_availability(&variable_context, cx);
         self.frame_variable_context = Some(variable_context);
 
         let root = div()

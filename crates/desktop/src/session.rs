@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt, fs,
     io::{self, Write},
@@ -31,6 +31,14 @@ pub(crate) struct SessionState {
     pub(crate) horizontal_panes: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) selected_environments: BTreeMap<PathBuf, String>,
+    /// Opaque credential identities known to be stored. A UI hint only.
+    ///
+    /// Entries are `CredentialId` persistence keys (`v1-` plus a digest). The set
+    /// does not contain secret values, workspace paths, environment names, or
+    /// variable names. Missing, empty, or corrupt session state leaves this empty;
+    /// request execution does not read it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) stored_credentials: BTreeSet<String>,
 }
 
 impl Default for SessionState {
@@ -48,6 +56,7 @@ impl Default for SessionState {
             response_width: DEFAULT_RESPONSE_WIDTH,
             horizontal_panes: false,
             selected_environments: BTreeMap::new(),
+            stored_credentials: BTreeSet::new(),
         }
     }
 }
@@ -111,7 +120,7 @@ impl SessionStore {
     }
 
     #[cfg(test)]
-    fn at(path: PathBuf) -> Self {
+    pub(crate) fn at(path: PathBuf) -> Self {
         Self { path }
     }
 
@@ -145,7 +154,7 @@ impl SessionStore {
     }
 
     #[cfg(test)]
-    fn path(&self) -> &std::path::Path {
+    pub(crate) fn path(&self) -> &std::path::Path {
         &self.path
     }
 }
@@ -311,5 +320,36 @@ mod tests {
 
         let state = store.load().unwrap();
         assert!(state.selected_environments.is_empty());
+        assert!(state.stored_credentials.is_empty());
+    }
+
+    #[test]
+    fn credential_presence_is_an_opaque_set_and_survives_collection_pruning() {
+        let store = store();
+        let mut state = SessionState::default();
+        state.stored_credentials.insert("v1-abc123".to_owned());
+        state.activate_collection("/tmp/collection".into());
+        state.remove_recent_collection(Path::new("/tmp/collection"));
+        state.clear_active_collection();
+
+        store.save(&state).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.stored_credentials, state.stored_credentials);
+        let source = std::fs::read_to_string(store.path()).unwrap();
+        assert!(source.contains("v1-abc123"));
+        assert!(!source.contains("secretToken"));
+        assert!(!source.contains("/tmp/collection"));
+    }
+
+    #[test]
+    fn corrupt_session_state_fails_closed_without_panicking() {
+        let store = store();
+        let parent = store
+            .path()
+            .parent()
+            .expect("desktop session path must have a parent directory");
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::write(store.path(), b"{not-json").unwrap();
+        assert!(store.load().is_err());
     }
 }

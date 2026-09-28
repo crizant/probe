@@ -11,7 +11,6 @@ impl ProbeApp {
         self.detached_requests.clear();
         self.committed_detached_requests.clear();
         self.workspace_path = None;
-        self.clear_secret_availability();
         self.shell.reset_for_workspace();
         self.shell.select_environment(None);
         self.reset_collection_ui();
@@ -123,7 +122,7 @@ impl ProbeApp {
         };
         self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(selected));
         self.environment_variables_scroll = UniformListScrollHandle::new();
-        self.refresh_secret_statuses(cx);
+        self.sync_secret_statuses_from_presence();
         self.clear_environment_dialog_error(cx);
         self.environment_manager_dialog_focus.focus(window, cx);
         cx.notify();
@@ -159,7 +158,6 @@ impl ProbeApp {
     }
 
     pub(super) fn discard_environment_manager_dialog(&mut self) {
-        self.secret_status_generation = self.secret_status_generation.wrapping_add(1);
         self.secret_value_dialog = None;
         self.transient.environment_manager_context_menu = None;
         self.environment_manager_close_after_save = false;
@@ -279,7 +277,7 @@ impl ProbeApp {
         {
             self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(environment));
             self.environment_variables_scroll = UniformListScrollHandle::new();
-            self.refresh_secret_statuses(cx);
+            self.sync_secret_statuses_from_presence();
             self.clear_environment_dialog_error(cx);
             cx.notify();
         }
@@ -426,7 +424,7 @@ impl ProbeApp {
                                 } else {
                                     view.environment_manager_dialog =
                                         Some(EnvironmentManagerDialog::new(&environment));
-                                    view.refresh_secret_statuses(cx);
+                                    view.sync_secret_statuses_from_presence();
                                 }
                             }
                         }
