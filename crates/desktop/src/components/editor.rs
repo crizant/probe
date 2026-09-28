@@ -28,6 +28,8 @@ pub(super) use search::{
     body_text_highlights, normalize_search_char_bounds, search_fallback_char_size,
     search_match_bounds, search_match_char_ranges,
 };
+#[cfg(test)]
+pub(super) use variables::SecretTooltipState;
 pub(crate) use variables::single_line;
 use variables::variable_editor_overlay;
 #[cfg(test)]

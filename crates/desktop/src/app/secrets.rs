@@ -508,6 +508,7 @@ impl ProbeApp {
             return;
         }
         let target = dialog.target.clone();
+        let from_manager = dialog.from_manager;
         self.close_secret_value_dialog(window, cx);
         self.secret_write_in_progress = true;
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
@@ -540,12 +541,14 @@ impl ProbeApp {
                             .environment_manager_dialog
                             .as_ref()
                             .is_some_and(|dialog| dialog.draft.name == environment);
-                        if same_environment {
+                        if !from_manager || same_environment {
                             view.show_toast(
                                 ToastIntent::Error,
                                 "Could not delete from the system credential store.",
                                 cx,
                             );
+                        }
+                        if same_environment {
                             view.sync_secret_statuses_from_presence();
                         }
                     }

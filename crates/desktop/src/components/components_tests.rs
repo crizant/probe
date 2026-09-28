@@ -11,8 +11,8 @@ use gpui_base::{
 };
 
 use super::{
-    DropdownButton, EditorInsets, ProbeEditor, VariableContext, VariableHoverState,
-    VariableTooltipPresentation, clipboard_has_pasteable_text, dropdown,
+    DropdownButton, EditorInsets, ProbeEditor, SecretTooltipState, VariableContext,
+    VariableHoverState, VariableTooltipPresentation, clipboard_has_pasteable_text, dropdown,
     editor_value_needs_refresh, menu_button, pane_splitter,
 };
 use crate::app::{FocusNextControl, FocusPreviousControl, ShiftTabOrOutdent, TabOrIndent};
@@ -35,8 +35,8 @@ impl Render for VariablePopupTestView {
             value: String::new(),
             placeholder: "Variable value",
             editable: !self.secret,
-            hint: self.secret.then_some("Not verified"),
-            show_lock: self.secret,
+            hint: None,
+            secret: self.secret.then_some(SecretTooltipState::Unknown),
         };
         super::variable_tooltip_popup(
             Theme::light(),

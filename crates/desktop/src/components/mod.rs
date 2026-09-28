@@ -46,6 +46,8 @@ pub(crate) use controls::{
 };
 
 mod icons;
+#[cfg(test)]
+use editor::SecretTooltipState;
 pub(crate) use editor::editor_paint_style;
 pub(crate) use editor::{
     BodySyntax, body_text_input, response_body_input, response_headers_input,

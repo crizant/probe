@@ -621,23 +621,11 @@ pub(in crate::components) fn variable_tooltip_presentation(
     variables: &VariableContext,
 ) -> VariableTooltipPresentation {
     if variables.unknown_secrets.contains(name) {
-        return VariableTooltipPresentation {
-            value: String::new(),
-            placeholder: "Secret value",
-            editable: false,
-            hint: Some("Not verified"),
-            show_lock: true,
-        };
+        return VariableTooltipPresentation::secret(SecretTooltipState::Unknown);
     }
     match variables.status(name) {
         VariableStatus::Resolved if variables.resolved_secrets.contains(name) => {
-            VariableTooltipPresentation {
-                value: String::new(),
-                placeholder: "Secret value",
-                editable: false,
-                hint: Some("● Stored securely"),
-                show_lock: true,
-            }
+            VariableTooltipPresentation::secret(SecretTooltipState::Stored)
         }
         VariableStatus::Resolved => VariableTooltipPresentation {
             value: variables
@@ -648,21 +636,17 @@ pub(in crate::components) fn variable_tooltip_presentation(
             placeholder: "Variable value",
             editable: variables.on_change.is_some(),
             hint: None,
-            show_lock: false,
+            secret: None,
         },
-        VariableStatus::SecretWithoutValue => VariableTooltipPresentation {
-            value: String::new(),
-            placeholder: "Secret value",
-            editable: false,
-            hint: Some("○ Not set"),
-            show_lock: true,
-        },
+        VariableStatus::SecretWithoutValue => {
+            VariableTooltipPresentation::secret(SecretTooltipState::NotStored)
+        }
         VariableStatus::Missing if variables.on_change.is_some() => VariableTooltipPresentation {
             value: String::new(),
             placeholder: "Enter a value to create",
             editable: true,
             hint: Some("Not defined in this environment"),
-            show_lock: false,
+            secret: None,
         },
         VariableStatus::Missing => unavailable_variable_tooltip(&variables.unavailable_message),
     }
@@ -674,7 +658,7 @@ fn unavailable_variable_tooltip(message: &str) -> VariableTooltipPresentation {
         placeholder: "Variable value",
         editable: false,
         hint: None,
-        show_lock: false,
+        secret: None,
     }
 }
 
@@ -683,15 +667,48 @@ pub(in crate::components) struct VariableTooltipPresentation {
     pub(in crate::components) placeholder: &'static str,
     pub(in crate::components) editable: bool,
     pub(in crate::components) hint: Option<&'static str>,
-    pub(in crate::components) show_lock: bool,
+    pub(in crate::components) secret: Option<SecretTooltipState>,
 }
 
 impl VariableTooltipPresentation {
-    pub(in crate::components) fn secret_action_label(&self) -> &'static str {
-        if self.hint == Some("● Stored securely") {
-            "Replace Secret…"
-        } else {
-            "Set Secret…"
+    fn secret(state: SecretTooltipState) -> Self {
+        Self {
+            value: String::new(),
+            placeholder: "Secret value",
+            editable: false,
+            hint: None,
+            secret: Some(state),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::components) enum SecretTooltipState {
+    Stored,
+    NotStored,
+    Unknown,
+}
+
+impl SecretTooltipState {
+    pub(in crate::components) fn status_text(self) -> &'static str {
+        match self {
+            Self::Stored => "● Stored securely",
+            Self::NotStored => "○ Not set",
+            Self::Unknown => "Not verified",
+        }
+    }
+
+    pub(in crate::components) fn status_color(self, theme: Theme) -> gpui::Rgba {
+        match self {
+            Self::Stored => theme.colors.status.success,
+            Self::NotStored | Self::Unknown => theme.colors.text.muted,
+        }
+    }
+
+    pub(in crate::components) fn action_label(self) -> &'static str {
+        match self {
+            Self::Stored => "Replace Secret…",
+            Self::NotStored | Self::Unknown => "Set Secret…",
         }
     }
 }

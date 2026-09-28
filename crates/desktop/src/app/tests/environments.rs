@@ -2291,6 +2291,7 @@ struct FakeManagerCredentials {
     values: std::sync::Mutex<std::collections::HashMap<crate::credentials::CredentialId, String>>,
     get_calls: std::sync::atomic::AtomicUsize,
     fail_set: std::sync::atomic::AtomicBool,
+    fail_delete: std::sync::atomic::AtomicBool,
     fail_get: std::sync::atomic::AtomicBool,
     allow_get: std::sync::atomic::AtomicBool,
     slow_set: std::sync::atomic::AtomicBool,
@@ -2319,6 +2320,9 @@ impl crate::credentials::CredentialStore for FakeManagerCredentials {
         &self,
         id: &crate::credentials::CredentialId,
     ) -> Result<(), crate::credentials::CredentialStoreError> {
+        if self.fail_delete.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(crate::credentials::CredentialStoreError::BackendFailure);
+        }
         if self.slow_delete.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
@@ -3584,6 +3588,131 @@ fn editor_replace_dialog_rejects_mismatched_and_stale_delete_targets(cx: &mut Te
         store.values.lock().unwrap().get(&id).map(String::as_str),
         Some("keep-me")
     );
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
+fn editor_delete_failure_reports_error_without_changing_presence(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_environment_fixture("editor-delete-failure")
+        .canonicalize()
+        .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    store.set(&id, "keep-me").unwrap();
+    store.fail_delete.store(true, Ordering::Relaxed);
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.open_editor_secret_value_dialog(
+                fixture.clone(),
+                "development".into(),
+                "secretToken".into(),
+                view.focus_handle.clone(),
+                window,
+                cx,
+            );
+            assert!(view.environment_manager_dialog.is_none());
+            view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Error,
+                "Could not delete from the system credential store."
+            ));
+            assert!(
+                view.session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
+            assert!(
+                !view
+                    .session
+                    .missing_credentials
+                    .contains(id.persistence_key())
+            );
+        })
+        .unwrap();
+    assert_eq!(
+        store.values.lock().unwrap().get(&id).map(String::as_str),
+        Some("keep-me")
+    );
+    assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
+fn manager_delete_failure_restores_status_and_reports_error(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_environment_fixture("manager-delete-failure")
+        .canonicalize()
+        .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    store.set(&id, "keep-me").unwrap();
+    store.fail_delete.store(true, Ordering::Relaxed);
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.open_environment_manager_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            view.open_secret_value_dialog("secretToken".into(), window, cx);
+            view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Error,
+                "Could not delete from the system credential store."
+            ));
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .secret_statuses
+                    .get("secretToken"),
+                Some(&super::super::SecretUiStatus::Stored)
+            );
+        })
+        .unwrap();
+    assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
     fs::remove_file(fixture).unwrap();
 }
 

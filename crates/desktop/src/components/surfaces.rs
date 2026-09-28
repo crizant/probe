@@ -612,7 +612,11 @@ pub(super) fn variable_tooltip_popup(
     editor_focus: FocusHandle,
 ) -> impl IntoElement {
     let hover_for_content = hover.clone();
-    let secret_action_label = presentation.secret_action_label();
+    let secret = presentation.secret;
+    let status_text = secret
+        .map(|state| state.status_text())
+        .or(presentation.hint);
+    let status_color = secret.map_or(theme.colors.text.muted, |state| state.status_color(theme));
     div()
         .id("variable-input-tooltip-popup")
         .debug_selector(|| "variable-input-tooltip-popup".into())
@@ -630,10 +634,9 @@ pub(super) fn variable_tooltip_popup(
         .occlude()
         .on_mouse_down(MouseButton::Left, {
             let value_input = value_input.clone();
-            let secret = presentation.show_lock;
             move |_, window, cx| {
                 cx.stop_propagation();
-                if !secret {
+                if secret.is_none() {
                     value_input.update(cx, |input, cx| input.focus(window, cx));
                 }
             }
@@ -646,7 +649,7 @@ pub(super) fn variable_tooltip_popup(
                 .flex()
                 .items_center()
                 .gap(px(theme.metrics.spacing_1))
-                .when(presentation.show_lock, |row| row.child(lock_icon(theme)))
+                .when(secret.is_some(), |row| row.child(lock_icon(theme)))
                 .child(
                     truncated_label(format!("{{{{{name}}}}}"))
                         .flex_none()
@@ -655,7 +658,7 @@ pub(super) fn variable_tooltip_popup(
                         .text_color(theme.colors.syntax.string),
                 ),
         )
-        .when_some(presentation.hint, |popup, hint| {
+        .when_some(status_text, |popup, hint| {
             popup.child(
                 div()
                     .id("variable-tooltip-create-hint")
@@ -667,11 +670,11 @@ pub(super) fn variable_tooltip_popup(
                     .child(
                         truncated_label(hint)
                             .text_size(px(theme.typography.caption_size))
-                            .text_color(theme.colors.text.muted),
+                            .text_color(status_color),
                     ),
             )
         })
-        .when(!presentation.show_lock, |popup| {
+        .when(secret.is_none(), |popup| {
             popup.child(variable_value_input(
                 theme,
                 format!("variable-tooltip-value-{name}"),
@@ -681,7 +684,7 @@ pub(super) fn variable_tooltip_popup(
                 presentation.editable,
             ))
         })
-        .when(presentation.show_lock, |popup| {
+        .when_some(secret, |popup, state| {
             popup.when_some(variables.on_manage_secret, |popup, on_manage| {
                 let hover = hover.clone();
                 let name = name.clone();
@@ -689,7 +692,7 @@ pub(super) fn variable_tooltip_popup(
                     text_button(
                         theme,
                         "variable-tooltip-secret-action",
-                        secret_action_label,
+                        state.action_label(),
                         move |_, window, cx| {
                             hover.update(cx, |state, cx| state.dismiss(cx));
                             on_manage(&name, editor_focus.clone(), window, cx);
