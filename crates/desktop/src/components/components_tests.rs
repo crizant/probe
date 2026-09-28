@@ -11,8 +11,9 @@ use gpui_base::{
 };
 
 use super::{
-    DropdownButton, EditorInsets, ProbeEditor, VariableContext, clipboard_has_pasteable_text,
-    dropdown, editor_value_needs_refresh, menu_button, pane_splitter,
+    DropdownButton, EditorInsets, ProbeEditor, VariableContext, VariableHoverState,
+    VariableTooltipPresentation, clipboard_has_pasteable_text, dropdown,
+    editor_value_needs_refresh, menu_button, pane_splitter,
 };
 use crate::app::{FocusNextControl, FocusPreviousControl, ShiftTabOrOutdent, TabOrIndent};
 use crate::theme::Theme;
@@ -20,6 +21,61 @@ use crate::theme::Theme;
 struct MenuTestView {
     open: bool,
     activations: usize,
+}
+
+struct VariablePopupTestView {
+    hover: Entity<VariableHoverState>,
+    secret: bool,
+    editor_focus: gpui::FocusHandle,
+}
+
+impl Render for VariablePopupTestView {
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let presentation = VariableTooltipPresentation {
+            value: String::new(),
+            placeholder: "Variable value",
+            editable: !self.secret,
+            hint: self.secret.then_some("Not verified"),
+            show_lock: self.secret,
+        };
+        super::variable_tooltip_popup(
+            Theme::light(),
+            "token".into(),
+            presentation,
+            self.hover.clone(),
+            self.hover.read(cx).value_input.clone(),
+            VariableContext::default(),
+            self.editor_focus.clone(),
+        )
+    }
+}
+
+#[gpui::test]
+fn secret_popup_does_not_focus_its_hidden_value_input(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(400.0), px(240.0)), |window, cx| {
+        VariablePopupTestView {
+            hover: cx.new(|cx| VariableHoverState::new(window, cx)),
+            secret: true,
+            editor_focus: cx.focus_handle(),
+        }
+    });
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(
+        visual
+            .debug_bounds("variable-tooltip-value-input")
+            .is_none()
+    );
+    let status = visual.debug_bounds("variable-tooltip-create-hint").unwrap();
+    visual.simulate_click(status.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            let input = view.hover.read(cx).value_input.clone();
+            assert!(!input.read(cx).focus_handle(cx).is_focused(window));
+        })
+        .unwrap();
 }
 
 #[derive(Clone, Copy)]

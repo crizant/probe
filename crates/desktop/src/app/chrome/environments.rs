@@ -892,15 +892,9 @@ impl ProbeApp {
         let cancel_view = cx.weak_entity();
         let save_view = cx.weak_entity();
         let delete_view = cx.weak_entity();
-        let delete_name = dialog.name.clone();
+        let delete_name = dialog.target.name.clone();
         let input = dialog.input.clone();
-        let stored = self
-            .environment_manager_dialog
-            .as_ref()
-            .is_some_and(|manager| {
-                manager.draft.name == dialog.environment
-                    && manager.secret_statuses.get(&dialog.name) == Some(&SecretUiStatus::Stored)
-            });
+        let stored = self.secret_is_stored(&dialog.target, dialog.from_manager);
         let content = components::dialog_surface(theme, "secret-value-dialog", components::COMPACT_DIALOG_WIDTH)
             .debug_selector(|| "secret-value-dialog".into())
             .child(components::dialog_title(theme, if dialog.replacing { "Replace secret" } else { "Set secret" }))
@@ -920,7 +914,7 @@ impl ProbeApp {
                 .border_color(theme.colors.borders.subtle)
                 .bg(theme.colors.surfaces.raised)
                 .child(components::lock_icon(theme).flex_none())
-                .child(components::truncated_label(dialog.name.clone())
+                .child(components::truncated_label(dialog.target.name.clone())
                     .font_family(theme.typography.monospace_family)
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.colors.text.primary))
@@ -928,7 +922,7 @@ impl ProbeApp {
                     .flex_none()
                     .text_color(theme.colors.text.muted)
                     .child("in"))
-                .child(components::truncated_label(dialog.environment.clone())
+                .child(components::truncated_label(dialog.target.environment.clone())
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.colors.actions.accent)))
             .child(div().mt(px(theme.metrics.spacing_3)).child(components::dialog_field_label(theme, "Secret value")))
@@ -966,12 +960,7 @@ impl ProbeApp {
                 .child(components::dialog_action_button(theme, "secret-value-save", if dialog.busy { "Saving…" } else { "Save Secret" }, components::DialogActionStyle::Primary, components::shortcut_label_for_action_in_context(window, &SubmitSecretValueDialog, "SecretValueDialog"), dialog.busy || dialog.input.read(cx).value().is_empty(), move |_, window, cx| {
                     let _ = save_view.update(cx, |view, cx| view.save_secret_value(window, cx));
                 })));
-        components::dialog_layer(
-            theme,
-            &self.environment_manager_dialog_focus,
-            "SecretValueDialog",
-            content,
-        )
-        .into_any_element()
+        components::dialog_layer(theme, &dialog.restore_focus, "SecretValueDialog", content)
+            .into_any_element()
     }
 }

@@ -107,7 +107,14 @@ pub(in crate::components) fn variable_input_overlay(
             .child(hits),
     );
 
-    with_variable_tooltip(wrapper, theme, hover, variables, cx)
+    with_variable_tooltip(
+        wrapper,
+        theme,
+        hover,
+        variables,
+        state.read(cx).focus_handle(cx),
+        cx,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -188,7 +195,14 @@ pub(super) fn variable_editor_overlay(
         window.request_animation_frame();
     }
     wrapper = wrapper.child(hits);
-    with_variable_tooltip(wrapper, theme, hover, variables, cx)
+    with_variable_tooltip(
+        wrapper,
+        theme,
+        hover,
+        variables,
+        state.read(cx).focus_handle(cx),
+        cx,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -247,6 +261,7 @@ fn with_variable_tooltip(
     theme: Theme,
     hover: Entity<VariableHoverState>,
     variables: VariableContext,
+    editor_focus: FocusHandle,
     cx: &App,
 ) -> gpui::AnyElement {
     let (open, active, bounds) = {
@@ -279,7 +294,8 @@ fn with_variable_tooltip(
                         presentation,
                         hover,
                         value_input,
-                        variables.on_manage_environments,
+                        variables,
+                        editor_focus,
                     )),
             )
             .with_priority(POPUP_PRIORITY + 1),
@@ -609,7 +625,7 @@ pub(in crate::components) fn variable_tooltip_presentation(
             value: String::new(),
             placeholder: "Secret value",
             editable: false,
-            hint: Some("Secret presence not verified"),
+            hint: Some("Not verified"),
             show_lock: true,
         };
     }
@@ -619,8 +635,8 @@ pub(in crate::components) fn variable_tooltip_presentation(
                 value: String::new(),
                 placeholder: "Secret value",
                 editable: false,
-                hint: Some("Secret value stored securely"),
-                show_lock: false,
+                hint: Some("● Stored securely"),
+                show_lock: true,
             }
         }
         VariableStatus::Resolved => VariableTooltipPresentation {
@@ -635,11 +651,11 @@ pub(in crate::components) fn variable_tooltip_presentation(
             show_lock: false,
         },
         VariableStatus::SecretWithoutValue => VariableTooltipPresentation {
-            value: variables.unavailable_message.clone(),
-            placeholder: "Variable value",
+            value: String::new(),
+            placeholder: "Secret value",
             editable: false,
-            hint: Some("Secret has no value in this environment"),
-            show_lock: false,
+            hint: Some("○ Not set"),
+            show_lock: true,
         },
         VariableStatus::Missing if variables.on_change.is_some() => VariableTooltipPresentation {
             value: String::new(),
@@ -668,6 +684,16 @@ pub(in crate::components) struct VariableTooltipPresentation {
     pub(in crate::components) editable: bool,
     pub(in crate::components) hint: Option<&'static str>,
     pub(in crate::components) show_lock: bool,
+}
+
+impl VariableTooltipPresentation {
+    pub(in crate::components) fn secret_action_label(&self) -> &'static str {
+        if self.hint == Some("● Stored securely") {
+            "Replace Secret…"
+        } else {
+            "Set Secret…"
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

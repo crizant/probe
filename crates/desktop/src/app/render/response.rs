@@ -1107,6 +1107,8 @@ impl ProbeApp {
         match resolve_environment(loaded.workspace().environments(), selected) {
             Ok(environment) => {
                 let view = cx.weak_entity();
+                let selected_environment = selected.to_owned();
+                let selected_workspace = self.workspace_path.clone();
                 let (secrets, resolved_secrets, unknown_secrets) =
                     self.editor_secret_sets(selected, environment.secrets_without_values());
                 components::VariableContext {
@@ -1124,6 +1126,36 @@ impl ProbeApp {
                             });
                         });
                     })),
+                    on_manage_secret: Some({
+                        let view = cx.weak_entity();
+                        let selected_environment = selected_environment.clone();
+                        let selected_workspace = selected_workspace.clone();
+                        Rc::new(
+                            move |name: &str,
+                                  focus: FocusHandle,
+                                  window: &mut Window,
+                                  cx: &mut gpui::App| {
+                                let name = name.to_owned();
+                                let view = view.clone();
+                                let selected_environment = selected_environment.clone();
+                                let selected_workspace = selected_workspace.clone();
+                                window.defer(cx, move |window, cx| {
+                                    let _ = view.update(cx, |view, cx| {
+                                        if let Some(workspace) = selected_workspace {
+                                            view.open_editor_secret_value_dialog(
+                                                workspace,
+                                                selected_environment,
+                                                name,
+                                                focus,
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    });
+                                });
+                            },
+                        )
+                    }),
                     on_manage_environments,
                     ..components::VariableContext::default()
                 }

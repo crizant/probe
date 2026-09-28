@@ -3212,6 +3212,382 @@ fn manager_cancel_during_set_drops_input_and_prevents_duplicate_write(cx: &mut T
 }
 
 #[gpui::test]
+fn editor_secret_tooltip_sets_replaces_and_deletes_in_effective_environment(
+    cx: &mut TestAppContext,
+) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_environment_fixture("editor-secret-tooltip")
+        .canonicalize()
+        .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+    let store = Arc::new(FakeManagerCredentials::default());
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(request_key, cx);
+            view.select_environment(Some("development".into()), cx);
+            view.edit_request(
+                request_key,
+                |request| request.url = Some("https://{{secretToken}}".into()),
+                cx,
+            );
+            assert!(view.environment_manager_dialog.is_none());
+            assert_unknown_secret(&view.variable_context(cx), "secretToken");
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let point = {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual
+            .debug_bounds("variable-hover-trigger")
+            .unwrap()
+            .center()
+    };
+    hover_and_wait(cx, window, point);
+    let action = {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            visual
+                .debug_bounds("variable-tooltip-value-input")
+                .is_none()
+        );
+        assert!(
+            visual
+                .debug_bounds("variable-tooltip-secret-action")
+                .is_some()
+        );
+        visual
+            .debug_bounds("variable-tooltip-secret-action")
+            .unwrap()
+            .center()
+    };
+    window
+        .update(cx, |view, _, cx| {
+            assert_unknown_secret(&view.variable_context(cx), "secretToken");
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+        })
+        .unwrap();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_click(action, Modifiers::default());
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |view, window, cx| {
+            let dialog = view.secret_value_dialog.as_ref().unwrap();
+            assert!(!dialog.from_manager);
+            assert!(!dialog.replacing);
+            assert_eq!(dialog.target.environment, "development");
+            assert_eq!(dialog.target.workspace, fixture);
+            assert!(view.environment_manager_dialog.is_none());
+            let input = dialog.input.clone();
+            input.update(cx, |input, cx| {
+                input.set_value(EDITOR_SECRET_SENTINEL, window, cx)
+            });
+            view.save_secret_value(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(view.secret_value_dialog.is_none());
+            assert!(
+                view.variable_context(cx)
+                    .resolved_secrets
+                    .contains("secretToken")
+            );
+            assert_secret_stays_out_of_editor_context(&view.variable_context(cx));
+            let presence = serde_json::to_string(&view.session.stored_credentials).unwrap();
+            assert!(!presence.contains(EDITOR_SECRET_SENTINEL));
+        })
+        .unwrap();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_mouse_move(
+            gpui::point(px(1000.0), px(700.0)),
+            None,
+            Modifiers::default(),
+        );
+        visual.run_until_parked();
+    }
+    hover_and_wait(cx, window, point);
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            visual
+                .debug_bounds("variable-tooltip-value-input")
+                .is_none()
+        );
+        let action = visual
+            .debug_bounds("variable-tooltip-secret-action")
+            .unwrap();
+        visual.simulate_click(action.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |view, _, cx| {
+            let dialog = view.secret_value_dialog.as_ref().unwrap();
+            assert!(dialog.replacing);
+            assert!(dialog.input.read(cx).value().is_empty());
+            assert!(view.environment_manager_dialog.is_none());
+        })
+        .unwrap();
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("secret-value-delete-stored").is_some());
+    }
+    window
+        .update(cx, |view, window, cx| {
+            view.confirm_delete_stored_secret("secretToken".into(), window, cx);
+            assert!(matches!(
+                view.application_dialog,
+                Some(ApplicationDialog::DeleteStoredSecret { .. })
+            ));
+            view.handle_application_dialog_action(ApplicationDialogAction::Delete, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(view.secret_value_dialog.is_none());
+            assert!(view.variable_context(cx).secrets.contains("secretToken"));
+            assert_secret_stays_out_of_editor_context(&view.variable_context(cx));
+        })
+        .unwrap();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_mouse_move(
+            gpui::point(px(1000.0), px(700.0)),
+            None,
+            Modifiers::default(),
+        );
+        visual.run_until_parked();
+    }
+    hover_and_wait(cx, window, point);
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            visual
+                .debug_bounds("variable-tooltip-value-input")
+                .is_none()
+        );
+        let action = visual
+            .debug_bounds("variable-tooltip-secret-action")
+            .unwrap();
+        visual.simulate_click(action.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |view, window, cx| {
+            assert!(!view.secret_value_dialog.as_ref().unwrap().replacing);
+            view.close_secret_value_dialog(window, cx);
+        })
+        .unwrap();
+    assert!(!store.values.lock().unwrap().contains_key(&id));
+    assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
+fn editor_secret_dialog_rejects_stale_environment_and_workspace(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::Ordering};
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_environment_fixture("stale-editor-secret")
+        .canonicalize()
+        .unwrap();
+    let other = writable_environment_fixture("other-editor-secret")
+        .canonicalize()
+        .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.open_editor_secret_value_dialog(
+                fixture.clone(),
+                "development".into(),
+                "secretToken".into(),
+                view.focus_handle.clone(),
+                window,
+                cx,
+            );
+            let input = view.secret_value_dialog.as_ref().unwrap().input.clone();
+            input.update(cx, |input, cx| {
+                input.set_value("should-not-write", window, cx)
+            });
+            view.select_environment(Some("base".into()), cx);
+            view.save_secret_value(window, cx);
+            assert!(!view.secret_value_dialog.as_ref().unwrap().busy);
+            view.select_environment(Some("development".into()), cx);
+            view.workspace_path = Some(other.clone());
+            view.save_secret_value(window, cx);
+            assert!(!view.secret_value_dialog.as_ref().unwrap().busy);
+            view.workspace_path = Some(fixture.clone());
+            view.close_secret_value_dialog(window, cx);
+            view.workspace_path = Some(other.clone());
+            view.open_editor_secret_value_dialog(
+                fixture.clone(),
+                "development".into(),
+                "secretToken".into(),
+                view.focus_handle.clone(),
+                window,
+                cx,
+            );
+            assert!(view.secret_value_dialog.is_none());
+            view.workspace_path = Some(fixture.clone());
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(store.values.lock().unwrap().is_empty());
+    assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
+    fs::remove_file(fixture).unwrap();
+    fs::remove_file(other).unwrap();
+}
+
+#[gpui::test]
+fn manager_secret_dialog_cannot_save_after_draft_becomes_dirty(cx: &mut TestAppContext) {
+    use std::sync::Arc;
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_environment_fixture("dirty-manager-secret")
+        .canonicalize()
+        .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.open_environment_manager_dialog(window, cx);
+            view.open_secret_value_dialog("secretToken".into(), window, cx);
+            let input = view.secret_value_dialog.as_ref().unwrap().input.clone();
+            input.update(cx, |input, cx| {
+                input.set_value("must-not-write", window, cx)
+            });
+            view.apply_environment_manager_draft(cx, |dialog| {
+                dialog
+                    .draft
+                    .variables
+                    .push(EnvironmentVariable::Plain(Variable {
+                        name: Some("newPlain".into()),
+                        value: None,
+                        disabled: false,
+                    }));
+            });
+            assert!(!view.can_manage_secret("secretToken"));
+            view.save_secret_value(window, cx);
+            assert!(!view.secret_value_dialog.as_ref().unwrap().busy);
+            view.close_secret_value_dialog(window, cx);
+            assert!(view.environment_manager_dialog_focus.is_focused(window));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(store.values.lock().unwrap().is_empty());
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
+fn editor_replace_dialog_rejects_mismatched_and_stale_delete_targets(cx: &mut TestAppContext) {
+    use std::sync::Arc;
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_environment_fixture("stale-delete-secret")
+        .canonicalize()
+        .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let store = Arc::new(FakeManagerCredentials::default());
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    store.set(&id, "keep-me").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.open_editor_secret_value_dialog(
+                fixture.clone(),
+                "development".into(),
+                "secretToken".into(),
+                view.focus_handle.clone(),
+                window,
+                cx,
+            );
+            assert!(view.secret_value_dialog.as_ref().unwrap().replacing);
+            view.confirm_delete_stored_secret("other".into(), window, cx);
+            assert!(view.application_dialog.is_none());
+            view.delete_stored_secret("other".into(), "development".into(), window, cx);
+            view.delete_stored_secret("secretToken".into(), "base".into(), window, cx);
+            assert!(!view.secret_write_in_progress);
+            view.select_environment(Some("base".into()), cx);
+            view.confirm_delete_stored_secret("secretToken".into(), window, cx);
+            assert!(view.application_dialog.is_none());
+            view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
+            assert!(!view.secret_write_in_progress);
+            view.select_environment(Some("development".into()), cx);
+            view.close_secret_value_dialog(window, cx);
+            view.session.stored_credentials.remove(id.persistence_key());
+            view.session
+                .missing_credentials
+                .insert(id.persistence_key().to_owned());
+            view.open_editor_secret_value_dialog(
+                fixture.clone(),
+                "development".into(),
+                "secretToken".into(),
+                view.focus_handle.clone(),
+                window,
+                cx,
+            );
+            assert!(!view.secret_value_dialog.as_ref().unwrap().replacing);
+            view.session
+                .missing_credentials
+                .remove(id.persistence_key());
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
+            view.confirm_delete_stored_secret("secretToken".into(), window, cx);
+            assert!(view.application_dialog.is_none());
+            assert!(view.secret_value_dialog.is_some());
+            view.close_secret_value_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        store.values.lock().unwrap().get(&id).map(String::as_str),
+        Some("keep-me")
+    );
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
 fn manager_secret_keyboard_enter_submits_and_escape_discards(cx: &mut TestAppContext) {
     use std::sync::Arc;
     cx.update(Theme::init);
@@ -3455,6 +3831,7 @@ fn delete_not_found_clears_presence_without_reading_the_secret(cx: &mut TestAppC
                 view.variable_context(cx).status("secretToken"),
                 probe_core::VariableStatus::Resolved
             );
+            view.open_secret_value_dialog("secretToken".into(), window, cx);
             view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
             view.close_environment_manager_dialog(window, cx);
         })
@@ -3719,6 +4096,7 @@ fn deleting_a_stored_secret_makes_the_editor_placeholder_unresolved(cx: &mut Tes
                 probe_core::VariableStatus::Resolved
             );
             assert_secret_stays_out_of_editor_context(&context);
+            view.open_secret_value_dialog("secretToken".into(), window, cx);
             view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
             assert_eq!(
                 view.variable_context(cx).status("secretToken"),
@@ -4383,6 +4761,7 @@ fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppCo
             );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
             view.open_environment_manager_dialog(window, cx);
+            view.open_secret_value_dialog("secretToken".into(), window, cx);
             view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
         })
         .unwrap();

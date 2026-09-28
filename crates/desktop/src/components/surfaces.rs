@@ -347,6 +347,7 @@ pub(crate) fn dialog_layer(
 
 type VariableChangeHandler = Rc<dyn Fn(&str, String, &mut Window, &mut App)>;
 type ManageEnvironmentsHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+type ManageSecretHandler = Rc<dyn Fn(&str, FocusHandle, &mut Window, &mut App)>;
 
 #[derive(Clone, Default)]
 pub(crate) struct VariableContext {
@@ -367,6 +368,7 @@ pub(crate) struct VariableContext {
     pub(crate) unavailable_message: String,
     pub(crate) on_change: Option<VariableChangeHandler>,
     pub(crate) on_manage_environments: Option<ManageEnvironmentsHandler>,
+    pub(crate) on_manage_secret: Option<ManageSecretHandler>,
 }
 
 impl VariableContext {
@@ -606,9 +608,11 @@ pub(super) fn variable_tooltip_popup(
     presentation: VariableTooltipPresentation,
     hover: Entity<VariableHoverState>,
     value_input: Entity<InputState>,
-    on_manage_environments: Option<ManageEnvironmentsHandler>,
+    variables: VariableContext,
+    editor_focus: FocusHandle,
 ) -> impl IntoElement {
     let hover_for_content = hover.clone();
+    let secret_action_label = presentation.secret_action_label();
     div()
         .id("variable-input-tooltip-popup")
         .debug_selector(|| "variable-input-tooltip-popup".into())
@@ -626,20 +630,30 @@ pub(super) fn variable_tooltip_popup(
         .occlude()
         .on_mouse_down(MouseButton::Left, {
             let value_input = value_input.clone();
+            let secret = presentation.show_lock;
             move |_, window, cx| {
                 cx.stop_propagation();
-                value_input.update(cx, |input, cx| input.focus(window, cx));
+                if !secret {
+                    value_input.update(cx, |input, cx| input.focus(window, cx));
+                }
             }
         })
         .on_hover(move |hovered, _, cx| {
             hover_for_content.update(cx, |state, cx| state.on_content_hover(*hovered, cx));
         })
         .child(
-            truncated_label(format!("{{{{{name}}}}}"))
-                .flex_none()
-                .font_family(theme.typography.monospace_family)
-                .text_size(px(theme.typography.caption_size))
-                .text_color(theme.colors.syntax.string),
+            div()
+                .flex()
+                .items_center()
+                .gap(px(theme.metrics.spacing_1))
+                .when(presentation.show_lock, |row| row.child(lock_icon(theme)))
+                .child(
+                    truncated_label(format!("{{{{{name}}}}}"))
+                        .flex_none()
+                        .font_family(theme.typography.monospace_family)
+                        .text_size(px(theme.typography.caption_size))
+                        .text_color(theme.colors.syntax.string),
+                ),
         )
         .when_some(presentation.hint, |popup, hint| {
             popup.child(
@@ -650,7 +664,6 @@ pub(super) fn variable_tooltip_popup(
                     .flex_none()
                     .items_center()
                     .gap(px(theme.metrics.spacing_1))
-                    .when(presentation.show_lock, |row| row.child(lock_icon(theme)))
                     .child(
                         truncated_label(hint)
                             .text_size(px(theme.typography.caption_size))
@@ -658,15 +671,35 @@ pub(super) fn variable_tooltip_popup(
                     ),
             )
         })
-        .child(variable_value_input(
-            theme,
-            format!("variable-tooltip-value-{name}"),
-            value_input,
-            presentation.value,
-            presentation.placeholder,
-            presentation.editable,
-        ))
-        .when_some(on_manage_environments, |popup, on_manage| {
+        .when(!presentation.show_lock, |popup| {
+            popup.child(variable_value_input(
+                theme,
+                format!("variable-tooltip-value-{name}"),
+                value_input,
+                presentation.value,
+                presentation.placeholder,
+                presentation.editable,
+            ))
+        })
+        .when(presentation.show_lock, |popup| {
+            popup.when_some(variables.on_manage_secret, |popup, on_manage| {
+                let hover = hover.clone();
+                let name = name.clone();
+                popup.child(
+                    text_button(
+                        theme,
+                        "variable-tooltip-secret-action",
+                        secret_action_label,
+                        move |_, window, cx| {
+                            hover.update(cx, |state, cx| state.dismiss(cx));
+                            on_manage(&name, editor_focus.clone(), window, cx);
+                        },
+                    )
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+                )
+            })
+        })
+        .when_some(variables.on_manage_environments, |popup, on_manage| {
             let hover = hover.clone();
             popup.child(
                 text_button(

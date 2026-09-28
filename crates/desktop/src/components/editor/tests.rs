@@ -90,9 +90,11 @@ fn variable_tooltip_presentation_creates_missing_writable_variables() {
     assert!(empty.hint.is_none());
 
     let secret = variable_tooltip_presentation("token", &variables);
-    assert_eq!(secret.value, "unavailable");
+    assert!(secret.value.is_empty());
     assert!(!secret.editable);
-    assert_eq!(secret.hint, Some("Secret has no value in this environment"));
+    assert!(secret.show_lock);
+    assert_eq!(secret.hint, Some("○ Not set"));
+    assert_eq!(secret.secret_action_label(), "Set Secret…");
 
     let stored = VariableContext {
         resolved_secrets: ["apiKey".to_owned()].into_iter().collect(),
@@ -107,7 +109,9 @@ fn variable_tooltip_presentation_creates_missing_writable_variables() {
     let stored_tooltip = variable_tooltip_presentation("apiKey", &stored);
     assert!(stored_tooltip.value.is_empty());
     assert!(!stored_tooltip.editable);
-    assert_eq!(stored_tooltip.hint, Some("Secret value stored securely"));
+    assert!(stored_tooltip.show_lock);
+    assert_eq!(stored_tooltip.hint, Some("● Stored securely"));
+    assert_eq!(stored_tooltip.secret_action_label(), "Replace Secret…");
     assert!(!stored.values.contains_key("apiKey"));
     let palette = variable_highlight_palette(Theme::light());
     let (color, underline) =
@@ -123,7 +127,8 @@ fn variable_tooltip_presentation_creates_missing_writable_variables() {
     assert!(unknown_tooltip.value.is_empty());
     assert!(!unknown_tooltip.editable);
     assert!(unknown_tooltip.show_lock);
-    assert_eq!(unknown_tooltip.hint, Some("Secret presence not verified"));
+    assert_eq!(unknown_tooltip.hint, Some("Not verified"));
+    assert_eq!(unknown_tooltip.secret_action_label(), "Set Secret…");
     assert_ne!(
         unknown.status("secretToken"),
         VariableStatus::SecretWithoutValue
