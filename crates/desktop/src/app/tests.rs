@@ -1066,7 +1066,7 @@ fn writable_environment_fixture(suffix: &str) -> PathBuf {
 }
 
 fn reconciled_workspace(workspace: probe_opencollection::LoadedWorkspace) -> ReconciledWorkspace {
-    let disk_baselines = workspace
+    let baselines = workspace
         .requests()
         .iter()
         .filter_map(|located| {
@@ -1074,7 +1074,7 @@ fn reconciled_workspace(workspace: probe_opencollection::LoadedWorkspace) -> Rec
                 .workspace()
                 .request(located.key())
                 .cloned()
-                .map(|request| (located.selector().to_owned(), request))
+                .map(|request| (located.key(), request))
         })
         .collect();
     let selector_remaps = workspace
@@ -1090,7 +1090,7 @@ fn reconciled_workspace(workspace: probe_opencollection::LoadedWorkspace) -> Rec
         .collect();
     ReconciledWorkspace {
         workspace,
-        disk_baselines,
+        baselines,
         selector_remaps,
     }
 }

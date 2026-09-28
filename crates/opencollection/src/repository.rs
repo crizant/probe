@@ -3,7 +3,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use atomic_write_file::AtomicWriteFile;
@@ -83,7 +86,9 @@ impl LocatedFolder {
 }
 
 /// A loaded OpenCollection workspace and its persistence-locator index.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Deliberately not `Clone`: background work captures a narrow prepared operation.
+#[derive(Debug, PartialEq)]
 pub struct LoadedWorkspace {
     workspace: Workspace,
     diagnostics: Vec<super::ProjectionDiagnostic>,
@@ -648,7 +653,7 @@ impl LoadedWorkspace {
         self.documents.insert(
             persistence.document_path,
             SourceDocument {
-                original_source: serialized,
+                original_source: serialized.into(),
             },
         );
         Ok(())
@@ -730,7 +735,7 @@ impl LoadedWorkspace {
 pub struct PreparedRequestSave {
     diagnostic_prefix: Option<String>,
     persistence: RequestPersistence,
-    original_source: Vec<u8>,
+    original_source: Arc<[u8]>,
     update: RequestUpdate,
 }
 
@@ -753,7 +758,7 @@ impl PreparedRequestSave {
         )?;
         Ok(CompletedRequestSave {
             document_path: self.persistence.document_path,
-            serialized_source: serialized,
+            serialized_source: serialized.into(),
             diagnostic_prefix: self.diagnostic_prefix,
             diagnostics: refreshed_diagnostics.unwrap(),
         })
@@ -764,7 +769,7 @@ impl PreparedRequestSave {
 #[derive(Debug)]
 pub struct CompletedRequestSave {
     document_path: PathBuf,
-    serialized_source: Vec<u8>,
+    serialized_source: Arc<[u8]>,
     diagnostic_prefix: Option<String>,
     diagnostics: Vec<ProjectionDiagnostic>,
 }
@@ -773,7 +778,7 @@ pub struct CompletedRequestSave {
 #[derive(Debug)]
 pub struct PreparedEnvironmentSave {
     persistence: EnvironmentPersistence,
-    original_source: Vec<u8>,
+    original_source: Arc<[u8]>,
     mutation: EnvironmentYamlMutation,
 }
 
@@ -784,7 +789,7 @@ impl PreparedEnvironmentSave {
             persist_environment_yaml(&self.persistence, &self.original_source, &self.mutation)?;
         Ok(CompletedEnvironmentSave {
             document_path: self.persistence.document_path,
-            serialized_source: serialized,
+            serialized_source: serialized.into(),
         })
     }
 }
@@ -793,14 +798,14 @@ impl PreparedEnvironmentSave {
 #[derive(Debug)]
 pub struct CompletedEnvironmentSave {
     document_path: PathBuf,
-    serialized_source: Vec<u8>,
+    serialized_source: Arc<[u8]>,
 }
 
 /// A validated environment replacement captured for background persistence.
 #[derive(Debug)]
 pub struct PreparedEnvironmentReplace {
     persistence: EnvironmentPersistence,
-    original_source: Vec<u8>,
+    original_source: Arc<[u8]>,
     original_name: String,
     replacement: Environment,
 }
@@ -835,7 +840,7 @@ impl PreparedEnvironmentReplace {
             original_name: self.original_name,
             replacement: self.replacement,
             document_path,
-            serialized_source: serialized,
+            serialized_source: serialized.into(),
         })
     }
 }
@@ -846,7 +851,7 @@ pub struct CompletedEnvironmentReplace {
     original_name: String,
     replacement: Environment,
     document_path: PathBuf,
-    serialized_source: Vec<u8>,
+    serialized_source: Arc<[u8]>,
 }
 
 /// A validated environment deletion captured for background persistence.
@@ -854,7 +859,7 @@ pub struct CompletedEnvironmentReplace {
 pub struct PreparedEnvironmentDelete {
     name: String,
     persistence: EnvironmentPersistence,
-    original_source: Vec<u8>,
+    original_source: Arc<[u8]>,
 }
 
 impl PreparedEnvironmentDelete {
@@ -863,11 +868,14 @@ impl PreparedEnvironmentDelete {
         let document_path = self.persistence.document_path.clone();
         let (serialized_source, bundled_index) = match self.persistence.bundled_index {
             Some(index) => (
-                Some(persist_bundled_environment_delete(
-                    &document_path,
-                    &self.original_source,
-                    index,
-                )?),
+                Some(
+                    persist_bundled_environment_delete(
+                        &document_path,
+                        &self.original_source,
+                        index,
+                    )?
+                    .into(),
+                ),
                 Some(index),
             ),
             None => {
@@ -889,7 +897,7 @@ impl PreparedEnvironmentDelete {
 pub struct CompletedEnvironmentDelete {
     name: String,
     document_path: PathBuf,
-    serialized_source: Option<Vec<u8>>,
+    serialized_source: Option<Arc<[u8]>>,
     bundled_index: Option<usize>,
 }
 
@@ -904,7 +912,7 @@ pub struct PreparedEnvironmentCreate {
 enum EnvironmentCreateKind {
     Bundled {
         document_path: PathBuf,
-        original_source: Vec<u8>,
+        original_source: Arc<[u8]>,
         bundled_index: usize,
     },
     Unbundled {
@@ -942,7 +950,7 @@ impl PreparedEnvironmentCreate {
         Ok(CompletedEnvironmentCreate {
             name,
             document_path,
-            serialized_source: serialized,
+            serialized_source: serialized.into(),
             bundled_index,
         })
     }
@@ -953,7 +961,7 @@ impl PreparedEnvironmentCreate {
 pub struct CompletedEnvironmentCreate {
     name: String,
     document_path: PathBuf,
-    serialized_source: Vec<u8>,
+    serialized_source: Arc<[u8]>,
     bundled_index: Option<usize>,
 }
 
@@ -978,7 +986,7 @@ struct RequestPersistence {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SourceDocument {
-    pub(crate) original_source: Vec<u8>,
+    pub(crate) original_source: Arc<[u8]>,
 }
 
 /// Loads a bundled OpenCollection file or an unbundled collection directory.

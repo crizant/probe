@@ -429,10 +429,10 @@ impl ProbeApp {
             );
             return;
         }
-        let Some(mut workspace) = self.loaded_workspace.clone() else {
+        let Some(loaded) = self.loaded_workspace.as_ref() else {
             return;
         };
-        let Some(mut draft) = workspace.workspace().request(key).cloned() else {
+        let Some(mut draft) = loaded.workspace().request(key).cloned() else {
             return;
         };
         draft.metadata.name = Some(name.clone());
@@ -462,34 +462,30 @@ impl ProbeApp {
             graphql: graphql_update,
             update: Some(update),
         };
-        let operation_for_task = operation.clone();
+        let prepared = match loaded.prepare_structure(operation.clone()) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.pending_close = None;
+                self.show_toast(
+                    ToastIntent::Error,
+                    format!("Could not save request: {error}"),
+                    cx,
+                );
+                return;
+            }
+        };
         self.loading = true;
         self.structure_task = Some(cx.spawn_in(window, async move |view, window| {
             let result = window
                 .background_spawn(async move {
-                    let (structure_result, disk_workspace) = workspace
-                        .apply_structure_with_disk_snapshot(operation_for_task)
-                        .map_err(|error| (matches!(error, probe_opencollection::StructureError::CommittedRefreshFailed { .. }), error.to_string()))?;
-                    let selector = structure_result
-                        .selector
-                        .as_deref()
-                        .expect("created request must have a selector");
-                    let created_key = workspace
-                        .request_key(selector)
-                        .expect("created request must resolve after repository reload");
-                    if let Some(request) = workspace.request_mut(created_key) {
-                        let metadata = request.metadata.clone();
-                        *request = draft;
-                        request.metadata = metadata;
-                    }
-                    Ok::<_, (bool, String)>((workspace, disk_workspace, structure_result))
+                    prepared.execute().map_err(|error| (matches!(error, probe_opencollection::StructureError::CommittedRefreshFailed { .. }), error.to_string()))
                 })
                 .await;
             let _ = view.update_in(window, |view, window, cx| {
                 view.structure_task = None;
                 view.loading = false;
                 match result {
-                    Ok((workspace, disk_workspace, result)) => {
+                    Ok((result, workspace)) => {
                         let current_draft = view
                             .loaded_workspace
                             .as_ref()
@@ -499,7 +495,6 @@ impl ProbeApp {
                         view.detached_requests.remove(&key);
                         let remaps = view.apply_structure_result(
                             workspace,
-                            disk_workspace,
                             result.clone(),
                             (&operation, Some(key)),
                             window,
@@ -510,15 +505,20 @@ impl ProbeApp {
                                 .loaded_workspace
                                 .as_ref()
                                 .and_then(|loaded| loaded.request_key(selector))
-                            && let Some(current) = current_draft
                             && let Some(loaded) = view.loaded_workspace.as_mut()
                             && let Some(request) = loaded.request_mut(new_key)
                         {
-                            let saved = request.clone();
-                            *request = current;
-                            request.metadata = saved.metadata.clone();
-                            if *request != saved {
-                                view.persistence.edited(new_key);
+                            let mut saved = draft;
+                            saved.metadata = request.metadata.clone();
+                            match current_draft {
+                                Some(current) => {
+                                    *request = current;
+                                    request.metadata = saved.metadata.clone();
+                                    if *request != saved {
+                                        view.persistence.edited(new_key);
+                                    }
+                                }
+                                None => *request = saved,
                             }
                         }
                         if let Some(active_key) =

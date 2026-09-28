@@ -126,6 +126,22 @@ fn bundled_structure_edits_save_reload_and_preserve_unknown_fields() {
             .map(String::as_str),
         Some("items/1/items/0")
     );
+    let renamed_in_memory = loaded
+        .requests()
+        .iter()
+        .filter(|located| {
+            loaded
+                .workspace()
+                .request(located.key())
+                .unwrap()
+                .metadata
+                .name
+                .as_deref()
+                == Some("Renamed")
+        })
+        .map(|located| located.selector())
+        .collect::<Vec<_>>();
+    assert_eq!(renamed_in_memory, ["items/1/items/0"]);
     let moved = loaded
         .apply_structure(StructureOperation::MoveRequest {
             selector: "items/1/items/0".to_owned(),
@@ -449,6 +465,53 @@ fn unbundled_duplicate_request_copies_request_after_original() {
     assert!(saved.contains("x-request: retained"));
     assert!(saved.contains("seq: 2"));
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn prepared_structure_edit_returns_disk_state_and_checks_the_prepared_baseline() {
+    let path = temporary_path("phase16-bundled-prepared.yml");
+    fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let key = loaded.request_key("items/0").unwrap();
+    let persisted_url = loaded.workspace().request(key).unwrap().url.clone();
+    loaded.request_mut(key).unwrap().url = Some("https://example.com/unsaved".to_owned());
+
+    let (result, disk) = loaded
+        .prepare_structure(StructureOperation::RenameRequest {
+            selector: "items/0".to_owned(),
+            name: "Renamed".to_owned(),
+        })
+        .unwrap()
+        .execute()
+        .unwrap();
+
+    let renamed = disk
+        .workspace()
+        .request(
+            disk.request_key(result.selector.as_deref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(renamed.metadata.name.as_deref(), Some("Renamed"));
+    assert_eq!(renamed.url, persisted_url);
+    let source = loaded.workspace().request(key).unwrap();
+    assert_eq!(source.metadata.name.as_deref(), Some("Alpha"));
+    assert_eq!(source.url.as_deref(), Some("https://example.com/unsaved"));
+
+    let prepared = disk
+        .prepare_structure(StructureOperation::DeleteRequest {
+            selector: "items/0".to_owned(),
+        })
+        .unwrap();
+    let external = fs::read_to_string(&path).unwrap() + "\nx-external: true\n";
+    fs::write(&path, &external).unwrap();
+    let conflict = prepared.execute().unwrap_err();
+    assert!(matches!(
+        conflict,
+        StructureError::ConcurrentModification(_)
+    ));
+    assert_eq!(fs::read_to_string(&path).unwrap(), external);
+    fs::remove_file(path).unwrap();
 }
 
 #[test]

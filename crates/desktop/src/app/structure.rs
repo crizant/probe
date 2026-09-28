@@ -501,32 +501,34 @@ impl ProbeApp {
             );
             return;
         }
-        let (Some(mut workspace), Some(path)) =
-            (self.loaded_workspace.clone(), self.workspace_path.clone())
-        else {
+        let (Some(loaded), Some(_)) = (self.loaded_workspace.as_ref(), &self.workspace_path) else {
             return;
         };
+        let prepared = match loaded.prepare_structure(operation.clone()) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.show_toast(
+                    ToastIntent::Error,
+                    format!("Could not edit collection structure: {error}"),
+                    cx,
+                );
+                return;
+            }
+        };
         self.loading = true;
-        let operation_for_task = operation.clone();
         self.structure_task = Some(cx.spawn_in(window, async move |view, window| {
             let result = window
-                .background_spawn(async move {
-                    let structure_result = workspace
-                        .apply_structure(operation_for_task)
-                        .map_err(|error| error.to_string())?;
-                    let disk_workspace =
-                        load_workspace(&path).map_err(|error| error.to_string())?;
-                    Ok::<_, String>((workspace, disk_workspace, structure_result))
-                })
+                .background_spawn(
+                    async move { prepared.execute().map_err(|error| error.to_string()) },
+                )
                 .await;
             let _ = view.update_in(window, |view, window, cx| {
                 view.structure_task = None;
                 view.loading = false;
                 match result {
-                    Ok((workspace, disk_workspace, result)) => {
+                    Ok((result, workspace)) => {
                         view.apply_structure_result(
                             workspace,
-                            disk_workspace,
                             result,
                             (&operation, None),
                             window,
@@ -547,10 +549,12 @@ impl ProbeApp {
         cx.notify();
     }
 
+    /// Installs a committed on-disk workspace, carrying current in-memory drafts to
+    /// their remapped selectors. `workspace` must not contain replayed drafts: its
+    /// requests become the persistence baselines.
     pub(super) fn apply_structure_result(
         &mut self,
         mut workspace: LoadedWorkspace,
-        disk_workspace: LoadedWorkspace,
         result: StructureResult,
         origin: (&StructureOperation, Option<RequestKey>),
         window: &mut Window,
@@ -568,48 +572,53 @@ impl ProbeApp {
         {
             key_remaps.insert(old_key, new_key);
         }
-        let current_requests = old
+        let replays = old
             .requests()
             .iter()
             .filter_map(|located| {
-                old.workspace()
-                    .request(located.key())
-                    .cloned()
-                    .map(|request| (located.selector().to_owned(), request))
+                let new_key = result
+                    .selector_remaps
+                    .get(located.selector())
+                    .and_then(|selector| workspace.request_key(selector))?;
+                let renamed = matches!(
+                    operation,
+                    StructureOperation::RenameRequest { selector, .. }
+                        if selector == located.selector()
+                );
+                Some((located.key(), new_key, renamed))
             })
             .collect::<Vec<_>>();
 
-        for (old_selector, mut request) in current_requests {
-            let Some(new_selector) = result.selector_remaps.get(&old_selector) else {
+        // Located drafts are moved out of the previous workspace, which is replaced
+        // below. Detached drafts must stay in place for reinstallation.
+        let old = self
+            .loaded_workspace
+            .as_mut()
+            .expect("previous workspace was checked above");
+        let mut disk_baselines = BTreeMap::new();
+        for (old_key, new_key, renamed) in replays {
+            let (Some(draft), Some(target)) =
+                (old.request_mut(old_key), workspace.request_mut(new_key))
+            else {
                 continue;
             };
-            let Some(new_key) = workspace.request_key(new_selector) else {
-                continue;
-            };
-            let persisted = disk_workspace
-                .request_key(new_selector)
-                .and_then(|key| disk_workspace.workspace().request(key));
-            if let Some(persisted) = persisted {
-                request.metadata.sequence = persisted.metadata.sequence;
-                if matches!(
-                    operation,
-                    StructureOperation::RenameRequest { selector, .. }
-                        if selector == &old_selector
-                ) {
-                    request.metadata.name.clone_from(&persisted.metadata.name);
-                }
+            let mut request = std::mem::take(draft);
+            request.metadata.sequence = target.metadata.sequence;
+            if renamed {
+                request.metadata.name.clone_from(&target.metadata.name);
             }
-            if let Some(target) = workspace.request_mut(new_key) {
-                *target = request;
-            }
+            let persisted = std::mem::replace(target, request);
+            disk_baselines.entry(new_key).or_insert(persisted);
         }
 
         let baselines = workspace
             .requests()
             .iter()
             .filter_map(|located| {
-                let disk_key = disk_workspace.request_key(located.selector())?;
-                let baseline = disk_workspace.workspace().request(disk_key)?.clone();
+                let baseline = match disk_baselines.remove(&located.key()) {
+                    Some(baseline) => baseline,
+                    None => workspace.workspace().request(located.key())?.clone(),
+                };
                 Some((located.key(), baseline))
             })
             .collect::<Vec<_>>();

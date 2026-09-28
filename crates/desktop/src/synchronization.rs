@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use probe_core::Request;
+use probe_core::{Request, RequestKey};
 use probe_opencollection::LoadedWorkspace;
 
-#[derive(Clone, Debug)]
-pub(crate) struct LocalRequestState {
-    pub(crate) selector: String,
-    pub(crate) baseline: Request,
-    pub(crate) local: Request,
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LocalRequestState<'a> {
+    pub(crate) selector: &'a str,
+    pub(crate) baseline: &'a Request,
+    pub(crate) local: &'a Request,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,7 +45,8 @@ impl SynchronizationConflict {
 
 pub(crate) struct ReconciledWorkspace {
     pub(crate) workspace: LoadedWorkspace,
-    pub(crate) disk_baselines: BTreeMap<String, Request>,
+    /// The on-disk version of every request in `workspace`, keyed by its fresh key.
+    pub(crate) baselines: Vec<(RequestKey, Request)>,
     pub(crate) selector_remaps: BTreeMap<String, String>,
 }
 
@@ -60,54 +61,45 @@ pub(crate) enum ReconcileResult {
 /// request field at a time when the disk changed a different field. Any overlap is
 /// returned to the desktop for an explicit user decision.
 pub(crate) fn reconcile(
-    local: Vec<LocalRequestState>,
+    local: &[LocalRequestState<'_>],
     mut fresh: LoadedWorkspace,
     rename_hints: &BTreeMap<String, String>,
 ) -> ReconcileResult {
-    let disk_baselines: BTreeMap<_, _> = fresh
-        .requests()
-        .iter()
-        .filter_map(|located| {
-            fresh
-                .workspace()
-                .request(located.key())
-                .cloned()
-                .map(|request| (located.selector().to_owned(), request))
-        })
-        .collect();
     let mut claimed = BTreeSet::new();
     let mut selector_remaps = rename_hints.clone();
     let mut conflicts = Vec::new();
+    // Merges are applied after matching so every lookup sees the disk version.
+    let mut merges = BTreeMap::new();
 
-    for state in &local {
-        let target = find_target_selector(
-            state,
-            &local,
-            &disk_baselines,
-            rename_hints,
-            &claimed,
-            &mut conflicts,
-        );
+    for state in local {
+        let target =
+            find_target_selector(state, local, &fresh, rename_hints, &claimed, &mut conflicts);
         let Some(target) = target else {
             if state.local != state.baseline {
                 conflicts.push(SynchronizationConflict::Deleted {
-                    selector: state.selector.clone(),
+                    selector: state.selector.to_owned(),
                 });
             }
             continue;
         };
         claimed.insert(target.clone());
-        selector_remaps.insert(state.selector.clone(), target.clone());
+        selector_remaps.insert(state.selector.to_owned(), target.clone());
 
-        let disk = &disk_baselines[&target];
-        let (merged, fields) = merge_request(&state.baseline, &state.local, disk);
+        let key = fresh
+            .request_key(&target)
+            .expect("fresh selector must resolve to a request key");
+        if state.local == state.baseline {
+            // A clean merge is exactly the disk request.
+            merges.remove(&key);
+            continue;
+        }
+        let disk = fresh
+            .workspace()
+            .request(key)
+            .expect("fresh request key must remain valid");
+        let (merged, fields) = merge_request(state.baseline, state.local, disk);
         if fields.is_empty() {
-            let key = fresh
-                .request_key(&target)
-                .expect("fresh selector must resolve to a request key");
-            *fresh
-                .request_mut(key)
-                .expect("fresh request key must remain valid") = merged;
+            merges.insert(key, merged);
         } else {
             conflicts.push(SynchronizationConflict::Modified {
                 selector: target,
@@ -116,51 +108,78 @@ pub(crate) fn reconcile(
         }
     }
 
-    if conflicts.is_empty() {
-        ReconcileResult::Applied(Box::new(ReconciledWorkspace {
-            workspace: fresh,
-            disk_baselines,
-            selector_remaps,
-        }))
-    } else {
-        ReconcileResult::Conflicted(conflicts)
+    if !conflicts.is_empty() {
+        return ReconcileResult::Conflicted(conflicts);
     }
+    let mut merged_baselines = BTreeMap::new();
+    for (key, merged) in merges {
+        let slot = fresh
+            .request_mut(key)
+            .expect("fresh request key must remain valid");
+        merged_baselines.insert(key, std::mem::replace(slot, merged));
+    }
+    let baselines = fresh
+        .requests()
+        .iter()
+        .filter_map(|located| {
+            let baseline = match merged_baselines.remove(&located.key()) {
+                Some(baseline) => baseline,
+                None => fresh.workspace().request(located.key())?.clone(),
+            };
+            Some((located.key(), baseline))
+        })
+        .collect();
+    ReconcileResult::Applied(Box::new(ReconciledWorkspace {
+        workspace: fresh,
+        baselines,
+        selector_remaps,
+    }))
+}
+
+fn disk_request<'a>(fresh: &'a LoadedWorkspace, selector: &str) -> Option<&'a Request> {
+    fresh
+        .request_key(selector)
+        .and_then(|key| fresh.workspace().request(key))
 }
 
 fn find_target_selector(
-    state: &LocalRequestState,
-    local: &[LocalRequestState],
-    disk: &BTreeMap<String, Request>,
+    state: &LocalRequestState<'_>,
+    local: &[LocalRequestState<'_>],
+    fresh: &LoadedWorkspace,
     rename_hints: &BTreeMap<String, String>,
     claimed: &BTreeSet<String>,
     conflicts: &mut Vec<SynchronizationConflict>,
 ) -> Option<String> {
-    if let Some(target) = hinted_selector(&state.selector, rename_hints)
-        && disk.contains_key(&target)
+    if let Some(target) = hinted_selector(state.selector, rename_hints)
+        && fresh.request_key(&target).is_some()
         && !claimed.contains(&target)
     {
         return Some(target);
     }
-    if let Some(exact) = disk.get(&state.selector) {
+    if let Some(exact) = disk_request(fresh, state.selector) {
         let belongs_to_another_request = local
             .iter()
-            .any(|other| other.selector != state.selector && other.baseline == *exact);
+            .any(|other| other.selector != state.selector && other.baseline == exact);
         if !belongs_to_another_request {
-            return Some(state.selector.clone());
+            return Some(state.selector.to_owned());
         }
     }
 
-    let candidates: Vec<_> = disk
+    let candidates: Vec<_> = fresh
+        .requests()
         .iter()
-        .filter(|(selector, request)| !claimed.contains(*selector) && *request == &state.baseline)
-        .map(|(selector, _)| selector.clone())
+        .filter(|located| {
+            !claimed.contains(located.selector())
+                && fresh.workspace().request(located.key()) == Some(state.baseline)
+        })
+        .map(|located| located.selector())
         .collect();
     match candidates.as_slice() {
-        [selector] => Some(selector.clone()),
+        [selector] => Some((*selector).to_owned()),
         [] => None,
         _ if state.local != state.baseline => {
             conflicts.push(SynchronizationConflict::AmbiguousRename {
-                selector: state.selector.clone(),
+                selector: state.selector.to_owned(),
             });
             None
         }
@@ -326,17 +345,33 @@ mod tests {
         path
     }
 
+    struct OwnedState {
+        selector: String,
+        baseline: probe_core::Request,
+        local: probe_core::Request,
+    }
+
+    impl OwnedState {
+        fn state(&self) -> LocalRequestState<'_> {
+            LocalRequestState {
+                selector: &self.selector,
+                baseline: &self.baseline,
+                local: &self.local,
+            }
+        }
+    }
+
     fn request_state(
         workspace: &probe_opencollection::LoadedWorkspace,
         index: usize,
-    ) -> LocalRequestState {
+    ) -> OwnedState {
         let located = &workspace.requests()[index];
         let request = workspace
             .workspace()
             .request(located.key())
             .unwrap()
             .clone();
-        LocalRequestState {
+        OwnedState {
             selector: located.selector().to_owned(),
             baseline: request.clone(),
             local: request,
@@ -354,7 +389,7 @@ mod tests {
         source = source.replacen("method: GET", "method: PATCH", 1);
         fs::write(&path, source).unwrap();
         let fresh = probe_opencollection::load_workspace(&path).unwrap();
-        let ReconcileResult::Applied(result) = reconcile(vec![state], fresh, &BTreeMap::new())
+        let ReconcileResult::Applied(result) = reconcile(&[state.state()], fresh, &BTreeMap::new())
         else {
             panic!("non-overlapping changes should merge")
         };
@@ -385,7 +420,7 @@ mod tests {
         source = source.replacen("method: POST", "method: GET", 1);
         fs::write(&path, source).unwrap();
         let fresh = probe_opencollection::load_workspace(&path).unwrap();
-        let ReconcileResult::Applied(result) = reconcile(vec![state], fresh, &BTreeMap::new())
+        let ReconcileResult::Applied(result) = reconcile(&[state.state()], fresh, &BTreeMap::new())
         else {
             panic!("a local GraphQL body change should merge with a disk method change")
         };
@@ -422,7 +457,7 @@ mod tests {
         source = source.replacen("value: \"25\"", "value: \"50\"", 1);
         fs::write(&path, source).unwrap();
         let fresh = probe_opencollection::load_workspace(&path).unwrap();
-        let ReconcileResult::Applied(result) = reconcile(vec![state], fresh, &BTreeMap::new())
+        let ReconcileResult::Applied(result) = reconcile(&[state.state()], fresh, &BTreeMap::new())
         else {
             panic!("non-overlapping path parameter changes should merge")
         };
@@ -448,7 +483,7 @@ mod tests {
         let fresh = probe_opencollection::load_workspace(&path).unwrap();
 
         let ReconcileResult::Conflicted(conflicts) =
-            reconcile(vec![state], fresh, &BTreeMap::new())
+            reconcile(&[state.state()], fresh, &BTreeMap::new())
         else {
             panic!("overlapping changes should conflict")
         };
@@ -474,7 +509,7 @@ mod tests {
         let mut hints = BTreeMap::new();
         hints.insert(old.clone(), target.clone());
         let fresh = probe_opencollection::load_workspace(&path).unwrap();
-        let ReconcileResult::Applied(result) = reconcile(vec![state], fresh, &hints) else {
+        let ReconcileResult::Applied(result) = reconcile(&[state.state()], fresh, &hints) else {
             panic!("a watcher rename pair should be authoritative")
         };
         assert_eq!(result.selector_remaps.get(&old), Some(&target));
@@ -493,7 +528,7 @@ mod tests {
         state.selector = "missing.yml".to_owned();
 
         let ReconcileResult::Conflicted(conflicts) =
-            reconcile(vec![state], fresh, &BTreeMap::new())
+            reconcile(&[state.state()], fresh, &BTreeMap::new())
         else {
             panic!("a dirty deletion should conflict")
         };
@@ -520,13 +555,17 @@ mod tests {
             "opencollection: 1.0.0\ninfo: { name: Test }\nbundled: true\nitems:\n  - info: { name: First, type: http }\n    http: { method: GET, url: https://first.example }\n  - info: { name: Second, type: http }\n    http: { method: GET, url: https://second.example }\n",
         )
         .unwrap();
-        let local = vec![request_state(&original, 0), request_state(&original, 1)];
+        let local = [request_state(&original, 0), request_state(&original, 1)];
         let fresh = probe_opencollection::load_workspace_from_str(
             "opencollection: 1.0.0\ninfo: { name: Test }\nbundled: true\nitems:\n  - info: { name: Second, type: http }\n    http: { method: GET, url: https://second.example }\n",
         )
         .unwrap();
 
-        let ReconcileResult::Applied(result) = reconcile(local, fresh, &BTreeMap::new()) else {
+        let ReconcileResult::Applied(result) = reconcile(
+            &local.iter().map(OwnedState::state).collect::<Vec<_>>(),
+            fresh,
+            &BTreeMap::new(),
+        ) else {
             panic!("deleting a clean request should apply")
         };
         assert_eq!(
