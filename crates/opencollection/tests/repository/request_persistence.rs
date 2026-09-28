@@ -263,7 +263,9 @@ fn request_saves_refresh_diagnostics_before_reloading() {
             },
         )
         .unwrap();
-    loaded.complete_request_save(prepared.execute().unwrap());
+    loaded
+        .complete_request_save(prepared.execute().unwrap())
+        .unwrap();
     assert!(loaded.diagnostics().is_empty());
     assert_eq!(
         loaded.diagnostics(),
@@ -461,7 +463,7 @@ fn desktop_editable_fields_survive_a_prepared_save_and_reload() {
         .prepare_request_save("items/0", update)
         .expect("save should prepare");
     let completed = prepared.execute().expect("save should execute");
-    loaded.complete_request_save(completed);
+    loaded.complete_request_save(completed).unwrap();
 
     let reloaded = load_workspace(&path).expect("saved workspace should reload");
     let request = reloaded
@@ -506,7 +508,7 @@ fn clearing_body_and_authentication_preserves_unrelated_yaml() {
         .unwrap()
         .execute()
         .unwrap();
-    loaded.complete_request_save(saved);
+    loaded.complete_request_save(saved).unwrap();
 
     let reloaded = load_workspace(&path).unwrap();
     let request = reloaded
@@ -554,7 +556,7 @@ fn every_supported_body_and_authentication_shape_survives_desktop_style_saves() 
             .unwrap()
             .execute()
             .unwrap();
-        loaded.complete_request_save(saved);
+        loaded.complete_request_save(saved).unwrap();
     }
 
     let reloaded = load_workspace(&path).unwrap();
@@ -758,4 +760,77 @@ fn rejects_a_bundled_flag_that_disagrees_with_the_source_kind() {
         error,
         probe_opencollection::LoadError::InvalidMode { .. }
     ));
+}
+
+#[test]
+fn request_completion_rejects_reloaded_workspace() {
+    let path = temporary_path("request-completion-reload.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &path).unwrap();
+    let loaded = load_workspace(&path).unwrap();
+    let saved = loaded
+        .prepare_request_save(
+            "items/0",
+            RequestUpdate {
+                method: FieldPatch::Set("PATCH".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap()
+        .execute()
+        .unwrap();
+    let mut reloaded = load_workspace(&path).unwrap();
+    let before = reloaded.diagnostics().to_vec();
+    assert!(matches!(
+        reloaded.complete_request_save(saved),
+        Err(SaveError::StaleCompletion)
+    ));
+    assert_eq!(reloaded.diagnostics(), before);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn request_completion_cannot_replace_newer_retained_baseline() {
+    let path = temporary_path("request-completion-baseline");
+    copy_directory(&fixture("unbundled"), &path);
+    let mut loaded = load_workspace(&path).unwrap();
+    let first = loaded
+        .prepare_request_save(
+            "health.yml",
+            RequestUpdate {
+                method: FieldPatch::Set("PATCH".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    let second = loaded
+        .prepare_request_save(
+            "users/list-users.yml",
+            RequestUpdate {
+                method: FieldPatch::Set("POST".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    loaded
+        .complete_request_save(second.execute().unwrap())
+        .unwrap();
+    let stale = first.execute().unwrap();
+    assert!(matches!(
+        loaded.complete_request_save(stale),
+        Err(SaveError::StaleCompletion)
+    ));
+    assert!(
+        loaded
+            .prepare_request_save(
+                "users/list-users.yml",
+                RequestUpdate {
+                    method: FieldPatch::Set("PUT".to_owned()),
+                    ..RequestUpdate::default()
+                },
+            )
+            .unwrap()
+            .execute()
+            .is_ok()
+    );
+    fs::remove_dir_all(path).unwrap();
 }

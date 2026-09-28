@@ -131,6 +131,9 @@ impl From<SaveError> for StructureError {
         match error {
             SaveError::ReadOnlySource => Self::ReadOnlySource,
             SaveError::ConcurrentModification(path) => Self::ConcurrentModification(path),
+            SaveError::StaleCompletion => {
+                Self::InvalidDocument("repository changed before save completion".to_owned())
+            }
             SaveError::InvalidDocument(message) => Self::InvalidDocument(message),
             SaveError::Serialize(error) => Self::InvalidDocument(error.to_string()),
             SaveError::Io { path, source } => Self::Io { path, source },

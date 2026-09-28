@@ -621,11 +621,14 @@ impl ProbeApp {
                 .await;
             let _ = view.update_in(window, |view, window, cx| {
                 view.request_save_task = None;
+                let result = result.and_then(|saved| {
+                    view.loaded_workspace
+                        .as_mut()
+                        .ok_or(probe_opencollection::SaveError::StaleCompletion)?
+                        .complete_request_save(saved)
+                });
                 match result {
-                    Ok(saved) => {
-                        if let Some(loaded) = view.loaded_workspace.as_mut() {
-                            loaded.complete_request_save(saved);
-                        }
+                    Ok(()) => {
                         view.persistence.complete(key, snapshot);
                         view.show_toast(ToastIntent::Success, "Request saved.", cx);
                         view.start_next_request_save(window, cx);

@@ -426,6 +426,7 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
         environment_persistence: BTreeMap::new(),
         documents: BTreeMap::new(),
         source: WorkspaceSource::Memory,
+        baseline: super::WorkspaceBaseline::fresh(),
     }
 }
 

@@ -197,7 +197,7 @@ fn environment_replace_preserves_unknown_fields_and_edits_secret_declarations() 
         .prepare_environment_replace("development", replacement)
         .unwrap();
     let saved = prepared.execute().unwrap();
-    loaded.complete_environment_replace(saved);
+    loaded.complete_environment_replace(saved).unwrap();
 
     let source = fs::read_to_string(&path).unwrap();
     assert!(!source.contains("extends: base"));
@@ -224,7 +224,7 @@ fn environment_replace_preserves_unknown_fields_and_edits_secret_declarations() 
         .retain(|variable| matches!(variable, probe_core::EnvironmentVariable::Plain(_)));
     let prepared = loaded.prepare_environment_replace("base", base).unwrap();
     let saved = prepared.execute().unwrap();
-    loaded.complete_environment_replace(saved);
+    loaded.complete_environment_replace(saved).unwrap();
     let reloaded = load_workspace(&path).unwrap();
     assert_eq!(
         loaded.workspace().environments()[0],
@@ -261,7 +261,7 @@ fn environment_replace_adds_and_renames_secret_declarations_without_values() {
         .unwrap()
         .execute()
         .unwrap();
-    loaded.complete_environment_replace(saved);
+    loaded.complete_environment_replace(saved).unwrap();
     let source = fs::read_to_string(&path).unwrap();
     assert!(source.contains("name: signingKey"));
     assert!(source.contains("secret: true"));
@@ -287,7 +287,7 @@ fn environment_replace_adds_and_renames_secret_declarations_without_values() {
         .unwrap()
         .execute()
         .unwrap();
-    reloaded.complete_environment_replace(saved);
+    reloaded.complete_environment_replace(saved).unwrap();
     let source = fs::read_to_string(&path).unwrap();
     assert!(source.contains("name: newSigningKey"));
     assert!(!source.contains("name: signingKey"));
@@ -352,7 +352,7 @@ fn bundled_environment_delete_updates_following_indices() {
     let mut loaded = load_workspace(&path).unwrap();
     let prepared = loaded.prepare_environment_delete("development").unwrap();
     let saved = prepared.execute().unwrap();
-    loaded.complete_environment_delete(saved);
+    loaded.complete_environment_delete(saved).unwrap();
     assert!(
         loaded
             .workspace()
@@ -377,7 +377,7 @@ fn unbundled_environment_delete_removes_only_the_environment_document() {
     let mut loaded = load_workspace(&root).unwrap();
     let prepared = loaded.prepare_environment_delete("development").unwrap();
     let saved = prepared.execute().unwrap();
-    loaded.complete_environment_delete(saved);
+    loaded.complete_environment_delete(saved).unwrap();
     assert!(!root.join("environments/development.yml").exists());
     assert!(root.join("opencollection.yml").exists());
     fs::remove_dir_all(root).unwrap();
@@ -400,7 +400,7 @@ fn unbundled_environment_rename_moves_the_document() {
         .prepare_environment_replace("development", replacement)
         .unwrap();
     let saved = prepared.execute().unwrap();
-    loaded.complete_environment_replace(saved);
+    loaded.complete_environment_replace(saved).unwrap();
 
     assert!(!root.join("environments/development.yml").exists());
     assert!(root.join("environments/staging.yml").exists());
@@ -568,7 +568,7 @@ fn environment_replace_updates_plain_and_existing_secret_without_leaking_value()
         .unwrap()
         .execute()
         .unwrap();
-    loaded.complete_environment_replace(saved);
+    loaded.complete_environment_replace(saved).unwrap();
     let source = fs::read_to_string(&path).unwrap();
     assert!(source.contains("changed.example"));
     assert!(source.contains("x-extra: keep"));
@@ -610,7 +610,7 @@ fn environment_replace_plain_with_secret_removes_plaintext_value() {
         .unwrap()
         .execute()
         .unwrap();
-    loaded.complete_environment_replace(saved);
+    loaded.complete_environment_replace(saved).unwrap();
     let source = fs::read_to_string(&path).unwrap();
     assert!(source.contains("secret: true"));
     assert!(!source.contains("development-token"));
@@ -621,4 +621,91 @@ fn environment_replace_plain_with_secret_removes_plaintext_value() {
         loaded.workspace().environments()[1]
     );
     fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn environment_replace_and_delete_reject_wrong_loaded_generation() {
+    for delete in [false, true] {
+        let path = temporary_path(if delete {
+            "env-wrong-delete.yml"
+        } else {
+            "env-wrong-replace.yml"
+        });
+        fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+        let original = load_workspace(&path).unwrap();
+        let mut reloaded;
+        if delete {
+            let saved = original
+                .prepare_environment_delete("development")
+                .unwrap()
+                .execute()
+                .unwrap();
+            reloaded = load_workspace(&path).unwrap();
+            let before = reloaded.workspace().environments().to_vec();
+            assert!(matches!(
+                reloaded.complete_environment_delete(saved),
+                Err(SaveError::StaleCompletion)
+            ));
+            assert_eq!(reloaded.workspace().environments(), before);
+        } else {
+            let mut replacement = original.workspace().environments()[1].clone();
+            replacement.extends = None;
+            let saved = original
+                .prepare_environment_replace("development", replacement)
+                .unwrap()
+                .execute()
+                .unwrap();
+            reloaded = load_workspace(&path).unwrap();
+            let before = reloaded.workspace().environments().to_vec();
+            assert!(matches!(
+                reloaded.complete_environment_replace(saved),
+                Err(SaveError::StaleCompletion)
+            ));
+            assert_eq!(reloaded.workspace().environments(), before);
+        }
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn synchronous_environment_replace_and_delete_refresh_memory_and_disk() {
+    let path = temporary_path("sync-environment-completion.yml");
+    fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let mut replacement = loaded.workspace().environments()[1].clone();
+    replacement.extends = None;
+    loaded
+        .replace_environment("development", replacement.clone())
+        .unwrap();
+    assert_eq!(loaded.workspace().environments()[1], replacement);
+    assert_eq!(
+        load_workspace(&path).unwrap().workspace().environments()[1],
+        replacement
+    );
+
+    loaded.delete_environment("development").unwrap();
+    assert_eq!(loaded.workspace().environments().len(), 1);
+    assert_eq!(
+        load_workspace(&path)
+            .unwrap()
+            .workspace()
+            .environments()
+            .len(),
+        1
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn stale_completion_error_has_a_diagnostic_and_io_errors_keep_their_source() {
+    assert!(
+        SaveError::StaleCompletion
+            .to_string()
+            .contains("repository changed")
+    );
+    let error = SaveError::Io {
+        path: temporary_path("io-error.yml").to_path_buf(),
+        source: std::io::Error::other("write failed"),
+    };
+    assert!(std::error::Error::source(&error).is_some());
 }

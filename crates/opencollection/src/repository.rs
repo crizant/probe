@@ -101,6 +101,24 @@ pub struct LoadedWorkspace {
     environment_persistence: BTreeMap<String, EnvironmentPersistence>,
     pub(crate) documents: BTreeMap<PathBuf, SourceDocument>,
     pub(crate) source: WorkspaceSource,
+    pub(crate) baseline: WorkspaceBaseline,
+}
+
+/// Runtime identity of a loaded repository baseline. Never written to OpenCollection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkspaceBaseline(u64);
+
+impl WorkspaceBaseline {
+    pub(crate) fn fresh() -> Self {
+        static NEXT_BASELINE: AtomicU64 = AtomicU64::new(1);
+        Self(
+            NEXT_BASELINE
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                    next.checked_add(1)
+                })
+                .expect("repository baseline identifiers exhausted"),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,6 +129,24 @@ pub(crate) enum WorkspaceSource {
 }
 
 impl LoadedWorkspace {
+    /// Identifies this loaded repository and its current retained source baseline.
+    #[must_use]
+    pub const fn baseline(&self) -> WorkspaceBaseline {
+        self.baseline
+    }
+
+    fn check_baseline(&self, baseline: WorkspaceBaseline) -> Result<(), SaveError> {
+        if self.baseline == baseline {
+            Ok(())
+        } else {
+            Err(SaveError::StaleCompletion)
+        }
+    }
+
+    fn advance_baseline(&mut self) {
+        self.baseline = WorkspaceBaseline::fresh();
+    }
+
     /// Returns the in-memory domain workspace.
     #[must_use]
     pub const fn workspace(&self) -> &Workspace {
@@ -228,7 +264,7 @@ impl LoadedWorkspace {
         let name = prepared.environment_name().to_owned();
         match prepared.execute() {
             Ok(saved) => {
-                self.complete_environment_create(saved);
+                self.complete_environment_create(saved)?;
                 Ok(())
             }
             Err(error) => {
@@ -272,6 +308,7 @@ impl LoadedWorkspace {
                     .original_source
                     .clone();
                 Ok(PreparedEnvironmentCreate {
+                    baseline: self.baseline,
                     environment,
                     kind: EnvironmentCreateKind::Bundled {
                         document_path,
@@ -281,6 +318,7 @@ impl LoadedWorkspace {
                 })
             }
             WorkspaceSource::Unbundled(root) => Ok(PreparedEnvironmentCreate {
+                baseline: self.baseline,
                 environment,
                 kind: EnvironmentCreateKind::Unbundled { root: root.clone() },
             }),
@@ -288,7 +326,11 @@ impl LoadedWorkspace {
     }
 
     /// Records persistence metadata after a prepared environment create succeeds.
-    pub fn complete_environment_create(&mut self, saved: CompletedEnvironmentCreate) {
+    pub fn complete_environment_create(
+        &mut self,
+        saved: CompletedEnvironmentCreate,
+    ) -> Result<(), SaveError> {
+        self.check_baseline(saved.baseline)?;
         self.environment_persistence.insert(
             saved.name,
             EnvironmentPersistence {
@@ -302,12 +344,15 @@ impl LoadedWorkspace {
                 original_source: saved.serialized_source,
             },
         );
+        self.advance_baseline();
+        Ok(())
     }
 
     /// Drops an in-memory environment that was created but not persisted.
     pub fn revert_created_environment(&mut self, name: &str) {
         self.workspace.revert_created_environment(name);
         self.environment_persistence.remove(name);
+        self.advance_baseline();
     }
 
     /// Captures an environment-variable save that can be executed away from the UI thread.
@@ -336,13 +381,19 @@ impl LoadedWorkspace {
     }
 
     /// Refreshes the retained conflict baseline after a prepared environment save succeeds.
-    pub fn complete_environment_save(&mut self, saved: CompletedEnvironmentSave) {
+    pub fn complete_environment_save(
+        &mut self,
+        saved: CompletedEnvironmentSave,
+    ) -> Result<(), SaveError> {
+        self.check_baseline(saved.baseline)?;
         self.documents.insert(
             saved.document_path,
             SourceDocument {
                 original_source: saved.serialized_source,
             },
         );
+        self.advance_baseline();
+        Ok(())
     }
 
     /// Replaces one environment in memory and atomically persists the OpenCollection document.
@@ -353,7 +404,7 @@ impl LoadedWorkspace {
     ) -> Result<(), SaveError> {
         let prepared = self.prepare_environment_replace(original_name, replacement)?;
         let saved = prepared.execute()?;
-        self.complete_environment_replace(saved);
+        self.complete_environment_replace(saved)?;
         Ok(())
     }
 
@@ -405,6 +456,7 @@ impl LoadedWorkspace {
             .original_source
             .clone();
         Ok(PreparedEnvironmentReplace {
+            baseline: self.baseline,
             persistence,
             original_source,
             original_name: original_name.to_owned(),
@@ -413,7 +465,11 @@ impl LoadedWorkspace {
     }
 
     /// Applies a successfully persisted environment replacement to the in-memory workspace.
-    pub fn complete_environment_replace(&mut self, saved: CompletedEnvironmentReplace) {
+    pub fn complete_environment_replace(
+        &mut self,
+        saved: CompletedEnvironmentReplace,
+    ) -> Result<(), SaveError> {
+        self.check_baseline(saved.baseline)?;
         self.workspace
             .replace_environment(&saved.original_name, saved.replacement.clone())
             .expect("prepared environment replacement must remain valid");
@@ -433,13 +489,15 @@ impl LoadedWorkspace {
                 original_source: saved.serialized_source,
             },
         );
+        self.advance_baseline();
+        Ok(())
     }
 
     /// Deletes an environment in memory and atomically persists the OpenCollection document.
     pub fn delete_environment(&mut self, name: &str) -> Result<(), SaveError> {
         let prepared = self.prepare_environment_delete(name)?;
         let saved = prepared.execute()?;
-        self.complete_environment_delete(saved);
+        self.complete_environment_delete(saved)?;
         Ok(())
     }
 
@@ -462,6 +520,7 @@ impl LoadedWorkspace {
             .original_source
             .clone();
         Ok(PreparedEnvironmentDelete {
+            baseline: self.baseline,
             name: name.to_owned(),
             persistence,
             original_source,
@@ -469,7 +528,11 @@ impl LoadedWorkspace {
     }
 
     /// Applies a successfully persisted environment deletion in memory.
-    pub fn complete_environment_delete(&mut self, saved: CompletedEnvironmentDelete) {
+    pub fn complete_environment_delete(
+        &mut self,
+        saved: CompletedEnvironmentDelete,
+    ) -> Result<(), SaveError> {
+        self.check_baseline(saved.baseline)?;
         self.workspace
             .delete_environment(&saved.name)
             .expect("prepared environment deletion must remain valid");
@@ -496,6 +559,8 @@ impl LoadedWorkspace {
         } else {
             self.documents.remove(&saved.document_path);
         }
+        self.advance_baseline();
+        Ok(())
     }
 
     fn persist_environment_mutation(
@@ -505,7 +570,7 @@ impl LoadedWorkspace {
     ) -> Result<(), SaveError> {
         let prepared = self.prepare_environment_mutation(environment_name, mutation)?;
         let saved = prepared.execute()?;
-        self.complete_environment_save(saved);
+        self.complete_environment_save(saved)?;
         Ok(())
     }
 
@@ -526,6 +591,7 @@ impl LoadedWorkspace {
             .original_source
             .clone();
         Ok(PreparedEnvironmentSave {
+            baseline: self.baseline,
             persistence,
             original_source,
             mutation,
@@ -656,6 +722,7 @@ impl LoadedWorkspace {
                 original_source: serialized.into(),
             },
         );
+        self.advance_baseline();
         Ok(())
     }
 
@@ -686,6 +753,7 @@ impl LoadedWorkspace {
             .original_source
             .clone();
         Ok(PreparedRequestSave {
+            baseline: self.baseline,
             diagnostic_prefix: self.request_diagnostic_prefix(&persistence.document_path),
             persistence,
             original_source,
@@ -694,7 +762,8 @@ impl LoadedWorkspace {
     }
 
     /// Refreshes the retained conflict baseline after a prepared save succeeds.
-    pub fn complete_request_save(&mut self, saved: CompletedRequestSave) {
+    pub fn complete_request_save(&mut self, saved: CompletedRequestSave) -> Result<(), SaveError> {
+        self.check_baseline(saved.baseline)?;
         self.refresh_request_diagnostics(saved.diagnostic_prefix.as_deref(), saved.diagnostics);
         self.documents.insert(
             saved.document_path,
@@ -702,6 +771,8 @@ impl LoadedWorkspace {
                 original_source: saved.serialized_source,
             },
         );
+        self.advance_baseline();
+        Ok(())
     }
 
     fn request_diagnostic_prefix(&self, document_path: &Path) -> Option<String> {
@@ -733,6 +804,7 @@ impl LoadedWorkspace {
 /// A filesystem save captured from a loaded workspace for background execution.
 #[derive(Debug)]
 pub struct PreparedRequestSave {
+    baseline: WorkspaceBaseline,
     diagnostic_prefix: Option<String>,
     persistence: RequestPersistence,
     original_source: Arc<[u8]>,
@@ -757,6 +829,7 @@ impl PreparedRequestSave {
             },
         )?;
         Ok(CompletedRequestSave {
+            baseline: self.baseline,
             document_path: self.persistence.document_path,
             serialized_source: serialized.into(),
             diagnostic_prefix: self.diagnostic_prefix,
@@ -768,6 +841,7 @@ impl PreparedRequestSave {
 /// The refreshed repository baseline produced by a successful prepared save.
 #[derive(Debug)]
 pub struct CompletedRequestSave {
+    baseline: WorkspaceBaseline,
     document_path: PathBuf,
     serialized_source: Arc<[u8]>,
     diagnostic_prefix: Option<String>,
@@ -777,6 +851,7 @@ pub struct CompletedRequestSave {
 /// A filesystem environment-variable save captured for background execution.
 #[derive(Debug)]
 pub struct PreparedEnvironmentSave {
+    baseline: WorkspaceBaseline,
     persistence: EnvironmentPersistence,
     original_source: Arc<[u8]>,
     mutation: EnvironmentYamlMutation,
@@ -788,6 +863,7 @@ impl PreparedEnvironmentSave {
         let serialized =
             persist_environment_yaml(&self.persistence, &self.original_source, &self.mutation)?;
         Ok(CompletedEnvironmentSave {
+            baseline: self.baseline,
             document_path: self.persistence.document_path,
             serialized_source: serialized.into(),
         })
@@ -797,6 +873,7 @@ impl PreparedEnvironmentSave {
 /// The refreshed repository baseline produced by a successful environment save.
 #[derive(Debug)]
 pub struct CompletedEnvironmentSave {
+    baseline: WorkspaceBaseline,
     document_path: PathBuf,
     serialized_source: Arc<[u8]>,
 }
@@ -804,6 +881,7 @@ pub struct CompletedEnvironmentSave {
 /// A validated environment replacement captured for background persistence.
 #[derive(Debug)]
 pub struct PreparedEnvironmentReplace {
+    baseline: WorkspaceBaseline,
     persistence: EnvironmentPersistence,
     original_source: Arc<[u8]>,
     original_name: String,
@@ -837,6 +915,7 @@ impl PreparedEnvironmentReplace {
             }
         };
         Ok(CompletedEnvironmentReplace {
+            baseline: self.baseline,
             original_name: self.original_name,
             replacement: self.replacement,
             document_path,
@@ -848,6 +927,7 @@ impl PreparedEnvironmentReplace {
 /// The refreshed repository baseline produced by an environment replacement.
 #[derive(Debug)]
 pub struct CompletedEnvironmentReplace {
+    baseline: WorkspaceBaseline,
     original_name: String,
     replacement: Environment,
     document_path: PathBuf,
@@ -857,6 +937,7 @@ pub struct CompletedEnvironmentReplace {
 /// A validated environment deletion captured for background persistence.
 #[derive(Debug)]
 pub struct PreparedEnvironmentDelete {
+    baseline: WorkspaceBaseline,
     name: String,
     persistence: EnvironmentPersistence,
     original_source: Arc<[u8]>,
@@ -884,6 +965,7 @@ impl PreparedEnvironmentDelete {
             }
         };
         Ok(CompletedEnvironmentDelete {
+            baseline: self.baseline,
             name: self.name,
             document_path,
             serialized_source,
@@ -895,6 +977,7 @@ impl PreparedEnvironmentDelete {
 /// The refreshed repository baseline produced by an environment deletion.
 #[derive(Debug)]
 pub struct CompletedEnvironmentDelete {
+    baseline: WorkspaceBaseline,
     name: String,
     document_path: PathBuf,
     serialized_source: Option<Arc<[u8]>>,
@@ -904,6 +987,7 @@ pub struct CompletedEnvironmentDelete {
 /// A filesystem environment-create save captured for background execution.
 #[derive(Debug)]
 pub struct PreparedEnvironmentCreate {
+    baseline: WorkspaceBaseline,
     environment: Environment,
     kind: EnvironmentCreateKind,
 }
@@ -948,6 +1032,7 @@ impl PreparedEnvironmentCreate {
             }
         };
         Ok(CompletedEnvironmentCreate {
+            baseline: self.baseline,
             name,
             document_path,
             serialized_source: serialized.into(),
@@ -959,6 +1044,7 @@ impl PreparedEnvironmentCreate {
 /// The refreshed repository baseline produced by a successful environment create.
 #[derive(Debug)]
 pub struct CompletedEnvironmentCreate {
+    baseline: WorkspaceBaseline,
     name: String,
     document_path: PathBuf,
     serialized_source: Arc<[u8]>,

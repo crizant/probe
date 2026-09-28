@@ -526,13 +526,17 @@ impl ProbeApp {
                 .await;
             let _ = view.update_in(window, |view, window, cx| {
                 view.environment_save_task = None;
+                let result = result.and_then(|saved| {
+                    if view.environment_save_workspace_path != view.workspace_path {
+                        return Err(probe_opencollection::SaveError::StaleCompletion);
+                    }
+                    view.loaded_workspace
+                        .as_mut()
+                        .ok_or(probe_opencollection::SaveError::StaleCompletion)?
+                        .complete_environment_save(saved)
+                });
                 match result {
-                    Ok(saved) => {
-                        if view.environment_save_workspace_path == view.workspace_path
-                            && let Some(loaded) = view.loaded_workspace.as_mut()
-                        {
-                            loaded.complete_environment_save(saved);
-                        }
+                    Ok(()) => {
                         view.environment_save_workspace_path = None;
                         view.start_next_request_save(window, cx);
                         view.start_next_environment_save(window, cx);
