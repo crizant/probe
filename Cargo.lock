@@ -4942,10 +4942,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "probe-application"
+version = "0.8.6"
+dependencies = [
+ "probe-core",
+ "probe-http",
+ "sha2 0.11.0",
+ "tokio",
+]
+
+[[package]]
 name = "probe-cli"
 version = "0.8.6"
 dependencies = [
  "criterion",
+ "probe-application",
  "probe-core",
  "probe-http",
  "probe-opencollection",
@@ -4976,6 +4987,7 @@ dependencies = [
  "keyring",
  "notify",
  "nucleo-matcher",
+ "probe-application",
  "probe-core",
  "probe-http",
  "probe-opencollection",

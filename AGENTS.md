@@ -72,8 +72,8 @@ cargo deny check advisories
 
 For changes to Rust production behavior, also run the coverage and CRAP review in
 [Development](docs/DEVELOPMENT.md). Run diff-scoped mutation testing on changed
-production functions in the CLI, core, HTTP, OpenCollection, Postman, or Yaak
-crates. Investigate each surviving mutant: it may expose a missing behavior
+production functions in the application, CLI, core, HTTP, OpenCollection,
+Postman, or Yaak crates. Investigate each surviving mutant: it may expose a missing behavior
 assertion, an equivalent change, platform glue, or a design problem. Add tests
 only for contracts, invariants, compatibility, and regressions; never mirror
 the implementation or add assertions merely to raise coverage. Do not split a

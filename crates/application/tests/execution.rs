@@ -1,0 +1,556 @@
+use std::{
+    cell::RefCell,
+    io::{Read, Write},
+    net::TcpListener,
+    path::PathBuf,
+    thread::JoinHandle,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use probe_application::{
+    HttpExecution, NoSecrets, RequestResolution, SECRET_DIAGNOSTIC_WITHHELD, prepare_request,
+};
+use probe_core::{
+    Environment, EnvironmentResolutionError, EnvironmentVariable, Header, Request, SecretContext,
+    SecretError, SecretProvider, SecretValue, SecretVariable, Variable, VariableValue,
+    VariableValueSet,
+};
+use probe_http::{ExecutionOptions, HttpEngine, HttpError, ResponseCache};
+use sha2::{Digest, Sha256};
+
+const SECRET: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
+
+/// Returns `SECRET` for `token`, fails for `broken`, and records every lookup.
+#[derive(Default)]
+struct RecordingProvider {
+    lookups: RefCell<Vec<String>>,
+}
+
+impl SecretProvider for RecordingProvider {
+    fn resolve_secret(
+        &self,
+        context: &SecretContext<'_>,
+    ) -> Result<Option<SecretValue>, SecretError> {
+        self.lookups
+            .borrow_mut()
+            .push(context.variable_name.to_owned());
+        match context.variable_name {
+            "token" | "unused" => Ok(Some(SecretValue::new(SECRET.to_owned()))),
+            "broken" => Err(SecretError),
+            _ => Ok(None),
+        }
+    }
+}
+
+fn secret(name: &str) -> EnvironmentVariable {
+    EnvironmentVariable::Secret(SecretVariable {
+        name: Some(name.to_owned()),
+        value_type: None,
+        disabled: false,
+    })
+}
+
+fn plain(name: &str, value: &str) -> EnvironmentVariable {
+    EnvironmentVariable::Plain(Variable {
+        name: Some(name.to_owned()),
+        value: Some(VariableValueSet::Single(VariableValue::String(
+            value.to_owned(),
+        ))),
+        disabled: false,
+    })
+}
+
+fn environments() -> Vec<Environment> {
+    vec![Environment {
+        name: "local".to_owned(),
+        color: None,
+        extends: None,
+        dot_env_file_path: None,
+        variables: vec![
+            secret("token"),
+            secret("unused"),
+            secret("broken"),
+            secret("absent"),
+            plain("authorization", "Bearer {{token}}"),
+        ],
+    }]
+}
+
+fn local<'a>(environments: &'a [Environment]) -> RequestResolution<'a> {
+    RequestResolution {
+        environments,
+        environment: Some("local"),
+        ..RequestResolution::default()
+    }
+}
+
+fn get(url: &str) -> Request {
+    Request {
+        method: Some("GET".to_owned()),
+        url: Some(url.to_owned()),
+        ..Request::default()
+    }
+}
+
+fn secret_request(base: &str) -> Request {
+    Request {
+        headers: vec![Header {
+            name: "Authorization".to_owned(),
+            value: "{{authorization}}".to_owned(),
+            disabled: false,
+        }],
+        ..get(&format!("{base}/{{{{token}}}}"))
+    }
+}
+
+fn prepare_secret_execution(base: &str) -> HttpExecution {
+    let environments = environments();
+    prepare_request(
+        &secret_request(base),
+        &local(&environments),
+        &RecordingProvider::default(),
+    )
+    .unwrap()
+    .into_http()
+    .unwrap()
+}
+
+fn serve_once(response: Vec<u8>) -> (String, JoinHandle<Vec<u8>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut head = Vec::new();
+        let mut buffer = [0; 4096];
+        while !head.windows(4).any(|part| part == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0);
+            head.extend_from_slice(&buffer[..count]);
+        }
+        // The client may close early after an output failure.
+        let _ = stream.write_all(&response);
+        head
+    });
+    (base, server)
+}
+
+fn http_response(extra_headers: &str, body: &[u8]) -> Vec<u8> {
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{extra_headers}Connection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(body);
+    response
+}
+
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|part| part == needle.as_bytes())
+}
+
+fn temporary_path(label: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "probe-application-{label}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
+}
+
+#[test]
+fn invocation_without_resolution_inputs_keeps_templates_and_never_consults_the_provider() {
+    let environments = environments();
+    let provider = RecordingProvider::default();
+    let source = secret_request("http://example.test");
+    let prepared = prepare_request(
+        &source,
+        &RequestResolution {
+            environments: &environments,
+            ..RequestResolution::default()
+        },
+        &provider,
+    )
+    .unwrap();
+    assert_eq!(prepared.presentation(), &source);
+    assert!(!prepared.uses_secrets());
+    assert!(provider.lookups.borrow().is_empty());
+
+    let unfinished = get("http://example.test/{{unfinished");
+    let prepared = prepare_request(&unfinished, &RequestResolution::default(), &provider).unwrap();
+    assert_eq!(prepared.presentation(), &unfinished);
+}
+
+#[test]
+fn presentation_and_debug_output_keep_secret_references_reached_through_plain_variables() {
+    let environments = environments();
+    let provider = RecordingProvider::default();
+    let prepared = prepare_request(
+        &secret_request("http://example.test"),
+        &local(&environments),
+        &provider,
+    )
+    .unwrap();
+    assert!(prepared.uses_secrets());
+    assert_eq!(*provider.lookups.borrow(), ["token"]);
+    assert_eq!(
+        prepared.presentation().url.as_deref(),
+        Some("http://example.test/{{token}}")
+    );
+    assert_eq!(
+        prepared.presentation().headers[0].value,
+        "{{authorization}}"
+    );
+    let debug = format!("{prepared:?}");
+    assert!(!debug.contains(SECRET));
+    assert!(debug.contains("{{authorization}}") && debug.contains("uses_secrets: true"));
+    let execution = prepared.into_http().unwrap();
+    assert!(execution.uses_secrets());
+    let debug = format!("{execution:?}");
+    assert!(!debug.contains(SECRET));
+    assert!(debug.contains("uses_secrets: true"));
+}
+
+#[test]
+fn unreferenced_secret_declarations_are_not_read_and_do_not_mark_secret_use() {
+    let environments = environments();
+    let provider = RecordingProvider::default();
+    let prepared = prepare_request(
+        &get("http://example.test/"),
+        &local(&environments),
+        &provider,
+    )
+    .unwrap();
+    assert!(!prepared.uses_secrets());
+    assert!(provider.lookups.borrow().is_empty());
+}
+
+#[test]
+fn referenced_unavailable_or_failed_secrets_fail_closed() {
+    let environments = environments();
+    assert_eq!(
+        prepare_request(
+            &get("http://example.test/{{token}}"),
+            &local(&environments),
+            &NoSecrets,
+        )
+        .unwrap_err(),
+        EnvironmentResolutionError::SecretVariableUnavailable("token".to_owned())
+    );
+    assert_eq!(
+        prepare_request(
+            &get("http://example.test/{{broken}}"),
+            &local(&environments),
+            &RecordingProvider::default(),
+        )
+        .unwrap_err(),
+        EnvironmentResolutionError::SecretProviderFailure("broken".to_owned())
+    );
+}
+
+#[test]
+fn strict_resolution_rejects_missing_values_that_lenient_resolution_keeps_literal() {
+    let environments = environments();
+    let request = get("http://example.test/{{missing}}");
+    let lenient = prepare_request(&request, &local(&environments), &NoSecrets).unwrap();
+    assert_eq!(
+        lenient.presentation().url.as_deref(),
+        Some("http://example.test/{{missing}}")
+    );
+    let strict = RequestResolution {
+        strict_variables: true,
+        ..local(&environments)
+    };
+    assert_eq!(
+        prepare_request(&request, &strict, &NoSecrets).unwrap_err(),
+        EnvironmentResolutionError::MissingVariable("missing".to_owned())
+    );
+    let strict_without_environment = RequestResolution {
+        strict_variables: true,
+        ..RequestResolution::default()
+    };
+    assert!(prepare_request(&request, &strict_without_environment, &NoSecrets).is_err());
+}
+
+#[test]
+fn runtime_overrides_resolve_without_an_environment_and_stay_secret_for_secret_declarations() {
+    let overrides = [("host".to_owned(), "example.test".to_owned())];
+    let prepared = prepare_request(
+        &get("http://{{host}}/"),
+        &RequestResolution {
+            overrides: &overrides,
+            ..RequestResolution::default()
+        },
+        &NoSecrets,
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.presentation().url.as_deref(),
+        Some("http://example.test/")
+    );
+    assert!(!prepared.uses_secrets());
+
+    let environments = environments();
+    let overrides = [("token".to_owned(), SECRET.to_owned())];
+    let prepared = prepare_request(
+        &get("http://example.test/{{token}}"),
+        &RequestResolution {
+            overrides: &overrides,
+            ..local(&environments)
+        },
+        &NoSecrets,
+    )
+    .unwrap();
+    assert!(prepared.uses_secrets());
+    assert_eq!(
+        prepared.presentation().url.as_deref(),
+        Some("http://example.test/{{token}}")
+    );
+    assert!(!format!("{prepared:?}").contains(SECRET));
+}
+
+#[tokio::test]
+async fn secret_bearing_response_is_redacted_and_reports_the_presentation_url() {
+    let mut body = SECRET.as_bytes().to_vec();
+    body.extend_from_slice(b"\xff-tail");
+    let (base, server) = serve_once(http_response(&format!("X-Echo: {SECRET}\r\n"), &body));
+    let executed = prepare_secret_execution(&base)
+        .execute(
+            &HttpEngine::new().unwrap(),
+            ExecutionOptions::default(),
+            None,
+            std::future::pending::<()>(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let head = server.join().unwrap();
+    assert!(contains(&head, &format!("/{SECRET}")));
+    assert!(contains(&head, &format!("Bearer {SECRET}")));
+    let response = executed.response;
+    assert_eq!(response.url, format!("{base}/{{{{token}}}}"));
+    assert_eq!(response.body, b"[REDACTED]\xff-tail");
+    let echo = response
+        .headers
+        .iter()
+        .find(|header| header.name == "x-echo")
+        .unwrap();
+    assert_eq!(echo.value, "[REDACTED]");
+    assert_eq!(executed.body_sha256, None);
+}
+
+#[tokio::test]
+async fn plain_response_is_returned_unchanged() {
+    let (base, server) = serve_once(http_response("", SECRET.as_bytes()));
+    let environments = environments();
+    let executed = prepare_request(
+        &get(&format!("{base}/plain")),
+        &local(&environments),
+        &RecordingProvider::default(),
+    )
+    .unwrap()
+    .into_http()
+    .unwrap()
+    .execute(
+        &HttpEngine::new().unwrap(),
+        ExecutionOptions::default(),
+        None,
+        std::future::pending::<()>(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    server.join().unwrap();
+    assert_eq!(executed.response.url, format!("{base}/plain"));
+    assert_eq!(executed.response.body, SECRET.as_bytes());
+}
+
+#[tokio::test]
+async fn only_secret_bearing_large_responses_bypass_the_spool_cache() {
+    let body = vec![b'x'; probe_http::MAX_IN_MEMORY_RESPONSE_BYTES + 1024];
+    let engine = HttpEngine::new().unwrap();
+
+    let plain_cache = temporary_path("plain-cache");
+    let (base, server) = serve_once(http_response("", &body));
+    let plain = prepare_request(
+        &get(&format!("{base}/")),
+        &RequestResolution::default(),
+        &NoSecrets,
+    )
+    .unwrap()
+    .into_http()
+    .unwrap()
+    .execute(
+        &engine,
+        ExecutionOptions {
+            response_cache: Some(ResponseCache::new(plain_cache.clone(), 64 * 1024 * 1024)),
+            ..ExecutionOptions::default()
+        },
+        None,
+        std::future::pending::<()>(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    server.join().unwrap();
+    assert!(plain.response.body_file.is_some());
+    drop(plain);
+    let _ = std::fs::remove_dir_all(&plain_cache);
+
+    let secret_cache = temporary_path("secret-cache");
+    let (base, server) = serve_once(http_response("", &body));
+    let secret = prepare_secret_execution(&base)
+        .execute(
+            &engine,
+            ExecutionOptions {
+                response_cache: Some(ResponseCache::new(secret_cache.clone(), 64 * 1024 * 1024)),
+                ..ExecutionOptions::default()
+            },
+            None,
+            std::future::pending::<()>(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+    assert!(!secret.response.body_complete);
+    assert!(secret.response.body_file.is_none());
+    assert!(!secret_cache.exists());
+}
+
+#[tokio::test]
+async fn file_output_keeps_original_bytes_and_returns_their_digest() {
+    let (base, server) = serve_once(http_response("", SECRET.as_bytes()));
+    let output = temporary_path("output");
+    let executed = prepare_secret_execution(&base)
+        .execute(
+            &HttpEngine::new().unwrap(),
+            ExecutionOptions::default(),
+            Some(&output),
+            std::future::pending::<()>(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(std::fs::read(&output).unwrap(), SECRET.as_bytes());
+    assert_eq!(
+        executed.body_sha256,
+        Some(Sha256::digest(SECRET.as_bytes()).into())
+    );
+    assert!(!contains(&executed.response.body, SECRET));
+    std::fs::remove_file(output).unwrap();
+}
+
+#[tokio::test]
+async fn secret_bearing_failures_withhold_diagnostics_but_keep_their_kind() {
+    let engine = HttpEngine::new().unwrap();
+    let withheld = SECRET_DIAGNOSTIC_WITHHELD.to_owned();
+
+    let cancelled = prepare_secret_execution("http://127.0.0.1:1")
+        .execute(
+            &engine,
+            ExecutionOptions::default(),
+            None,
+            std::future::ready(()),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(cancelled, HttpError::Cancelled);
+
+    let transport = prepare_secret_execution("http://127.0.0.1:1")
+        .execute(
+            &engine,
+            ExecutionOptions::default(),
+            None,
+            std::future::pending::<()>(),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(transport, HttpError::Transport(withheld.clone()));
+
+    let environments = environments();
+    let overrides = [("token".to_owned(), "has space\n".to_owned())];
+    let configuration = prepare_request(
+        &Request {
+            headers: vec![Header {
+                name: "X-{{token}}".to_owned(),
+                value: String::new(),
+                disabled: false,
+            }],
+            ..get("http://127.0.0.1:1/")
+        },
+        &RequestResolution {
+            overrides: &overrides,
+            ..local(&environments)
+        },
+        &NoSecrets,
+    )
+    .unwrap()
+    .into_http()
+    .unwrap()
+    .execute(
+        &engine,
+        ExecutionOptions::default(),
+        None,
+        std::future::pending::<()>(),
+        |_| {},
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(configuration, HttpError::InvalidRequest(withheld.clone()));
+    assert!(configuration.is_configuration());
+
+    let (base, server) = serve_once(http_response("", b"body"));
+    let output = temporary_path("missing-directory").join("response.bin");
+    let output_failure = prepare_secret_execution(&base)
+        .execute(
+            &engine,
+            ExecutionOptions::default(),
+            Some(&output),
+            std::future::pending::<()>(),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+    server.join().unwrap();
+    assert_eq!(
+        output_failure,
+        HttpError::ResponseOutput {
+            path: output,
+            message: withheld,
+        }
+    );
+}
+
+#[tokio::test]
+async fn failures_without_secrets_keep_their_diagnostics() {
+    let error = prepare_request(
+        &get("http://127.0.0.1:1/"),
+        &RequestResolution::default(),
+        &NoSecrets,
+    )
+    .unwrap()
+    .into_http()
+    .unwrap()
+    .execute(
+        &HttpEngine::new().unwrap(),
+        ExecutionOptions::default(),
+        None,
+        std::future::pending::<()>(),
+        |_| {},
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(error, HttpError::Transport(message) if message != SECRET_DIAGNOSTIC_WITHHELD)
+    );
+}

@@ -1,10 +1,11 @@
 use std::{borrow::Cow, io::Read, path::PathBuf};
 
+use probe_application::{NoSecrets, RequestResolution, prepare_request};
 use probe_core::{
     ExpectationOutcome, Request, RequestUpdate, RequestVariableInfo, SecretContext, SecretError,
     SecretProvider, SecretValue, StatusExpectation, VariableUsage, discover_request_variables,
-    evaluate_expectations, resolve_environment_with_overrides, resolve_environment_with_provider,
-    resolve_request, resolve_request_for_presentation, resolve_request_strict,
+    evaluate_expectations, resolve_environment_with_overrides, resolve_request,
+    resolve_request_strict,
 };
 use probe_http::{ExecutionOptions, HttpEngine, HttpResponse};
 use serde_json::json;
@@ -221,45 +222,32 @@ pub(crate) fn run(
         .workspace()
         .request(key)
         .expect("repository request key must resolve");
-    let env_provider = ProcessEnvironmentSecretProvider;
-    let absent_provider = AbsentSecretProvider;
     let provider: &dyn SecretProvider = if options.secret_provider_env {
-        &env_provider
+        &ProcessEnvironmentSecretProvider
     } else {
-        &absent_provider
+        &NoSecrets
     };
     let workspace_identity = match input {
         WorkspaceInput::Path(path) => path.to_str(),
         WorkspaceInput::Stdin => Some("-"),
     };
-    let environment = resolve_environment_with_provider(
-        loaded.workspace().environments(),
-        options.environment,
-        options.variables,
+    let prepared = prepare_request(
+        source,
+        &RequestResolution {
+            environments: loaded.workspace().environments(),
+            environment: options.environment,
+            overrides: options.variables,
+            strict_variables: options.strict_variables,
+            workspace_identity,
+        },
         provider,
-        workspace_identity,
     )
     .map_err(CliError::configuration)?;
-    let interpolate =
-        options.environment.is_some() || !options.variables.is_empty() || options.strict_variables;
-    let (request, display) = if interpolate {
-        let request = if options.strict_variables {
-            resolve_request_strict(source, &environment)
-        } else {
-            resolve_request(source, &environment)
-        }
-        .map_err(CliError::configuration)?;
-        let display =
-            resolve_request_for_presentation(source, &environment, options.strict_variables)
-                .map_err(CliError::configuration)?;
-        (request, display)
-    } else {
-        (source.clone(), source.clone())
-    };
+    let display = prepared.presentation();
     if options.dry_run {
         return Ok(CommandOutput {
-            human: dry_run_human(&display),
-            json: dry_run_json(&display).map_err(CliError::graphql)?,
+            human: dry_run_human(display),
+            json: dry_run_json(display).map_err(CliError::graphql)?,
         });
     }
     let method = display
@@ -267,9 +255,9 @@ pub(crate) fn run(
         .clone()
         .unwrap_or_else(|| "<unset>".to_owned());
     let url = display.url.clone().unwrap_or_else(|| "<unset>".to_owned());
-    let request_json = run_request_json(&display).map_err(CliError::graphql)?;
-    let prepared = request.into_http().map_err(CliError::graphql)?;
-    let execution = ExecutionOptions {
+    let request_json = run_request_json(display).map_err(CliError::graphql)?;
+    let execution = prepared.into_http().map_err(CliError::graphql)?;
+    let execution_options = ExecutionOptions {
         base_directory: input.base_directory(),
         ..ExecutionOptions::default()
     };
@@ -279,23 +267,22 @@ pub(crate) fn run(
         .map_err(|error| CliError::runtime(&error))?;
     let response = runtime.block_on(async {
         let engine = HttpEngine::new().map_err(CliError::http)?;
-        if let Some(output) = options.output {
-            engine
-                .execute_cancellable_to_file(&prepared, &execution, output, tokio::signal::ctrl_c())
-                .await
-                .map_err(|error| safe_http_error(error, &environment))
-        } else {
-            engine
-                .execute_cancellable(&prepared, &execution, tokio::signal::ctrl_c())
-                .await
-                .map_err(|error| safe_http_error(error, &environment))
-        }
+        execution
+            .execute(
+                &engine,
+                execution_options,
+                options.output.map(PathBuf::as_path),
+                tokio::signal::ctrl_c(),
+                |_| {},
+            )
+            .await
+            .map(|executed| executed.response)
+            .map_err(CliError::http)
     })?;
     let outcomes = evaluate_expectations(options.expectations, response.status);
     if outcomes.iter().any(|outcome| !outcome.ok) {
         return Err(CliError::expectation_failed(&outcomes));
     }
-    let response = redact_response(response, &environment, &url);
     response_output(
         &method,
         &url,
@@ -326,45 +313,6 @@ impl SecretProvider for ProcessEnvironmentSecretProvider {
             None => Ok(None),
         }
     }
-}
-
-struct AbsentSecretProvider;
-impl SecretProvider for AbsentSecretProvider {
-    fn resolve_secret(&self, _: &SecretContext<'_>) -> Result<Option<SecretValue>, SecretError> {
-        Ok(None)
-    }
-}
-
-fn safe_http_error(
-    error: probe_http::HttpError,
-    environment: &probe_core::ResolvedEnvironment,
-) -> CliError {
-    let mut error = CliError::http(error);
-    if environment.has_resolved_secrets() {
-        error.message = "HTTP request failed while using a secret variable".to_owned();
-    }
-    error
-}
-
-fn redact_response(
-    mut response: HttpResponse,
-    environment: &probe_core::ResolvedEnvironment,
-    display_url: &str,
-) -> HttpResponse {
-    if environment.has_resolved_secrets() {
-        // A redirect may encode or transform secret bytes. The request's
-        // reference-aware URL is the only safe URL to present.
-        response.url = display_url.to_owned();
-    }
-    response.reason = environment.redact_secrets(&response.reason);
-    for header in &mut response.headers {
-        header.name = environment.redact_secrets(&header.name);
-        header.value = environment.redact_secrets(&header.value);
-    }
-    if let Ok(body) = std::str::from_utf8(&response.body) {
-        response.body = environment.redact_secrets(body).into_bytes();
-    }
-    response
 }
 
 fn selected_request<'a>(
@@ -461,122 +409,6 @@ mod usage_json_tests {
         for (usage, expected) in cases {
             assert_eq!(variable_usage_json(&usage), expected);
         }
-    }
-}
-
-#[cfg(test)]
-mod secret_redaction_tests {
-    use super::redact_response;
-    use probe_core::{
-        Environment, EnvironmentVariable, SecretContext, SecretError, SecretProvider, SecretValue,
-        SecretVariable, resolve_environment_with_provider,
-    };
-    use probe_http::HttpResponse;
-    use std::time::Duration;
-
-    struct Provider;
-    impl SecretProvider for Provider {
-        fn resolve_secret(
-            &self,
-            _: &SecretContext<'_>,
-        ) -> Result<Option<SecretValue>, SecretError> {
-            Ok(Some(SecretValue::new(
-                "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR".into(),
-            )))
-        }
-    }
-
-    #[test]
-    fn redirected_response_url_uses_safe_request_reference() {
-        let environment = resolve_environment_with_provider(
-            &[Environment {
-                name: "local".into(),
-                color: None,
-                extends: None,
-                dot_env_file_path: None,
-                variables: vec![EnvironmentVariable::Secret(SecretVariable {
-                    name: Some("token".into()),
-                    value_type: None,
-                    disabled: false,
-                })],
-            }],
-            Some("local"),
-            &[],
-            &Provider,
-            None,
-        )
-        .unwrap();
-        let response = HttpResponse {
-            status: 200,
-            reason: "OK".into(),
-            url: "https://example.test/final/SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR".into(),
-            duration: Duration::ZERO,
-            size: 0,
-            headers: vec![],
-            body: vec![],
-            body_complete: true,
-            body_file: None,
-            body_retention_error: None,
-        };
-        let redacted = redact_response(response, &environment, "https://example.test/{{token}}");
-        assert_eq!(redacted.url, "https://example.test/{{token}}");
-    }
-
-    #[test]
-    fn response_redaction_handles_encoded_and_overlapping_values() {
-        struct OverlapProvider;
-        impl SecretProvider for OverlapProvider {
-            fn resolve_secret(
-                &self,
-                context: &SecretContext<'_>,
-            ) -> Result<Option<SecretValue>, SecretError> {
-                let value = match context.variable_name {
-                    "short" => "abc",
-                    "long" => "abcdef",
-                    "spaced" => "my secret",
-                    _ => return Ok(None),
-                };
-                Ok(Some(SecretValue::new(value.into())))
-            }
-        }
-        let environment = resolve_environment_with_provider(
-            &[Environment {
-                name: "local".into(),
-                color: None,
-                extends: None,
-                dot_env_file_path: None,
-                variables: ["short", "long", "spaced"]
-                    .into_iter()
-                    .map(|name| {
-                        EnvironmentVariable::Secret(SecretVariable {
-                            name: Some(name.into()),
-                            value_type: None,
-                            disabled: false,
-                        })
-                    })
-                    .collect(),
-            }],
-            Some("local"),
-            &[],
-            &OverlapProvider,
-            None,
-        )
-        .unwrap();
-        let response = HttpResponse {
-            status: 200,
-            reason: "OK".into(),
-            url: "https://example.test/%61bc/a%2fb/my%20secret".into(),
-            duration: Duration::ZERO,
-            size: 6,
-            headers: vec![],
-            body: b"abcdef".to_vec(),
-            body_complete: true,
-            body_file: None,
-            body_retention_error: None,
-        };
-        let redacted = redact_response(response, &environment, "https://example.test/{{long}}");
-        assert_eq!(redacted.url, "https://example.test/{{long}}");
-        assert_eq!(redacted.body, b"[REDACTED]");
     }
 }
 

@@ -30,7 +30,7 @@ use probe_core::{
     QueryParameter, RawBodyKind, Request, RequestBody, RequestKey, SecretVariable, Variable,
     VariableValue, VariableValueSet, WorkspaceItemRef, add_path_parameter,
     ensure_path_parameters_from_url, remove_path_parameter_at, rename_path_parameter_at,
-    resolve_environment, resolve_request,
+    resolve_environment,
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
 use probe_opencollection::{
@@ -83,7 +83,7 @@ use tree::{
 use crate::{
     components,
     execution::{
-        ExecutionService, ExecutionState, ResponseState, SavedResponseBody,
+        ExecutionInput, ExecutionService, ExecutionState, ResponseState, SavedResponseBody,
         body_file_path_for_storage, download_directory, format_duration, format_size,
         format_transfer_progress, read_response_page, response_cache, save_response_body,
         suggested_request_filename, suggested_response_filename,

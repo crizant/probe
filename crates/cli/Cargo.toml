@@ -14,6 +14,7 @@ name = "performance"
 harness = false
 
 [dependencies]
+probe-application = { path = "../application" }
 probe-core = { path = "../core" }
 probe-http = { path = "../http" }
 probe-opencollection = { path = "../opencollection" }

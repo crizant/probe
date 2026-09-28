@@ -11,11 +11,8 @@ use crate::credentials::{CredentialId, CredentialStore, NativeSecretProvider};
 use crate::filesystem::workspace_base_directory;
 use atomic_write_file::AtomicWriteFile;
 use directories::{ProjectDirs, UserDirs};
-use probe_core::{
-    Environment, Request, RequestKey, SecretContext, SecretError, SecretProvider,
-    resolve_environment_for_request_with_provider, resolve_request,
-    resolve_request_for_presentation,
-};
+use probe_application::{NoSecrets, RequestResolution, prepare_request};
+use probe_core::{Environment, Request, RequestKey, SecretContext, SecretError, SecretProvider};
 use probe_http::{
     ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse, ResponseBodyFile,
     ResponseCache,
@@ -377,8 +374,7 @@ impl ExecutionService {
 
     pub(crate) fn execute(
         &self,
-        request: Request,
-        native_environment: Option<(Vec<Environment>, String, PathBuf)>,
+        input: ExecutionInput,
         options: ExecutionOptions,
         output: Option<PathBuf>,
         cancellation: oneshot::Receiver<()>,
@@ -393,149 +389,88 @@ impl ExecutionService {
             .expect("execution runtime is active")
             .spawn(async move {
                 let observer = Arc::new(SecretPresenceObserver::default());
-                let (request, disclosure) = if let Some((environments, selected, workspace)) =
-                    native_environment
-                {
-                    let observer_for_resolution = Arc::clone(&observer);
-                    match tokio::task::spawn_blocking(move || {
-                        let provider = ObservingSecretProvider {
-                            inner: NativeSecretProvider {
-                                store: credentials.as_ref(),
-                                workspace: &workspace,
-                            },
-                            observer: &observer_for_resolution,
-                        };
-                        resolve_environment_for_request_with_provider(
-                            &request,
-                            &environments,
-                            Some(&selected),
-                            &[],
-                            &provider,
-                            None,
-                        )
-                        .and_then(|environment| {
-                            let display =
-                                resolve_request_for_presentation(&request, &environment, false)?;
-                            let request = resolve_request(&request, &environment)?;
-                            Ok((request, environment, display.url))
+                let observer_for_resolution = Arc::clone(&observer);
+                let prepared = tokio::task::spawn_blocking(move || {
+                    let native;
+                    let provider: &dyn SecretProvider = match &input.credential_workspace {
+                        Some(workspace) => {
+                            native = ObservingSecretProvider {
+                                inner: NativeSecretProvider {
+                                    store: credentials.as_ref(),
+                                    workspace,
+                                },
+                                observer: &observer_for_resolution,
+                            };
+                            &native
+                        }
+                        None => &NoSecrets,
+                    };
+                    let resolution = RequestResolution {
+                        environments: &input.environments,
+                        environment: input.environment.as_deref(),
+                        ..RequestResolution::default()
+                    };
+                    prepare_request(&input.request, &resolution, provider)
+                        .map_err(|error| error.to_string())
+                        .and_then(|prepared| {
+                            prepared.into_http().map_err(|error| error.to_string())
                         })
-                        .map_err(|error| HttpError::InvalidBody(error.to_string()))
-                    })
-                    .await
-                    {
-                        Ok(Ok((request, environment, display_url))) => {
-                            (request, Some((environment, display_url)))
-                        }
-                        Ok(Err(error)) => {
-                            let _ = presence_sender.send(observer.snapshot());
-                            let _ = result_sender.send(Err(error));
-                            return;
-                        }
-                        Err(_) => {
-                            let _ = presence_sender.send(observer.snapshot());
-                            let _ = result_sender.send(Err(HttpError::InvalidBody(
-                                "request resolution failed".into(),
-                            )));
-                            return;
-                        }
-                    }
-                } else {
-                    (request, None)
-                };
+                })
+                .await;
                 let _ = presence_sender.send(observer.snapshot());
-                let secret_bearing = disclosure
-                    .as_ref()
-                    .is_some_and(|(environment, _)| environment.has_resolved_secrets());
-                if secret_bearing && output.is_some() {
+                let execution = match prepared {
+                    Ok(Ok(execution)) => execution,
+                    Ok(Err(message)) => {
+                        let _ = result_sender.send(Err(HttpError::InvalidBody(message)));
+                        return;
+                    }
+                    Err(_) => {
+                        let _ = result_sender.send(Err(HttpError::InvalidBody(
+                            "request resolution failed".into(),
+                        )));
+                        return;
+                    }
+                };
+                // Direct file output writes response bytes before redaction.
+                if execution.uses_secrets() && output.is_some() {
                     let _ = result_sender.send(Err(HttpError::InvalidBody(
                         "saving a response directly to a file is unavailable for requests using secret variables".into(),
                     )));
                     return;
                 }
-                let mut options = options;
-                if secret_bearing {
-                    options.response_cache = None;
-                }
-                let result = execute_http_request(
-                    &engine,
-                    request,
-                    options,
-                    output,
-                    cancellation,
-                    move |progress| {
-                        let _ = progress_sender.send(progress);
-                    },
-                )
-                .await;
-                let result = match (result, disclosure) {
-                    (Ok((mut response, saved)), Some((environment, display_url)))
-                        if environment.has_resolved_secrets() =>
-                    {
-                        response.url = display_url.unwrap_or_default();
-                        response.reason = environment.redact_secrets(&response.reason);
-                        for header in &mut response.headers {
-                            header.name = environment.redact_secrets(&header.name);
-                            header.value = environment.redact_secrets(&header.value);
-                        }
-                        response.body = environment.redact_secret_bytes(&response.body);
-                        Ok((response, saved))
-                    }
-                    (Err(_), Some((environment, _))) if environment.has_resolved_secrets() => {
-                        Err(HttpError::Transport(
-                            "HTTP request failed while using a secret variable".into(),
-                        ))
-                    }
-                    (result, _) => result,
+                let cancellation = async move {
+                    let _ = cancellation.await;
                 };
+                let result = execution
+                    .execute(
+                        &engine,
+                        options,
+                        output.as_deref(),
+                        cancellation,
+                        move |progress| {
+                            let _ = progress_sender.send(progress);
+                        },
+                    )
+                    .await
+                    .map(|executed| {
+                        let saved_to = output.zip(executed.body_sha256).map(|(path, sha256)| {
+                            SavedResponseBody { path, sha256 }
+                        });
+                        (executed.response, saved_to)
+                    });
                 let _ = result_sender.send(result);
             });
         (result_receiver, progress_receiver, presence_receiver)
     }
 }
 
-pub(crate) async fn execute_http_request<P>(
-    engine: &HttpEngine,
-    request: Request,
-    options: ExecutionOptions,
-    output: Option<PathBuf>,
-    cancellation: oneshot::Receiver<()>,
-    progress: P,
-) -> Result<(HttpResponse, Option<SavedResponseBody>), HttpError>
-where
-    P: FnMut(HttpProgress) + Send,
-{
-    let request = request
-        .into_http()
-        .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
-    let cancellation = async move {
-        let _ = cancellation.await;
-    };
-    match output {
-        Some(output) => {
-            let streamed = engine
-                .execute_cancellable_to_file_with_progress(
-                    &request,
-                    &options,
-                    &output,
-                    cancellation,
-                    progress,
-                )
-                .await?;
-            Ok((
-                streamed.response,
-                Some(SavedResponseBody {
-                    path: output,
-                    sha256: streamed.body_sha256,
-                }),
-            ))
-        }
-        None => {
-            let response = engine
-                .execute_cancellable_with_progress(&request, &options, cancellation, progress)
-                .await?;
-            Ok((response, None))
-        }
-    }
+/// Request and environment inputs owned by one desktop execution.
+pub(crate) struct ExecutionInput {
+    pub(crate) request: Request,
+    pub(crate) environments: Vec<Environment>,
+    pub(crate) environment: Option<String>,
+    /// Saved workspace whose native credentials supply secret values.
+    pub(crate) credential_workspace: Option<PathBuf>,
 }
 
 pub(crate) fn save_response_body(
@@ -791,7 +726,7 @@ mod tests {
         fs,
         io::{Read, Write},
         net::TcpListener,
-        path::Path,
+        path::{Path, PathBuf},
         sync::{
             Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
@@ -806,13 +741,13 @@ mod tests {
         Environment, EnvironmentVariable, Header, Request, SecretValue, SecretVariable, Variable,
         VariableValue, VariableValueSet,
     };
-    use probe_http::{ExecutionOptions, ResponseCache};
+    use probe_http::ExecutionOptions;
     use probe_http::{HttpError, HttpProgress, HttpResponse, ResponseHeader};
     use sha2::{Digest, Sha256};
     use tokio::sync::oneshot;
 
     use super::{
-        ExecutionService, ExecutionState, ResponseState, SavedResponseBody,
+        ExecutionInput, ExecutionService, ExecutionState, ResponseState, SavedResponseBody,
         body_file_path_for_storage, format_duration, format_size, format_transfer_progress,
         save_response_body, suggested_request_filename, suggested_response_filename,
     };
@@ -1124,12 +1059,16 @@ mod tests {
         let service = ExecutionService::with_credentials(Arc::new(NativeCredentialStore))
             .expect("execution service should start");
         let (result, _, _) = service.execute(
-            Request {
-                method: Some("GET".to_owned()),
-                url: Some("http://127.0.0.1:1/phase-12".to_owned()),
-                ..Request::default()
+            ExecutionInput {
+                request: Request {
+                    method: Some("GET".to_owned()),
+                    url: Some("http://127.0.0.1:1/phase-12".to_owned()),
+                    ..Request::default()
+                },
+                environments: Vec::new(),
+                environment: None,
+                credential_workspace: None,
             },
-            None,
             ExecutionOptions::default(),
             None,
             cancellation,
@@ -1218,8 +1157,17 @@ mod tests {
         }]
     }
 
+    fn native_input(request: Request, workspace: PathBuf) -> ExecutionInput {
+        ExecutionInput {
+            request,
+            environments: native_test_environment(),
+            environment: Some("production".into()),
+            credential_workspace: Some(workspace),
+        }
+    }
+
     #[test]
-    fn desktop_send_uses_fake_credentials_and_redacts_echo_without_caching() {
+    fn desktop_send_resolves_native_credentials_through_shared_redaction() {
         let secret = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
         let workspace = std::env::temp_dir();
         let store = Arc::new(FakeCredentials::new(false));
@@ -1245,15 +1193,11 @@ mod tests {
                     .windows(secret.len())
                     .any(|part| part == secret.as_bytes())
             );
-            let mut body = vec![b'x'; 16 * 1024 * 1024 + 1024];
-            body[..secret.len()].copy_from_slice(secret.as_bytes());
-            body[secret.len()] = 0xff;
-            let headers = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Echo: {secret}\r\nConnection: close\r\n\r\n",
-                body.len()
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Echo: {secret}\r\nConnection: close\r\n\r\n{secret}",
+                secret.len()
             );
-            stream.write_all(headers.as_bytes()).unwrap();
-            stream.write_all(&body).unwrap();
+            stream.write_all(response.as_bytes()).unwrap();
         });
         let request = Request {
             method: Some("GET".into()),
@@ -1265,22 +1209,10 @@ mod tests {
             }],
             ..Request::default()
         };
-        let cache_path = workspace.join(format!(
-            "probe-native-cache-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
         let (cancel_sender, cancellation) = oneshot::channel();
         let (receiver, _, _) = service.execute(
-            request,
-            Some((native_test_environment(), "production".into(), workspace)),
-            ExecutionOptions {
-                response_cache: Some(ResponseCache::new(cache_path.clone(), 64 * 1024 * 1024)),
-                ..ExecutionOptions::default()
-            },
+            native_input(request, workspace),
+            ExecutionOptions::default(),
             None,
             cancellation,
         );
@@ -1296,16 +1228,7 @@ mod tests {
         assert_eq!(store.reads.load(Ordering::Relaxed), 1);
         assert!(response.url.contains("{{token}}"));
         assert!(!format!("{response:?}").contains(secret));
-        assert!(
-            !response
-                .body
-                .windows(secret.len())
-                .any(|part| part == secret.as_bytes())
-        );
-        assert_eq!(response.body[b"[REDACTED]".len()], 0xff);
-        assert!(!response.body_complete);
-        assert!(response.body_file.is_none());
-        assert!(!cache_path.exists());
+        assert_eq!(response.body, b"[REDACTED]");
     }
 
     #[test]
@@ -1319,12 +1242,7 @@ mod tests {
         };
         let (_cancel_sender, cancellation) = oneshot::channel();
         let (receiver, _, presence) = service.execute(
-            request,
-            Some((
-                native_test_environment(),
-                "production".into(),
-                Path::new("/").to_owned(),
-            )),
+            native_input(request, Path::new("/").to_owned()),
             ExecutionOptions::default(),
             None,
             cancellation,
@@ -1353,12 +1271,7 @@ mod tests {
         };
         let (_cancel_sender, cancellation) = oneshot::channel();
         let (receiver, _, presence) = service.execute(
-            request,
-            Some((
-                native_test_environment(),
-                "production".into(),
-                workspace.clone(),
-            )),
+            native_input(request, workspace.clone()),
             ExecutionOptions::default(),
             None,
             cancellation,
@@ -1419,8 +1332,7 @@ mod tests {
         };
         let (_cancel_sender, cancellation) = oneshot::channel();
         let (receiver, _, presence) = service.execute(
-            request,
-            Some((native_test_environment(), "production".into(), workspace)),
+            native_input(request, workspace),
             ExecutionOptions::default(),
             None,
             cancellation,
@@ -1459,8 +1371,7 @@ mod tests {
         };
         let (_cancel_sender, cancellation) = oneshot::channel();
         let (receiver, _, _) = service.execute(
-            request,
-            Some((native_test_environment(), "production".into(), workspace)),
+            native_input(request, workspace),
             ExecutionOptions::default(),
             Some(output.clone()),
             cancellation,

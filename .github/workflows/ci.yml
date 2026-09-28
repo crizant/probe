@@ -95,11 +95,11 @@ jobs:
           set -euo pipefail
           mkdir -p target
           git diff --unified=0 "$BASE_SHA...$HEAD_SHA" -- \
-            crates/cli/src crates/core/src crates/http/src \
+            crates/application/src crates/cli/src crates/core/src crates/http/src \
             crates/opencollection/src crates/postman/src crates/yaak/src \
             > target/mutants.diff
           git diff --name-only "$BASE_SHA...$HEAD_SHA" -- \
-            crates/cli/src crates/core/src crates/http/src \
+            crates/application/src crates/cli/src crates/core/src crates/http/src \
             crates/opencollection/src crates/postman/src crates/yaak/src \
             > target/mutants-files.txt
           if grep -q '\.rs$' target/mutants-files.txt; then
