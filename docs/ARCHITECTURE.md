@@ -262,8 +262,8 @@ expansion, tabs, pane state, and environment selection are presentation state.
 Request controls mutate the in-memory domain request. Saving is a separate shared
 repository operation and never occurs implicitly on each keystroke. Environment
 resolution and mutation use core and repository operations rather than desktop-only
-logic. Secrets remain unavailable for editing until Probe has a supported runtime
-value provider.
+logic. Secret declarations live in OpenCollection; the desktop manages their values
+through the native credential store and never writes them to collection YAML.
 
 Desktop Send uses the same `probe-application` execution operation as the CLI, away
 from the UI thread. Resolution runs on a Tokio blocking worker because the native

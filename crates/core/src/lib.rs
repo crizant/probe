@@ -1,7 +1,7 @@
-//! Shared domain and application layer for Probe.
+//! Shared domain models and business rules for Probe.
 //!
-//! These models describe application concepts and deliberately contain no YAML or
-//! serialization concerns.
+//! These models describe domain concepts and deliberately contain no YAML or
+//! serialization concerns. Use-case coordination lives in `probe-application`.
 
 #![forbid(unsafe_code)]
 
