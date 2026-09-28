@@ -3923,6 +3923,12 @@ fn park_until_execution_settles(
     }
 }
 
+fn response_has_settled(response: Option<&crate::execution::ResponseState>) -> bool {
+    // `begin` records `Running` before secret resolution or the socket call
+    // finishes. Presence can update while that state is still current.
+    response.is_some_and(|state| !state.is_running())
+}
+
 fn reference_secret(
     view: &mut ProbeApp,
     key: probe_core::RequestKey,
@@ -3977,7 +3983,7 @@ fn execution_invalidates_stale_presence_when_the_native_secret_is_missing(cx: &m
             window
                 .update(cx, |view, _, _| {
                     view.session.missing_credentials.contains(&persistence_key)
-                        && view.execution.response(request_key).is_some()
+                        && response_has_settled(view.execution.response(request_key))
                 })
                 .unwrap()
         },
@@ -4059,7 +4065,7 @@ fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppC
             window
                 .update(cx, |view, _, _| {
                     view.session.stored_credentials.contains(&persistence_key)
-                        && view.execution.response(request_key).is_some()
+                        && response_has_settled(view.execution.response(request_key))
                 })
                 .unwrap()
         },
@@ -4180,7 +4186,7 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
             window
                 .update(cx, |view, _, _| {
                     view.session.stored_credentials.contains(&persistence_key)
-                        && view.execution.response(request_key).is_some()
+                        && response_has_settled(view.execution.response(request_key))
                 })
                 .unwrap()
         },
@@ -4258,7 +4264,7 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
                 .update(cx, |view, _, _| {
                     let key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
                     store.get_calls.load(Ordering::Relaxed) >= 2
-                        && view.execution.response(key).is_some()
+                        && response_has_settled(view.execution.response(key))
                 })
                 .unwrap()
         },
@@ -4427,7 +4433,7 @@ fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppCo
         cx.run_until_parked();
         let finished = window
             .update(cx, |view, _, _| {
-                view.execution.response(request_key).is_some()
+                response_has_settled(view.execution.response(request_key))
             })
             .unwrap();
         if finished {
@@ -4459,7 +4465,7 @@ fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppCo
                 probe_core::VariableStatus::SecretWithoutValue
             );
             assert_secret_stays_out_of_editor_context(&context);
-            assert!(view.execution.response(request_key).is_some());
+            assert!(response_has_settled(view.execution.response(request_key)));
         })
         .unwrap();
 }
