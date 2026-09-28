@@ -350,10 +350,9 @@ secret, including through a dependent plain variable; then resolution fails clos
 The core does not manage native credential storage. The CLI continues to use the
 process environment provider and its existing workspace context. Desktop uses the
 Probe-owned `credentials` service over `keyring` 4's native store. The service
-offers `CredentialId::for_workspace`, `CredentialStore::{status,set,delete,get}`,
+offers `CredentialId::for_workspace`, `CredentialStore::{set,delete,get}`,
 `NativeCredentialStore`, and `NativeSecretProvider`. Setting an existing key replaces
-it; deleting a missing key returns `NotFound`. The portable keyring API has no
-existence-only call, so `status` reads and immediately discards the value.
+it; deleting a missing key returns `NotFound`.
 
 Credential identity v1 is a SHA-256 digest of length-prefixed canonical workspace
 path, effective environment name, and variable name. The keyring service is
