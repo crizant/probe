@@ -31,14 +31,22 @@ pub(crate) struct SessionState {
     pub(crate) horizontal_panes: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) selected_environments: BTreeMap<PathBuf, String>,
-    /// Opaque credential identities known to be stored. A UI hint only.
+    /// Opaque credential identities Probe has learned are stored. A UI hint only.
     ///
     /// Entries are `CredentialId` persistence keys (`v1-` plus a digest). The set
     /// does not contain secret values, workspace paths, environment names, or
-    /// variable names. Missing, empty, or corrupt session state leaves this empty;
-    /// request execution does not read it.
+    /// variable names. An identity in neither this set nor `missing_credentials`
+    /// has unknown presence. Missing, empty, or corrupt session state leaves both
+    /// empty; request execution does not read them.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) stored_credentials: BTreeSet<String>,
+    /// Opaque identities a trusted operation learned are not stored.
+    ///
+    /// Successful Delete, Delete that returns not found, or execution that finds
+    /// no credential records the key here. Rendering does not query the native
+    /// store to fill this set.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) missing_credentials: BTreeSet<String>,
 }
 
 impl Default for SessionState {
@@ -57,6 +65,7 @@ impl Default for SessionState {
             horizontal_panes: false,
             selected_environments: BTreeMap::new(),
             stored_credentials: BTreeSet::new(),
+            missing_credentials: BTreeSet::new(),
         }
     }
 }
@@ -321,6 +330,7 @@ mod tests {
         let state = store.load().unwrap();
         assert!(state.selected_environments.is_empty());
         assert!(state.stored_credentials.is_empty());
+        assert!(state.missing_credentials.is_empty());
     }
 
     #[test]
@@ -328,6 +338,7 @@ mod tests {
         let store = store();
         let mut state = SessionState::default();
         state.stored_credentials.insert("v1-abc123".to_owned());
+        state.missing_credentials.insert("v1-def456".to_owned());
         state.activate_collection("/tmp/collection".into());
         state.remove_recent_collection(Path::new("/tmp/collection"));
         state.clear_active_collection();
@@ -335,8 +346,10 @@ mod tests {
         store.save(&state).unwrap();
         let loaded = store.load().unwrap();
         assert_eq!(loaded.stored_credentials, state.stored_credentials);
+        assert_eq!(loaded.missing_credentials, state.missing_credentials);
         let source = std::fs::read_to_string(store.path()).unwrap();
         assert!(source.contains("v1-abc123"));
+        assert!(source.contains("v1-def456"));
         assert!(!source.contains("secretToken"));
         assert!(!source.contains("/tmp/collection"));
     }

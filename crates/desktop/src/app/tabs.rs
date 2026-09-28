@@ -663,7 +663,7 @@ impl ProbeApp {
             PendingClose::Open {
                 path,
                 restored_state,
-            } => self.load_workspace_path(path, restored_state, window, cx),
+            } => self.load_workspace_path(path, restored_state.map(|state| *state), window, cx),
             PendingClose::Create { path } => self.create_workspace_path(path, window, cx),
             PendingClose::Import(source) => self.choose_import(source, window, cx),
         }

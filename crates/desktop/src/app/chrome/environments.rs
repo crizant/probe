@@ -430,28 +430,23 @@ impl ProbeApp {
         } else if busy {
             "Saving changes…"
         } else {
-            match current_status.unwrap_or(SecretUiStatus::Loading) {
+            match current_status.unwrap_or(SecretUiStatus::Unknown) {
                 SecretUiStatus::Loading => "Removing stored secret…",
                 SecretUiStatus::Stored => "● Stored securely",
                 SecretUiStatus::NotStored => "○ Not set",
-                SecretUiStatus::Unavailable => "⚠ Credential store unavailable",
+                SecretUiStatus::Unknown => "Not verified",
             }
         };
         let actionable = credential_ready && !self.secret_write_in_progress;
         let set_view = cx.weak_entity();
         let set_name = name.clone();
-        let retry = current_status == Some(SecretUiStatus::Unavailable);
         let button_label = match current_status {
             Some(SecretUiStatus::Stored) => "Replace",
-            Some(SecretUiStatus::Unavailable) => "Retry",
             _ => "Set",
         };
         let set_selector = match current_status {
             Some(SecretUiStatus::Stored) => {
                 format!("environment-secret-replace-{name}")
-            }
-            Some(SecretUiStatus::Unavailable) => {
-                format!("environment-secret-retry-{name}")
             }
             _ => format!("environment-secret-set-{name}"),
         };
@@ -478,9 +473,6 @@ impl ProbeApp {
                         Some(SecretUiStatus::Stored) if credential_ready => {
                             theme.colors.status.success
                         }
-                        Some(SecretUiStatus::Unavailable) if credential_ready => {
-                            theme.colors.status.warning
-                        }
                         _ => theme.colors.text.muted,
                     })
                     .child(status),
@@ -492,7 +484,7 @@ impl ProbeApp {
                         Some(
                             SecretUiStatus::Stored
                                 | SecretUiStatus::NotStored
-                                | SecretUiStatus::Unavailable
+                                | SecretUiStatus::Unknown
                         )
                     ),
                 |row| {
@@ -504,12 +496,7 @@ impl ProbeApp {
                             !actionable,
                             move |_, window, cx| {
                                 let _ = set_view.update(cx, |view, cx| {
-                                    if retry {
-                                        view.sync_secret_statuses_from_presence();
-                                        cx.notify();
-                                    } else {
-                                        view.open_secret_value_dialog(set_name.clone(), window, cx);
-                                    }
+                                    view.open_secret_value_dialog(set_name.clone(), window, cx);
                                 });
                             },
                         )

@@ -158,18 +158,20 @@ Resolved placeholders use the syntax string color and no underline. Unresolved
 placeholders use the status error color and a 1px underline, so the state stays
 visible without color.
 
-Unresolved covers an environment variable that is absent or disabled, a secret with
-no runtime value, a path-parameter row that is missing, disabled, or still blank, and
-every `{{name}}` when no environment is selected or environment resolution failed. An
-environment variable set to an empty string is resolved. A secret is resolved only
-when Probe's credential-presence metadata says its opaque identity is stored. Request
+Unresolved covers an environment variable that is absent or disabled, a secret Probe
+has learned is not stored, a path-parameter row that is missing, disabled, or still
+blank, and every `{{name}}` when no environment is selected or environment resolution
+failed. An environment variable set to an empty string is resolved. A secret is
+resolved only when Probe's credential-presence metadata says its opaque identity is
+stored. A secret whose presence is unknown uses the secondary text color, no error
+underline, and a lock in a tooltip that says "Secret presence not verified". Request
 rendering and editor highlighting never access native credential values and never
 query the operating-system credential store solely for presentation. The metadata is
 a UI hint: the native credential store remains the source of truth at execution time,
-a stale "stored" hint is cleared when execution finds the credential missing, and a
-secret created outside Probe is not discovered automatically. Until presence is known,
-the placeholder stays unresolved. The stored-secret tooltip says "Secret value stored
-securely" and does not display the value. A blank path parameter is not resolved, because
+a stale "stored" hint becomes known-missing when execution finds the credential
+missing, and a secret created outside Probe is not discovered automatically. The
+stored-secret tooltip says "Secret value stored securely" and does not display the
+value. A blank path parameter is not resolved, because
 those rows are created empty as soon as `:name` is typed.
 
 `:name` is never classified against the environment, and `{{name}}` is never

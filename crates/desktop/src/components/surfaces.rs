@@ -351,11 +351,14 @@ type ManageEnvironmentsHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 #[derive(Clone, Default)]
 pub(crate) struct VariableContext {
     pub(crate) values: BTreeMap<String, String>,
-    /// Enabled secrets with no known stored credential.
+    /// Enabled secrets a trusted operation learned are not stored.
     pub(crate) secrets: BTreeSet<String>,
     /// Enabled secrets whose credential is known to be stored.
     /// Names only: secret values never enter this set or `values`.
     pub(crate) resolved_secrets: BTreeSet<String>,
+    /// Enabled secrets whose presence Probe has not learned.
+    /// Names only. Absence from `resolved_secrets` is not enough to mean missing.
+    pub(crate) unknown_secrets: BTreeSet<String>,
     /// Enabled path-parameter names with a non-empty value.
     ///
     /// `None` means this field does not highlight path placeholders, so every
@@ -405,6 +408,7 @@ impl std::fmt::Debug for VariableContext {
             .field("values", &self.values)
             .field("secrets", &self.secrets)
             .field("resolved_secrets", &self.resolved_secrets)
+            .field("unknown_secrets", &self.unknown_secrets)
             .field("path_values", &self.path_values)
             .field("unavailable_message", &self.unavailable_message)
             .finish_non_exhaustive()
@@ -639,12 +643,19 @@ pub(super) fn variable_tooltip_popup(
         )
         .when_some(presentation.hint, |popup, hint| {
             popup.child(
-                truncated_label(hint)
+                div()
                     .id("variable-tooltip-create-hint")
                     .debug_selector(|| "variable-tooltip-create-hint".into())
+                    .flex()
                     .flex_none()
-                    .text_size(px(theme.typography.caption_size))
-                    .text_color(theme.colors.text.muted),
+                    .items_center()
+                    .gap(px(theme.metrics.spacing_1))
+                    .when(presentation.show_lock, |row| row.child(lock_icon(theme)))
+                    .child(
+                        truncated_label(hint)
+                            .text_size(px(theme.typography.caption_size))
+                            .text_color(theme.colors.text.muted),
+                    ),
             )
         })
         .child(variable_value_input(

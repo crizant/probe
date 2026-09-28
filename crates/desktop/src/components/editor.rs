@@ -32,12 +32,12 @@ pub(crate) use variables::single_line;
 use variables::variable_editor_overlay;
 #[cfg(test)]
 pub(super) use variables::{
-    ReferenceKind, VariableHighlightElement, VariableHighlightPalette, input_text_scroll_offset,
-    reference_status, variable_highlight_palette, variable_highlight_runs, variable_ranges,
-    variable_span_layout, variable_tooltip_presentation,
+    PlaceholderTone, ReferenceKind, VariableHighlightElement, VariableHighlightPalette,
+    input_text_scroll_offset, placeholder_tone, reference_status, variable_highlight_palette,
+    variable_highlight_runs, variable_ranges, variable_span_layout, variable_tooltip_presentation,
 };
 pub(super) use variables::{
     VariableTooltipPresentation, input_variable_ranges, variable_input_overlay,
 };
 #[cfg(not(test))]
-use variables::{reference_status, variable_highlight_palette, variable_ranges};
+use variables::{placeholder_tone, variable_highlight_palette, variable_ranges};

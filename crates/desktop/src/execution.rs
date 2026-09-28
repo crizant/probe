@@ -800,8 +800,7 @@ mod tests {
     };
 
     use crate::credentials::{
-        CredentialId, CredentialStatus, CredentialStore, CredentialStoreError,
-        NativeCredentialStore,
+        CredentialId, CredentialStore, CredentialStoreError, NativeCredentialStore,
     };
     use probe_core::{
         Environment, EnvironmentVariable, Header, Request, SecretValue, SecretVariable, Variable,
@@ -1161,9 +1160,6 @@ mod tests {
     }
 
     impl CredentialStore for FakeCredentials {
-        fn status(&self, _: &CredentialId) -> Result<CredentialStatus, CredentialStoreError> {
-            panic!("execution resolves secrets through get, not status")
-        }
         fn set(&self, id: &CredentialId, value: &str) -> Result<(), CredentialStoreError> {
             self.values
                 .lock()

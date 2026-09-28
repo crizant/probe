@@ -37,7 +37,9 @@ start of each frame and reuses that context for every variable-bearing field. Th
 memo is cleared before the frame returns, so event handlers and other calls outside
 that render resolve the current selection instead of a previous frame. Secret
 highlighting reads in-memory credential-presence metadata. Rendering does not query
-the operating-system credential store and does not read secret values. Opaque
+the operating-system credential store and does not read secret values. Unknown
+presence is a neutral hint; only a trusted Set, Delete, or execution result marks a
+secret stored or missing. Opaque
 credential identities for the current workspace, environment, and secret names are
 derived once, then reused for later frames until that set changes.
 

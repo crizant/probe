@@ -31,7 +31,7 @@ pub(crate) fn body_text_input(
         &value,
         &ranges,
         variable_highlight_palette(theme),
-        |kind, name| reference_status(&variables, kind, name),
+        |kind, name| placeholder_tone(&variables, kind, name),
     );
     ProbeEditor {
         theme,

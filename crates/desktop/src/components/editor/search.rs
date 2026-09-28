@@ -485,13 +485,13 @@ pub(in crate::components) fn body_text_highlights(
     value: &str,
     references: &[super::variables::VariableReference],
     palette: super::variables::VariableHighlightPalette,
-    mut status_for: impl FnMut(super::variables::ReferenceKind, &str) -> probe_core::VariableStatus,
+    mut tone_for: impl FnMut(super::variables::ReferenceKind, &str) -> super::variables::PlaceholderTone,
 ) -> Vec<TextDecoration> {
     references
         .iter()
         .map(|reference| {
             let (color, underline) = super::variables::placeholder_paint(
-                status_for(reference.kind, reference.name(value)),
+                tone_for(reference.kind, reference.name(value)),
                 palette,
             );
             TextDecoration::new(

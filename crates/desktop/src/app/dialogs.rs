@@ -29,8 +29,10 @@ pub(crate) struct EnvironmentManagerDialog {
 pub(crate) enum SecretUiStatus {
     Loading,
     Stored,
+    /// A trusted operation learned that the credential is not stored.
     NotStored,
-    Unavailable,
+    /// Probe has not learned whether the credential exists.
+    Unknown,
 }
 
 impl EnvironmentManagerDialog {
@@ -76,7 +78,7 @@ pub(crate) enum PendingClose {
     Quit,
     Open {
         path: PathBuf,
-        restored_state: Option<SessionState>,
+        restored_state: Option<Box<SessionState>>,
     },
     Create {
         path: PathBuf,

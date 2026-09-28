@@ -77,6 +77,14 @@ impl ProbeApp {
                 output,
                 cancellation_receiver,
             );
+        let presence_revision = self.credential_presence_revision;
+        cx.spawn(async move |view, cx| {
+            let presence = presence_receiver.await.unwrap_or_default();
+            let _ = view.update(cx, |view, cx| {
+                view.apply_secret_presence_reconciliation(presence, presence_revision, cx);
+            });
+        })
+        .detach();
 
         cx.spawn(async move |view, cx| {
             while let Some(progress) = progress_receiver.recv().await {
@@ -98,9 +106,7 @@ impl ProbeApp {
                     None,
                 ),
             };
-            let presence = presence_receiver.await.unwrap_or_default();
             let _ = view.update(cx, |view, cx| {
-                view.apply_secret_presence_reconciliation(presence, cx);
                 view.complete_execution(key, generation, result, saved_to, cx);
                 cx.notify();
             });

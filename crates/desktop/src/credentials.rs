@@ -59,12 +59,6 @@ impl fmt::Debug for CredentialId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CredentialStatus {
-    Stored,
-    NotStored,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CredentialStoreError {
     NotFound,
     Unavailable,
@@ -90,7 +84,6 @@ impl fmt::Display for CredentialStoreError {
 impl std::error::Error for CredentialStoreError {}
 
 pub trait CredentialStore: Send + Sync {
-    fn status(&self, id: &CredentialId) -> Result<CredentialStatus, CredentialStoreError>;
     /// Creates or replaces a credential.
     fn set(&self, id: &CredentialId, value: &str) -> Result<(), CredentialStoreError>;
     /// Deleting a missing credential returns `NotFound`.
@@ -108,17 +101,6 @@ impl NativeCredentialStore {
 }
 
 impl CredentialStore for NativeCredentialStore {
-    fn status(&self, id: &CredentialId) -> Result<CredentialStatus, CredentialStoreError> {
-        // keyring's portable v1 API has no existence-only call. Discard the value here.
-        self.get(id).map(|value| {
-            if value.is_some() {
-                CredentialStatus::Stored
-            } else {
-                CredentialStatus::NotStored
-            }
-        })
-    }
-
     fn set(&self, id: &CredentialId, value: &str) -> Result<(), CredentialStoreError> {
         Self::entry(id)?.set_password(value).map_err(map_error)
     }
@@ -176,15 +158,6 @@ mod tests {
     struct FakeStore(Mutex<HashMap<String, String>>);
 
     impl CredentialStore for FakeStore {
-        fn status(&self, id: &CredentialId) -> Result<CredentialStatus, CredentialStoreError> {
-            Ok(
-                if self.0.lock().unwrap().contains_key(id.persistence_key()) {
-                    CredentialStatus::Stored
-                } else {
-                    CredentialStatus::NotStored
-                },
-            )
-        }
         fn set(&self, id: &CredentialId, value: &str) -> Result<(), CredentialStoreError> {
             self.0
                 .lock()
@@ -229,10 +202,8 @@ mod tests {
         assert!(!a.persistence_key().contains(secret));
         assert!(a.persistence_key().starts_with("v1-"));
         let store = FakeStore::default();
-        assert_eq!(store.status(&a), Ok(CredentialStatus::NotStored));
         assert!(store.get(&a).unwrap().is_none());
         store.set(&a, secret).unwrap();
-        assert_eq!(store.status(&a), Ok(CredentialStatus::Stored));
         assert!(!format!("{:?}", store.get(&a).unwrap()).contains(secret));
         store.set(&a, "replacement").unwrap();
         assert_eq!(
@@ -247,9 +218,6 @@ mod tests {
     fn provider_maps_failures_without_diagnostics() {
         struct Broken;
         impl CredentialStore for Broken {
-            fn status(&self, _: &CredentialId) -> Result<CredentialStatus, CredentialStoreError> {
-                Err(CredentialStoreError::Unavailable)
-            }
             fn set(&self, _: &CredentialId, _: &str) -> Result<(), CredentialStoreError> {
                 Err(CredentialStoreError::Unavailable)
             }

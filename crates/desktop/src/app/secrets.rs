@@ -29,12 +29,6 @@ struct TestCredentialStore;
 
 #[cfg(test)]
 impl CredentialStore for TestCredentialStore {
-    fn status(
-        &self,
-        _: &CredentialId,
-    ) -> Result<crate::credentials::CredentialStatus, CredentialStoreError> {
-        panic!("presentation must not query credential status")
-    }
     fn set(&self, _: &CredentialId, _: &str) -> Result<(), CredentialStoreError> {
         Err(CredentialStoreError::Unsupported)
     }
@@ -100,21 +94,19 @@ impl ProbeApp {
         let statuses = names
             .into_iter()
             .map(|name| {
-                let stored = CredentialId::for_workspace(&path, &environment, &name)
+                let key = CredentialId::for_workspace(&path, &environment, &name)
                     .ok()
-                    .is_some_and(|id| {
-                        self.session
-                            .stored_credentials
-                            .contains(id.persistence_key())
-                    });
-                (
-                    name,
-                    if stored {
+                    .map(|id| id.persistence_key().to_owned());
+                let status = match key.as_deref() {
+                    Some(key) if self.session.stored_credentials.contains(key) => {
                         SecretUiStatus::Stored
-                    } else {
+                    }
+                    Some(key) if self.session.missing_credentials.contains(key) => {
                         SecretUiStatus::NotStored
-                    },
-                )
+                    }
+                    _ => SecretUiStatus::Unknown,
+                };
+                (name, status)
             })
             .collect();
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
@@ -126,23 +118,32 @@ impl ProbeApp {
         &self,
         selected: &str,
         secrets_without_values: &BTreeSet<String>,
-    ) -> (BTreeSet<String>, BTreeSet<String>) {
+    ) -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
         let Some(workspace) = &self.workspace_path else {
-            return (secrets_without_values.clone(), BTreeSet::new());
+            return (
+                BTreeSet::new(),
+                BTreeSet::new(),
+                secrets_without_values.clone(),
+            );
         };
         let keys = self.secret_persistence_keys(workspace, selected, secrets_without_values);
-        let mut unresolved = secrets_without_values.clone();
+        let mut missing = BTreeSet::new();
         let mut resolved = BTreeSet::new();
+        let mut unknown = BTreeSet::new();
         for name in secrets_without_values {
-            if keys
-                .get(name)
-                .is_some_and(|key| self.session.stored_credentials.contains(key))
-            {
-                unresolved.remove(name);
-                resolved.insert(name.clone());
+            match keys.get(name) {
+                Some(key) if self.session.stored_credentials.contains(key) => {
+                    resolved.insert(name.clone());
+                }
+                Some(key) if self.session.missing_credentials.contains(key) => {
+                    missing.insert(name.clone());
+                }
+                _ => {
+                    unknown.insert(name.clone());
+                }
             }
         }
-        (unresolved, resolved)
+        (missing, resolved, unknown)
     }
 
     fn secret_persistence_keys(
@@ -177,11 +178,9 @@ impl ProbeApp {
     }
 
     fn remember_stored_credential(&mut self, id: &CredentialId, cx: &mut Context<Self>) {
-        if self
-            .session
-            .stored_credentials
-            .insert(id.persistence_key().to_owned())
-        {
+        let changed = self.record_credential_presence(id.persistence_key(), true);
+        self.note_credential_presence_changed();
+        if changed {
             self.persist_session(cx);
         }
         self.sync_secret_statuses_from_presence();
@@ -189,24 +188,50 @@ impl ProbeApp {
     }
 
     fn forget_stored_credential(&mut self, id: &CredentialId, cx: &mut Context<Self>) {
-        if self.session.stored_credentials.remove(id.persistence_key()) {
+        let changed = self.record_credential_presence(id.persistence_key(), false);
+        self.note_credential_presence_changed();
+        if changed {
             self.persist_session(cx);
         }
         self.sync_secret_statuses_from_presence();
         cx.notify();
     }
 
+    /// Moves one opaque identity between the stored and known-missing sets.
+    ///
+    /// `stored` records a value Probe has learned is present. `false` records a
+    /// trusted absence. Returns whether either set changed.
+    fn record_credential_presence(&mut self, key: &str, stored: bool) -> bool {
+        if stored {
+            let inserted = self.session.stored_credentials.insert(key.to_owned());
+            let cleared = self.session.missing_credentials.remove(key);
+            inserted || cleared
+        } else {
+            let removed = self.session.stored_credentials.remove(key);
+            let recorded = self.session.missing_credentials.insert(key.to_owned());
+            removed || recorded
+        }
+    }
+
+    fn note_credential_presence_changed(&mut self) {
+        self.credential_presence_revision = self.credential_presence_revision.wrapping_add(1);
+    }
+
     pub(super) fn apply_secret_presence_reconciliation(
         &mut self,
         reconciliation: SecretPresenceReconciliation,
+        revision: u64,
         cx: &mut Context<Self>,
     ) {
+        if revision < self.credential_presence_revision {
+            return;
+        }
         let mut changed = false;
         for id in reconciliation.missing {
-            changed |= self.session.stored_credentials.remove(&id);
+            changed |= self.record_credential_presence(&id, false);
         }
         for id in reconciliation.found {
-            changed |= self.session.stored_credentials.insert(id);
+            changed |= self.record_credential_presence(&id, true);
         }
         if changed {
             self.persist_session(cx);

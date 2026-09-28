@@ -2197,10 +2197,7 @@ fn variable_context_reclassifies_when_the_selected_environment_changes(cx: &mut 
                 development.status("token"),
                 probe_core::VariableStatus::Resolved
             );
-            assert_eq!(
-                development.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
+            assert_unknown_secret(&development, "secretToken");
             assert_eq!(
                 development.status("disabledValue"),
                 probe_core::VariableStatus::Missing
@@ -2218,10 +2215,7 @@ fn variable_context_reclassifies_when_the_selected_environment_changes(cx: &mut 
                 Some("api.example.com")
             );
             assert_eq!(base.status("token"), probe_core::VariableStatus::Missing);
-            assert_eq!(
-                base.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
+            assert_unknown_secret(&base, "secretToken");
             assert_eq!(
                 base.status("disabledValue"),
                 probe_core::VariableStatus::Missing
@@ -2256,7 +2250,6 @@ fn variable_context_reclassifies_when_the_selected_environment_changes(cx: &mut 
 #[derive(Default)]
 struct FakeManagerCredentials {
     values: std::sync::Mutex<std::collections::HashMap<crate::credentials::CredentialId, String>>,
-    status_calls: std::sync::atomic::AtomicUsize,
     get_calls: std::sync::atomic::AtomicUsize,
     fail_set: std::sync::atomic::AtomicBool,
     fail_get: std::sync::atomic::AtomicBool,
@@ -2266,15 +2259,6 @@ struct FakeManagerCredentials {
 }
 
 impl crate::credentials::CredentialStore for FakeManagerCredentials {
-    fn status(
-        &self,
-        _: &crate::credentials::CredentialId,
-    ) -> Result<crate::credentials::CredentialStatus, crate::credentials::CredentialStoreError>
-    {
-        self.status_calls
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        panic!("presentation must not query credential status")
-    }
     fn set(
         &self,
         id: &crate::credentials::CredentialId,
@@ -2358,7 +2342,6 @@ fn manager_secret_status_uses_effective_environment_and_never_gets_value(cx: &mu
         let dialog = view.environment_manager_dialog.as_ref().unwrap();
         assert_eq!(dialog.secret_statuses.get("secretToken"), Some(&super::super::SecretUiStatus::Stored));
         assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
-        assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         assert_eq!(view.loaded_workspace.as_ref().unwrap().workspace().effective_environment_variables(&dialog.draft).iter().find(|row| matches!(&row.variable, EnvironmentVariable::Secret(secret) if secret.name.as_deref() == Some("secretToken"))).unwrap().defined_in, "base");
         cx.notify();
     }).unwrap();
@@ -2375,7 +2358,7 @@ fn manager_secret_status_uses_effective_environment_and_never_gets_value(cx: &mu
     );
     visual.run_until_parked();
     assert_eq!(
-        store.status_calls.load(Ordering::Relaxed),
+        store.get_calls.load(Ordering::Relaxed),
         0,
         "rerender should not query the store"
     );
@@ -2393,7 +2376,7 @@ fn manager_secret_status_uses_effective_environment_and_never_gets_value(cx: &mu
                     .unwrap()
                     .secret_statuses
                     .get("secretToken"),
-                Some(&super::super::SecretUiStatus::NotStored)
+                Some(&super::super::SecretUiStatus::Unknown)
             );
         })
         .unwrap();
@@ -2561,32 +2544,7 @@ fn manager_secret_row_actions_follow_saved_status_and_keep_name_width(cx: &mut T
     );
     assert!(
         visual
-            .debug_bounds("environment-secret-retry-secretToken")
-            .is_none()
-    );
-    assert!(
-        visual
             .debug_bounds("environment-secret-status-secretToken")
-            .is_some()
-    );
-    window
-        .update(cx, |view, _, cx| {
-            view.apply_environment_manager_draft(cx, |dialog| dialog.draft.color = None);
-            view.environment_manager_dialog
-                .as_mut()
-                .unwrap()
-                .secret_statuses
-                .insert(
-                    "secretToken".into(),
-                    super::super::SecretUiStatus::Unavailable,
-                );
-            cx.notify();
-        })
-        .unwrap();
-    visual.run_until_parked();
-    assert!(
-        visual
-            .debug_bounds("environment-secret-retry-secretToken")
             .is_some()
     );
 }
@@ -2906,9 +2864,8 @@ fn manager_store_failure_and_unsaved_rename_never_write_collection(cx: &mut Test
                     .unwrap()
                     .secret_statuses
                     .get("secretToken"),
-                Some(&super::super::SecretUiStatus::NotStored)
+                Some(&super::super::SecretUiStatus::Unknown)
             );
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             view.apply_environment_manager_draft(cx, |dialog| dialog.draft.name = "renamed".into());
             assert!(!view.can_manage_secret("secretToken"));
             view.open_secret_value_dialog("secretToken".into(), window, cx);
@@ -2943,11 +2900,8 @@ fn manager_store_failure_and_unsaved_rename_never_write_collection(cx: &mut Test
             );
             view.close_secret_value_dialog(window, cx);
             assert!(view.session.stored_credentials.is_empty());
-            assert_eq!(
-                view.variable_context(cx).status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
+            assert!(view.session.missing_credentials.is_empty());
+            assert_unknown_secret(&view.variable_context(cx), "secretToken");
         })
         .unwrap();
     assert_eq!(fs::read_to_string(&fixture).unwrap(), before);
@@ -2997,7 +2951,7 @@ fn manager_ignores_status_from_previous_environment(cx: &mut TestAppContext) {
             assert_eq!(dialog.original_name, "base");
             assert_eq!(
                 dialog.secret_statuses.get("secretToken"),
-                Some(&super::super::SecretUiStatus::NotStored)
+                Some(&super::super::SecretUiStatus::Unknown)
             );
         })
         .unwrap();
@@ -3081,7 +3035,7 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
                     .unwrap()
                     .secret_statuses
                     .get("secretToken"),
-                Some(&super::super::SecretUiStatus::NotStored)
+                Some(&super::super::SecretUiStatus::Unknown)
             );
         })
         .unwrap();
@@ -3428,12 +3382,6 @@ fn slow_set_records_presence_after_the_environment_manager_closes(cx: &mut TestA
                 probe_core::VariableStatus::Resolved
             );
             assert_eq!(
-                store
-                    .status_calls
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                0
-            );
-            assert_eq!(
                 store.get_calls.load(std::sync::atomic::Ordering::Relaxed),
                 0
             );
@@ -3482,18 +3430,36 @@ fn delete_not_found_clears_presence_without_reading_the_secret(cx: &mut TestAppC
                     .stored_credentials
                     .contains(id.persistence_key())
             );
+            assert!(
+                view.session
+                    .missing_credentials
+                    .contains(id.persistence_key())
+            );
             assert_eq!(
                 view.variable_context(cx).status("secretToken"),
                 probe_core::VariableStatus::SecretWithoutValue
             );
             assert!(store.values.lock().unwrap().is_empty());
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
 }
 
 const EDITOR_SECRET_SENTINEL: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
+
+fn assert_unknown_secret(context: &crate::components::VariableContext, name: &str) {
+    assert!(
+        context.unknown_secrets.contains(name),
+        "{name} should stay unverified until Probe learns its presence"
+    );
+    assert!(!context.secrets.contains(name));
+    assert!(!context.resolved_secrets.contains(name));
+    assert_ne!(
+        context.status(name),
+        probe_core::VariableStatus::SecretWithoutValue
+    );
+    assert_ne!(context.status(name), probe_core::VariableStatus::Resolved);
+}
 
 fn assert_secret_stays_out_of_editor_context(context: &crate::components::VariableContext) {
     assert!(!context.values.contains_key("secretToken"));
@@ -3537,12 +3503,7 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
             );
             view.select_environment(Some("development".into()), cx);
             let pending = view.variable_context(cx);
-            assert_eq!(
-                pending.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue,
-                "a secret absent from presence metadata stays unresolved"
-            );
-            assert!(pending.resolved_secrets.is_empty());
+            assert_unknown_secret(&pending, "secretToken");
             assert_eq!(
                 pending.status("token"),
                 probe_core::VariableStatus::Resolved
@@ -3557,10 +3518,7 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
     window
         .update(cx, |view, _, cx| {
             let context = view.variable_context(cx);
-            assert_eq!(
-                context.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
+            assert_unknown_secret(&context, "secretToken");
             assert_eq!(
                 context.status("baseUrl"),
                 probe_core::VariableStatus::Resolved
@@ -3573,14 +3531,13 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
                 context.status("disabledValue"),
                 probe_core::VariableStatus::Missing
             );
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
             cx.notify();
         })
         .unwrap();
     cx.run_until_parked();
     assert_eq!(
-        store.status_calls.load(Ordering::Relaxed),
+        store.get_calls.load(Ordering::Relaxed),
         0,
         "rendering repeated placeholders must not query the credential store"
     );
@@ -3636,12 +3593,10 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
                 Some("development-token")
             );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             cx.notify();
         })
         .unwrap();
     cx.run_until_parked();
-    assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
     assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
 }
 
@@ -3691,7 +3646,6 @@ fn empty_stored_secret_is_resolved_without_entering_the_variable_map(cx: &mut Te
                     .contains(id.persistence_key())
             );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
 }
@@ -3754,8 +3708,12 @@ fn deleting_a_stored_secret_makes_the_editor_placeholder_unresolved(cx: &mut Tes
                     .stored_credentials
                     .contains(id.persistence_key())
             );
+            assert!(
+                view.session
+                    .missing_credentials
+                    .contains(id.persistence_key())
+            );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
 }
@@ -3793,7 +3751,6 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
                 view.variable_context(cx).status("secretToken"),
                 probe_core::VariableStatus::Resolved
             );
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
@@ -3813,12 +3770,7 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
 
             view.select_environment(Some("base".into()), cx);
             let base = view.variable_context(cx);
-            assert_eq!(
-                base.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue,
-                "another environment must not reuse a stored secret status"
-            );
-            assert!(base.resolved_secrets.is_empty());
+            assert_unknown_secret(&base, "secretToken");
             assert_eq!(base.status("host"), probe_core::VariableStatus::Resolved);
             assert_eq!(base.status("token"), probe_core::VariableStatus::Missing);
         })
@@ -3827,10 +3779,7 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
     window
         .update(cx, |view, _, cx| {
             let base = view.variable_context(cx);
-            assert_eq!(
-                base.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
+            assert_unknown_secret(&base, "secretToken");
             assert_secret_stays_out_of_editor_context(&base);
 
             view.select_environment(Some("development".into()), cx);
@@ -3845,22 +3794,14 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
             view.set_workspace(second.clone(), second_workspace);
             view.select_environment(Some("development".into()), cx);
             let other_workspace = view.variable_context(cx);
-            assert_eq!(
-                other_workspace.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue,
-                "a different workspace must not reuse the previous workspace status"
-            );
-            assert!(other_workspace.resolved_secrets.is_empty());
+            assert_unknown_secret(&other_workspace, "secretToken");
         })
         .unwrap();
     cx.run_until_parked();
     window
         .update(cx, |view, _, cx| {
             let other_workspace = view.variable_context(cx);
-            assert_eq!(
-                other_workspace.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
+            assert_unknown_secret(&other_workspace, "secretToken");
             assert_eq!(
                 other_workspace.status("token"),
                 probe_core::VariableStatus::Resolved
@@ -3881,7 +3822,6 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
             );
             assert_secret_stays_out_of_editor_context(&development);
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
     fs::remove_file(first).unwrap();
@@ -3889,9 +3829,7 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
 }
 
 #[gpui::test]
-fn unknown_presence_keeps_the_secret_unresolved_without_querying_the_store(
-    cx: &mut TestAppContext,
-) {
+fn unknown_presence_stays_neutral_without_querying_the_store(cx: &mut TestAppContext) {
     use std::sync::{Arc, atomic::Ordering};
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -3912,17 +3850,12 @@ fn unknown_presence_keeps_the_secret_unresolved_without_querying_the_store(
     window
         .update(cx, |view, _, cx| {
             let context = view.variable_context(cx);
-            assert_eq!(
-                context.status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
-            assert!(context.resolved_secrets.is_empty());
+            assert_unknown_secret(&context, "secretToken");
             assert_eq!(
                 context.status("token"),
                 probe_core::VariableStatus::Resolved
             );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
 }
@@ -3983,6 +3916,11 @@ fn execution_invalidates_stale_presence_when_the_native_secret_is_missing(cx: &m
                     .stored_credentials
                     .contains(id.persistence_key())
             );
+            assert!(
+                view.session
+                    .missing_credentials
+                    .contains(id.persistence_key())
+            );
             let context = view.variable_context(cx);
             assert_eq!(
                 context.status("secretToken"),
@@ -3990,7 +3928,6 @@ fn execution_invalidates_stale_presence_when_the_native_secret_is_missing(cx: &m
             );
             assert_secret_stays_out_of_editor_context(&context);
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             assert!(matches!(
                 view.execution.response(request_key),
                 Some(crate::execution::ResponseState::Failed(_))
@@ -4024,10 +3961,7 @@ fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppC
             view.select_request(request_key, cx);
             reference_secret(view, request_key, cx);
             assert!(view.session.stored_credentials.is_empty());
-            assert_eq!(
-                view.variable_context(cx).status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
+            assert_unknown_secret(&view.variable_context(cx), "secretToken");
             view.send_request(request_key, cx);
         })
         .unwrap();
@@ -4049,7 +3983,6 @@ fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppC
             assert!(!presence.contains(EDITOR_SECRET_SENTINEL));
             assert!(!presence.contains("secretToken"));
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
             match view.execution.response(request_key) {
                 Some(crate::execution::ResponseState::Failed(message)) => {
                     assert!(!message.contains(EDITOR_SECRET_SENTINEL));
@@ -4111,7 +4044,6 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
                 probe_core::VariableStatus::Resolved
             );
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 0);
-            assert_eq!(store.status_calls.load(Ordering::Relaxed), 0);
         })
         .unwrap();
     cx.run_until_parked();
@@ -4123,10 +4055,8 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
     window
         .update(cx, |view, _, cx| {
             assert!(view.session.stored_credentials.is_empty());
-            assert_eq!(
-                view.variable_context(cx).status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
+            assert!(view.session.missing_credentials.is_empty());
+            assert_unknown_secret(&view.variable_context(cx), "secretToken");
             view.select_request(request_key, cx);
             reference_secret(view, request_key, cx);
             view.send_request(request_key, cx);
@@ -4182,10 +4112,7 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
             view.select_environment(Some("development".into()), cx);
             view.select_request(key, cx);
             reference_secret(view, key, cx);
-            assert_eq!(
-                view.variable_context(cx).status("secretToken"),
-                probe_core::VariableStatus::SecretWithoutValue
-            );
+            assert_unknown_secret(&view.variable_context(cx), "secretToken");
             view.send_request(key, cx);
         })
         .unwrap();
@@ -4201,4 +4128,180 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
         })
         .unwrap();
     let _ = std::fs::remove_file(session_store.path());
+}
+
+#[gpui::test]
+fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppContext) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, atomic::Ordering, mpsc};
+    use std::time::Duration;
+
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = environment_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+    let store = Arc::new(FakeManagerCredentials::default());
+    store.allow_get.store(true, Ordering::Relaxed);
+    let id =
+        crate::credentials::CredentialId::for_workspace(&fixture, "development", "secretToken")
+            .unwrap();
+    store.set(&id, EDITOR_SECRET_SENTINEL).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut received = Vec::new();
+        let mut buffer = [0; 1024];
+        while !received.windows(4).any(|part| part == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0);
+            received.extend_from_slice(&buffer[..count]);
+        }
+        let _ = release_rx.recv_timeout(Duration::from_secs(10));
+        let _ = stream.write_all(
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+    });
+    cx.executor().allow_parking();
+    let captured_revision = window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.credential_store = store.clone();
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
+            view.set_workspace(fixture, workspace);
+            view.select_environment(Some("development".into()), cx);
+            view.select_request(request_key, cx);
+            view.edit_request(
+                request_key,
+                |request| {
+                    request.url = Some(format!("http://{address}/{{{{secretToken}}}}"));
+                },
+                cx,
+            );
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::Resolved
+            );
+            let captured = view.credential_presence_revision;
+            view.send_request(request_key, cx);
+            captured
+        })
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        cx.run_until_parked();
+        if store.get_calls.load(Ordering::Relaxed) >= 1 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "secret resolution should finish while HTTP is still in flight"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(
+                view.session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
+            assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
+            view.open_environment_manager_dialog(window, cx);
+            view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(
+                !view
+                    .session
+                    .stored_credentials
+                    .contains(id.persistence_key())
+            );
+            assert!(
+                view.session
+                    .missing_credentials
+                    .contains(id.persistence_key())
+            );
+            assert_eq!(
+                view.variable_context(cx).status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            view.apply_secret_presence_reconciliation(
+                crate::execution::SecretPresenceReconciliation {
+                    found: [id.persistence_key().to_owned()].into(),
+                    missing: std::collections::BTreeSet::new(),
+                },
+                captured_revision,
+                cx,
+            );
+            assert!(
+                !view
+                    .session
+                    .stored_credentials
+                    .contains(id.persistence_key()),
+                "an older execution snapshot must not restore a deleted secret"
+            );
+            assert!(
+                view.session
+                    .missing_credentials
+                    .contains(id.persistence_key())
+            );
+        })
+        .unwrap();
+    release_tx.send(()).unwrap();
+    server.join().unwrap();
+    let response_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        cx.run_until_parked();
+        let finished = window
+            .update(cx, |view, _, _| {
+                view.execution.response(request_key).is_some()
+            })
+            .unwrap();
+        if finished {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < response_deadline,
+            "the in-flight request should finish after the server responds"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    window
+        .update(cx, |view, _, cx| {
+            assert!(
+                !view
+                    .session
+                    .stored_credentials
+                    .contains(id.persistence_key()),
+                "a finished request must not restore presence deleted while it was in flight"
+            );
+            assert!(
+                view.session
+                    .missing_credentials
+                    .contains(id.persistence_key())
+            );
+            let context = view.variable_context(cx);
+            assert_eq!(
+                context.status("secretToken"),
+                probe_core::VariableStatus::SecretWithoutValue
+            );
+            assert_secret_stays_out_of_editor_context(&context);
+            assert!(view.execution.response(request_key).is_some());
+        })
+        .unwrap();
 }
