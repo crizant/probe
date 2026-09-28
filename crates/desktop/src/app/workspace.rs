@@ -975,7 +975,12 @@ impl ProbeApp {
         self.remap_structure_dialog(&reconciled.selector_remaps);
         self.create_environment_dialog = None;
         self.sync_environment_manager_after_reload(environment_manager_reload, cx);
-        self.sync_secret_statuses_from_presence();
+        // A dirty draft name is not the stored credential's environment. Recomputing
+        // labels from it would mark a stored secret unknown, and reverting the name
+        // does not sync again.
+        if !self.environment_manager_is_dirty() {
+            self.sync_secret_statuses_from_presence();
+        }
         if self.shell.selected_environment().is_some_and(|name| {
             !self
                 .loaded_workspace

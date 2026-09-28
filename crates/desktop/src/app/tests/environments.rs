@@ -1289,7 +1289,24 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
             view.select_environment(Some("development".to_owned()), cx);
+            let id = crate::credentials::CredentialId::for_workspace(
+                &fixture,
+                "development",
+                "secretToken",
+            )
+            .unwrap();
+            view.session
+                .stored_credentials
+                .insert(id.persistence_key().to_owned());
             view.open_environment_manager_dialog(window, cx);
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .secret_statuses
+                    .get("secretToken"),
+                Some(&super::super::SecretUiStatus::Stored)
+            );
             view.apply_reconciled_workspace(
                 reconciled_workspace(
                     probe_opencollection::load_workspace(&fixture).expect("fixture should reload"),
@@ -1319,6 +1336,28 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
                     .map(|dialog| dialog.draft.name.as_str()),
                 Some("renamed-development")
             );
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .secret_statuses
+                    .get("secretToken"),
+                Some(&super::super::SecretUiStatus::Stored),
+                "a reload must not relabel a stored secret from the unsaved environment name"
+            );
+            view.apply_environment_manager_draft(cx, |dialog| {
+                dialog.draft.name = "development".to_owned();
+            });
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .secret_statuses
+                    .get("secretToken"),
+                Some(&super::super::SecretUiStatus::Stored)
+            );
+            view.environment_manager_dialog.as_mut().unwrap().draft.name =
+                "renamed-development".to_owned();
             assert!(view.toasts.is_empty(), "{:?}", toast_debug(view));
         })
         .expect("test window should be open");
@@ -3860,6 +3899,30 @@ fn unknown_presence_stays_neutral_without_querying_the_store(cx: &mut TestAppCon
         .unwrap();
 }
 
+fn park_until_execution_settles(
+    cx: &mut TestAppContext,
+    mut ready: impl FnMut(&mut TestAppContext) -> bool,
+    mut detail: impl FnMut(&mut TestAppContext) -> String,
+) {
+    // Secret resolution finishes on the execution runtime and wakes the GPUI
+    // task from another thread. One `run_until_parked` can return before that
+    // wake is visible, which is common on slower Windows CI hosts.
+    cx.executor().allow_parking();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        cx.run_until_parked();
+        if ready(cx) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for request execution: {}",
+            detail(cx)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 fn reference_secret(
     view: &mut ProbeApp,
     key: probe_core::RequestKey,
@@ -3907,7 +3970,31 @@ fn execution_invalidates_stale_presence_when_the_native_secret_is_missing(cx: &m
             view.send_request(request_key, cx);
         })
         .unwrap();
-    cx.run_until_parked();
+    let persistence_key = id.persistence_key().to_owned();
+    park_until_execution_settles(
+        cx,
+        |cx| {
+            window
+                .update(cx, |view, _, _| {
+                    view.session.missing_credentials.contains(&persistence_key)
+                        && view.execution.response(request_key).is_some()
+                })
+                .unwrap()
+        },
+        |cx| {
+            window
+                .update(cx, |view, _, _| {
+                    format!(
+                        "stored={:?} missing={:?} get_calls={} response={:?}",
+                        view.session.stored_credentials,
+                        view.session.missing_credentials,
+                        store.get_calls.load(Ordering::Relaxed),
+                        view.execution.response(request_key)
+                    )
+                })
+                .unwrap()
+        },
+    );
     window
         .update(cx, |view, _, cx| {
             assert!(
@@ -3965,7 +4052,31 @@ fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppC
             view.send_request(request_key, cx);
         })
         .unwrap();
-    cx.run_until_parked();
+    let persistence_key = id.persistence_key().to_owned();
+    park_until_execution_settles(
+        cx,
+        |cx| {
+            window
+                .update(cx, |view, _, _| {
+                    view.session.stored_credentials.contains(&persistence_key)
+                        && view.execution.response(request_key).is_some()
+                })
+                .unwrap()
+        },
+        |cx| {
+            window
+                .update(cx, |view, _, _| {
+                    format!(
+                        "stored={:?} missing={:?} get_calls={} response={:?}",
+                        view.session.stored_credentials,
+                        view.session.missing_credentials,
+                        store.get_calls.load(Ordering::Relaxed),
+                        view.execution.response(request_key)
+                    )
+                })
+                .unwrap()
+        },
+    );
     window
         .update(cx, |view, _, cx| {
             assert!(
@@ -4062,7 +4173,31 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
             view.send_request(request_key, cx);
         })
         .unwrap();
-    cx.run_until_parked();
+    let persistence_key = id.persistence_key().to_owned();
+    park_until_execution_settles(
+        cx,
+        |cx| {
+            window
+                .update(cx, |view, _, _| {
+                    view.session.stored_credentials.contains(&persistence_key)
+                        && view.execution.response(request_key).is_some()
+                })
+                .unwrap()
+        },
+        |cx| {
+            window
+                .update(cx, |view, _, _| {
+                    format!(
+                        "stored={:?} missing={:?} get_calls={} response={:?}",
+                        view.session.stored_credentials,
+                        view.session.missing_credentials,
+                        store.get_calls.load(Ordering::Relaxed),
+                        view.execution.response(request_key)
+                    )
+                })
+                .unwrap()
+        },
+    );
     window
         .update(cx, |view, _, cx| {
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
@@ -4116,7 +4251,30 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
             view.send_request(key, cx);
         })
         .unwrap();
-    cx.run_until_parked();
+    park_until_execution_settles(
+        cx,
+        |cx| {
+            corrupt
+                .update(cx, |view, _, _| {
+                    let key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
+                    store.get_calls.load(Ordering::Relaxed) >= 2
+                        && view.execution.response(key).is_some()
+                })
+                .unwrap()
+        },
+        |cx| {
+            corrupt
+                .update(cx, |view, _, _| {
+                    format!(
+                        "stored={:?} missing={:?} get_calls={}",
+                        view.session.stored_credentials,
+                        view.session.missing_credentials,
+                        store.get_calls.load(Ordering::Relaxed)
+                    )
+                })
+                .unwrap()
+        },
+    );
     corrupt
         .update(cx, |view, _, _| {
             let key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
