@@ -644,7 +644,7 @@ fn environment_replace_and_delete_reject_wrong_loaded_generation() {
             let before = reloaded.workspace().environments().to_vec();
             assert!(matches!(
                 reloaded.complete_environment_delete(saved),
-                Err(SaveError::StaleCompletion)
+                Err(SaveError::CommittedButNotIntegrated)
             ));
             assert_eq!(reloaded.workspace().environments(), before);
         } else {
@@ -659,12 +659,35 @@ fn environment_replace_and_delete_reject_wrong_loaded_generation() {
             let before = reloaded.workspace().environments().to_vec();
             assert!(matches!(
                 reloaded.complete_environment_replace(saved),
-                Err(SaveError::StaleCompletion)
+                Err(SaveError::CommittedButNotIntegrated)
             ));
             assert_eq!(reloaded.workspace().environments(), before);
         }
         fs::remove_file(path).unwrap();
     }
+}
+
+#[test]
+fn environment_variable_save_rejects_advanced_baseline_before_writing() {
+    let path = temporary_path("env-save-advanced-baseline.yml");
+    fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    loaded
+        .set_environment_variable("development", "token", "rotated".to_owned())
+        .unwrap();
+    let stale = loaded
+        .prepare_environment_variable_save("development", "token")
+        .unwrap();
+    let create = loaded
+        .prepare_environment_create("staging".to_owned(), None)
+        .unwrap();
+    loaded
+        .complete_environment_create(create.execute().unwrap())
+        .unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(matches!(stale.execute(), Err(SaveError::StaleCompletion)));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    fs::remove_file(path).unwrap();
 }
 
 #[test]

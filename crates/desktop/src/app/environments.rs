@@ -396,6 +396,7 @@ impl ProbeApp {
             return;
         }
         self.environment_save_workspace_path = self.workspace_path.clone();
+        let save_workspace_path = self.workspace_path.clone();
         self.environment_save_task = Some(cx.spawn_in(window, async move |view, window| {
             let result = window
                 .background_spawn(async move { prepared.execute() })
@@ -404,11 +405,11 @@ impl ProbeApp {
                 view.environment_save_task = None;
                 let result = result.and_then(|saved| {
                     if view.environment_save_workspace_path != view.workspace_path {
-                        return Err(probe_opencollection::SaveError::StaleCompletion);
+                        return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
                     }
                     view.loaded_workspace
                         .as_mut()
-                        .ok_or(probe_opencollection::SaveError::StaleCompletion)?
+                        .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
                         .complete_environment_replace(saved)
                 });
                 match result {
@@ -437,6 +438,14 @@ impl ProbeApp {
                         view.environment_manager_close_after_save = false;
                         view.clear_environment_dialog_error(cx);
                         view.show_toast(ToastIntent::Success, "Environment saved.", cx);
+                    }
+                    Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
+                        view.environment_manager_close_after_save = false;
+                        view.environment_save_workspace_path = None;
+                        view.pending_close = None;
+                        view.recover_committed_save(save_workspace_path, window, cx);
+                        cx.notify();
+                        return;
                     }
                     Err(error) => {
                         view.environment_manager_close_after_save = false;
@@ -525,6 +534,7 @@ impl ProbeApp {
             }
         };
         self.environment_save_workspace_path = self.workspace_path.clone();
+        let save_workspace_path = self.workspace_path.clone();
         self.environment_save_task = Some(cx.spawn_in(window, async move |view, window| {
             let result = window
                 .background_spawn(async move { prepared.execute() })
@@ -539,6 +549,13 @@ impl ProbeApp {
                         if close_manager {
                             view.close_environment_manager_dialog(window, cx);
                         }
+                    }
+                    Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
+                        view.environment_save_workspace_path = None;
+                        view.pending_close = None;
+                        view.recover_committed_save(save_workspace_path, window, cx);
+                        cx.notify();
+                        return;
                     }
                     Err(error) => {
                         view.show_environment_dialog_error(
@@ -566,7 +583,7 @@ impl ProbeApp {
         if self.environment_save_workspace_path != self.workspace_path
             || self.loaded_workspace.is_none()
         {
-            return Err(probe_opencollection::SaveError::StaleCompletion);
+            return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
         }
         let deleted_current = self
             .environment_manager_dialog
@@ -746,6 +763,7 @@ impl ProbeApp {
         };
         let prepared_baseline = loaded.baseline();
         self.environment_save_workspace_path = self.workspace_path.clone();
+        let save_workspace_path = self.workspace_path.clone();
         self.clear_environment_dialog_error(cx);
         self.environment_save_task = Some(cx.spawn_in(window, async move |view, window| {
             let result = window
@@ -755,11 +773,11 @@ impl ProbeApp {
                 view.environment_save_task = None;
                 let result = result.and_then(|saved| {
                     if view.environment_save_workspace_path != view.workspace_path {
-                        return Err(probe_opencollection::SaveError::StaleCompletion);
+                        return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
                     }
                     view.loaded_workspace
                         .as_mut()
-                        .ok_or(probe_opencollection::SaveError::StaleCompletion)?
+                        .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
                         .complete_environment_create(saved)
                 });
                 match result {
@@ -779,6 +797,11 @@ impl ProbeApp {
                         view.restore_environment_dialog_focus(window, cx);
                         view.start_next_request_save(window, cx);
                         view.start_next_environment_save(window, cx);
+                    }
+                    Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
+                        view.environment_save_workspace_path = None;
+                        view.pending_close = None;
+                        view.recover_committed_save(save_workspace_path, window, cx);
                     }
                     Err(error) => {
                         if view.environment_save_workspace_path == view.workspace_path

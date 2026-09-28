@@ -570,7 +570,8 @@ impl ProbeApp {
     }
 
     pub(super) fn start_next_request_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.request_save_task.is_some() || self.environment_save_task.is_some() {
+        if self.loading || self.request_save_task.is_some() || self.environment_save_task.is_some()
+        {
             return;
         }
         let Some(key) = self.persistence.next() else {
@@ -615,6 +616,7 @@ impl ProbeApp {
                 return;
             }
         };
+        let save_workspace_path = self.workspace_path.clone();
         self.request_save_task = Some(cx.spawn_in(window, async move |view, window| {
             let result = window
                 .background_spawn(async move { prepared.execute() })
@@ -624,7 +626,7 @@ impl ProbeApp {
                 let result = result.and_then(|saved| {
                     view.loaded_workspace
                         .as_mut()
-                        .ok_or(probe_opencollection::SaveError::StaleCompletion)?
+                        .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
                         .complete_request_save(saved)
                 });
                 match result {
@@ -633,6 +635,11 @@ impl ProbeApp {
                         view.show_toast(ToastIntent::Success, "Request saved.", cx);
                         view.start_next_request_save(window, cx);
                         view.start_next_environment_save(window, cx);
+                    }
+                    Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
+                        view.persistence.fail(key);
+                        view.pending_close = None;
+                        view.recover_committed_save(save_workspace_path, window, cx);
                     }
                     Err(error) => {
                         view.persistence.fail(key);

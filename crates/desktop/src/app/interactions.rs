@@ -491,7 +491,8 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.environment_save_task.is_some()
+        if self.loading
+            || self.environment_save_task.is_some()
             || self.request_save_task.is_some()
             || self.structure_task.is_some()
         {
@@ -520,6 +521,7 @@ impl ProbeApp {
             }
         };
         self.environment_save_workspace_path = self.workspace_path.clone();
+        let save_workspace_path = self.workspace_path.clone();
         self.environment_save_task = Some(cx.spawn_in(window, async move |view, window| {
             let result = window
                 .background_spawn(async move { prepared.execute() })
@@ -528,11 +530,11 @@ impl ProbeApp {
                 view.environment_save_task = None;
                 let result = result.and_then(|saved| {
                     if view.environment_save_workspace_path != view.workspace_path {
-                        return Err(probe_opencollection::SaveError::StaleCompletion);
+                        return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
                     }
                     view.loaded_workspace
                         .as_mut()
-                        .ok_or(probe_opencollection::SaveError::StaleCompletion)?
+                        .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
                         .complete_environment_save(saved)
                 });
                 match result {
@@ -540,6 +542,11 @@ impl ProbeApp {
                         view.environment_save_workspace_path = None;
                         view.start_next_request_save(window, cx);
                         view.start_next_environment_save(window, cx);
+                    }
+                    Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
+                        view.environment_save_workspace_path = None;
+                        view.pending_close = None;
+                        view.recover_committed_save(save_workspace_path, window, cx);
                     }
                     Err(error) => {
                         view.environment_save_workspace_path = None;

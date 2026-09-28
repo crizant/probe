@@ -136,8 +136,11 @@ pub enum SaveError {
     ReadOnlySource,
     /// The source changed after it was loaded and was not overwritten.
     ConcurrentModification(PathBuf),
-    /// A completed operation belongs to another loaded repository baseline.
+    /// A prepared operation no longer belongs to the live repository baseline.
     StaleCompletion,
+    /// The filesystem write committed, but its result could not be integrated into
+    /// the loaded workspace. Reload from disk before another save.
+    CommittedButNotIntegrated,
     /// A retained source document no longer has the expected OpenCollection shape.
     InvalidDocument(String),
     /// A native GraphQL update cannot be applied to the selected request.
@@ -168,6 +171,8 @@ impl fmt::Display for SaveError {
             Self::StaleCompletion => {
                 formatter.write_str("repository changed before save completion")
             }
+            Self::CommittedButNotIntegrated => formatter
+                .write_str("save committed to disk but the repository changed; reload from disk"),
             Self::InvalidDocument(message) => {
                 write!(
                     formatter,
@@ -197,6 +202,7 @@ impl Error for SaveError {
             | Self::ReadOnlySource
             | Self::ConcurrentModification(_)
             | Self::StaleCompletion
+            | Self::CommittedButNotIntegrated
             | Self::InvalidDocument(_)
             | Self::Environment(_) => None,
         }

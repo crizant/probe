@@ -22,6 +22,7 @@ pub enum StructureError {
     ReadOnlySource,
     ConcurrentModification(PathBuf),
     StaleCompletion,
+    CommittedButNotIntegrated,
     RecoveryRequired(String),
     CommittedRefreshFailed {
         result: Box<StructureResult>,
@@ -58,7 +59,9 @@ impl StructureError {
             Self::InvalidName(_) => "invalid_name",
             Self::InvalidIndex { .. } => "invalid_index",
             Self::ReadOnlySource => "persistence_read_only",
-            Self::ConcurrentModification(_) | Self::StaleCompletion => "workspace_modified",
+            Self::ConcurrentModification(_)
+            | Self::StaleCompletion
+            | Self::CommittedButNotIntegrated => "workspace_modified",
             Self::RecoveryRequired(_) => "recovery_required",
             Self::CommittedRefreshFailed { .. } => "committed_refresh_failed",
             Self::CommittedCleanupFailed { .. } => "committed_cleanup_failed",
@@ -99,6 +102,8 @@ impl fmt::Display for StructureError {
             Self::StaleCompletion => {
                 formatter.write_str("repository changed before save completion")
             }
+            Self::CommittedButNotIntegrated => formatter
+                .write_str("save committed to disk but the repository changed; reload from disk"),
             Self::RecoveryRequired(message) => {
                 write!(
                     formatter,
@@ -136,6 +141,7 @@ impl From<SaveError> for StructureError {
             SaveError::ReadOnlySource => Self::ReadOnlySource,
             SaveError::ConcurrentModification(path) => Self::ConcurrentModification(path),
             SaveError::StaleCompletion => Self::StaleCompletion,
+            SaveError::CommittedButNotIntegrated => Self::CommittedButNotIntegrated,
             SaveError::InvalidDocument(message) => Self::InvalidDocument(message),
             SaveError::Serialize(error) => Self::InvalidDocument(error.to_string()),
             SaveError::Io { path, source } => Self::Io { path, source },
@@ -169,6 +175,13 @@ mod tests {
             stale_completion.to_string(),
             "repository changed before save completion"
         );
+
+        let committed = StructureError::from(SaveError::CommittedButNotIntegrated);
+        assert_eq!(committed.category(), "workspace_modified");
+        assert!(matches!(
+            committed,
+            StructureError::CommittedButNotIntegrated
+        ));
 
         let missing = StructureError::from(SaveError::RequestNotFound("items/2".to_owned()));
         assert_eq!(missing.category(), "request_not_found");

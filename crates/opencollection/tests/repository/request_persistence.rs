@@ -782,7 +782,7 @@ fn request_completion_rejects_reloaded_workspace() {
     let before = reloaded.diagnostics().to_vec();
     assert!(matches!(
         reloaded.complete_request_save(saved),
-        Err(SaveError::StaleCompletion)
+        Err(SaveError::CommittedButNotIntegrated)
     ));
     assert_eq!(reloaded.diagnostics(), before);
     fs::remove_file(path).unwrap();
@@ -814,11 +814,9 @@ fn request_completion_cannot_replace_newer_retained_baseline() {
     loaded
         .complete_request_save(second.execute().unwrap())
         .unwrap();
-    let stale = first.execute().unwrap();
-    assert!(matches!(
-        loaded.complete_request_save(stale),
-        Err(SaveError::StaleCompletion)
-    ));
+    let original = fs::read(path.join("health.yml")).unwrap();
+    assert!(matches!(first.execute(), Err(SaveError::StaleCompletion)));
+    assert_eq!(fs::read(path.join("health.yml")).unwrap(), original);
     assert!(
         loaded
             .prepare_request_save(
@@ -832,5 +830,68 @@ fn request_completion_cannot_replace_newer_retained_baseline() {
             .execute()
             .is_ok()
     );
+    fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn request_write_committed_before_baseline_advance_is_reported_as_committed() {
+    let path = temporary_path("request-committed-before-completion");
+    copy_directory(&fixture("unbundled"), &path);
+    let mut loaded = load_workspace(&path).unwrap();
+    let first = loaded
+        .prepare_request_save(
+            "health.yml",
+            RequestUpdate {
+                method: FieldPatch::Set("PATCH".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    let second = loaded
+        .prepare_request_save(
+            "users/list-users.yml",
+            RequestUpdate {
+                method: FieldPatch::Set("POST".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    let committed = first.execute().unwrap();
+    loaded
+        .complete_request_save(second.execute().unwrap())
+        .unwrap();
+    assert!(matches!(
+        loaded.complete_request_save(committed),
+        Err(SaveError::CommittedButNotIntegrated)
+    ));
+    assert!(
+        fs::read_to_string(path.join("health.yml"))
+            .unwrap()
+            .contains("PATCH")
+    );
+    fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn request_save_rejects_a_replaced_workspace_before_writing() {
+    let path = temporary_path("request-replaced-before-write");
+    copy_directory(&fixture("unbundled"), &path);
+    let loaded = load_workspace(&path).unwrap();
+    let prepared = loaded
+        .prepare_request_save(
+            "health.yml",
+            RequestUpdate {
+                method: FieldPatch::Set("PATCH".to_owned()),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    let before = fs::read(path.join("health.yml")).unwrap();
+    drop(loaded);
+    assert!(matches!(
+        prepared.execute(),
+        Err(SaveError::StaleCompletion)
+    ));
+    assert_eq!(fs::read(path.join("health.yml")).unwrap(), before);
     fs::remove_dir_all(path).unwrap();
 }
