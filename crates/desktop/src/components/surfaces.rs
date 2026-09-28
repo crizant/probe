@@ -666,12 +666,37 @@ pub(super) fn variable_tooltip_popup(
                     .flex()
                     .flex_none()
                     .items_center()
-                    .gap(px(theme.metrics.spacing_1))
+                    .justify_between()
+                    .gap(px(theme.metrics.spacing_2))
                     .child(
                         truncated_label(hint)
+                            .flex_1()
                             .text_size(px(theme.typography.caption_size))
                             .text_color(status_color),
-                    ),
+                    )
+                    .when_some(secret, |row, state| {
+                        row.when_some(variables.on_manage_secret.clone(), |row, on_manage| {
+                            let hover = hover.clone();
+                            let name = name.clone();
+                            row.child(
+                                secondary_button(
+                                    theme,
+                                    "variable-tooltip-secret-action",
+                                    state.action_label(),
+                                    move |_, window, cx| {
+                                        hover.update(cx, |state, cx| state.dismiss(cx));
+                                        on_manage(&name, editor_focus.clone(), window, cx);
+                                    },
+                                )
+                                .flex_none()
+                                .min_w(px(0.0))
+                                .h(px(theme.typography.caption_size + theme.metrics.spacing_3))
+                                .px(px(theme.metrics.spacing_2))
+                                .text_size(px(theme.typography.caption_size))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+                            )
+                        })
+                    }),
             )
         })
         .when(secret.is_none(), |popup| {
@@ -683,24 +708,6 @@ pub(super) fn variable_tooltip_popup(
                 presentation.placeholder,
                 presentation.editable,
             ))
-        })
-        .when_some(secret, |popup, state| {
-            popup.when_some(variables.on_manage_secret, |popup, on_manage| {
-                let hover = hover.clone();
-                let name = name.clone();
-                popup.child(
-                    text_button(
-                        theme,
-                        "variable-tooltip-secret-action",
-                        state.action_label(),
-                        move |_, window, cx| {
-                            hover.update(cx, |state, cx| state.dismiss(cx));
-                            on_manage(&name, editor_focus.clone(), window, cx);
-                        },
-                    )
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
-                )
-            })
         })
         .when_some(variables.on_manage_environments, |popup, on_manage| {
             let hover = hover.clone();
