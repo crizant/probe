@@ -150,7 +150,9 @@ impl CliError {
             SaveError::RequestNotFound(_) => ("request_not_found", REQUEST_NOT_FOUND_EXIT_CODE),
             SaveError::EmptyUpdate => ("invalid_arguments", INVALID_ARGUMENTS_EXIT_CODE),
             SaveError::ReadOnlySource => ("persistence_read_only", PERSISTENCE_EXIT_CODE),
-            SaveError::ConcurrentModification(_) => ("workspace_modified", PERSISTENCE_EXIT_CODE),
+            SaveError::ConcurrentModification(_)
+            | SaveError::StaleCompletion
+            | SaveError::CommittedButNotIntegrated => ("workspace_modified", PERSISTENCE_EXIT_CODE),
             SaveError::Environment(error) => return Self::configuration(error.clone()),
             SaveError::Graphql(error) => return Self::graphql(error.clone()),
             SaveError::InvalidDocument(_) | SaveError::Serialize(_) | SaveError::Io { .. } => {

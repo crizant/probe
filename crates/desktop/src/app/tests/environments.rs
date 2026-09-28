@@ -1370,7 +1370,7 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
         .unwrap()
         .execute()
         .unwrap();
-    changed.complete_environment_replace(saved);
+    changed.complete_environment_replace(saved).unwrap();
 
     window
         .update(cx, |view, _, cx| {
@@ -1401,7 +1401,7 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
         .unwrap()
         .execute()
         .unwrap();
-    remaining.complete_environment_delete(saved);
+    remaining.complete_environment_delete(saved).unwrap();
 
     window
         .update(cx, |view, _, cx| {

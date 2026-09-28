@@ -1,6 +1,72 @@
 use super::*;
 
 impl ProbeApp {
+    pub(super) fn recover_committed_save(
+        &mut self,
+        saved_path: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = saved_path else {
+            self.show_toast(
+                ToastIntent::Warning,
+                "Save reached disk, but the collection is no longer open. Reopen it to refresh.",
+                cx,
+            );
+            return;
+        };
+        if self.workspace_path.as_ref() != Some(&path) {
+            self.show_toast(
+                ToastIntent::Warning,
+                "Save reached disk in the previous collection. Reopen it to see the result.",
+                cx,
+            );
+            return;
+        }
+        self.loading = true;
+        self.show_toast(
+            ToastIntent::Warning,
+            "Save reached disk after the collection changed. Reloading it now.",
+            cx,
+        );
+        let view = cx.weak_entity();
+        window
+            .spawn(cx, async move |cx| {
+                let reload_path = path.clone();
+                let result = cx.background_spawn(async move { load_workspace(&reload_path) }).await;
+                let _ = view.update_in(cx, |view, window, cx| {
+                    if view.workspace_path.as_ref() != Some(&path) {
+                        return;
+                    }
+                    view.loading = false;
+                    match result {
+                        Ok(fresh) => {
+                            if view.loaded_workspace.is_some() {
+                                view.reconcile_filesystem_workspace(
+                                    fresh,
+                                    BTreeMap::new(),
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                view.set_workspace(path.clone(), fresh);
+                                view.start_workspace_watcher(window, cx);
+                            }
+                        }
+                        Err(error) => {
+                            view.show_toast(
+                                ToastIntent::Error,
+                                format!("Save reached disk, but the collection could not be reloaded: {error}"),
+                                cx,
+                            );
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
     pub(super) fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(store) = self.session_store.clone() else {
             return;

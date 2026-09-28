@@ -414,6 +414,7 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
         .enumerate()
         .map(|(index, folder)| (folder.key, index))
         .collect();
+    let baseline = WorkspaceBaseline::fresh();
     LoadedWorkspace {
         workspace,
         diagnostics: Vec::new(),
@@ -426,6 +427,8 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
         environment_persistence: BTreeMap::new(),
         documents: BTreeMap::new(),
         source: WorkspaceSource::Memory,
+        baseline,
+        live_baseline: Arc::new(LiveBaseline::new(baseline)),
     }
 }
 
