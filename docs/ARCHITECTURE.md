@@ -16,10 +16,7 @@ The application uses two interfaces over shared application and domain layers.
                     ┌────────▼────────┐
                     │   Application   │
                     │                │
-                    │ Workspace      │
                     │ Request Exec   │
-                    │ Environment    │
-                    │ Persistence    │
                     └────────┬────────┘
                              │
                     ┌────────▼────────┐
@@ -100,6 +97,21 @@ Application may depend on Domain abstractions.
 
 Infrastructure implements capabilities required by the application.
 
+The crate graph is acyclic:
+
+    probe-cli ─────┐        ┌──► probe-opencollection ──┐
+                   ├────────┤    probe-postman ─────────┤
+    probe-desktop ─┘        │    probe-yaak ────────────┤
+                            │                           ▼
+                            └──► probe-application ──► probe-core
+                                        │                ▲
+                                        └──► probe-http ─┘
+
+Both interfaces depend on `probe-application`, `probe-core`, the repository and
+import adapters, and `probe-http` for engine construction and response types. `probe-application` depends only on `probe-core` and `probe-http`.
+`probe-http` depends only on `probe-core`. Only `probe-desktop` depends on GPUI,
+gpui-base, and `keyring`.
+
 Domain must not depend on:
 
 - GPUI
@@ -177,21 +189,32 @@ behavior, visual testing, themes, and accessibility.
 
 ## Application Layer
 
-The application layer coordinates use cases.
+The application layer coordinates use cases. These operations should be usable from
+both CLI and GPUI without knowledge of either frontend.
 
-Examples:
+`probe-application` currently owns request execution:
 
-- load workspace
-- list requests
-- get request
-- execute request
-- resolve environment
-- save request
-- validate collection
-- inspect and convert an imported collection
+    prepare_request(request, RequestResolution, &dyn SecretProvider)
+        ↓
+    PreparedRequest ── presentation() ──► dry runs, summaries
+        ↓ into_http()
+    HttpExecution
+        ↓ execute(engine, options, output, cancellation, progress)
+    ExecutedResponse (redacted when a secret was used)
 
-These operations should be usable from both CLI and GPUI without
-knowledge of either frontend.
+`RequestResolution` carries the environments, selected environment, invocation
+overrides, strict flag, and provider workspace identity. Variables are resolved only
+when an environment, overrides, or strict resolution is requested. The provider is
+consulted only for secrets the request can reach. `PreparedRequest` and
+`HttpExecution` keep the secret-bearing execution request and the disclosure context
+private. Their `Debug` output shows only the presentation request and whether a secret
+was used. `NoSecrets` is the shared provider for invocations without a secret backend.
+The process-environment provider stays in the CLI. The native credential provider and
+its presence observer stay in the desktop.
+
+Other use cases are not yet collected here. Loading, listing, validation, saving,
+structure edits, and import conversion are shared through `probe-core`,
+`probe-opencollection`, `probe-postman`, and `probe-yaak` directly.
 
 
 ## Workspace
@@ -242,8 +265,9 @@ resolution and mutation use core and repository operations rather than desktop-o
 logic. Secrets remain unavailable for editing until Probe has a supported runtime
 value provider.
 
-Desktop Send resolves the selected environment and executes the same probe-http
-engine used by the CLI, away from the UI thread. Cancellation reaches that engine;
+Desktop Send uses the same `probe-application` execution operation as the CLI, away
+from the UI thread. Resolution runs on a Tokio blocking worker because the native
+provider may block. Cancellation reaches the shared engine;
 generation checks prevent stale completions from replacing newer results. Response
 and execution state remain presentation-only.
 The desktop retains one Tokio execution runtime and HTTP engine per window, so
@@ -291,25 +315,19 @@ Typical path:
 
 CLI arguments
      ↓
-Application operation
-     ↓
 WorkspaceRepository
      ↓
 native Request + Environment
      ↓
-environment resolution
+probe_application::prepare_request   (--dry-run stops here)
      ↓
-Request::into_http()
+PreparedRequest::into_http()
      ↓
-PreparedHttpRequest
+HttpExecution::execute → probe-http engine → network (reqwest)
      ↓
-probe-http engine
+redacted ExecutedResponse
      ↓
-network (reqwest)
-     ↓
-Response
-     ↓
-CLI formatter
+CLI expectations and formatter
      ↓
 human text / JSON
 
@@ -343,8 +361,8 @@ inside `probe-core`. The resolved environment exposes safe redaction operations 
 adapters. Providers are consulted only for effective enabled
 secret declarations after inheritance and invocation overrides. The CLI offers a
 process-environment provider through `--secret-provider env`; OpenCollection stores
-only `secret: true`, never the value. Request resolution produces an execution
-request and a presentation request that keeps secret references. Missing secret
+only `secret: true`, never the value. `probe_application::prepare_request` produces
+an execution request and a presentation request that keeps secret references. Missing secret
 values and provider failures are retained until a request references the affected
 secret, including through a dependent plain variable; then resolution fails closed.
 The core does not manage native credential storage. The CLI continues to use the
@@ -398,19 +416,34 @@ Probe learns the identity again from Set, Delete, or execution. An empty stored
 secret still counts as present and follows the existing execution rule that an
 explicit empty value is substituted.
 
-`resolve_environment_for_request_with_provider` finds the request's variable
-references and follows transitive plain-variable dependencies before consulting a
-provider. It reads each reachable effective secret once per execution. Unused
-declarations cause no native calls. Desktop performs this synchronous work on a
+Both interfaces prepare requests through `resolve_environment_for_request_with_provider`.
+It finds the request's variable references and follows transitive plain-variable
+dependencies before consulting a provider. It reads each reachable effective secret
+once per execution. Unused declarations cause no provider calls and do not make the
+request secret-bearing. Desktop performs this synchronous work on a
 Tokio blocking worker before sending the request, not on GPUI's event thread.
 Native operations may invoke OS services or permission UI. The native adapter maps
 backend diagnostics to safe Probe errors and then to core's diagnostic-free
 `SecretError`. Secret material remains in ordinary process memory while submitted
-and resolved. Desktop redacts secret byte sequences even in binary response previews.
-Direct desktop response-to-file execution is rejected for secret-bearing requests,
-because that streaming path would write response bytes before redaction. The normal
-viewer can save a complete redacted in-memory response; oversized previews cannot
-be saved as complete bodies without retained storage.
+and resolved.
+
+When a secret was used, `HttpExecution::execute` applies the same rules for every
+interface:
+
+- it bypasses the response cache, so no spool file holds unredacted bytes;
+- it redacts exact secret byte sequences in response headers and the body preview,
+  including binary previews;
+- it reports the presentation URL instead of the final URL;
+- it withholds failure diagnostics but keeps the failure kind. Cancellation and
+  timeout are kept, output failures keep their path, configuration failures stay
+  configuration failures, and all others become transport failures.
+
+Response-to-file policy is left to each interface. The CLI's `--output` deliberately
+writes the original bytes to a user-owned file. Direct desktop response-to-file
+execution is rejected for secret-bearing requests, because that streaming path would
+write response bytes before redaction. The normal viewer can save a complete redacted
+in-memory response; oversized previews cannot be saved as complete bodies without
+retained storage.
 
 The desktop Environment Manager shows secret declarations alongside plain variables.
 Adding a secret creates a draft `secret: true` declaration in OpenCollection; the

@@ -7,46 +7,17 @@ impl ProbeApp {
 
     fn start_request(&mut self, key: RequestKey, output: Option<PathBuf>, cx: &mut Context<Self>) {
         self.transient.request_execution_menu_open = false;
-        let Some(request) = self
-            .loaded_workspace
-            .as_ref()
-            .and_then(|loaded| loaded.workspace().request(key))
-            .cloned()
-        else {
+        let Some(loaded) = self.loaded_workspace.as_ref() else {
             return;
         };
-        let native_environment = self.shell.selected_environment().and_then(|name| {
-            self.loaded_workspace.as_ref().and_then(|loaded| {
-                loaded.source_path().map(|path| {
-                    (
-                        loaded.workspace().environments().to_vec(),
-                        name.to_owned(),
-                        path.to_owned(),
-                    )
-                })
-            })
-        });
-        let request = if native_environment.is_none() {
-            if let Some(name) = self.shell.selected_environment() {
-                let Some(loaded) = &self.loaded_workspace else {
-                    return;
-                };
-                match resolve_environment(loaded.workspace().environments(), name)
-                    .and_then(|environment| resolve_request(&request, &environment))
-                {
-                    Ok(request) => request,
-                    Err(error) => {
-                        self.execution.fail(key, error.to_string());
-                        self.response_viewer.remove(key);
-                        cx.notify();
-                        return;
-                    }
-                }
-            } else {
-                request
-            }
-        } else {
-            request
+        let Some(request) = loaded.workspace().request(key).cloned() else {
+            return;
+        };
+        let input = ExecutionInput {
+            request,
+            environments: loaded.workspace().environments().to_vec(),
+            environment: self.shell.selected_environment().map(str::to_owned),
+            credential_workspace: loaded.source_path().map(Path::to_owned),
         };
         let options = ExecutionOptions {
             base_directory: self
@@ -69,14 +40,11 @@ impl ProbeApp {
         }
         let (cancellation_sender, cancellation_receiver) = tokio::sync::oneshot::channel();
         let generation = self.execution.begin(key, cancellation_sender);
-        let (result_receiver, mut progress_receiver, presence_receiver) =
-            self.execution_service.as_ref().unwrap().execute(
-                request,
-                native_environment,
-                options,
-                output,
-                cancellation_receiver,
-            );
+        let (result_receiver, mut progress_receiver, presence_receiver) = self
+            .execution_service
+            .as_ref()
+            .unwrap()
+            .execute(input, options, output, cancellation_receiver);
         let presence_revision = self.credential_presence_revision;
         cx.spawn(async move |view, cx| {
             let presence = presence_receiver.await.unwrap_or_default();

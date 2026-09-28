@@ -139,7 +139,9 @@ declarations do not prevent an unrelated request from running.
 
 The outbound request receives the runtime value. Request summaries, dry runs, and
 JSON retain the `{{name}}` reference for secret fields. Exact occurrences of secret
-values in UTF-8 response reason, headers, and body are redacted. Encoded or otherwise
+values in the response reason, headers, and body are redacted, including byte sequences
+in non-UTF-8 bodies. Failure messages for such a run withhold HTTP diagnostics; the error
+category and exit code still reflect the failure kind. Encoded or otherwise
 transformed echoes may remain visible in CLI output. When a runtime secret is used,
 the reported final URL is the presentation request URL because redirects can encode
 or transform secret text. `--output <file>` intentionally saves the original server

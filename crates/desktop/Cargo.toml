@@ -35,6 +35,7 @@ icondata = { version = "0.7.0", default-features = false, features = ["lucide"] 
 # commit (see that revision's Cargo.lock `gpui` source).
 gpui-base = { git = "https://github.com/longbridge/gpui-component", rev = "d598c6c0a61c23650dd933d58d046c0708085531" }
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed" }
+probe-application = { path = "../application" }
 probe-core = { path = "../core" }
 probe-http = { path = "../http" }
 probe-opencollection = { path = "../opencollection" }

@@ -12,6 +12,7 @@ from pathlib import Path
 # Baseline measured on 2026-09-26 with inline test modules removed from LCOV.
 # Desktop rendering is reported separately because a line floor rewards UI glue tests.
 LINE_FLOORS = {
+    "application": 95.0,
     "cli": 89.0,
     "core": 90.0,
     "http": 81.0,
