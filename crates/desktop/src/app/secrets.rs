@@ -279,6 +279,12 @@ impl ProbeApp {
                 .secret_value_dialog
                 .as_ref()
                 .is_none_or(|dialog| !dialog.replacing || dialog.name != name)
+            || self
+                .environment_manager_dialog
+                .as_ref()
+                .is_none_or(|dialog| {
+                    dialog.secret_statuses.get(&name) != Some(&SecretUiStatus::Stored)
+                })
         {
             return;
         }
@@ -307,7 +313,10 @@ impl ProbeApp {
             || self
                 .environment_manager_dialog
                 .as_ref()
-                .is_none_or(|dialog| dialog.draft.name != environment)
+                .is_none_or(|dialog| {
+                    dialog.draft.name != environment
+                        || dialog.secret_statuses.get(&name) != Some(&SecretUiStatus::Stored)
+                })
         {
             return;
         }

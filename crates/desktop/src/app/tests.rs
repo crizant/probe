@@ -264,6 +264,25 @@ fn secret_rename_dialogs_explain_that_credentials_stay_behind() {
 }
 
 #[test]
+fn stored_secret_delete_dialog_names_the_value() {
+    let dialog = ApplicationDialog::DeleteStoredSecret {
+        name: "apiToken".to_owned(),
+        environment: "production".to_owned(),
+        detail: "The secret declaration will remain.".to_owned(),
+    };
+    assert_eq!(dialog.title(), "Delete stored value?");
+    assert_eq!(dialog.action_specs().unwrap()[0].label, "Cancel");
+    assert_eq!(
+        dialog.action_specs().unwrap()[1].label,
+        "Delete Stored Value"
+    );
+    assert_eq!(
+        dialog.destructive_action(),
+        Some(ApplicationDialogAction::Delete)
+    );
+}
+
+#[test]
 fn stored_secret_rename_warning_follows_declaration_identity() {
     let base = sample_environment("base", None, vec![sample_secret("secretToken")]);
     let development = sample_environment("development", Some("base"), vec![sample_plain("host")]);

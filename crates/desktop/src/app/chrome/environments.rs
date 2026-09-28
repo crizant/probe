@@ -906,6 +906,13 @@ impl ProbeApp {
         let delete_view = cx.weak_entity();
         let delete_name = dialog.name.clone();
         let input = dialog.input.clone();
+        let stored = self
+            .environment_manager_dialog
+            .as_ref()
+            .is_some_and(|manager| {
+                manager.draft.name == dialog.environment
+                    && manager.secret_statuses.get(&dialog.name) == Some(&SecretUiStatus::Stored)
+            });
         let content = components::dialog_surface(theme, "secret-value-dialog", components::COMPACT_DIALOG_WIDTH)
             .debug_selector(|| "secret-value-dialog".into())
             .child(components::dialog_title(theme, if dialog.replacing { "Replace secret" } else { "Set secret" }))
@@ -960,8 +967,8 @@ impl ProbeApp {
                 components::dialog_description(theme, error).mt(px(theme.metrics.spacing_2)).text_color(theme.colors.status.error)
             ))
             .child(components::dialog_actions(theme)
-                .when(dialog.replacing, |actions| actions.child(
-                    components::dialog_action_button(theme, "secret-value-delete-stored", "Delete stored value", components::DialogActionStyle::Destructive, None, dialog.busy || self.secret_write_in_progress, move |_, window, cx| {
+                .when(dialog.replacing && stored, |actions| actions.child(
+                    components::dialog_action_button(theme, "secret-value-delete-stored", "Delete Stored Value", components::DialogActionStyle::Destructive, None, dialog.busy || self.secret_write_in_progress, move |_, window, cx| {
                         let _ = delete_view.update(cx, |view, cx| view.confirm_delete_stored_secret(delete_name.clone(), window, cx));
                     })
                 ))

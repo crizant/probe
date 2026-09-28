@@ -2519,6 +2519,35 @@ fn manager_secret_row_actions_follow_saved_status_and_keep_name_width(cx: &mut T
     assert!(visual.debug_bounds("secret-value-delete-stored").is_some());
     window
         .update(cx, |view, window, cx| {
+            view.environment_manager_dialog
+                .as_mut()
+                .unwrap()
+                .secret_statuses
+                .insert(
+                    "secretToken".into(),
+                    super::super::SecretUiStatus::NotStored,
+                );
+            view.confirm_delete_stored_secret("secretToken".into(), window, cx);
+            assert!(view.application_dialog.is_none());
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("secret-value-delete-stored").is_none());
+    window
+        .update(cx, |view, _, cx| {
+            view.environment_manager_dialog
+                .as_mut()
+                .unwrap()
+                .secret_statuses
+                .insert("secretToken".into(), super::super::SecretUiStatus::Stored);
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("secret-value-delete-stored").is_some());
+    window
+        .update(cx, |view, window, cx| {
             let input = &view.secret_value_dialog.as_ref().unwrap().input;
             assert!(input.read(cx).focus_handle(cx).is_focused(window));
         })
@@ -2756,6 +2785,23 @@ fn manager_replaces_and_deletes_native_value_without_changing_declaration(cx: &m
                 Some(ApplicationDialog::DeleteStoredSecret { .. })
             ));
             assert!(view.secret_value_dialog.is_some());
+            view.environment_manager_dialog
+                .as_mut()
+                .unwrap()
+                .secret_statuses
+                .insert(
+                    "secretToken".into(),
+                    super::super::SecretUiStatus::NotStored,
+                );
+            view.handle_application_dialog_action(ApplicationDialogAction::Delete, window, cx);
+            assert!(view.secret_value_dialog.is_some());
+            assert!(!view.secret_write_in_progress);
+            view.environment_manager_dialog
+                .as_mut()
+                .unwrap()
+                .secret_statuses
+                .insert("secretToken".into(), super::super::SecretUiStatus::Stored);
+            view.confirm_delete_stored_secret("secretToken".into(), window, cx);
             view.handle_application_dialog_action(ApplicationDialogAction::Delete, window, cx);
         })
         .unwrap();

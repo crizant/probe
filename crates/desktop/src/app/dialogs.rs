@@ -203,7 +203,7 @@ impl ApplicationDialog {
             Self::Delete { name, .. } | Self::DeleteEnvironment { name, .. } => {
                 Cow::Owned(format!("Delete “{name}”?"))
             }
-            Self::DeleteStoredSecret { .. } => Cow::Borrowed("Delete stored secret?"),
+            Self::DeleteStoredSecret { .. } => Cow::Borrowed("Delete stored value?"),
             Self::RenameStoredSecrets {
                 kind: StoredSecretRename::Environment,
             } => Cow::Borrowed("Rename environment?"),
@@ -277,9 +277,8 @@ impl ApplicationDialog {
         match self {
             Self::About => Some(ABOUT_DIALOG_ACTIONS),
             Self::Unsaved { .. } | Self::UnsavedEnvironment => Some(UNSAVED_DIALOG_ACTIONS),
-            Self::Delete { .. }
-            | Self::DeleteEnvironment { .. }
-            | Self::DeleteStoredSecret { .. } => Some(DELETE_DIALOG_ACTIONS),
+            Self::Delete { .. } | Self::DeleteEnvironment { .. } => Some(DELETE_DIALOG_ACTIONS),
+            Self::DeleteStoredSecret { .. } => Some(DELETE_STORED_VALUE_DIALOG_ACTIONS),
             Self::RenameStoredSecrets { .. } => Some(RENAME_STORED_SECRETS_DIALOG_ACTIONS),
             Self::FilesystemConflict { .. } => Some(FILESYSTEM_CONFLICT_DIALOG_ACTIONS),
             Self::SelectYaakWorkspace { .. } => None,
@@ -403,6 +402,15 @@ const DELETE_DIALOG_ACTIONS: &[DialogActionSpec] = &[
     DialogActionSpec::new(
         "application-dialog-delete",
         "Delete",
+        components::DialogActionStyle::Destructive,
+        ApplicationDialogAction::Delete,
+    ),
+];
+const DELETE_STORED_VALUE_DIALOG_ACTIONS: &[DialogActionSpec] = &[
+    CANCEL_DIALOG_ACTION,
+    DialogActionSpec::new(
+        "application-dialog-delete-stored-value",
+        "Delete Stored Value",
         components::DialogActionStyle::Destructive,
         ApplicationDialogAction::Delete,
     ),
