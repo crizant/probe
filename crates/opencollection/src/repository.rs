@@ -1363,3 +1363,47 @@ pub(crate) fn atomic_write(
     file.commit().map_err(map_io)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{SaveError, create_bundled_workspace, load_workspace};
+    use std::{
+        fs, process,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn stale_environment_create_does_not_change_reloaded_workspace() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "probe-stale-environment-create-{}-{unique}.yml",
+            process::id()
+        ));
+        let mut original = create_bundled_workspace(&path, Some("Stale create"), false).unwrap();
+        let prepared = original
+            .prepare_environment_create("staging".to_owned(), None)
+            .unwrap();
+        assert_eq!(original.workspace().environments()[0].name, "staging");
+
+        let mut reloaded = load_workspace(&path).unwrap();
+        let environments_before = reloaded.workspace().environments().to_vec();
+        let persistence_before = reloaded.environment_persistence.clone();
+        let documents_before = reloaded.documents.clone();
+        let baseline_before = reloaded.baseline;
+
+        let completed = prepared.execute().unwrap();
+        assert!(matches!(
+            reloaded.complete_environment_create(completed),
+            Err(SaveError::StaleCompletion)
+        ));
+        assert_eq!(reloaded.workspace().environments(), environments_before);
+        assert_eq!(reloaded.environment_persistence, persistence_before);
+        assert_eq!(reloaded.documents, documents_before);
+        assert_eq!(reloaded.baseline, baseline_before);
+
+        fs::remove_file(path).unwrap();
+    }
+}
