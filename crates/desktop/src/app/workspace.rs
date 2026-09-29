@@ -404,10 +404,7 @@ impl ProbeApp {
                         );
                     });
                 }
-                if !events
-                    .iter()
-                    .any(|event| event_affects_workspace(event, &workspace_path))
-                {
+                if !events_reload_workspace(&events, &workspace_path) {
                     if disconnected {
                         return;
                     }
@@ -1024,7 +1021,8 @@ impl ProbeApp {
             self.shell.activate_tab(key);
         }
         self.remap_structure_dialog(&reconciled.selector_remaps);
-        self.create_environment_dialog = None;
+        // The new-environment dialog is only a typed name. A refresh replaces
+        // stored documents, and the next submit uses that refreshed workspace.
         self.sync_environment_manager_after_reload(environment_manager_reload, cx);
         // A dirty draft name is not the stored credential's environment. Recomputing
         // labels from it would mark a stored secret unknown, and reverting the name

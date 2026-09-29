@@ -8,7 +8,7 @@ use std::sync::mpsc;
 
 use notify::{
     Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
-    event::{ModifyKind, RenameMode},
+    event::{AccessKind, AccessMode, ModifyKind, RenameMode},
 };
 
 pub(crate) const WATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -85,6 +85,26 @@ pub(crate) fn event_affects_workspace(event: &Event, workspace_path: &Path) -> b
             .any(|path| path == workspace_path || path.file_name() == workspace_path.file_name())
 }
 
+/// Whether `event` can change collection contents.
+///
+/// Linux inotify emits open and close-after-read for every read. Reloading on
+/// those events reads the file again and queues the same events, so the
+/// desktop refreshes continuously. A close-after-write still reloads, because
+/// some editors report a save only that way.
+fn event_changes_workspace_content(event: &Event) -> bool {
+    match event.kind {
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        _ => true,
+    }
+}
+
+pub(crate) fn events_reload_workspace(events: &[Event], workspace_path: &Path) -> bool {
+    events.iter().any(|event| {
+        event_affects_workspace(event, workspace_path) && event_changes_workspace_content(event)
+    })
+}
+
 pub(crate) fn rename_hints(events: &[Event], workspace_path: &Path) -> BTreeMap<String, String> {
     if !workspace_path.is_dir() {
         return BTreeMap::new();
@@ -120,12 +140,14 @@ fn selector(root: &Path, path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use notify::{
         Event, EventKind,
-        event::{ModifyKind, RenameMode},
+        event::{AccessKind, AccessMode, ModifyKind, RenameMode},
     };
 
-    use super::{drain_watch_events, rename_hints};
+    use super::{drain_watch_events, events_reload_workspace, rename_hints};
 
     #[test]
     fn extracts_repository_selectors_from_paired_rename_events() {
@@ -153,6 +175,31 @@ mod tests {
         assert!(drain_watch_events(&receiver, &mut events, &mut watch_error));
         assert_eq!(events, [event]);
         assert!(watch_error.is_none());
+    }
+
+    #[test]
+    fn reading_the_collection_does_not_reload_it() {
+        let path = Path::new("/tmp/mycollection.yml");
+        let open = Event::new(EventKind::Access(AccessKind::Open(AccessMode::Any)))
+            .add_path(path.to_path_buf());
+        let close_read = Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)))
+            .add_path(path.to_path_buf());
+
+        assert!(!events_reload_workspace(&[open, close_read], path));
+    }
+
+    #[test]
+    fn writing_the_collection_reloads_it() {
+        let path = Path::new("/tmp/mycollection.yml");
+        let close_write = Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)))
+            .add_path(path.to_path_buf());
+        let modify = Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path.to_path_buf());
+        let unrelated_write = Event::new(EventKind::Modify(ModifyKind::Any))
+            .add_path(Path::new("/tmp/notes.txt").to_path_buf());
+
+        assert!(events_reload_workspace(&[close_write], path));
+        assert!(events_reload_workspace(&[modify], path));
+        assert!(!events_reload_workspace(&[unrelated_write], path));
     }
 
     #[test]
