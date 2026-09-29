@@ -36,12 +36,11 @@ while painting a request. `ProbeApp` resolves the selected environment once at t
 start of each frame and reuses that context for every variable-bearing field. The
 memo is cleared before the frame returns, so event handlers and other calls outside
 that render resolve the current selection instead of a previous frame. Secret
-highlighting reads in-memory credential-presence metadata. Rendering does not query
-the operating-system credential store and does not read secret values. Unknown
-presence is a neutral hint; only a trusted Set, Delete, or execution result marks a
-secret stored or missing. Opaque
-credential identities for the current workspace, environment, and secret names are
-derived once, then reused for later frames until that set changes.
+highlighting reads in-memory
+[credential-presence metadata](ARCHITECTURE.md#presence-metadata) and never queries
+the operating-system credential store. Opaque credential identities for the current
+workspace, environment, and secret names are derived once, then reused for later
+frames until that set changes.
 
 Criterion stores machine-local reports under `target/criterion`. Compare results on
 the same machine and build profile; absolute timings from different machines are not

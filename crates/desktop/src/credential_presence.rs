@@ -139,6 +139,72 @@ mod tests {
     }
 
     #[test]
+    fn delete_supersedes_execution_that_found_the_old_value() {
+        let mut state = CredentialPresenceState::default();
+        assert!(state.record_write("v1-key", true));
+        let captured = state.revision();
+        assert!(state.record_write("v1-key", false));
+        assert!(!state.reconcile(
+            SecretPresenceReconciliation {
+                missing: BTreeSet::new(),
+                found: ["v1-key".into()].into()
+            },
+            captured
+        ));
+        assert!(state.is_missing("v1-key"));
+        assert!(!state.is_stored("v1-key"));
+    }
+
+    #[test]
+    fn execution_after_the_latest_write_is_applied() {
+        let mut state = CredentialPresenceState::default();
+        assert!(state.record_write("v1-key", true));
+        assert!(state.reconcile(
+            SecretPresenceReconciliation {
+                missing: ["v1-key".into()].into(),
+                found: BTreeSet::new()
+            },
+            state.revision()
+        ));
+        assert!(state.is_missing("v1-key"));
+    }
+
+    #[test]
+    fn repeated_writes_report_no_change_but_still_advance_the_revision() {
+        let mut state = CredentialPresenceState::default();
+        assert!(state.record_write("v1-key", true));
+        let before = state.revision();
+        assert!(!state.record_write("v1-key", true));
+        assert!(state.revision() > before);
+    }
+
+    #[test]
+    fn persistence_keys_follow_workspace_environment_and_names() {
+        let state = CredentialPresenceState::default();
+        let workspace = std::env::temp_dir();
+        let names: BTreeSet<String> = ["token".into()].into();
+        let key = |workspace: &Path, environment: &str| {
+            CredentialId::for_workspace(workspace, environment, "token")
+                .unwrap()
+                .persistence_key()
+                .to_owned()
+        };
+
+        let development = state.persistence_keys(&workspace, "development", &names);
+        assert_eq!(development["token"], key(&workspace, "development"));
+        let base = state.persistence_keys(&workspace, "base", &names);
+        assert_eq!(base["token"], key(&workspace, "base"));
+        let other = state.persistence_keys(Path::new("/"), "base", &names);
+        assert_eq!(other["token"], key(Path::new("/"), "base"));
+        let renamed: BTreeSet<String> = ["other".into()].into();
+        assert!(
+            !state
+                .persistence_keys(Path::new("/"), "base", &renamed)
+                .contains_key("token")
+        );
+    }
+
+    #[test]
     fn execution_reconciliation_moves_identity_between_sets() {
         let mut state = CredentialPresenceState::default();
         assert!(state.reconcile(

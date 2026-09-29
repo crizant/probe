@@ -4,31 +4,12 @@ This document records current scope and future product work. It is not required
 reading for ordinary implementation tasks; use the task-specific references in
 [AGENTS.md](AGENTS.md) and the [documentation index](docs/README.md).
 
-## Current Foundation
+## Current Scope
 
-Probe currently has the product foundation originally planned for the first desktop
-release:
-
-- a Rust workspace with separate core, OpenCollection, HTTP, CLI, desktop, Postman,
-  and Yaak crates;
-- bundled and unbundled OpenCollection loading, validation, retained YAML, atomic
-  persistence, external-change detection, and recovery-aware structural writes;
-- an indexed in-memory workspace with repository-owned persistent selectors;
-- shared environment resolution and management;
-- one asynchronous HTTP engine used by both interfaces, with cancellation and bounded
-  response handling;
-- a deterministic, non-interactive CLI with versioned JSON, stable exit codes, request
-  and workspace editing, and Postman and Yaak import;
-- a GPUI desktop application with native workspace navigation, request editing,
-  execution, response inspection, session restoration, filesystem synchronization,
-  environment management, and keyboard-accessible tree editing;
-- performance fixtures and benchmarks for workspaces up to 10,000 requests.
-
-The public CLI contract is documented in [docs/CLI.md](docs/CLI.md). Current
-architecture and desktop behavior are documented in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
-[docs/DESIGN.md](docs/DESIGN.md). Code and tests remain authoritative when a document
-falls behind.
+The foundation planned for the first desktop release is implemented. Current behavior
+is documented in the canonical references listed in the
+[documentation index](docs/README.md), not here. Code and tests remain authoritative
+when a document falls behind.
 
 ## Planned Work
 

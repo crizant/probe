@@ -57,29 +57,17 @@ maintainability, memory efficiency, visual polish.
 
 Every newly supported OpenCollection feature needs fixture-based tests, including
 load → modify → save → reload where relevant. Core behavior must be testable without
-launching GPUI or invoking the CLI binary. Preserve unrelated worktree changes and
-never use unsafe merely to bypass ownership problems.
+launching GPUI or invoking the CLI binary. Test contracts, invariants, compatibility,
+and regressions; never mirror the implementation or add assertions merely to raise
+coverage. Preserve unrelated worktree changes and never use unsafe merely to bypass
+ownership problems.
 
-Before completing a code change, run:
-
-```bash
-unset CARGO_TARGET_DIR
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
-cargo deny check advisories
-```
-
-For changes to Rust production behavior, also run the coverage and CRAP review in
-[Development](docs/DEVELOPMENT.md). Run diff-scoped mutation testing on changed
-production functions in the application, CLI, core, HTTP, OpenCollection,
-Postman, or Yaak crates. Investigate each surviving mutant: it may expose a missing behavior
-assertion, an equivalent change, platform glue, or a design problem. Add tests
-only for contracts, invariants, compatibility, and regressions; never mirror
-the implementation or add assertions merely to raise coverage. Do not split a
-function solely to lower CRAP. Preserve the architecture and requested scope;
-stop once the requested work and applicable checks pass, without unrelated
-cleanup. Do not report completion while a required check fails.
+Before completing a code change, run the
+[completion checks](docs/DEVELOPMENT.md#completion-checks). For changes to Rust
+production behavior, also run the
+[coverage, CRAP, and mutation review](docs/DEVELOPMENT.md#final-quality-checks).
+Stop once the requested work and applicable checks pass, without unrelated cleanup.
+Do not report completion while a required check fails.
 
 ## Scope
 

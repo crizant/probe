@@ -49,6 +49,15 @@ Desktop tests may cover behavior such as appearance selection, pane constraints,
 focus, and highlight ranges. Extend an existing desktop test when it already builds
 the same surface and the new assertion is a follow-on interaction.
 
+Test state machines and pure rules at the type that owns them, and keep desktop tests
+for wiring, focus, dialogs, and cross-component contracts. Share window, workspace,
+and fake-store setup through test helpers instead of repeating it. Assert semantic
+actions, dynamic values, and safety-critical wording in UI copy rather than whole
+paragraphs. Similar tests at different boundaries, such as core, repository, and CLI
+integration tests, may protect different contracts.
+
+## Completion Checks
+
 Before completing a code change, run:
 
 ```bash
@@ -65,7 +74,7 @@ and do not inherit the sandbox `CARGO_TARGET_DIR`. That cache cannot compile
 
 Do not report completion while any required check fails.
 
-## Final quality checks
+## Final Quality Checks
 
 Probe uses [Rust-TOPS 1.0.0](https://github.com/Hedronite/rust-tops/blob/v0.1.3/RUST_TOPS.md)
 as a risk-review protocol. `rust-tops.yaml` describes this workspace; the
@@ -113,9 +122,10 @@ heat, and fan noise during local mutation runs; they are not a hard CPU cap.
 
 For a PR branch, use `git diff --unified=0 origin/main...HEAD` to include
 committed changes. CI runs this gate only on PRs that change Rust source in the
-seven behavior crates. A survivor needs investigation; add a test when a
-documented behavior or regression has no assertion, and record the reason for
-an equivalent or irrelevant mutant in the change review. Desktop mutation
+seven behavior crates. A survivor needs investigation: it may expose a missing
+behavior assertion, an equivalent change, platform glue, or a design problem. Add
+a test when a documented behavior or regression has no assertion, and record the
+reason for an equivalent or irrelevant mutant in the change review. Desktop mutation
 testing is local and selective because GPUI compilation and render glue make a
 workspace-wide PR mutation run costly. Property tests fit pure resolution and
 round-trip contracts; fuzzing fits untrusted OpenCollection, Postman, and Yaak
@@ -160,7 +170,5 @@ sandbox when tests need to bind local mock HTTP servers.
 
 ## Working Style
 
-- Inspect relevant architecture and pinned dependency source instead of guessing.
-- Preserve unrelated user changes in a dirty worktree.
-- Make the smallest coherent change and add or update tests.
-- Summarize architectural decisions and remaining limitations.
+Scope and worktree rules are in `AGENTS.md`. When reporting a change, summarize
+architectural decisions and remaining limitations.

@@ -262,8 +262,9 @@ expansion, tabs, pane state, and environment selection are presentation state.
 Request controls mutate the in-memory domain request. Saving is a separate shared
 repository operation and never occurs implicitly on each keystroke. Environment
 resolution and mutation use core and repository operations rather than desktop-only
-logic. Secret declarations live in OpenCollection; the desktop manages their values
-through the native credential store and never writes them to collection YAML.
+logic. Secret declarations live in OpenCollection; the desktop sets, replaces, and
+deletes their values in the native credential store, as described in
+[Secrets](#secrets).
 
 Desktop Send uses the same `probe-application` execution operation as the CLI, away
 from the UI thread. Resolution runs on a Tokio blocking worker because the native
@@ -359,73 +360,18 @@ core `SecretProvider` receives a logical variable name, selected environment, an
 optional workspace identity; `SecretValue` redacts formatting, and raw access stays
 inside `probe-core`. The resolved environment exposes safe redaction operations to
 adapters. Providers are consulted only for effective enabled
-secret declarations after inheritance and invocation overrides. The CLI offers a
-process-environment provider through `--secret-provider env`; OpenCollection stores
-only `secret: true`, never the value. `probe_application::prepare_request` produces
-an execution request and a presentation request that keeps secret references. Missing secret
-values and provider failures are retained until a request references the affected
-secret, including through a dependent plain variable; then resolution fails closed.
-The core does not manage native credential storage. The CLI continues to use the
-process environment provider and its existing workspace context. Desktop uses the
-Probe-owned `credentials` service over `keyring` 4's native store. The service
-offers `CredentialId::for_workspace`, `CredentialStore::{set,delete,get}`,
-`NativeCredentialStore`, and `NativeSecretProvider`. Setting an existing key replaces
-it; deleting a missing key returns `NotFound`.
-
-Credential identity v1 is a SHA-256 digest of length-prefixed canonical workspace
-path, effective environment name, and variable name. The keyring service is
-`dev.probe.desktop.credentials.v1`; the account is `v1-` plus the digest. Neither
-the raw path nor variable names appear in the native entry key. The canonical path
-survives relative paths and symlinks, but a workspace move or rename changes its
-identity and leaves the old credential behind. Environment names are the only
-durable environment identity, so renaming one likewise requires the user to store
-its credential again; Probe does not migrate or delete credentials implicitly.
-The OpenCollection collection carries no credential plaintext. The desktop session may
-store opaque credential-presence keys (`v1-` plus the digest) as a rebuildable UI hint.
-That index contains no secret values, workspace paths, environment names, or variable
-names. No plaintext file or process-environment fallback is used when the native store
-is unavailable.
-
-Request rendering and editor highlighting never access native credential values and
-never query the operating-system credential store solely for presentation. The editor
-treats a secret as resolved only when its opaque `CredentialId` is in the stored set.
-A secret is an error only when a trusted operation has recorded that identity in the
-known-missing set: successful Delete, Delete that returns not found, or execution
-that finds no credential. Every other secret is unknown. Unknown presence uses a
-neutral style, not the unresolved error style, and the Environment Manager says the
-secret is not verified. Probe does not query the native store to turn unknown into
-stored or missing. The metadata is only a UI hint. `NativeSecretProvider` and the
-native credential store remain the source of truth when a request actually runs. A
-successful Set records the identity as stored and clears any known-missing mark. A
-successful Delete, or a Delete that returns not found, records it as missing. Those
-updates are applied when the credential operation finishes, including when the
-Environment Manager has already closed, and each one advances a presence revision.
-Execution reconciliation is applied when secret resolution finishes, not when the
-HTTP request returns. It carries the revision from when that request started, so a
-Set or Delete that happened later is left in place. If execution looks up an identity
-that presence calls stored and the native store returns not found, Probe records the
-identity as missing and repaints the placeholder as unresolved. A successful execution
-lookup may record the identity as stored, because that native read already happened
-for execution. Credentials created outside Probe are not discovered automatically. If
-a user deletes a Probe credential in Keychain Access, Windows Credential Manager, or
-a Linux secret-service UI, presence can stay positive until the next execution finds
-it missing. That tradeoff avoids a Keychain, Credential Manager, or Secret Service
-query every time a variable is painted. Missing or corrupt session state leaves both
-presence sets empty and does not block execution; highlighting stays unknown until
-Probe learns the identity again from Set, Delete, or execution. An empty stored
-secret still counts as present and follows the existing execution rule that an
-explicit empty value is substituted.
+secret declarations after inheritance and invocation overrides.
+`probe_application::prepare_request` produces an execution request and a presentation
+request that keeps secret references. Missing secret values and provider failures are
+retained until a request references the affected secret, including through a dependent
+plain variable; then resolution fails closed. The core does not manage credential
+storage; each interface supplies its provider, as described in [Secrets](#secrets).
 
 Both interfaces prepare requests through `resolve_environment_for_request_with_provider`.
 It finds the request's variable references and follows transitive plain-variable
 dependencies before consulting a provider. It reads each reachable effective secret
 once per execution. Unused declarations cause no provider calls and do not make the
-request secret-bearing. Desktop performs this synchronous work on a
-Tokio blocking worker before sending the request, not on GPUI's event thread.
-Native operations may invoke OS services or permission UI. The native adapter maps
-backend diagnostics to safe Probe errors and then to core's diagnostic-free
-`SecretError`. Secret material remains in ordinary process memory while submitted
-and resolved.
+request secret-bearing.
 
 When a secret was used, `HttpExecution::execute` applies the same rules for every
 interface:
@@ -444,44 +390,6 @@ execution is rejected for secret-bearing requests, because that streaming path w
 write response bytes before redaction. The normal viewer can save a complete redacted
 in-memory response; oversized previews cannot be saved as complete bodies without
 retained storage.
-
-The desktop Environment Manager shows secret declarations alongside plain variables.
-Adding a secret creates a draft `secret: true` declaration in OpenCollection; the
-declaration must be saved before a native value can be set. Set, Replace, and Delete
-run off the GPUI thread and update credential-presence metadata when they finish.
-Opening the manager, switching environments, or painting the request editor reads
-that metadata only. It does not read the native credential store to decide a label.
-Stored means the opaque identity is known present. Known-missing means a trusted
-operation learned the credential is absent, and the row says the secret is not set.
-Otherwise the row says the secret is not verified. Explicit Set, Replace, and Delete
-still use the native store, because the user asked for a credential change. The
-request editor uses the same presence metadata when classifying `{{name}}`: a known
-stored secret is resolved, a known-missing secret is unresolved, and unknown presence
-stays neutral. Secret values stay inside the credential store and are read on the
-execution path through `NativeSecretProvider`. The value is entered in a masked,
-initially empty dialog and is never revealed by Probe. Deleting a stored value keeps
-the declaration; removing the declaration does not delete the native credential.
-Inherited declarations show their defining environment, while the credential is
-scoped to the selected effective environment. A workspace move, environment rename,
-or variable rename changes credential identity in v1. Saving an environment rename
-or a direct secret-variable rename asks for confirmation when that change would
-leave stored values under the previous identity. The prompt is based on the
-declaration edit and does not read the credential store. Probe does not migrate or
-delete old credentials automatically. Credential operations are disabled while the environment
-draft is unsaved, and there is no plaintext fallback. The input and request value
-exist temporarily in ordinary process memory during submission and execution.
-
-`keyring` 4.2.0 was selected for its maintained, portable synchronous v1 API,
-MIT/Apache-2.0 license, and supported native Keychain Services on macOS, Windows
-Credential Manager, and Secret Service via zbus on Linux. It requires Rust 1.88,
-below Probe's 1.95 minimum. It is a desktop-only dependency, leaving the CLI
-dependency graph unchanged. The Linux backend needs a working user DBus session
-and Secret Service implementation; headless or locked sessions return an error,
-without fallback. `oo7` targets Secret Service rather than all three systems;
-manual platform bindings would multiply platform-specific code. `keyring-core`
-with individually selected stores offers more control, but the v1 API meets this
-service's narrow operations with less Probe-owned setup. Native platform builds
-remain CI-gated on macOS, Windows, and Linux.
 
 HTTP requests pass through unchanged. GraphQL requests become GraphQL-over-HTTP: `GET`
 carries the selected operation in query parameters, and other methods carry a JSON
@@ -522,6 +430,83 @@ subsequent reservations remove session directories whose lease was released by a
 accounting includes live response files from every active session. If a response cannot fit in the
 remaining quota, Probe deletes its partial spool, continues draining the network response, and
 returns the 16 MiB preview with a retention warning; existing retained responses are not evicted.
+
+
+## Secrets
+
+OpenCollection secret declarations (`secret: true`) contain no value, and Probe never
+writes a secret value to collection YAML or the desktop session. Values come only from
+a runtime `SecretProvider` supplied by the interface:
+
+- The CLI offers the process-environment provider (`--secret-provider env`); its
+  contract is in [CLI.md](CLI.md).
+- The desktop uses `NativeSecretProvider` over the Probe-owned `credentials` service,
+  which exposes `CredentialId::for_workspace` and `CredentialStore::{set,delete,get}`
+  over `keyring` 4. Setting an existing key replaces it; deleting a missing key returns
+  `NotFound`. There is no plaintext file or process-environment fallback when the
+  native store is unavailable. The adapter maps backend diagnostics to safe Probe
+  errors and then to core's diagnostic-free `SecretError`.
+
+`keyring` is a desktop-only dependency, so the CLI dependency graph does not include
+native credential backends. It uses Keychain Services on macOS, Windows Credential
+Manager, and Secret Service on Linux. The Linux backend needs a user D-Bus session and
+a Secret Service implementation; headless or locked sessions return an error. Native
+platform builds are CI-gated on macOS, Windows, and Linux.
+
+### Native Credential Identity
+
+Credential identity v1 is a SHA-256 digest of length-prefixed canonical workspace
+path, effective environment name, and variable name. The keyring service is
+`dev.probe.desktop.credentials.v1`; the account is `v1-` plus the digest. Neither
+the raw path nor variable names appear in the native entry key. The canonical path
+survives relative paths and symlinks, but a workspace move or rename changes its
+identity and leaves the old credential behind. Environment and variable names are the
+only durable identities, so renaming either also requires storing the value again.
+Inherited declarations are scoped to the selected effective environment. Probe never
+migrates or deletes credentials implicitly: deleting a stored value keeps its
+declaration, and removing a declaration keeps its stored value.
+
+### Presence Metadata
+
+The desktop session may record opaque identities (`v1-` plus the digest) in a stored
+set and a known-missing set. These sets contain no secret values, workspace paths,
+environment names, or variable names. They are a rebuildable hint for presentation,
+not a source of truth: missing or corrupt session state leaves both sets empty and
+does not block execution.
+
+Presentation, including placeholder highlighting and Environment Manager status,
+reads only presence metadata. It never reads credential values or queries the
+operating-system credential store. A secret whose identity is in neither set is
+unknown. Only trusted operations change the sets. Asynchronous credential writes
+update presence when they complete, independently of whether the Secret Value dialog
+or Environment Manager that initiated them is still open:
+
+- a successful Set records the identity as stored;
+- a Delete that succeeds or returns `NotFound` records it as missing;
+- execution records the identities the native store returned or did not return.
+  Store errors are omitted, so a transient failure does not erase metadata.
+
+Credentials created or deleted outside Probe are not discovered until one of those
+operations observes them. This avoids an operating-system credential query every time
+a placeholder is painted.
+
+### Execution and Reconciliation
+
+The native credential store is the source of truth when a request runs. Desktop
+execution reads reachable secrets through `NativeSecretProvider` on a Tokio blocking
+worker and reconciles presence when secret resolution finishes, not when the HTTP
+response arrives. Every Set or Delete advances a session-only presence revision. A
+send captures that revision when it starts, and a reconciliation from an older
+revision is discarded, so an execution that read the store before a newer Set or
+Delete cannot overwrite that newer state.
+
+### Secret Material
+
+Probe does not present secret values. Presentation requests, dry runs, and summaries
+keep `{{name}}` references; `SecretValue` redacts its formatting; response redaction
+follows [HTTP Execution](#http-execution). Desktop value entry is masked, starts
+empty, and never reveals a stored value. Secret material exists in ordinary process
+memory while it is submitted to the store or used by a request.
 
 
 ## Persistence and Filesystem Synchronization

@@ -162,23 +162,44 @@ Unresolved covers an environment variable that is absent or disabled, a secret P
 has learned is not stored, a path-parameter row that is missing, disabled, or still
 blank, and every `{{name}}` when no environment is selected or environment resolution
 failed. An environment variable set to an empty string is resolved. A secret is
-resolved only when Probe's credential-presence metadata says its opaque identity is
-stored. A secret whose presence is unknown uses the secondary text color, no error
-underline, and a lock in a tooltip that says "Not verified". Request
-rendering and editor highlighting never access native credential values and never
-query the operating-system credential store solely for presentation. The metadata is
-a UI hint: the native credential store remains the source of truth at execution time,
-a stale "stored" hint becomes known-missing when execution finds the credential
-missing, and a secret created outside Probe is not discovered automatically. The
-stored-secret tooltip says "Stored securely" and offers Replace Secret. Known-missing
-and unverified secrets offer Set Secret. Secret tooltips never render a value input;
-both actions open the masked Secret Value dialog. A blank path parameter is not resolved, because
-those rows are created empty as soon as `:name` is typed.
+resolved only when credential-presence metadata says it is stored, and unresolved
+only when that metadata says it is known missing. A secret whose presence is unknown
+uses the secondary text color, no error underline, and a lock in a tooltip that says
+"Not verified". Presence metadata and its trust rules are defined in
+[Architecture](ARCHITECTURE.md#presence-metadata). The stored-secret tooltip says
+"Stored securely" and offers Replace Secret. Known-missing and unverified secrets
+offer Set Secret. Secret tooltips never render a value input; both actions open the
+secret value dialog. A blank path parameter is not resolved, because those rows are
+created empty as soon as `:name` is typed.
 
 `:name` is never classified against the environment, and `{{name}}` is never
 classified against path parameters, even when the names coincide. Highlights and
 hover tooltips share `probe_core::VariableStatus`. Path placeholders are edited in
 the path-parameters section and do not use the environment tooltip.
+
+## Secret Values
+
+The Environment Manager lists secret declarations alongside plain variables. An
+inherited declaration shows the environment that defines it. Each secret row shows
+its presence as stored, not set (known missing), or not verified (unknown), and
+offers Set or Replace accordingly. Adding a secret creates a draft declaration;
+credential actions stay disabled until the environment draft is saved, because the
+stored value belongs to the saved identity.
+
+Set and Replace open the same secret value dialog from the Environment Manager or
+from a placeholder tooltip. The dialog is masked, starts empty even when replacing,
+clears its input when the value is submitted or the dialog closes, submits on Enter,
+discards on Escape, and returns focus to the control that opened it. Only one
+credential write runs at a time. Delete Stored Value is offered only while replacing
+a stored value, requires confirmation, and keeps the declaration. Removing a
+declaration from the Environment Manager does not delete its stored value.
+
+Saving an environment rename, or a rename of a direct secret variable, asks for
+confirmation when the change would leave stored values under the previous identity.
+The prompt states that affected values must be stored again and names the variable
+when a single secret was renamed. It is based on the declaration edit and does not
+query the credential store. Credential store failures are reported without changing presence or the
+collection.
 
 ## Future Plain-Text Themes
 
