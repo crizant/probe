@@ -45,7 +45,7 @@ impl ProbeApp {
             .as_ref()
             .unwrap()
             .execute(input, options, output, cancellation_receiver);
-        let presence_revision = self.credential_presence_revision;
+        let presence_revision = self.session.presence.revision();
         cx.spawn(async move |view, cx| {
             let presence = presence_receiver.await.unwrap_or_default();
             let _ = view.update(cx, |view, cx| {

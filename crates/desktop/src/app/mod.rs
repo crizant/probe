@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
     path::{Path, PathBuf},
@@ -19,7 +19,7 @@ use gpui::{
 };
 #[cfg(target_os = "macos")]
 use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
-use gpui_base::input::{Copy, Cut, InputEvent, InputState, Paste, Redo, SelectAll, Undo};
+use gpui_base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_base::{
     AutoScroll, Button, Input, POPUP_PRIORITY, Popover, Positioner, Scrollbar, ScrollbarMode, Tab,
     Tabs, ToastStack,
@@ -43,6 +43,7 @@ use probe_postman::{
 use probe_yaak::{ImportedYaakWorkspace, YaakImportError, YaakImportPreview, inspect_yaak_source};
 
 mod chrome;
+mod detached_requests;
 mod dialogs;
 mod environments;
 mod imports;
@@ -58,6 +59,7 @@ mod transient;
 mod tree;
 mod workspace;
 
+use detached_requests::DetachedRequests;
 #[cfg(test)]
 pub(crate) use dialogs::IMPORT_DIAGNOSTIC_GROUP_LIMIT;
 use dialogs::{
@@ -287,8 +289,7 @@ pub(crate) struct ProbeApp {
     application_dialog_focus: FocusHandle,
     toast_focus_handle: FocusHandle,
     loaded_workspace: Option<LoadedWorkspace>,
-    detached_requests: BTreeSet<RequestKey>,
-    committed_detached_requests: BTreeSet<RequestKey>,
+    detached_requests: DetachedRequests,
     workspace_path: Option<PathBuf>,
     shell: ShellState,
     loading: bool,
@@ -319,10 +320,6 @@ pub(crate) struct ProbeApp {
     create_environment_dialog: Option<String>,
     environment_manager_dialog: Option<EnvironmentManagerDialog>,
     secret_value_dialog: Option<secrets::SecretValueDialog>,
-    editor_secret_identities: RefCell<Option<secrets::EditorSecretIdentityCache>>,
-    /// Advances when a successful Set or Delete changes credential presence.
-    /// In-flight execution reconciliation captured at an older revision is ignored.
-    credential_presence_revision: u64,
     secret_write_in_progress: bool,
     credential_store: Arc<dyn crate::credentials::CredentialStore>,
     environment_dialog_error: Option<EnvironmentDialogError>,
@@ -418,8 +415,7 @@ impl ProbeApp {
             application_dialog_focus,
             toast_focus_handle,
             loaded_workspace: None,
-            detached_requests: BTreeSet::new(),
-            committed_detached_requests: BTreeSet::new(),
+            detached_requests: DetachedRequests::default(),
             workspace_path: None,
             shell: ShellState::default(),
             loading: false,
@@ -450,8 +446,6 @@ impl ProbeApp {
             create_environment_dialog: None,
             environment_manager_dialog: None,
             secret_value_dialog: None,
-            editor_secret_identities: RefCell::new(None),
-            credential_presence_revision: 0,
             secret_write_in_progress: false,
             credential_store: secrets::default_credential_store(),
             environment_dialog_error: None,

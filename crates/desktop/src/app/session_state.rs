@@ -1,4 +1,6 @@
-use super::*;
+use gpui::{AppContext as _, Context};
+
+use super::{PaneLayout, ProbeApp, ToastIntent};
 
 impl ProbeApp {
     pub(super) fn restore_shell_state(&mut self, cx: &mut Context<Self>) {
