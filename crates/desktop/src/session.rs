@@ -140,9 +140,12 @@ impl SessionStore {
         let version = source
             .get("schema_version")
             .and_then(serde_json::Value::as_u64);
-        if version == Some(1)
-            && let Some(object) = source.as_object_mut()
-        {
+        let legacy_state = version == Some(1)
+            || (source.get("schema_version").is_none()
+                && ["open_tabs", "active_tab", "collapsed_folders"]
+                    .iter()
+                    .any(|field| source.get(field).is_some()));
+        if legacy_state && let Some(object) = source.as_object_mut() {
             let active = object
                 .get("active_collection")
                 .and_then(|path| path.as_str());
@@ -304,6 +307,31 @@ mod tests {
             store.path(),
             r#"{
             "schema_version": 1,
+            "active_collection": "/tmp/old",
+            "open_tabs": ["first", "second"],
+            "active_tab": "first",
+            "collapsed_folders": ["folder"]
+        }"#,
+        )
+        .unwrap();
+
+        let restored = store.load().unwrap();
+        assert_eq!(restored.schema_version, 2);
+        let workspace = &restored.workspaces[Path::new("/tmp/old")];
+        assert_eq!(workspace.open_tabs, ["first", "second"]);
+        assert_eq!(workspace.active_tab.as_deref(), Some("first"));
+        assert_eq!(workspace.collapsed_folders, ["folder"]);
+        store.save(&restored).unwrap();
+        assert_eq!(store.load().unwrap(), restored);
+    }
+
+    #[test]
+    fn unversioned_legacy_tabs_migrate_to_their_workspace() {
+        let store = store();
+        std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        std::fs::write(
+            store.path(),
+            r#"{
             "active_collection": "/tmp/old",
             "open_tabs": ["first", "second"],
             "active_tab": "first",
