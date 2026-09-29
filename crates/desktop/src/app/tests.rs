@@ -827,9 +827,23 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
         ProbeApp::new(window, cx)
     });
+    let canonical_destination = destination
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+        .join(destination.file_name().unwrap());
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
+            view.session.workspaces.insert(
+                canonical_destination.clone(),
+                crate::session::WorkspaceSessionState {
+                    open_tabs: vec!["items/0/items/0".to_owned()],
+                    active_tab: Some("items/0/items/0".to_owned()),
+                    collapsed_folders: vec!["items/0".to_owned()],
+                },
+            );
             view.choose_postman_import_destination(imported, window, cx);
         })
         .unwrap();
@@ -849,6 +863,18 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
             assert_eq!(
                 view.workspace_path.as_deref(),
                 Some(destination.canonicalize().unwrap().as_path())
+            );
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            assert!(loaded.request_key("items/0/items/0").is_some());
+            assert!(loaded.folder_key("items/0").is_some());
+            assert!(view.shell.tabs().is_empty());
+            assert!(
+                view.shell
+                    .folder_is_expanded(loaded.folder_key("items/0").unwrap())
+            );
+            assert_eq!(
+                view.session.workspaces[&canonical_destination],
+                crate::session::WorkspaceSessionState::default()
             );
         })
         .unwrap();

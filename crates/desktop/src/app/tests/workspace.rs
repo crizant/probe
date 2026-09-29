@@ -1199,6 +1199,71 @@ fn switching_workspaces_restores_each_tabs_active_tab_and_folders(cx: &mut TestA
 }
 
 #[gpui::test]
+fn loading_existing_workspaces_restores_tabs_after_switching(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let a = bundled_fixture().canonicalize().unwrap();
+    let b = nested_fixture().canonicalize().unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.load_workspace_path(a.clone(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(view.workspace_path.as_ref(), Some(&a));
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            let (first, second) = (requests[0].key(), requests[1].key());
+            view.select_request(first, cx);
+            view.select_request(second, cx);
+            view.select_request(first, cx);
+            view.load_workspace_path(b.clone(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(view.workspace_path.as_ref(), Some(&b));
+            assert!(view.shell.tabs().is_empty());
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            let (first, second) = (requests[0].key(), requests[1].key());
+            view.select_request(first, cx);
+            view.select_request(second, cx);
+            view.load_workspace_path(a.clone(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(view.workspace_path.as_ref(), Some(&a));
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            let (first, second) = (requests[0].key(), requests[1].key());
+            assert_eq!(view.shell.tabs(), &[first, second]);
+            assert_eq!(view.shell.active_tab(), Some(first));
+            view.load_workspace_path(b.clone(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.workspace_path.as_ref(), Some(&b));
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            let (first, second) = (requests[0].key(), requests[1].key());
+            assert_eq!(view.shell.tabs(), &[first, second]);
+            assert_eq!(view.shell.active_tab(), Some(second));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn add_menu_renders_compact_request_and_folder_markers(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2557,6 +2622,19 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
     ));
     fs::create_dir(&destination_dir).unwrap();
     let destination = destination_dir.join("pets.yml");
+    let canonical_destination = destination_dir.canonicalize().unwrap().join("pets.yml");
+    window
+        .update(cx, |view, _, _| {
+            view.session.workspaces.insert(
+                canonical_destination.clone(),
+                crate::session::WorkspaceSessionState {
+                    open_tabs: vec!["items/0".to_owned()],
+                    active_tab: Some("items/0".to_owned()),
+                    collapsed_folders: vec!["items/0".to_owned()],
+                },
+            );
+        })
+        .unwrap();
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let button = visual
         .debug_bounds("sidebar-new-collection")
@@ -2575,7 +2653,7 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
     let expected = destination
         .canonicalize()
         .expect("created collection should exist");
-    let (actual, name, requests, message) = window
+    let (actual, name, requests, tabs, remembered, message) = window
         .update(cx, |view, _, _| {
             (
                 view.workspace_path.clone(),
@@ -2585,6 +2663,8 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
                 view.loaded_workspace
                     .as_ref()
                     .map(|loaded| loaded.workspace().request_count()),
+                view.shell.tabs().len(),
+                view.session.workspaces.get(&canonical_destination).cloned(),
                 toast_debug(view),
             )
         })
@@ -2596,6 +2676,11 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
     );
     assert_eq!(name.as_deref(), Some("pets"));
     assert_eq!(requests, Some(0));
+    assert_eq!(tabs, 0);
+    assert_eq!(
+        remembered,
+        Some(crate::session::WorkspaceSessionState::default())
+    );
     fs::remove_dir_all(destination_dir).unwrap();
 }
 

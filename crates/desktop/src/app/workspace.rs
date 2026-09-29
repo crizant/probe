@@ -240,7 +240,6 @@ impl ProbeApp {
                     match result {
                         Ok((canonical_path, workspace)) => {
                             view.set_workspace(canonical_path, workspace);
-                            view.restore_shell_state(cx);
                             view.start_workspace_watcher(window, cx);
                             view.persist_session(cx);
                         }
