@@ -1,9 +1,9 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    AppContext as _, Axis, ClipboardItem, Context, Entity, Focusable as _, Image, IntoElement,
-    KeyBinding, Modifiers, MouseButton, Render, SharedString, TestAppContext, VisualTestContext,
-    div, point, prelude::*, px, size,
+    AppContext as _, Axis, ClipboardItem, Context, Entity, Focusable as _, Image,
+    InteractiveElement as _, IntoElement, KeyBinding, Modifiers, MouseButton, Render, ScrollHandle,
+    SharedString, TestAppContext, VisualTestContext, div, point, prelude::*, px, size,
 };
 use gpui_base::{
     Button, Popover,
@@ -88,6 +88,83 @@ enum TextContextMenuHarnessKind {
 struct TextContextMenuHarness {
     kind: TextContextMenuHarnessKind,
     input: Option<Entity<InputState>>,
+}
+
+struct ScrollableInputHarness {
+    input: Entity<InputState>,
+    list_scroll: ScrollHandle,
+    value: SharedString,
+}
+
+impl Render for ScrollableInputHarness {
+    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let mut input = super::text_input_base(
+            Theme::light(),
+            "scrollable-input",
+            self.value.clone(),
+            "Value",
+        );
+        input.debug_selector = Some("scrollable-input");
+        input.shared_input = Some(self.input.clone());
+        input.list_scroll = Some(self.list_scroll.clone());
+        div()
+            .id("scrollable-input-list")
+            .w(px(240.0))
+            .h(px(120.0))
+            .overflow_y_scroll()
+            .track_scroll(&self.list_scroll)
+            .child(input)
+            .child(div().h(px(500.0)))
+    }
+}
+
+#[gpui::test]
+fn horizontal_wheel_scrolls_focused_input_without_scrolling_its_list(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
+        ScrollableInputHarness {
+            input: cx.new(|cx| InputState::new(window, cx)),
+            list_scroll: ScrollHandle::new(),
+            value: "x".repeat(400).into(),
+        }
+    });
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let field = visual
+        .debug_bounds("scrollable-input")
+        .expect("the overflowing input should render");
+    visual.simulate_click(field.center(), Modifiers::default());
+    visual.run_until_parked();
+    let (input, list_before, text_before) = window
+        .update(cx, |view, window, cx| {
+            assert!(view.input.read(cx).focus_handle(cx).is_focused(window));
+            assert!(view.list_scroll.max_offset().y > px(0.0));
+            (
+                view.input.clone(),
+                view.list_scroll.offset().y,
+                view.input.read(cx).scroll_offset().x,
+            )
+        })
+        .unwrap();
+
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(-160.0), px(-6.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let text_after = input.read(cx).scroll_offset().x;
+            assert!(
+                text_after < text_before,
+                "horizontal wheel should move overflowing text, before={text_before:?} after={text_after:?}"
+            );
+            assert_eq!(view.list_scroll.offset().y, list_before);
+        })
+        .unwrap();
 }
 
 #[test]

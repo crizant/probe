@@ -256,8 +256,6 @@ impl RenderOnce for ProbeTextInput {
                 input.set_value(self.value.clone(), window, cx);
             }
         });
-        #[cfg(test)]
-        remember_rendered_text_input(&state);
         let tooltip_id = ElementId::NamedChild(
             Arc::new(self.id.clone()),
             SharedString::from("variable-tooltip"),
@@ -389,38 +387,6 @@ pub(in crate::components) fn text_input_base(
 
 thread_local! {
     static ACTIVE_LIST_SCROLL: RefCell<Option<ScrollHandle>> = const { RefCell::new(None) };
-}
-
-#[cfg(test)]
-thread_local! {
-    static RENDERED_TEXT_INPUTS: RefCell<Vec<gpui::WeakEntity<InputState>>> =
-        const { RefCell::new(Vec::new()) };
-}
-
-#[cfg(test)]
-fn remember_rendered_text_input(state: &Entity<InputState>) {
-    let weak = state.downgrade();
-    RENDERED_TEXT_INPUTS.with(|inputs| {
-        let mut inputs = inputs.borrow_mut();
-        inputs.retain(|input| input.upgrade().is_some());
-        if inputs
-            .iter()
-            .all(|input| input.entity_id() != weak.entity_id())
-        {
-            inputs.push(weak);
-        }
-    });
-}
-
-/// The live single-line field showing `value`, if one was rendered this process.
-#[cfg(test)]
-pub(crate) fn rendered_text_input(value: &str, cx: &App) -> Option<Entity<InputState>> {
-    RENDERED_TEXT_INPUTS.with(|inputs| {
-        inputs.borrow().iter().rev().find_map(|input| {
-            let input = input.upgrade()?;
-            (input.read(cx).value().as_ref() == value).then_some(input)
-        })
-    })
 }
 
 /// Single-line fields built while `render` runs defer vertical wheel events to `scroll`.
