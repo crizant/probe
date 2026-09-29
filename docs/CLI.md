@@ -148,8 +148,8 @@ or transform secret text. `--output <file>` intentionally saves the original ser
 response bytes; that file can contain echoed secrets and must be handled as sensitive.
 A `--var name=value` override of a declared secret also stays secret, but process
 environment injection is preferred: command-line
-arguments may appear in shell history or process inspection. Native OS credential
-storage is not yet supported.
+arguments may appear in shell history or process inspection. The CLI does not read
+values stored in the operating-system credential store by the desktop application.
 
 Use `-` instead of `<path>` to read a bundled OpenCollection YAML document from
 stdin. Stdin does not represent an unbundled directory, and requests loaded this way

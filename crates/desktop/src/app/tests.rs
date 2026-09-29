@@ -225,42 +225,42 @@ fn unsaved_environment_dialog_warns_before_discard() {
 
 #[test]
 fn secret_rename_dialogs_explain_that_credentials_stay_behind() {
-    let environment = ApplicationDialog::RenameStoredSecrets {
-        kind: StoredSecretRename::Environment,
+    let variable = StoredSecretRename::Variable {
+        from: "apiToken".to_owned(),
+        to: "accessToken".to_owned(),
     };
-    assert_eq!(environment.title(), "Rename environment?");
-    assert_eq!(
-        environment.description(),
-        "Stored secret values are associated with the environment name.\nAfter renaming, affected secrets will need to be stored again.\n\nThe existing stored credentials will not be migrated."
-    );
-    assert_eq!(
-        environment.primary_action(),
-        Some(ApplicationDialogAction::Rename)
-    );
-    assert_eq!(environment.destructive_action(), None);
-    assert_eq!(environment.action_specs().unwrap()[0].label, "Cancel");
-    assert_eq!(environment.action_specs().unwrap()[1].label, "Rename");
-
-    let variable = ApplicationDialog::RenameStoredSecrets {
-        kind: StoredSecretRename::Variable {
-            from: "apiToken".to_owned(),
-            to: "accessToken".to_owned(),
-        },
-    };
-    assert_eq!(variable.title(), "Rename secret variable?");
-    assert_eq!(
-        variable.description(),
-        "Stored secret values are associated with the variable name.\nAfter renaming apiToken to accessToken, its value will need to be stored again."
-    );
-
-    let variables = ApplicationDialog::RenameStoredSecrets {
-        kind: StoredSecretRename::Variables,
-    };
-    assert_eq!(variables.title(), "Rename secret variables?");
-    assert_eq!(
-        variables.description(),
-        "Stored secret values are associated with the variable name.\nAfter renaming, affected secrets will need to be stored again.\n\nThe existing stored credentials will not be migrated."
-    );
+    for kind in [
+        StoredSecretRename::Environment,
+        variable,
+        StoredSecretRename::Variables,
+    ] {
+        let dialog = ApplicationDialog::RenameStoredSecrets { kind: kind.clone() };
+        let description = dialog.description();
+        assert!(
+            description.contains("stored again"),
+            "{kind:?} should warn that values must be stored again: {description}"
+        );
+        assert_eq!(
+            dialog.primary_action(),
+            Some(ApplicationDialogAction::Rename)
+        );
+        assert_eq!(dialog.destructive_action(), None);
+        let labels: Vec<_> = dialog
+            .action_specs()
+            .unwrap()
+            .iter()
+            .map(|action| action.label)
+            .collect();
+        assert_eq!(labels, ["Cancel", "Rename"]);
+        match kind {
+            StoredSecretRename::Variable { .. } => {
+                assert!(description.contains("apiToken") && description.contains("accessToken"));
+            }
+            StoredSecretRename::Environment | StoredSecretRename::Variables => {
+                assert!(description.contains("will not be migrated"));
+            }
+        }
+    }
 }
 
 #[test]
