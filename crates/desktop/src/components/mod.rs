@@ -15,12 +15,12 @@ use crate::theme::Theme;
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, AppContext as _, Bounds, BoxShadow,
     ClickEvent, ContentMask, Context, Edges, Element, ElementId, Entity, EntityId, FocusHandle,
-    Focusable, FontWeight, GlobalElementId, HighlightStyle, Hsla, InspectorElementId,
-    InteractiveElement as _, IntoElement, LayoutId, MouseButton, ParentElement as _, Pixels, Point,
-    Render, RenderOnce, Role, ShapedLine, SharedString, StatefulInteractiveElement as _, Style,
-    Styled as _, Subscription, Task, TextAlign, TextRun, TransformationMatrix, Window, canvas,
-    deferred, div, fill, font, point, prelude::FluentBuilder as _, px, relative, size,
-    transparent_black,
+    Focusable, FontWeight, GlobalElementId, HighlightStyle, HitboxBehavior, Hsla,
+    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton,
+    ParentElement as _, Pixels, Point, Render, RenderOnce, Role, ScrollHandle, ScrollWheelEvent,
+    ShapedLine, SharedString, StatefulInteractiveElement as _, Style, Styled as _, Subscription,
+    Task, TextAlign, TextRun, TransformationMatrix, Window, canvas, deferred, div, fill, font,
+    point, prelude::FluentBuilder as _, px, relative, size, transparent_black,
 };
 use gpui_base::{
     Align, Button, Editor, ElementExt as _, FocusTrapElement as _, Input, InputBase,
@@ -42,7 +42,7 @@ pub(crate) use controls::{
     ResponseBodyInputOptions, browse_file_button, compact_icon_button, dialog_text_input, dropdown,
     dropdown_with_option_colors, editor_action_button, editor_add_button, editor_button,
     editor_key_value_row, editor_subtab, icon_button, remove_row_button, sidebar_search_input,
-    text_tab, url_text_input, variable_text_input,
+    text_tab, url_text_input, variable_text_input, with_list_scroll,
 };
 
 mod icons;

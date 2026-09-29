@@ -51,6 +51,61 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn request_editor_scrolls_headers_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.request_editor.set_section(key, EditorSection::Headers);
+            view.edit_request(
+                key,
+                |request| {
+                    for index in 0..40 {
+                        request.headers.push(probe_core::Header {
+                            name: format!("Header-{index}"),
+                            value: format!("value-{index}"),
+                            disabled: false,
+                        });
+                    }
+                },
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let field = visual
+        .debug_bounds("header-name-field")
+        .expect("the first header name field should render");
+    let before = window
+        .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+        .unwrap();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(4.0), px(-160.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    let after = window
+        .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+        .unwrap();
+    assert!(
+        after < before,
+        "wheeling over a header field should scroll the section, before={before:?} after={after:?}"
+    );
+}
+
+#[gpui::test]
 fn saving_detached_request_preserves_edited_fields(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
