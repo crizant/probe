@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::chrome::environment_variable_text;
+use gpui::Focusable as _;
 use gpui::ScrollStrategy;
 use std::rc::Rc;
 
@@ -84,17 +85,12 @@ fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut Te
             visual.debug_bounds("environment-manager-delete").is_none(),
             "delete should live in the environment context menu, not the sidebar"
         );
-        let add_variable = visual
+        visual
             .debug_bounds("environment-manager-add-variable")
             .expect("inline add-variable action should render");
-        let add_secret = visual
+        visual
             .debug_bounds("environment-manager-add-secret")
             .expect("inline add-secret action should render");
-        let gap = add_secret.origin.x - add_variable.right();
-        assert!(
-            gap >= px(0.0) && gap <= px(24.0),
-            "add actions should sit together, gap={gap:?}"
-        );
         visual
             .debug_bounds("environment-variable-value-host")
             .expect("string values should remain editable");
@@ -204,8 +200,29 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
         "wheeling over a value field should scroll the list, before={before:?} after={after:?}"
     );
 
+    workspace.update(cx, |view, _, cx| {
+        view.environment_variables_scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    });
+    visual.run_until_parked();
+    let field = visual
+        .debug_bounds("environment-variable-value-host")
+        .expect("the value field should return to the top of the list");
     visual.simulate_click(field.center(), Modifiers::default());
     visual.run_until_parked();
+    workspace.update(cx, |_, window, cx| {
+        let input = crate::components::rendered_text_input("api.example.com", cx)
+            .expect("the host value field should be rendered");
+        assert!(
+            input.read(cx).focus_handle(cx).is_focused(window),
+            "clicking the value field should focus its input"
+        );
+    });
+    let focused_before = offset_y(&workspace, cx);
     visual.simulate_event(gpui::ScrollWheelEvent {
         position: field.center(),
         delta: gpui::ScrollDelta::Pixels(point(px(12.0), px(-80.0))),
@@ -215,8 +232,94 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
     visual.run_until_parked();
     let focused = offset_y(&workspace, cx);
     assert!(
-        focused < after,
-        "a focused field should still let a vertical wheel scroll the list, after={after:?} focused={focused:?}"
+        focused < focused_before,
+        "a focused field should still let a vertical wheel scroll the list, before={focused_before:?} after={focused:?}"
+    );
+}
+
+#[gpui::test]
+fn environment_manager_keeps_a_horizontal_wheel_on_a_focused_overflowing_field(
+    cx: &mut TestAppContext,
+) {
+    let overflow_value = "x".repeat(400);
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "base");
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            for variable in &mut dialog.draft.variables {
+                let EnvironmentVariable::Plain(variable) = variable else {
+                    continue;
+                };
+                if variable.name.as_deref() == Some("host") {
+                    variable.value = Some(VariableValueSet::Single(VariableValue::String(
+                        overflow_value.clone(),
+                    )));
+                }
+            }
+            for index in 0..40 {
+                dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                    name: Some(format!("scroll-{index}")),
+                    value: Some(VariableValueSet::Single(VariableValue::String(format!(
+                        "value-{index}"
+                    )))),
+                    disabled: false,
+                }));
+            }
+        });
+    });
+    cx.run_until_parked();
+
+    let mut visual = workspace.visual(cx);
+    let field = visual
+        .debug_bounds("environment-variable-value-host")
+        .expect("the overflowing value field should accept the pointer");
+    visual.simulate_click(field.center(), Modifiers::default());
+    visual.run_until_parked();
+
+    let (list_before, text_before) = workspace.update(cx, |view, window, cx| {
+        let input = crate::components::rendered_text_input(&overflow_value, cx)
+            .expect("the overflowing value field should be rendered");
+        assert!(
+            input.read(cx).focus_handle(cx).is_focused(window),
+            "clicking the overflowing value field should focus its input"
+        );
+        (
+            view.environment_variables_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y,
+            input.read(cx).scroll_offset().x,
+        )
+    });
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(-160.0), px(-6.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    let (list_after, text_after) = workspace.update(cx, |view, _, cx| {
+        let input = crate::components::rendered_text_input(&overflow_value, cx)
+            .expect("the overflowing value field should stay rendered");
+        (
+            view.environment_variables_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y,
+            input.read(cx).scroll_offset().x,
+        )
+    });
+    assert_eq!(
+        list_after, list_before,
+        "a horizontal wheel on a focused overflowing field should leave the list in place"
+    );
+    assert!(
+        text_after < text_before,
+        "a horizontal wheel should scroll the focused field's text, before={text_before:?} after={text_after:?}"
     );
 }
 

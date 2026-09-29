@@ -9,6 +9,8 @@ pub(crate) use buttons::{
     editor_button, editor_key_value_row, editor_subtab, icon_button, remove_row_button, text_tab,
 };
 pub(crate) use dropdown::{dropdown, dropdown_with_option_colors};
+#[cfg(test)]
+pub(crate) use input::rendered_text_input;
 pub(super) use input::{
     EditorInsets, TextContextMenuExtraAction, TextContextMenuLabel, VisibleRangeHandler,
     text_input_base,

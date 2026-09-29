@@ -37,6 +37,8 @@ use probe_core::path_variable_spans;
 mod buttons;
 mod controls;
 mod editor;
+#[cfg(test)]
+pub(crate) use controls::rendered_text_input;
 use controls::{EditorInsets, TextContextMenuExtraAction, VisibleRangeHandler, text_input_base};
 pub(crate) use controls::{
     ResponseBodyInputOptions, browse_file_button, compact_icon_button, dialog_text_input, dropdown,
