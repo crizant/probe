@@ -468,6 +468,8 @@ impl ProbeApp {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
+                    // Match the value field, whose text sits inside a 1px border and spacing_2 padding.
+                    .px(px(theme.metrics.spacing_2 + 1.0))
                     .text_size(px(theme.typography.caption_size))
                     .text_color(match current_status {
                         Some(SecretUiStatus::Stored) if credential_ready => {
@@ -519,7 +521,7 @@ impl ProbeApp {
             .w_full()
             .flex_none()
             .px(px(theme.metrics.spacing_2))
-            .py(px(theme.metrics.spacing_2))
+            .py(px(theme.metrics.spacing_1))
             .flex()
             .items_center()
             .gap(px(theme.metrics.spacing_2))
@@ -532,15 +534,16 @@ impl ProbeApp {
                     "Add variable",
                     move |_, _, cx| {
                         let _ = add_variable_view.update(cx, |view, cx| {
-                            view.apply_environment_manager_draft(cx, |dialog| {
-                                dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                            view.add_environment_manager_variable(
+                                cx,
+                                EnvironmentVariable::Plain(Variable {
                                     name: Some(String::new()),
                                     value: Some(VariableValueSet::Single(VariableValue::String(
                                         String::new(),
                                     ))),
                                     disabled: false,
-                                }));
-                            });
+                                }),
+                            );
                         });
                     },
                 )
@@ -554,13 +557,14 @@ impl ProbeApp {
                     "Add secret",
                     move |_, _, cx| {
                         let _ = add_secret_view.update(cx, |view, cx| {
-                            view.apply_environment_manager_draft(cx, |dialog| {
-                                dialog.add_variable(EnvironmentVariable::Secret(SecretVariable {
+                            view.add_environment_manager_variable(
+                                cx,
+                                EnvironmentVariable::Secret(SecretVariable {
                                     name: Some(String::new()),
                                     value_type: None,
                                     disabled: false,
-                                }));
-                            });
+                                }),
+                            );
                         });
                     },
                 )

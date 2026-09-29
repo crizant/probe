@@ -324,6 +324,80 @@ fn environment_manager_keeps_a_horizontal_wheel_on_a_focused_overflowing_field(
 }
 
 #[gpui::test]
+fn environment_manager_scrolls_a_new_row_into_view(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "base");
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            for index in 0..40 {
+                dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                    name: Some(format!("scroll-{index}")),
+                    value: Some(VariableValueSet::Single(VariableValue::String(format!(
+                        "value-{index}"
+                    )))),
+                    disabled: false,
+                }));
+            }
+        });
+    });
+    cx.run_until_parked();
+
+    let variable_index = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .draft
+            .variables
+            .len()
+    });
+    let mut visual = workspace.visual(cx);
+    let add_variable = visual
+        .debug_bounds("environment-manager-add-variable")
+        .expect("add variable should render");
+    visual.simulate_click(add_variable.center(), Modifiers::default());
+    visual.run_until_parked();
+    let variable_name: &'static str =
+        Box::leak(format!("environment-variable-name-{variable_index}").into_boxed_str());
+    visual
+        .debug_bounds(variable_name)
+        .expect("the new variable row should scroll into view");
+    let offset_y = workspace.update(cx, |view, _, _| {
+        view.environment_variables_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .y
+    });
+    assert!(
+        offset_y < px(0.0),
+        "adding a variable below the fold should scroll the list, offset={offset_y:?}"
+    );
+
+    let add_secret = visual
+        .debug_bounds("environment-manager-add-secret")
+        .expect("add secret should render");
+    visual.simulate_click(add_secret.center(), Modifiers::default());
+    visual.run_until_parked();
+    let secret_name: &'static str =
+        Box::leak(format!("environment-variable-name-{}", variable_index + 1).into_boxed_str());
+    visual
+        .debug_bounds(secret_name)
+        .expect("the new secret row should scroll into view");
+    workspace.update(cx, |view, _, _| {
+        assert!(matches!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft
+                .variables
+                .last(),
+            Some(EnvironmentVariable::Secret(_))
+        ));
+    });
+}
+
+#[gpui::test]
 fn environment_manager_virtualizes_variables_and_preserves_row_identity(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.update(cx, |view, window, cx| {

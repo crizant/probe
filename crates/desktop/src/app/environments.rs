@@ -237,6 +237,31 @@ impl ProbeApp {
         }
     }
 
+    pub(super) fn add_environment_manager_variable(
+        &mut self,
+        cx: &mut Context<Self>,
+        variable: EnvironmentVariable,
+    ) {
+        let before = self
+            .environment_manager_dialog
+            .as_ref()
+            .map(|dialog| dialog.draft.variables.len());
+        self.apply_environment_manager_draft(cx, |dialog| dialog.add_variable(variable));
+        let Some(after) = self
+            .environment_manager_dialog
+            .as_ref()
+            .map(|dialog| dialog.draft.variables.len())
+        else {
+            return;
+        };
+        if before == Some(after) {
+            return;
+        }
+        // Direct variables are a prefix of the list, so this index is the new row.
+        self.environment_variables_scroll
+            .scroll_to_item(after.saturating_sub(1), ScrollStrategy::Bottom);
+    }
+
     pub(super) fn select_environment_manager_environment(
         &mut self,
         name: &str,
