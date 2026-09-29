@@ -507,7 +507,7 @@ impl ProbeApp {
             .into_any_element()
     }
 
-    fn render_environment_variable_add_row(
+    fn render_environment_variable_actions(
         &self,
         theme: Theme,
         busy: bool,
@@ -517,13 +517,14 @@ impl ProbeApp {
         let add_secret_view = cx.weak_entity();
         div()
             .w_full()
-            .h(px(theme.metrics.control_height + theme.metrics.spacing_2))
+            .flex_none()
             .px(px(theme.metrics.spacing_2))
-            .py(px(theme.metrics.spacing_1))
+            .py(px(theme.metrics.spacing_2))
             .flex()
+            .items_center()
             .gap(px(theme.metrics.spacing_2))
-            .child(div().w(px(ENABLED_COLUMN_WIDTH)).flex_none())
-            .child(div().w(px(theme.metrics.icon_standard)).flex_none())
+            .border_t_1()
+            .border_color(theme.colors.borders.subtle)
             .child(
                 components::editor_add_button(
                     theme,
@@ -635,7 +636,7 @@ impl ProbeApp {
             .flex_1()
             .min_h(px(0.0))
             .relative();
-        let row_count = rows.len() + 1 + usize::from(rows_empty);
+        let row_count = rows.len() + usize::from(rows_empty);
         let rows = Rc::new(rows);
         let list_scroll = self
             .environment_variables_scroll
@@ -675,11 +676,6 @@ impl ProbeApp {
                                         .into_any_element(),
                                 );
                             }
-                            if index == row_count - 1 {
-                                return Some(
-                                    view.render_environment_variable_add_row(theme, busy, cx),
-                                );
-                            }
                             let row = rows.get(index)?.clone();
                             Some(view.render_environment_variable_row(
                                 theme, dialog, row, busy, dirty, cx,
@@ -708,7 +704,8 @@ impl ProbeApp {
             .border_1()
             .border_color(theme.colors.borders.standard)
             .child(table_header)
-            .child(table_body);
+            .child(table_body)
+            .child(self.render_environment_variable_actions(theme, busy, cx));
         let form = div()
             .flex_1()
             .min_w(px(0.0))
