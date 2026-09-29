@@ -1108,6 +1108,23 @@ fn creating_an_environment_from_the_switcher_persists_and_selects_it(cx: &mut Te
 }
 
 #[gpui::test]
+fn filesystem_reload_keeps_the_create_environment_dialog(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "create-env-reload");
+    workspace.update(cx, |view, window, cx| {
+        view.open_create_environment_dialog(window, cx);
+        *view
+            .create_environment_dialog
+            .as_mut()
+            .expect("create dialog should open") = "staging".to_owned();
+        let fresh = reconciled_workspace(
+            probe_opencollection::load_workspace(&workspace.path).expect("fixture should reload"),
+        );
+        view.apply_reconciled_workspace(fresh, cx);
+        assert_eq!(view.create_environment_dialog.as_deref(), Some("staging"));
+    });
+}
+
+#[gpui::test]
 fn create_environment_dialog_rejects_an_empty_name(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "create-env-empty");
     workspace.update(cx, |view, window, cx| {

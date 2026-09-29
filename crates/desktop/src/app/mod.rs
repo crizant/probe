@@ -91,7 +91,7 @@ use crate::{
         suggested_request_filename, suggested_response_filename,
     },
     filesystem::{
-        WATCH_DEBOUNCE, WorkspaceWatcher, event_affects_workspace, rename_hints,
+        WATCH_DEBOUNCE, WorkspaceWatcher, events_reload_workspace, rename_hints,
         workspace_base_directory,
     },
     persistence::PersistenceState,
