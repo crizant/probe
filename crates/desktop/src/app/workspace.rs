@@ -50,6 +50,7 @@ impl ProbeApp {
                                 );
                             } else {
                                 view.set_workspace(path.clone(), fresh);
+                                view.restore_shell_state(cx);
                                 view.start_workspace_watcher(window, cx);
                             }
                         }
@@ -130,8 +131,8 @@ impl ProbeApp {
                             }
                             if let Some(state) = restored_state {
                                 view.session = state;
-                                view.restore_shell_state(cx);
                             }
+                            view.restore_shell_state(cx);
                             view.start_workspace_watcher(window, cx);
                             view.persist_session(cx);
                         }
@@ -299,6 +300,9 @@ impl ProbeApp {
     }
 
     pub(super) fn set_workspace(&mut self, path: PathBuf, workspace: LoadedWorkspace) {
+        if self.loaded_workspace.is_some() {
+            self.capture_session();
+        }
         self.persistence
             .reset(workspace.requests().iter().filter_map(|located| {
                 workspace

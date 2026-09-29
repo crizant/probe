@@ -1124,13 +1124,143 @@ fn reordered_tabs_are_captured_and_restored_in_session_order(cx: &mut TestAppCon
             view.drop_tab(keys[0], cx);
             assert_eq!(view.shell.tabs(), &[keys[1], keys[0]]);
             assert_eq!(view.shell.active_tab(), Some(keys[1]));
-            let saved_order = view.session.open_tabs.clone();
+            let saved_order = view.session.workspaces[view.workspace_path.as_ref().unwrap()]
+                .open_tabs
+                .clone();
             view.shell.reset_for_workspace();
             view.restore_shell_state(cx);
             assert_eq!(view.shell.tabs(), &[keys[1], keys[0]]);
-            assert_eq!(view.session.open_tabs, saved_order);
+            assert_eq!(
+                view.session.workspaces[view.workspace_path.as_ref().unwrap()].open_tabs,
+                saved_order
+            );
         })
         .expect("test window should remain open");
+}
+
+#[gpui::test]
+fn switching_workspaces_restores_each_tabs_active_tab_and_folders(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let a = bundled_fixture().canonicalize().unwrap();
+    let b = nested_fixture().canonicalize().unwrap();
+    let load = |path: &PathBuf| probe_opencollection::load_workspace(path).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(a.clone(), load(&a));
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let a_tabs: Vec<_> = loaded
+                .requests()
+                .iter()
+                .take(2)
+                .map(|item| item.key())
+                .collect();
+            let a_folder = loaded.folders()[0].key();
+            view.shell.open_request(a_tabs[0]);
+            view.shell.open_request(a_tabs[1]);
+            view.shell.activate_tab(a_tabs[1]);
+            view.shell.collapse_folder(a_folder);
+
+            view.set_workspace(b.clone(), load(&b));
+            view.restore_shell_state(cx);
+            assert!(view.shell.tabs().is_empty());
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let b_tab = loaded.requests()[0].key();
+            let b_folder = loaded.folders()[0].key();
+            view.shell.open_request(b_tab);
+            view.shell.collapse_folder(b_folder);
+
+            view.set_workspace(a.clone(), load(&a));
+            view.restore_shell_state(cx);
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let restored_a: Vec<_> = loaded
+                .requests()
+                .iter()
+                .take(2)
+                .map(|item| item.key())
+                .collect();
+            assert_eq!(view.shell.tabs(), restored_a);
+            assert_eq!(view.shell.active_tab(), Some(restored_a[1]));
+            assert!(!view.shell.folder_is_expanded(loaded.folders()[0].key()));
+
+            view.set_workspace(b.clone(), load(&b));
+            view.restore_shell_state(cx);
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            assert_eq!(view.shell.tabs(), &[loaded.requests()[0].key()]);
+            assert_eq!(view.shell.active_tab(), Some(loaded.requests()[0].key()));
+            assert!(!view.shell.folder_is_expanded(loaded.folders()[0].key()));
+            view.capture_session();
+            assert_eq!(view.session.active_collection.as_ref(), Some(&b));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn loading_existing_workspaces_restores_tabs_after_switching(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let a = bundled_fixture().canonicalize().unwrap();
+    let b = nested_fixture().canonicalize().unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.load_workspace_path(a.clone(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(view.workspace_path.as_ref(), Some(&a));
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            let (first, second) = (requests[0].key(), requests[1].key());
+            view.select_request(first, cx);
+            view.select_request(second, cx);
+            view.select_request(first, cx);
+            view.load_workspace_path(b.clone(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(view.workspace_path.as_ref(), Some(&b));
+            assert!(view.shell.tabs().is_empty());
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            let (first, second) = (requests[0].key(), requests[1].key());
+            view.select_request(first, cx);
+            view.select_request(second, cx);
+            view.load_workspace_path(a.clone(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(view.workspace_path.as_ref(), Some(&a));
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            let (first, second) = (requests[0].key(), requests[1].key());
+            assert_eq!(view.shell.tabs(), &[first, second]);
+            assert_eq!(view.shell.active_tab(), Some(first));
+            view.load_workspace_path(b.clone(), None, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.workspace_path.as_ref(), Some(&b));
+            let requests = view.loaded_workspace.as_ref().unwrap().requests();
+            let (first, second) = (requests[0].key(), requests[1].key());
+            assert_eq!(view.shell.tabs(), &[first, second]);
+            assert_eq!(view.shell.active_tab(), Some(second));
+        })
+        .unwrap();
 }
 
 #[gpui::test]
@@ -2492,6 +2622,19 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
     ));
     fs::create_dir(&destination_dir).unwrap();
     let destination = destination_dir.join("pets.yml");
+    let canonical_destination = destination_dir.canonicalize().unwrap().join("pets.yml");
+    window
+        .update(cx, |view, _, _| {
+            view.session.workspaces.insert(
+                canonical_destination.clone(),
+                crate::session::WorkspaceSessionState {
+                    open_tabs: vec!["items/0".to_owned()],
+                    active_tab: Some("items/0".to_owned()),
+                    collapsed_folders: vec!["items/0".to_owned()],
+                },
+            );
+        })
+        .unwrap();
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let button = visual
         .debug_bounds("sidebar-new-collection")
@@ -2510,7 +2653,7 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
     let expected = destination
         .canonicalize()
         .expect("created collection should exist");
-    let (actual, name, requests, message) = window
+    let (actual, name, requests, tabs, remembered, message) = window
         .update(cx, |view, _, _| {
             (
                 view.workspace_path.clone(),
@@ -2520,6 +2663,8 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
                 view.loaded_workspace
                     .as_ref()
                     .map(|loaded| loaded.workspace().request_count()),
+                view.shell.tabs().len(),
+                view.session.workspaces.get(&canonical_destination).cloned(),
                 toast_debug(view),
             )
         })
@@ -2531,6 +2676,11 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
     );
     assert_eq!(name.as_deref(), Some("pets"));
     assert_eq!(requests, Some(0));
+    assert_eq!(tabs, 0);
+    assert_eq!(
+        remembered,
+        Some(crate::session::WorkspaceSessionState::default())
+    );
     fs::remove_dir_all(destination_dir).unwrap();
 }
 
@@ -2657,8 +2807,13 @@ fn large_sidebar_virtualizes_rows_and_reveals_the_restored_request(cx: &mut Test
         .update(cx, |view, _, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            view.session.open_tabs = vec![first_selector, last_selector.clone()];
-            view.session.active_tab = Some(last_selector);
+            let workspace = view
+                .session
+                .workspaces
+                .entry(view.workspace_path.clone().unwrap())
+                .or_default();
+            workspace.open_tabs = vec![first_selector, last_selector.clone()];
+            workspace.active_tab = Some(last_selector);
             view.restore_shell_state(cx);
             cx.notify();
         })
@@ -2884,8 +3039,13 @@ fn restored_active_tab_highlights_matching_sidebar_request(cx: &mut TestAppConte
         .update(cx, |view, _, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            view.session.open_tabs = vec![first_selector, second_selector.clone()];
-            view.session.active_tab = Some(second_selector);
+            let workspace = view
+                .session
+                .workspaces
+                .entry(view.workspace_path.clone().unwrap())
+                .or_default();
+            workspace.open_tabs = vec![first_selector, second_selector.clone()];
+            workspace.active_tab = Some(second_selector);
             view.restore_shell_state(cx);
             cx.notify();
         })

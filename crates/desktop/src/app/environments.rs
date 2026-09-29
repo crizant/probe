@@ -2,7 +2,7 @@ use super::*;
 
 impl ProbeApp {
     pub(super) fn close_workspace_now(&mut self, cx: &mut Context<Self>) {
-        self.capture_selected_environment();
+        self.capture_session();
         self.execution.clear();
         self.response_viewer.clear();
         self.pending_environment_saves.clear();
