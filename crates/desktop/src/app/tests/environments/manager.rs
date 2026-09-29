@@ -84,9 +84,17 @@ fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut Te
             visual.debug_bounds("environment-manager-delete").is_none(),
             "delete should live in the environment context menu, not the sidebar"
         );
-        visual
+        let add_variable = visual
             .debug_bounds("environment-manager-add-variable")
             .expect("inline add-variable action should render");
+        let add_secret = visual
+            .debug_bounds("environment-manager-add-secret")
+            .expect("inline add-secret action should render");
+        let gap = add_secret.origin.x - add_variable.right();
+        assert!(
+            gap >= px(0.0) && gap <= px(24.0),
+            "add actions should sit together, gap={gap:?}"
+        );
         visual
             .debug_bounds("environment-variable-value-host")
             .expect("string values should remain editable");
@@ -147,6 +155,69 @@ fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut Te
     visual
         .debug_bounds("environment-manager-dirty")
         .expect("unsaved environment changes should show a dirty indicator");
+}
+
+#[gpui::test]
+fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "base");
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            for index in 0..40 {
+                dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                    name: Some(format!("scroll-{index}")),
+                    value: Some(VariableValueSet::Single(VariableValue::String(format!(
+                        "value-{index}"
+                    )))),
+                    disabled: false,
+                }));
+            }
+        });
+    });
+    cx.run_until_parked();
+
+    let offset_y = |workspace: &EnvironmentWorkspace, cx: &mut TestAppContext| {
+        workspace.update(cx, |view, _, _| {
+            view.environment_variables_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y
+        })
+    };
+    let mut visual = workspace.visual(cx);
+    let field = visual
+        .debug_bounds("environment-variable-value-host")
+        .expect("a value field should accept the pointer");
+    let before = offset_y(&workspace, cx);
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    let after = offset_y(&workspace, cx);
+    assert!(
+        after < before,
+        "wheeling over a value field should scroll the list, before={before:?} after={after:?}"
+    );
+
+    visual.simulate_click(field.center(), Modifiers::default());
+    visual.run_until_parked();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(12.0), px(-80.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    let focused = offset_y(&workspace, cx);
+    assert!(
+        focused < after,
+        "a focused field should still let a vertical wheel scroll the list, after={after:?} focused={focused:?}"
+    );
 }
 
 #[gpui::test]

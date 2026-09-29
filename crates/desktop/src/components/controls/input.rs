@@ -174,6 +174,7 @@ pub(crate) struct ProbeTextInput {
     pub(in crate::components) content_gap: f32,
     pub(in crate::components) quiet_focus: bool,
     pub(in crate::components) focus_on_render: bool,
+    pub(in crate::components) list_scroll: Option<ScrollHandle>,
 }
 
 impl RenderOnce for ProbeTextInput {
@@ -319,10 +320,10 @@ impl RenderOnce for ProbeTextInput {
             })
             .when_some(self.leading_icon, |input, icon| input.child(icon))
             .child(Input::new(&state));
-        let input = if self.variable_overlay {
+        let mut input = if self.variable_overlay {
             variable_input_overlay(
                 self.theme,
-                state,
+                state.clone(),
                 tooltip_id,
                 input,
                 self.value,
@@ -334,6 +335,9 @@ impl RenderOnce for ProbeTextInput {
         } else {
             input.into_any_element()
         };
+        if let Some(scroll) = self.list_scroll.clone() {
+            input = defer_list_scroll(input, state, scroll);
+        }
         with_text_context_menu(
             self.theme,
             &component_id,
@@ -377,7 +381,133 @@ pub(in crate::components) fn text_input_base(
         content_gap: theme.metrics.spacing_1,
         quiet_focus: false,
         focus_on_render: false,
+        list_scroll: active_list_scroll(),
     }
+}
+
+thread_local! {
+    static ACTIVE_LIST_SCROLL: RefCell<Option<ScrollHandle>> = const { RefCell::new(None) };
+}
+
+/// Single-line fields built while `render` runs defer vertical wheel events to `scroll`.
+pub(crate) fn with_list_scroll<T>(scroll: &ScrollHandle, render: impl FnOnce() -> T) -> T {
+    ACTIVE_LIST_SCROLL.with(|slot| {
+        let previous = slot.replace(Some(scroll.clone()));
+        let value = render();
+        *slot.borrow_mut() = previous;
+        value
+    })
+}
+
+fn active_list_scroll() -> Option<ScrollHandle> {
+    ACTIVE_LIST_SCROLL.with(|slot| slot.borrow().clone())
+}
+
+/// A focused single-line field keeps a wheel gesture only when that gesture is
+/// horizontal and the value actually overflows. Every other gesture belongs to
+/// the surrounding list.
+pub(crate) fn wheel_scrolls_field_text(
+    focused: bool,
+    overflows: bool,
+    shift: bool,
+    delta_x: Pixels,
+    delta_y: Pixels,
+) -> bool {
+    focused && overflows && (shift || delta_x.abs() > delta_y.abs())
+}
+
+fn shift_maps_vertical_wheel_to_text(shift: bool, delta_x: Pixels, delta_y: Pixels) -> bool {
+    shift && delta_x.abs() <= delta_y.abs()
+}
+
+fn single_line_input_overflows(input: &InputState) -> bool {
+    if input.scroll_offset().x < px(0.0) {
+        return true;
+    }
+    let len = input.value().len();
+    if len == 0 {
+        return false;
+    }
+    let Some(text) = input.range_to_bounds(&(0..len)) else {
+        return false;
+    };
+    let viewport = input.input_bounds();
+    text.left() < viewport.left() - px(0.5) || text.right() > viewport.right() + px(0.5)
+}
+
+fn scroll_list_vertically(scroll: &ScrollHandle, delta_y: Pixels) -> bool {
+    let mut offset = scroll.offset();
+    let next_y = (offset.y + delta_y).clamp(-scroll.max_offset().y, px(0.0));
+    if next_y == offset.y {
+        return false;
+    }
+    offset.y = next_y;
+    scroll.set_offset(offset);
+    true
+}
+
+fn defer_list_scroll(
+    field: gpui::AnyElement,
+    state: Entity<InputState>,
+    scroll: ScrollHandle,
+) -> gpui::AnyElement {
+    div()
+        .relative()
+        .w_full()
+        .child(field)
+        .child(
+            canvas(
+                |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                move |_bounds, hitbox, window, _cx| {
+                    let state = state.clone();
+                    let scroll = scroll.clone();
+                    let view = window.current_view();
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                        if !phase.capture() || !hitbox.should_handle_scroll(window) {
+                            return;
+                        }
+                        let delta = event.delta.pixel_delta(window.line_height());
+                        let focused = state.read(cx).focus_handle(cx).is_focused(window);
+                        let overflows = single_line_input_overflows(state.read(cx));
+                        if wheel_scrolls_field_text(
+                            focused,
+                            overflows,
+                            event.modifiers.shift,
+                            delta.x,
+                            delta.y,
+                        ) {
+                            if shift_maps_vertical_wheel_to_text(
+                                event.modifiers.shift,
+                                delta.x,
+                                delta.y,
+                            ) {
+                                state.update(cx, |input, cx| {
+                                    let mut offset = input.scroll_offset();
+                                    offset.x += delta.y;
+                                    offset.y = px(0.0);
+                                    input.set_scroll_offset(offset, cx);
+                                });
+                                cx.stop_propagation();
+                            }
+                            return;
+                        }
+                        // Stop before the input's bubble handler. That handler
+                        // repaints on every wheel tick and swallows the event
+                        // when a horizontal component moves its own text.
+                        if scroll_list_vertically(&scroll, delta.y) {
+                            cx.notify(view);
+                        }
+                        cx.stop_propagation();
+                    });
+                },
+            )
+            .absolute()
+            .top(px(0.0))
+            .right(px(0.0))
+            .bottom(px(0.0))
+            .left(px(0.0)),
+        )
+        .into_any_element()
 }
 
 pub(crate) fn variable_text_input(
@@ -455,4 +585,53 @@ pub(crate) fn sidebar_search_input(
             .text_color(theme.colors.text.muted),
     );
     input
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wheel_scrolls_field_text;
+    use gpui::px;
+
+    #[test]
+    fn vertical_and_unfocused_wheels_stay_with_the_list() {
+        assert!(!wheel_scrolls_field_text(
+            true,
+            true,
+            false,
+            px(2.0),
+            px(-40.0)
+        ));
+        assert!(!wheel_scrolls_field_text(
+            false,
+            true,
+            false,
+            px(40.0),
+            px(0.0)
+        ));
+        assert!(!wheel_scrolls_field_text(
+            true,
+            false,
+            true,
+            px(0.0),
+            px(-40.0)
+        ));
+    }
+
+    #[test]
+    fn a_focused_overflowing_field_keeps_a_horizontal_wheel() {
+        assert!(wheel_scrolls_field_text(
+            true,
+            true,
+            false,
+            px(-30.0),
+            px(4.0)
+        ));
+        assert!(wheel_scrolls_field_text(
+            true,
+            true,
+            true,
+            px(0.0),
+            px(-40.0)
+        ));
+    }
 }

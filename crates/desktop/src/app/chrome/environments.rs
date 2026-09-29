@@ -522,6 +522,8 @@ impl ProbeApp {
             .py(px(theme.metrics.spacing_1))
             .flex()
             .gap(px(theme.metrics.spacing_2))
+            .child(div().w(px(ENABLED_COLUMN_WIDTH)).flex_none())
+            .child(div().w(px(theme.metrics.icon_standard)).flex_none())
             .child(
                 components::editor_add_button(
                     theme,
@@ -541,13 +543,14 @@ impl ProbeApp {
                         });
                     },
                 )
+                .flex_none()
                 .disabled(busy),
             )
             .child(
                 components::editor_add_button(
                     theme,
                     "environment-manager-add-secret",
-                    "Add secret variable",
+                    "Add secret",
                     move |_, _, cx| {
                         let _ = add_secret_view.update(cx, |view, cx| {
                             view.apply_environment_manager_draft(cx, |dialog| {
@@ -560,6 +563,7 @@ impl ProbeApp {
                         });
                     },
                 )
+                .flex_none()
                 .disabled(busy),
             )
             .into_any_element()
@@ -633,45 +637,56 @@ impl ProbeApp {
             .relative();
         let row_count = rows.len() + 1 + usize::from(rows_empty);
         let rows = Rc::new(rows);
+        let list_scroll = self
+            .environment_variables_scroll
+            .0
+            .borrow()
+            .base_handle
+            .clone();
         let list = uniform_list("environment-manager-variable-list", row_count, {
             let rows = rows.clone();
+            let list_scroll = list_scroll.clone();
             cx.processor(move |view, range: std::ops::Range<usize>, _, cx| {
-                #[cfg(test)]
-                {
-                    view.rendered_environment_variable_rows =
-                        range.clone().filter(|index| *index < rows.len()).count();
-                }
-                let Some(dialog) = view.environment_manager_dialog.as_ref() else {
-                    return Vec::new();
-                };
-                range
-                    .filter_map(|index| {
-                        if rows_empty && index == 0 {
-                            return Some(
-                                div()
-                                    .w_full()
-                                    .h(px(theme.metrics.control_height + theme.metrics.spacing_2))
-                                    .px(px(theme.metrics.spacing_2))
-                                    .flex()
-                                    .items_center()
-                                    .border_b_1()
-                                    .border_color(theme.colors.borders.subtle)
-                                    .text_color(theme.colors.text.muted)
-                                    .child("No variables in this environment.")
-                                    .into_any_element(),
-                            );
-                        }
-                        if index == row_count - 1 {
-                            return Some(view.render_environment_variable_add_row(theme, busy, cx));
-                        }
-                        let row = rows.get(index)?.clone();
-                        Some(
-                            view.render_environment_variable_row(
+                components::with_list_scroll(&list_scroll, || {
+                    #[cfg(test)]
+                    {
+                        view.rendered_environment_variable_rows =
+                            range.clone().filter(|index| *index < rows.len()).count();
+                    }
+                    let Some(dialog) = view.environment_manager_dialog.as_ref() else {
+                        return Vec::new();
+                    };
+                    range
+                        .filter_map(|index| {
+                            if rows_empty && index == 0 {
+                                return Some(
+                                    div()
+                                        .w_full()
+                                        .h(px(
+                                            theme.metrics.control_height + theme.metrics.spacing_2
+                                        ))
+                                        .px(px(theme.metrics.spacing_2))
+                                        .flex()
+                                        .items_center()
+                                        .border_b_1()
+                                        .border_color(theme.colors.borders.subtle)
+                                        .text_color(theme.colors.text.muted)
+                                        .child("No variables in this environment.")
+                                        .into_any_element(),
+                                );
+                            }
+                            if index == row_count - 1 {
+                                return Some(
+                                    view.render_environment_variable_add_row(theme, busy, cx),
+                                );
+                            }
+                            let row = rows.get(index)?.clone();
+                            Some(view.render_environment_variable_row(
                                 theme, dialog, row, busy, dirty, cx,
-                            ),
-                        )
-                    })
-                    .collect::<Vec<_>>()
+                            ))
+                        })
+                        .collect::<Vec<_>>()
+                })
             })
         })
         .size_full()

@@ -193,30 +193,21 @@ impl ProbeApp {
             ));
         }
 
-        let section = match self.request_editor.section(key) {
-            EditorSection::Query => {
-                self.render_parameter_editor(key, &request, ParameterEditorKind::Query, theme, cx)
-            }
-            EditorSection::Path => {
-                self.render_parameter_editor(key, &request, ParameterEditorKind::Path, theme, cx)
-            }
-            EditorSection::Headers => self.render_header_editor(key, &request, theme, cx),
-            EditorSection::Body => self.render_body_editor(key, &request, theme, cx),
-            EditorSection::Authentication => {
-                self.render_authentication_editor(key, &request, theme, cx)
-            }
-            EditorSection::GraphqlQuery => {
-                self.render_graphql_query_editor(key, &request, theme, cx)
-            }
-            EditorSection::GraphqlVariables => {
-                self.render_graphql_variables_editor(key, &request, theme, cx)
-            }
-            EditorSection::GraphqlOperationName => {
-                self.render_graphql_operation_name_editor(key, &request, theme, cx)
-            }
-            EditorSection::GraphqlExtensions => {
-                self.render_graphql_extensions_editor(key, &request, theme, cx)
-            }
+        let section_kind = self.request_editor.section(key);
+        let section_scrolls = section_kind != EditorSection::Body && !section_kind.is_graphql();
+        if section_scrolls && self.request_section_scroll_owner.get() != Some((key, section_kind)) {
+            self.request_section_scroll
+                .set_offset(point(px(0.0), px(0.0)));
+            self.request_section_scroll_owner
+                .set(Some((key, section_kind)));
+        }
+        let section_scroll = self.request_section_scroll.clone();
+        let section = if section_scrolls {
+            components::with_list_scroll(&section_scroll, || {
+                self.render_request_section(key, &request, theme, cx)
+            })
+        } else {
+            self.render_request_section(key, &request, theme, cx)
         };
 
         div()
@@ -356,12 +347,46 @@ impl ProbeApp {
                     .min_h(px(0.0))
                     .px(px(theme.metrics.spacing_2))
                     .pb(px(theme.metrics.spacing_2))
-                    .when(
-                        self.request_editor.section(key) != EditorSection::Body
-                            && !self.request_editor.section(key).is_graphql(),
-                        |content| content.overflow_y_scroll(),
-                    )
+                    .when(section_scrolls, |content| {
+                        content
+                            .overflow_y_scroll()
+                            .track_scroll(&self.request_section_scroll)
+                    })
                     .child(section),
             )
+    }
+
+    fn render_request_section(
+        &self,
+        key: RequestKey,
+        request: &Request,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        match self.request_editor.section(key) {
+            EditorSection::Query => {
+                self.render_parameter_editor(key, request, ParameterEditorKind::Query, theme, cx)
+            }
+            EditorSection::Path => {
+                self.render_parameter_editor(key, request, ParameterEditorKind::Path, theme, cx)
+            }
+            EditorSection::Headers => self.render_header_editor(key, request, theme, cx),
+            EditorSection::Body => self.render_body_editor(key, request, theme, cx),
+            EditorSection::Authentication => {
+                self.render_authentication_editor(key, request, theme, cx)
+            }
+            EditorSection::GraphqlQuery => {
+                self.render_graphql_query_editor(key, request, theme, cx)
+            }
+            EditorSection::GraphqlVariables => {
+                self.render_graphql_variables_editor(key, request, theme, cx)
+            }
+            EditorSection::GraphqlOperationName => {
+                self.render_graphql_operation_name_editor(key, request, theme, cx)
+            }
+            EditorSection::GraphqlExtensions => {
+                self.render_graphql_extensions_editor(key, request, theme, cx)
+            }
+        }
     }
 }
