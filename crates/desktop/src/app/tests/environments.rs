@@ -1296,6 +1296,7 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
             )
             .unwrap();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.open_environment_manager_dialog(window, cx);
@@ -2373,6 +2374,7 @@ fn manager_secret_status_uses_effective_environment_and_never_gets_value(cx: &mu
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(development_id.persistence_key().to_owned());
             view.set_workspace(fixture.clone(), workspace);
@@ -2727,6 +2729,7 @@ fn manager_replaces_and_deletes_native_value_without_changing_declaration(cx: &m
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture.clone(), workspace);
@@ -2942,8 +2945,8 @@ fn manager_store_failure_and_unsaved_rename_never_write_collection(cx: &mut Test
                     .is_empty()
             );
             view.close_secret_value_dialog(window, cx);
-            assert!(view.session.stored_credentials.is_empty());
-            assert!(view.session.missing_credentials.is_empty());
+            assert!(view.session.presence.stored_credentials.is_empty());
+            assert!(view.session.presence.missing_credentials.is_empty());
             assert_unknown_secret(&view.variable_context(cx), "secretToken");
         })
         .unwrap();
@@ -2971,6 +2974,7 @@ fn manager_ignores_status_from_previous_environment(cx: &mut TestAppContext) {
             view.session_store = None;
             view.credential_store = store;
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture, workspace);
@@ -3312,7 +3316,8 @@ fn editor_secret_tooltip_sets_replaces_and_deletes_in_effective_environment(
                     .contains("secretToken")
             );
             assert_secret_stays_out_of_editor_context(&view.variable_context(cx));
-            let presence = serde_json::to_string(&view.session.stored_credentials).unwrap();
+            let presence =
+                serde_json::to_string(&view.session.presence.stored_credentials).unwrap();
             assert!(!presence.contains(EDITOR_SECRET_SENTINEL));
         })
         .unwrap();
@@ -3533,6 +3538,7 @@ fn editor_replace_dialog_rejects_mismatched_and_stale_delete_targets(cx: &mut Te
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture.clone(), workspace);
@@ -3558,8 +3564,12 @@ fn editor_replace_dialog_rejects_mismatched_and_stale_delete_targets(cx: &mut Te
             assert!(!view.secret_write_in_progress);
             view.select_environment(Some("development".into()), cx);
             view.close_secret_value_dialog(window, cx);
-            view.session.stored_credentials.remove(id.persistence_key());
             view.session
+                .presence
+                .stored_credentials
+                .remove(id.persistence_key());
+            view.session
+                .presence
                 .missing_credentials
                 .insert(id.persistence_key().to_owned());
             view.open_editor_secret_value_dialog(
@@ -3572,9 +3582,11 @@ fn editor_replace_dialog_rejects_mismatched_and_stale_delete_targets(cx: &mut Te
             );
             assert!(!view.secret_value_dialog.as_ref().unwrap().replacing);
             view.session
+                .presence
                 .missing_credentials
                 .remove(id.persistence_key());
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.confirm_delete_stored_secret("secretToken".into(), window, cx);
@@ -3613,6 +3625,7 @@ fn editor_delete_failure_reports_error_without_changing_presence(cx: &mut TestAp
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture.clone(), workspace);
@@ -3639,12 +3652,14 @@ fn editor_delete_failure_reports_error_without_changing_presence(cx: &mut TestAp
             ));
             assert!(
                 view.session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
             assert!(
                 !view
                     .session
+                    .presence
                     .missing_credentials
                     .contains(id.persistence_key())
             );
@@ -3680,6 +3695,7 @@ fn manager_delete_failure_restores_status_and_reports_error(cx: &mut TestAppCont
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture.clone(), workspace);
@@ -3904,7 +3920,7 @@ fn slow_set_records_presence_after_the_environment_manager_closes(cx: &mut TestA
             assert!(view.secret_value_dialog.as_ref().unwrap().busy);
             view.close_environment_manager_dialog(window, cx);
             assert!(view.environment_manager_dialog.is_none());
-            assert!(view.session.stored_credentials.is_empty());
+            assert!(view.session.presence.stored_credentials.is_empty());
         })
         .unwrap();
     cx.run_until_parked();
@@ -3918,6 +3934,7 @@ fn slow_set_records_presence_after_the_environment_manager_closes(cx: &mut TestA
                     .unwrap();
             assert!(
                 view.session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
@@ -3951,6 +3968,7 @@ fn delete_not_found_clears_presence_without_reading_the_secret(cx: &mut TestAppC
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture, workspace);
@@ -3972,11 +3990,13 @@ fn delete_not_found_clears_presence_without_reading_the_secret(cx: &mut TestAppC
             assert!(
                 !view
                     .session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
             assert!(
                 view.session
+                    .presence
                     .missing_credentials
                     .contains(id.persistence_key())
             );
@@ -4120,12 +4140,14 @@ fn stored_secret_resolves_in_the_editor_without_exposing_or_fetching_its_value(
                     .unwrap();
             assert!(
                 view.session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
             assert!(!id.persistence_key().contains("secretToken"));
             assert!(!id.persistence_key().contains(EDITOR_SECRET_SENTINEL));
-            let presence = serde_json::to_string(&view.session.stored_credentials).unwrap();
+            let presence =
+                serde_json::to_string(&view.session.presence.stored_credentials).unwrap();
             assert!(!presence.contains(EDITOR_SECRET_SENTINEL));
             assert!(!presence.contains("secretToken"));
             assert!(!presence.contains(path.to_str().unwrap()));
@@ -4164,6 +4186,7 @@ fn empty_stored_secret_is_resolved_without_entering_the_variable_map(cx: &mut Te
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture.clone(), workspace);
@@ -4182,7 +4205,8 @@ fn empty_stored_secret_is_resolved_without_entering_the_variable_map(cx: &mut Te
                 context.status("token"),
                 probe_core::VariableStatus::Resolved
             );
-            let presence = serde_json::to_string(&view.session.stored_credentials).unwrap();
+            let presence =
+                serde_json::to_string(&view.session.presence.stored_credentials).unwrap();
             assert!(presence.contains(id.persistence_key()));
             assert!(!presence.contains("secretToken"));
             assert!(
@@ -4214,6 +4238,7 @@ fn deleting_a_stored_secret_makes_the_editor_placeholder_unresolved(cx: &mut Tes
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture, workspace);
@@ -4251,11 +4276,13 @@ fn deleting_a_stored_secret_makes_the_editor_placeholder_unresolved(cx: &mut Tes
             assert!(
                 !view
                     .session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
             assert!(
                 view.session
+                    .presence
                     .missing_credentials
                     .contains(id.persistence_key())
             );
@@ -4289,6 +4316,7 @@ fn secret_placeholder_status_is_isolated_by_environment_and_workspace(cx: &mut T
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(development_id.persistence_key().to_owned());
             view.set_workspace(first.clone(), first_workspace);
@@ -4470,6 +4498,7 @@ fn execution_invalidates_stale_presence_when_the_native_secret_is_missing(cx: &m
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture, workspace);
@@ -4489,7 +4518,10 @@ fn execution_invalidates_stale_presence_when_the_native_secret_is_missing(cx: &m
         |cx| {
             window
                 .update(cx, |view, _, _| {
-                    view.session.missing_credentials.contains(&persistence_key)
+                    view.session
+                        .presence
+                        .missing_credentials
+                        .contains(&persistence_key)
                         && response_has_settled(view.execution.response(request_key))
                 })
                 .unwrap()
@@ -4499,8 +4531,8 @@ fn execution_invalidates_stale_presence_when_the_native_secret_is_missing(cx: &m
                 .update(cx, |view, _, _| {
                     format!(
                         "stored={:?} missing={:?} get_calls={} response={:?}",
-                        view.session.stored_credentials,
-                        view.session.missing_credentials,
+                        view.session.presence.stored_credentials,
+                        view.session.presence.missing_credentials,
                         store.get_calls.load(Ordering::Relaxed),
                         view.execution.response(request_key)
                     )
@@ -4513,11 +4545,13 @@ fn execution_invalidates_stale_presence_when_the_native_secret_is_missing(cx: &m
             assert!(
                 !view
                     .session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
             assert!(
                 view.session
+                    .presence
                     .missing_credentials
                     .contains(id.persistence_key())
             );
@@ -4560,7 +4594,7 @@ fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppC
             view.select_environment(Some("development".into()), cx);
             view.select_request(request_key, cx);
             reference_secret(view, request_key, cx);
-            assert!(view.session.stored_credentials.is_empty());
+            assert!(view.session.presence.stored_credentials.is_empty());
             assert_unknown_secret(&view.variable_context(cx), "secretToken");
             view.send_request(request_key, cx);
         })
@@ -4571,7 +4605,10 @@ fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppC
         |cx| {
             window
                 .update(cx, |view, _, _| {
-                    view.session.stored_credentials.contains(&persistence_key)
+                    view.session
+                        .presence
+                        .stored_credentials
+                        .contains(&persistence_key)
                         && response_has_settled(view.execution.response(request_key))
                 })
                 .unwrap()
@@ -4581,8 +4618,8 @@ fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppC
                 .update(cx, |view, _, _| {
                     format!(
                         "stored={:?} missing={:?} get_calls={} response={:?}",
-                        view.session.stored_credentials,
-                        view.session.missing_credentials,
+                        view.session.presence.stored_credentials,
+                        view.session.presence.missing_credentials,
                         store.get_calls.load(Ordering::Relaxed),
                         view.execution.response(request_key)
                     )
@@ -4594,6 +4631,7 @@ fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppC
         .update(cx, |view, _, cx| {
             assert!(
                 view.session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
@@ -4603,7 +4641,8 @@ fn execution_resolves_real_secret_values_and_relearns_presence(cx: &mut TestAppC
                 probe_core::VariableStatus::Resolved
             );
             assert_secret_stays_out_of_editor_context(&context);
-            let presence = serde_json::to_string(&view.session.stored_credentials).unwrap();
+            let presence =
+                serde_json::to_string(&view.session.presence.stored_credentials).unwrap();
             assert!(!presence.contains(EDITOR_SECRET_SENTINEL));
             assert!(!presence.contains("secretToken"));
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
@@ -4640,6 +4679,7 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
     )));
     let mut saved = crate::session::SessionState::default();
     saved
+        .presence
         .stored_credentials
         .insert(id.persistence_key().to_owned());
     session_store.save(&saved).unwrap();
@@ -4658,6 +4698,7 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
         .update(cx, |view, _, cx| {
             assert!(
                 view.session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
@@ -4678,8 +4719,8 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
     cx.run_until_parked();
     window
         .update(cx, |view, _, cx| {
-            assert!(view.session.stored_credentials.is_empty());
-            assert!(view.session.missing_credentials.is_empty());
+            assert!(view.session.presence.stored_credentials.is_empty());
+            assert!(view.session.presence.missing_credentials.is_empty());
             assert_unknown_secret(&view.variable_context(cx), "secretToken");
             view.select_request(request_key, cx);
             reference_secret(view, request_key, cx);
@@ -4692,7 +4733,10 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
         |cx| {
             window
                 .update(cx, |view, _, _| {
-                    view.session.stored_credentials.contains(&persistence_key)
+                    view.session
+                        .presence
+                        .stored_credentials
+                        .contains(&persistence_key)
                         && response_has_settled(view.execution.response(request_key))
                 })
                 .unwrap()
@@ -4702,8 +4746,8 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
                 .update(cx, |view, _, _| {
                     format!(
                         "stored={:?} missing={:?} get_calls={} response={:?}",
-                        view.session.stored_credentials,
-                        view.session.missing_credentials,
+                        view.session.presence.stored_credentials,
+                        view.session.presence.missing_credentials,
                         store.get_calls.load(Ordering::Relaxed),
                         view.execution.response(request_key)
                     )
@@ -4716,6 +4760,7 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
             assert_eq!(store.get_calls.load(Ordering::Relaxed), 1);
             assert!(
                 view.session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
@@ -4752,7 +4797,7 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
     corrupt
         .update(cx, |view, _, cx| {
             assert!(
-                view.session.stored_credentials.is_empty(),
+                view.session.presence.stored_credentials.is_empty(),
                 "corrupt presence metadata is ignored"
             );
             view.set_workspace(fixture, reloaded);
@@ -4780,8 +4825,8 @@ fn corrupt_or_missing_presence_metadata_does_not_block_execution(cx: &mut TestAp
                 .update(cx, |view, _, _| {
                     format!(
                         "stored={:?} missing={:?} get_calls={}",
-                        view.session.stored_credentials,
-                        view.session.missing_credentials,
+                        view.session.presence.stored_credentials,
+                        view.session.presence.missing_credentials,
                         store.get_calls.load(Ordering::Relaxed)
                     )
                 })
@@ -4847,6 +4892,7 @@ fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppCo
             view.session_store = None;
             view.credential_store = store.clone();
             view.session
+                .presence
                 .stored_credentials
                 .insert(id.persistence_key().to_owned());
             view.set_workspace(fixture, workspace);
@@ -4863,7 +4909,7 @@ fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppCo
                 view.variable_context(cx).status("secretToken"),
                 probe_core::VariableStatus::Resolved
             );
-            let captured = view.credential_presence_revision;
+            let captured = view.session.presence.revision();
             view.send_request(request_key, cx);
             captured
         })
@@ -4885,6 +4931,7 @@ fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppCo
         .update(cx, |view, window, cx| {
             assert!(
                 view.session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
@@ -4900,11 +4947,13 @@ fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppCo
             assert!(
                 !view
                     .session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key())
             );
             assert!(
                 view.session
+                    .presence
                     .missing_credentials
                     .contains(id.persistence_key())
             );
@@ -4923,12 +4972,14 @@ fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppCo
             assert!(
                 !view
                     .session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key()),
                 "an older execution snapshot must not restore a deleted secret"
             );
             assert!(
                 view.session
+                    .presence
                     .missing_credentials
                     .contains(id.persistence_key())
             );
@@ -4958,12 +5009,14 @@ fn stale_execution_presence_does_not_restore_a_deleted_secret(cx: &mut TestAppCo
             assert!(
                 !view
                     .session
+                    .presence
                     .stored_credentials
                     .contains(id.persistence_key()),
                 "a finished request must not restore presence deleted while it was in flight"
             );
             assert!(
                 view.session
+                    .presence
                     .missing_credentials
                     .contains(id.persistence_key())
             );

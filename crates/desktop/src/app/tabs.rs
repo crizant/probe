@@ -185,7 +185,6 @@ impl ProbeApp {
         self.request_editor.remove(key);
         self.response_viewer.remove_selection(key);
         if self.detached_requests.remove(&key) {
-            self.committed_detached_requests.remove(&key);
             if let Some(loaded) = self.loaded_workspace.as_mut() {
                 loaded.remove_detached_request(key);
             }
@@ -413,7 +412,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.committed_detached_requests.contains(&key) {
+        if self.detached_requests.is_committed(&key) {
             self.pending_close = None;
             self.show_toast(ToastIntent::Warning, "This request was written, but the collection could not refresh. Reopen the collection before saving it again.", cx);
             return;
@@ -550,7 +549,7 @@ impl ProbeApp {
                     Err((committed, error)) => {
                         view.pending_close = None;
                         if committed {
-                            view.committed_detached_requests.insert(key);
+                            view.detached_requests.mark_committed(key);
                         }
                         view.show_toast(
                             ToastIntent::Error,

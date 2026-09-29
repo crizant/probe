@@ -1,4 +1,9 @@
-use super::*;
+use std::{cell::RefCell, collections::BTreeMap, path::PathBuf};
+
+use gpui::{Context, FocusHandle, Task};
+use probe_core::{RequestKey, WorkspaceItemRef};
+
+use super::{DesktopMenu, DesktopSubmenu, PositionedContextMenu, ProbeApp, RequestTabTooltip};
 
 /// Ephemeral menus, popovers, and their focus restoration targets.
 ///

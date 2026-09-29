@@ -1,17 +1,17 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use super::*;
+use gpui::{AppContext as _, Context, FocusHandle, Window};
+use gpui_base::input::{InputEvent, InputState};
+use probe_core::EnvironmentVariable;
+
+use super::{ApplicationDialog, ProbeApp, SecretUiStatus, ToastIntent};
 use crate::credentials::{CredentialId, CredentialStore, CredentialStoreError};
 use crate::execution::SecretPresenceReconciliation;
-
-/// In-memory `CredentialId` keys for the secrets currently classified by the editor.
-/// Rebuilt when the workspace, environment, or secret names change. Never persisted.
-pub(super) struct EditorSecretIdentityCache {
-    workspace: PathBuf,
-    environment: String,
-    names: BTreeSet<String>,
-    keys: BTreeMap<String, String>,
-}
+use crate::{components, theme::Theme};
 
 pub(super) fn default_credential_store() -> Arc<dyn CredentialStore> {
     #[cfg(test)]
@@ -145,12 +145,8 @@ impl ProbeApp {
                     .ok()
                     .map(|id| id.persistence_key().to_owned());
                 let status = match key.as_deref() {
-                    Some(key) if self.session.stored_credentials.contains(key) => {
-                        SecretUiStatus::Stored
-                    }
-                    Some(key) if self.session.missing_credentials.contains(key) => {
-                        SecretUiStatus::NotStored
-                    }
+                    Some(key) if self.session.presence.is_stored(key) => SecretUiStatus::Stored,
+                    Some(key) if self.session.presence.is_missing(key) => SecretUiStatus::NotStored,
                     _ => SecretUiStatus::Unknown,
                 };
                 (name, status)
@@ -179,10 +175,10 @@ impl ProbeApp {
         let mut unknown = BTreeSet::new();
         for name in secrets_without_values {
             match keys.get(name) {
-                Some(key) if self.session.stored_credentials.contains(key) => {
+                Some(key) if self.session.presence.is_stored(key) => {
                     resolved.insert(name.clone());
                 }
-                Some(key) if self.session.missing_credentials.contains(key) => {
+                Some(key) if self.session.presence.is_missing(key) => {
                     missing.insert(name.clone());
                 }
                 _ => {
@@ -199,34 +195,16 @@ impl ProbeApp {
         environment: &str,
         names: &BTreeSet<String>,
     ) -> BTreeMap<String, String> {
-        let mut cache = self.editor_secret_identities.borrow_mut();
-        if let Some(cached) = cache.as_ref()
-            && cached.workspace == workspace
-            && cached.environment == environment
-            && &cached.names == names
-        {
-            return cached.keys.clone();
-        }
-        let keys = names
-            .iter()
-            .filter_map(|name| {
-                CredentialId::for_workspace(workspace, environment, name)
-                    .ok()
-                    .map(|id| (name.clone(), id.persistence_key().to_owned()))
-            })
-            .collect::<BTreeMap<_, _>>();
-        *cache = Some(EditorSecretIdentityCache {
-            workspace: workspace.to_path_buf(),
-            environment: environment.to_owned(),
-            names: names.clone(),
-            keys: keys.clone(),
-        });
-        keys
+        self.session
+            .presence
+            .persistence_keys(workspace, environment, names)
     }
 
     fn remember_stored_credential(&mut self, id: &CredentialId, cx: &mut Context<Self>) {
-        let changed = self.record_credential_presence(id.persistence_key(), true);
-        self.note_credential_presence_changed();
+        let changed = self
+            .session
+            .presence
+            .record_write(id.persistence_key(), true);
         if changed {
             self.persist_session(cx);
         }
@@ -235,33 +213,15 @@ impl ProbeApp {
     }
 
     fn forget_stored_credential(&mut self, id: &CredentialId, cx: &mut Context<Self>) {
-        let changed = self.record_credential_presence(id.persistence_key(), false);
-        self.note_credential_presence_changed();
+        let changed = self
+            .session
+            .presence
+            .record_write(id.persistence_key(), false);
         if changed {
             self.persist_session(cx);
         }
         self.sync_secret_statuses_from_presence();
         cx.notify();
-    }
-
-    /// Moves one opaque identity between the stored and known-missing sets.
-    ///
-    /// `stored` records a value Probe has learned is present. `false` records a
-    /// trusted absence. Returns whether either set changed.
-    fn record_credential_presence(&mut self, key: &str, stored: bool) -> bool {
-        if stored {
-            let inserted = self.session.stored_credentials.insert(key.to_owned());
-            let cleared = self.session.missing_credentials.remove(key);
-            inserted || cleared
-        } else {
-            let removed = self.session.stored_credentials.remove(key);
-            let recorded = self.session.missing_credentials.insert(key.to_owned());
-            removed || recorded
-        }
-    }
-
-    fn note_credential_presence_changed(&mut self) {
-        self.credential_presence_revision = self.credential_presence_revision.wrapping_add(1);
     }
 
     pub(super) fn apply_secret_presence_reconciliation(
@@ -270,16 +230,7 @@ impl ProbeApp {
         revision: u64,
         cx: &mut Context<Self>,
     ) {
-        if revision < self.credential_presence_revision {
-            return;
-        }
-        let mut changed = false;
-        for id in reconciliation.missing {
-            changed |= self.record_credential_presence(&id, false);
-        }
-        for id in reconciliation.found {
-            changed |= self.record_credential_presence(&id, true);
-        }
+        let changed = self.session.presence.reconcile(reconciliation, revision);
         if changed {
             self.persist_session(cx);
             self.sync_secret_statuses_from_presence();
@@ -342,11 +293,7 @@ impl ProbeApp {
         };
         let replacing = CredentialId::for_workspace(&target.workspace, &target.environment, &name)
             .ok()
-            .is_some_and(|id| {
-                self.session
-                    .stored_credentials
-                    .contains(id.persistence_key())
-            });
+            .is_some_and(|id| self.session.presence.is_stored(id.persistence_key()));
         self.show_secret_value_dialog(target, replacing, restore_focus, false, window, cx);
     }
 
@@ -570,10 +517,6 @@ impl ProbeApp {
         }
         CredentialId::for_workspace(&target.workspace, &target.environment, &target.name)
             .ok()
-            .is_some_and(|id| {
-                self.session
-                    .stored_credentials
-                    .contains(id.persistence_key())
-            })
+            .is_some_and(|id| self.session.presence.is_stored(id.persistence_key()))
     }
 }

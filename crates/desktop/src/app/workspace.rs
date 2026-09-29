@@ -311,7 +311,6 @@ impl ProbeApp {
         self.response_viewer.clear();
         self.loaded_workspace = Some(workspace);
         self.detached_requests.clear();
-        self.committed_detached_requests.clear();
         self.workspace_path = Some(path);
         self.shell.reset_for_workspace();
         self.reset_collection_ui();
@@ -841,17 +840,11 @@ impl ProbeApp {
         let open_tabs = self.shell.tabs().to_vec();
         let active_tab = self.shell.active_tab();
         let mut remaps = key_remaps.clone();
-        self.detached_requests.clear();
         for (old_key, request) in detached {
             let new_key = workspace.add_detached_request(request);
             remaps.insert(old_key, new_key);
-            self.detached_requests.insert(new_key);
         }
-        self.committed_detached_requests = self
-            .committed_detached_requests
-            .iter()
-            .filter_map(|key| remaps.get(key).copied())
-            .collect();
+        self.detached_requests.remap(&remaps);
         self.persistence.reset(baselines);
         self.loaded_workspace = Some(workspace);
         self.shell.reset_for_workspace();

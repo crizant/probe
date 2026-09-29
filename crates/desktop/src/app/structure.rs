@@ -19,7 +19,7 @@ impl ProbeApp {
             );
             return;
         }
-        if self.committed_detached_requests.contains(&key) {
+        if self.detached_requests.is_committed(&key) {
             self.pending_close = None;
             self.show_toast(ToastIntent::Warning, "This request was written, but the collection could not refresh. Reopen the collection before saving it again.", cx);
             return;
@@ -325,7 +325,7 @@ impl ProbeApp {
                 self.show_toast(ToastIntent::Error, "Request name is required.", cx);
                 return;
             }
-            if self.committed_detached_requests.contains(&key) {
+            if self.detached_requests.is_committed(&key) {
                 self.pending_close = None;
                 self.show_toast(ToastIntent::Warning, "This request was written, but the collection could not refresh. Reopen the collection before saving it again.", cx);
                 return;
