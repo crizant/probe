@@ -477,8 +477,9 @@ does not block execution.
 Presentation, including placeholder highlighting and Environment Manager status,
 reads only presence metadata. It never reads credential values or queries the
 operating-system credential store. A secret whose identity is in neither set is
-unknown. Only trusted operations change the sets, and each applies its result when
-the operation completes, even if the view that started it has closed:
+unknown. Only trusted operations change the sets. Asynchronous credential writes
+update presence when they complete, independently of whether the Secret Value dialog
+or Environment Manager that initiated them is still open:
 
 - a successful Set records the identity as stored;
 - a Delete that succeeds or returns `NotFound` records it as missing;
