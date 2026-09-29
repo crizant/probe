@@ -13,8 +13,16 @@ use serde::{Deserialize, Serialize};
 use crate::credential_presence::CredentialPresenceState;
 use crate::shell::{DEFAULT_RESPONSE_HEIGHT, DEFAULT_RESPONSE_WIDTH, DEFAULT_SIDEBAR_WIDTH};
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const RECENT_COLLECTION_LIMIT: usize = 10;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct WorkspaceSessionState {
+    pub(crate) open_tabs: Vec<String>,
+    pub(crate) active_tab: Option<String>,
+    pub(crate) collapsed_folders: Vec<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -22,9 +30,7 @@ pub(crate) struct SessionState {
     pub(crate) schema_version: u32,
     pub(crate) active_collection: Option<PathBuf>,
     pub(crate) recent_collections: Vec<PathBuf>,
-    pub(crate) open_tabs: Vec<String>,
-    pub(crate) active_tab: Option<String>,
-    pub(crate) collapsed_folders: Vec<String>,
+    pub(crate) workspaces: BTreeMap<PathBuf, WorkspaceSessionState>,
     pub(crate) sidebar_width: f32,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) response_height: f32,
@@ -42,9 +48,7 @@ impl Default for SessionState {
             schema_version: SCHEMA_VERSION,
             active_collection: None,
             recent_collections: Vec::new(),
-            open_tabs: Vec::new(),
-            active_tab: None,
-            collapsed_folders: Vec::new(),
+            workspaces: BTreeMap::new(),
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             sidebar_collapsed: false,
             response_height: DEFAULT_RESPONSE_HEIGHT,
@@ -63,18 +67,17 @@ impl SessionState {
         self.recent_collections.truncate(RECENT_COLLECTION_LIMIT);
         self.active_collection = Some(path);
         self.prune_selected_environments();
+        self.prune_workspaces();
     }
 
     pub(crate) fn clear_active_collection(&mut self) {
         self.active_collection = None;
-        self.open_tabs.clear();
-        self.active_tab = None;
-        self.collapsed_folders.clear();
     }
 
     pub(crate) fn remove_recent_collection(&mut self, path: &Path) {
         self.recent_collections.retain(|recent| recent != path);
         self.selected_environments.remove(path);
+        self.workspaces.remove(path);
     }
 
     pub(crate) fn selected_environment_for(&self, path: &Path) -> Option<&str> {
@@ -98,6 +101,11 @@ impl SessionState {
 
     fn prune_selected_environments(&mut self) {
         self.selected_environments
+            .retain(|path, _| self.recent_collections.contains(path));
+    }
+
+    fn prune_workspaces(&mut self) {
+        self.workspaces
             .retain(|path, _| self.recent_collections.contains(path));
     }
 }
@@ -127,7 +135,31 @@ impl SessionStore {
             }
             Err(source) => return Err(SessionError::Io(source)),
         };
-        let state: SessionState = serde_json::from_slice(&source).map_err(SessionError::Parse)?;
+        let mut source: serde_json::Value =
+            serde_json::from_slice(&source).map_err(SessionError::Parse)?;
+        let version = source
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64);
+        if version == Some(1)
+            && let Some(object) = source.as_object_mut()
+        {
+            let active = object
+                .get("active_collection")
+                .and_then(|path| path.as_str());
+            if let Some(path) = active.map(str::to_owned) {
+                let mut workspace = serde_json::Map::new();
+                for field in ["open_tabs", "active_tab", "collapsed_folders"] {
+                    if let Some(value) = object.remove(field) {
+                        workspace.insert(field.to_owned(), value);
+                    }
+                }
+                let mut workspaces = serde_json::Map::new();
+                workspaces.insert(path, workspace.into());
+                object.insert("workspaces".to_owned(), workspaces.into());
+            }
+            object.insert("schema_version".to_owned(), SCHEMA_VERSION.into());
+        }
+        let state: SessionState = serde_json::from_value(source).map_err(SessionError::Parse)?;
         if state.schema_version != SCHEMA_VERSION {
             return Err(SessionError::UnsupportedVersion(state.schema_version));
         }
@@ -187,7 +219,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{SessionState, SessionStore};
+    use super::{SessionState, SessionStore, WorkspaceSessionState};
 
     fn store() -> SessionStore {
         let unique = SystemTime::now()
@@ -210,9 +242,14 @@ mod tests {
         let store = store();
         let mut state = SessionState::default();
         state.activate_collection("/tmp/example".into());
-        state.open_tabs = vec!["users/list.yml".to_owned()];
-        state.active_tab = state.open_tabs.first().cloned();
-        state.collapsed_folders = vec!["users".to_owned()];
+        state.workspaces.insert(
+            "/tmp/example".into(),
+            WorkspaceSessionState {
+                open_tabs: vec!["users/list.yml".to_owned()],
+                active_tab: Some("users/list.yml".to_owned()),
+                collapsed_folders: vec!["users".to_owned()],
+            },
+        );
         state.sidebar_width = 312.0;
         state.sidebar_collapsed = true;
         state.response_width = 480.0;
@@ -222,6 +259,67 @@ mod tests {
         store.save(&state).unwrap();
         assert_eq!(store.load().unwrap(), state);
         assert!(store.path().is_file());
+    }
+
+    #[test]
+    fn two_workspace_states_survive_restart_and_keep_global_layout() {
+        let store = store();
+        let mut state = SessionState::default();
+        let a = PathBuf::from("/tmp/a");
+        let b = PathBuf::from("/tmp/b");
+        state.activate_collection(a.clone());
+        state.workspaces.insert(
+            a.clone(),
+            WorkspaceSessionState {
+                open_tabs: vec!["first".into(), "second".into()],
+                active_tab: Some("first".into()),
+                collapsed_folders: vec!["folder-a".into()],
+            },
+        );
+        state.activate_collection(b.clone());
+        state.workspaces.insert(
+            b.clone(),
+            WorkspaceSessionState {
+                open_tabs: vec!["other".into()],
+                active_tab: Some("other".into()),
+                collapsed_folders: vec!["folder-b".into()],
+            },
+        );
+        state.sidebar_width = 330.0;
+        store.save(&state).unwrap();
+
+        let restored = store.load().unwrap();
+        assert_eq!(restored.active_collection, Some(b.clone()));
+        assert_eq!(restored.workspaces[&a].open_tabs, ["first", "second"]);
+        assert_eq!(restored.workspaces[&a].active_tab.as_deref(), Some("first"));
+        assert_eq!(restored.workspaces[&b].collapsed_folders, ["folder-b"]);
+        assert_eq!(restored.sidebar_width, 330.0);
+    }
+
+    #[test]
+    fn version_one_active_tabs_migrate_to_their_workspace() {
+        let store = store();
+        std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        std::fs::write(
+            store.path(),
+            r#"{
+            "schema_version": 1,
+            "active_collection": "/tmp/old",
+            "open_tabs": ["first", "second"],
+            "active_tab": "first",
+            "collapsed_folders": ["folder"]
+        }"#,
+        )
+        .unwrap();
+
+        let restored = store.load().unwrap();
+        assert_eq!(restored.schema_version, 2);
+        let workspace = &restored.workspaces[Path::new("/tmp/old")];
+        assert_eq!(workspace.open_tabs, ["first", "second"]);
+        assert_eq!(workspace.active_tab.as_deref(), Some("first"));
+        assert_eq!(workspace.collapsed_folders, ["folder"]);
+        store.save(&restored).unwrap();
+        assert_eq!(store.load().unwrap(), restored);
     }
 
     #[test]
@@ -242,11 +340,15 @@ mod tests {
         let path = PathBuf::from("/tmp/collection");
         state.activate_collection(path.clone());
         state.remember_selected_environment(path.clone(), Some("development".to_owned()));
+        state
+            .workspaces
+            .insert(path.clone(), WorkspaceSessionState::default());
 
         state.remove_recent_collection(&path);
 
         assert!(state.recent_collections.is_empty());
         assert_eq!(state.selected_environment_for(&path), None);
+        assert!(!state.workspaces.contains_key(&path));
     }
 
     #[test]
@@ -314,6 +416,8 @@ mod tests {
         .unwrap();
 
         let state = store.load().unwrap();
+        assert_eq!(state.schema_version, 2);
+        assert!(state.workspaces.is_empty());
         assert!(state.selected_environments.is_empty());
         assert!(state.presence.stored_credentials.is_empty());
         assert!(state.presence.missing_credentials.is_empty());

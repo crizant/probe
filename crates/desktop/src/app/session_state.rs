@@ -1,3 +1,4 @@
+use crate::session::WorkspaceSessionState;
 use gpui::{AppContext as _, Context};
 
 use super::{PaneLayout, ProbeApp, ToastIntent};
@@ -7,19 +8,25 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return;
         };
-        let tabs: Vec<_> = self
+        let Some(path) = &self.workspace_path else {
+            return;
+        };
+        let workspace = self
             .session
+            .workspaces
+            .get(path)
+            .cloned()
+            .unwrap_or_default();
+        let tabs: Vec<_> = workspace
             .open_tabs
             .iter()
             .filter_map(|selector| loaded.request_key(selector))
             .collect();
-        let active_tab = self
-            .session
+        let active_tab = workspace
             .active_tab
             .as_deref()
             .and_then(|selector| loaded.request_key(selector));
-        let collapsed_folders: Vec<_> = self
-            .session
+        let collapsed_folders: Vec<_> = workspace
             .collapsed_folders
             .iter()
             .filter_map(|selector| loaded.folder_key(selector))
@@ -38,10 +45,11 @@ impl ProbeApp {
                 PaneLayout::Vertical
             });
         self.refresh_system_menu(cx);
+        let fallback_tab = tabs.last().copied();
         for key in tabs {
-            self.shell.open_request(key);
+            self.shell.insert_tab(key);
         }
-        if let Some(key) = active_tab {
+        if let Some(key) = active_tab.or(fallback_tab) {
             self.shell.open_request(key);
         }
         for key in collapsed_folders {
@@ -63,23 +71,31 @@ impl ProbeApp {
             return;
         };
         self.session.activate_collection(path.clone());
-        self.session.open_tabs = self
+        let open_tabs = self
             .shell
             .tabs()
             .iter()
             .filter_map(|key| loaded.request_selector(*key).map(str::to_owned))
             .collect();
-        self.session.active_tab = self
+        let active_tab = self
             .shell
             .active_tab()
             .and_then(|key| loaded.request_selector(key))
             .map(str::to_owned);
-        self.session.collapsed_folders = self
+        let mut collapsed_folders: Vec<String> = self
             .shell
             .collapsed_folders()
             .filter_map(|key| loaded.folder_selector(key).map(str::to_owned))
             .collect();
-        self.session.collapsed_folders.sort();
+        collapsed_folders.sort();
+        self.session.workspaces.insert(
+            path.clone(),
+            WorkspaceSessionState {
+                open_tabs,
+                active_tab,
+                collapsed_folders,
+            },
+        );
         self.session.remember_selected_environment(
             path.clone(),
             self.shell.selected_environment().map(str::to_owned),

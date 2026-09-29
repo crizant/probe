@@ -415,6 +415,7 @@ impl ProbeApp {
                         Ok((path, workspace)) => {
                             let projection_warning = workspace::projection_warning(&workspace);
                             view.set_workspace(path, workspace);
+                            view.restore_shell_state(cx);
                             if let Some(message) = projection_warning {
                                 view.show_toast(ToastIntent::Warning, message, cx);
                             }
