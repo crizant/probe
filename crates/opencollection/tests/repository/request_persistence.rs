@@ -293,6 +293,10 @@ fn unbundled_diagnostics_use_workspace_relative_paths() {
     assert_eq!(loaded.workspace().request_count(), 0);
     assert_eq!(loaded.diagnostics().len(), 1);
     assert_eq!(loaded.diagnostics()[0].path, "future.yml/item/info/type");
+    assert_eq!(
+        loaded.diagnostics()[0].item_name.as_deref(),
+        Some("Future item")
+    );
 
     fs::remove_dir_all(root).unwrap();
 }

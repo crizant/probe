@@ -37,6 +37,7 @@ pub(super) fn diagnostic(
         path,
         kind,
         value: value.into(),
+        item_name: None,
     });
 }
 

@@ -43,6 +43,33 @@ fn toast_debug(view: &ProbeApp) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn projection_warning_identifies_unsupported_value_and_containing_item() {
+    let workspace = probe_opencollection::load_workspace_from_str(include_str!(
+        "../../../../tests/fixtures/opencollection/diagnostic-context.yml"
+    ))
+    .unwrap();
+    let warning = super::workspace::projection_warning(&workspace).unwrap();
+    assert!(warning.contains("4 unsupported"));
+    assert!(warning.contains("\"Contacts\" in \"List contacts\""));
+    assert!(warning.contains("items/0/items/0/info/type"));
+    assert!(warning.contains("unsupported_item_type"));
+    assert!(warning.contains("source YAML is preserved"));
+
+    let unnamed = probe_opencollection::load_workspace_from_str(
+        "opencollection: 1.0.0\ninfo: {}\nbundled: true\nitems:\n  - info:\n      type: Contacts\n",
+    )
+    .unwrap();
+    let warning = super::workspace::projection_warning(&unnamed).unwrap();
+    assert!(warning.contains("\"Contacts\" at items/0/info/type"));
+
+    let supported = probe_opencollection::load_workspace_from_str(
+        "opencollection: 1.0.0\ninfo: {}\nbundled: true\n",
+    )
+    .unwrap();
+    assert!(super::workspace::projection_warning(&supported).is_none());
+}
+
 fn has_active_toast(view: &ProbeApp, intent: ToastIntent, text: &str) -> bool {
     view.toasts.iter().any(|(_, toast, status)| {
         status != gpui_base::ToastTransitionStatus::Ending

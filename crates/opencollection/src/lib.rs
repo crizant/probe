@@ -84,6 +84,8 @@ pub struct ProjectionDiagnostic {
     pub kind: ProjectionDiagnosticKind,
     /// The unsupported type or property name.
     pub value: String,
+    /// Nearest named containing item, including items omitted from the projection.
+    pub item_name: Option<String>,
 }
 
 /// Categories of unsupported OpenCollection projection or execution.
