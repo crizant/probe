@@ -55,6 +55,26 @@ pub(crate) fn project_item(
     path: &str,
     diagnostics: &mut Vec<ProjectionDiagnostic>,
 ) -> Result<Option<CollectionItem>, serde_yaml_ng::Error> {
+    let item_name = value
+        .get("info")
+        .and_then(|info| info.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let start = diagnostics.len();
+    let item = project_item_contents(value, path, diagnostics)?;
+    for diagnostic in &mut diagnostics[start..] {
+        if diagnostic.item_name.is_none() {
+            diagnostic.item_name = item_name.clone();
+        }
+    }
+    Ok(item)
+}
+
+fn project_item_contents(
+    value: Value,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) -> Result<Option<CollectionItem>, serde_yaml_ng::Error> {
     let kind: ItemKindDocument = serde_yaml_ng::from_value(value.clone())?;
 
     match kind.info.item_type.as_deref() {

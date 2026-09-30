@@ -105,6 +105,14 @@ fn unsupported_projection_is_reported_and_retained() {
         })
         .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 5);
+    let names = parsed
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.value.as_str(), diagnostic.item_name.as_deref()))
+        .collect::<Vec<_>>();
+    assert!(names.contains(&("matrix", Some("Supported request with future fields"))));
+    assert!(names.contains(&("binary-stream", Some("Future body"))));
+    assert!(names.contains(&("websocket", Some("Future item"))));
     for expected in [
         (
             "items/0/http/params/0/type",
@@ -139,6 +147,35 @@ fn unsupported_projection_is_reported_and_retained() {
     let before: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source).unwrap();
     let after: serde_yaml_ng::Value = serde_yaml_ng::from_str(&serialized).unwrap();
     assert_eq!(before, after);
+    assert_eq!(
+        parse(&serialized).unwrap().diagnostics(),
+        parsed.diagnostics()
+    );
+}
+
+#[test]
+fn diagnostics_identify_the_nearest_named_item_without_changing_source() {
+    let source = fixture("diagnostic-context.yml");
+    let parsed = parse(&source).unwrap();
+    let contexts = parsed
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.value.as_str(), diagnostic.item_name.as_deref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        contexts,
+        [
+            ("Contacts", Some("List contacts")),
+            ("future-body", Some("Customers")),
+            ("future-item", None),
+            ("<missing>", None),
+        ]
+    );
+    let serialized = parsed.to_yaml().unwrap();
+    assert_eq!(
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&source).unwrap(),
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&serialized).unwrap()
+    );
     assert_eq!(
         parse(&serialized).unwrap().diagnostics(),
         parsed.diagnostics()

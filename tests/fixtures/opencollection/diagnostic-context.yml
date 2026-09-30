@@ -1,0 +1,20 @@
+opencollection: 1.0.0
+info:
+  name: Diagnostic context
+bundled: true
+items:
+  - info:
+      name: Customers
+      type: folder
+    items:
+      - info:
+          name: List contacts
+          type: Contacts
+      - info:
+          type: http
+        http:
+          body:
+            type: future-body
+  - info:
+      type: future-item
+  - {}

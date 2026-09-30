@@ -1058,9 +1058,16 @@ impl ProbeApp {
 pub(super) fn projection_warning(workspace: &LoadedWorkspace) -> Option<String> {
     let diagnostics = workspace.diagnostics();
     let first = diagnostics.first()?;
+    let context = first
+        .item_name
+        .as_ref()
+        .map(|name| format!(" in {name:?}"))
+        .unwrap_or_default();
     Some(format!(
-        "This collection contains {} unsupported OpenCollection value(s). First: {} ({}). The source YAML is preserved.",
+        "This collection contains {} unsupported OpenCollection value(s). First: {:?}{} at {} ({}). The source YAML is preserved.",
         diagnostics.len(),
+        first.value,
+        context,
         first.path,
         first.kind.as_str(),
     ))
