@@ -620,9 +620,8 @@ async fn curl_export_keeps_secret_placeholders_in_url_parameters_and_all_bodies(
     environments[0]
         .variables
         .extend([secret("secret"), secret("SecretHost")]);
-    let mut request = get(
-        "https://{{SecretHost}}/{{secret}}/:id?original={{secret}}&encoded=%7B%7Bsecret%7D%7D&collision=probe-curl-template-0",
-    );
+    let mut request =
+        get("https://{{SecretHost}}/{{secret}}/:id?original={{secret}}&encoded=%7B%7Bsecret%7D%7D");
     request.method = Some("POST".into());
     request.path_parameters = vec![QueryParameter {
         name: "id".into(),
@@ -661,7 +660,6 @@ async fn curl_export_keeps_secret_placeholders_in_url_parameters_and_all_bodies(
         }]),
     ] {
         let expected_body = match &body {
-            Body::Raw(_) if cfg!(windows) => r#"{\"secret\":\"{{secret}}\"}"#,
             Body::Raw(_) => r#"{"secret":"{{secret}}"}"#,
             Body::FormUrlEncoded(_) => "{{secret}}=a+{{secret}}%2Bb",
             Body::Multipart(_) => "{{secret}}",
@@ -678,7 +676,7 @@ async fn curl_export_keeps_secret_placeholders_in_url_parameters_and_all_bodies(
         )
         .await
         .unwrap();
-        assert!(command.contains("https://{{SecretHost}}/{{secret}}/{{secret}}?original={{secret}}&encoded=%7B%7Bsecret%7D%7D&collision=probe-curl-template-0&{{secret}}=prefix+{{secret}}%2Btail"), "{command}");
+        assert!(command.contains("https://{{SecretHost}}/{{secret}}/{{secret}}?original={{secret}}&encoded=%7B%7Bsecret%7D%7D&{{secret}}=prefix+{{secret}}%2Btail"), "{command}");
         // This body must remain a template even when invocation overrides contain real secrets.
         assert!(command.contains(expected_body), "{command}");
         assert!(!command.contains(SECRET));

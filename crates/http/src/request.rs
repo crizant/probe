@@ -51,37 +51,33 @@ pub(crate) async fn build_request(
     Ok(builder)
 }
 
-/// Builds a shell-appropriate cURL command without reading files or sending a request.
-pub(crate) async fn curl_command(
+/// Builds one canonical, POSIX-quoted cURL command without file or network I/O.
+pub(crate) fn curl_command(
     client: &Client,
     prepared: &PreparedHttpRequest,
     options: &ExecutionOptions,
-    shell: crate::CurlShell,
 ) -> Result<String, HttpError> {
-    let (masked, placeholders) = mask_curl_placeholders(prepared.request())?;
-    let prepared = &masked
-        .into_http()
-        .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
+    let request = prepared.request();
     let body = selected_body(prepared.body())?;
-    let mut base = prepared.request().clone();
-    base.kind = probe_core::RequestKind::Http { body: None };
-    let base = base
-        .into_http()
-        .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
-    let mut builder = build_request(client, &base, options).await?;
-    if let Some(body @ (Body::Raw(_) | Body::FormUrlEncoded(_))) = body {
-        let has_content_type = request_headers(prepared.request())?.contains_key(CONTENT_TYPE);
-        builder = apply_body(builder, body, has_content_type, options).await?;
+    // Reuse HTTP header/auth validation without parsing a template-bearing URL.
+    let mut builder = client
+        .request(
+            supported_method(request.method.as_deref())?,
+            "http://localhost",
+        )
+        .headers(request_headers(request)?);
+    if let Some(authentication) = &request.authentication {
+        builder = apply_authentication(builder, authentication)?;
     }
     let built = builder
         .build()
         .map_err(|error| HttpError::InvalidRequest(error.to_string()))?;
-    let mut command = vec![("--globoff", None)];
+    let mut command = String::from("curl --globoff");
     curl_argument(&mut command, "--request", built.method().as_str());
-    curl_argument(&mut command, "--url", built.url().as_str());
-    let settings = &prepared.request().settings;
+    curl_argument(&mut command, "--url", &curl_url(request)?);
+    let settings = &request.settings;
     if settings.follow_redirects != Some(false) {
-        command.push(("--location", None));
+        command.push_str(" --location");
         curl_argument(
             &mut command,
             "--max-redirs",
@@ -95,8 +91,7 @@ pub(crate) async fn curl_command(
             &timeout.as_secs_f64().to_string(),
         );
     }
-    let basic = prepared
-        .request()
+    let basic = request
         .authentication
         .as_ref()
         .filter(|authentication| authentication.kind == AuthenticationKind::Basic);
@@ -107,7 +102,7 @@ pub(crate) async fn curl_command(
             &format!(
                 "{}:{}",
                 authentication_string(authentication, "username", "basic")?,
-                authentication_string(authentication, "password", "basic")?,
+                authentication_string(authentication, "password", "basic")?
             ),
         );
     }
@@ -120,95 +115,134 @@ pub(crate) async fn curl_command(
             .map_err(|_| HttpError::InvalidHeaderValue(name.to_string()))?;
         curl_argument(&mut command, "--header", &format!("{name}: {value}"));
     }
-    curl_body_arguments(&mut command, body, &built, options)?;
-    for argument in command.iter_mut().filter_map(|(_, value)| value.as_mut()) {
-        for (marker, placeholder) in &placeholders {
-            *argument = argument.replace(marker, placeholder);
-        }
-    }
-    Ok(format_curl_command(&command, shell))
+    curl_body_arguments(&mut command, body, built.headers(), options)?;
+    Ok(command)
 }
 
-// Use the shared interpolator to protect templates before URL/path/form encoding.
-// A collision-free ASCII marker preserves real percent escapes and prevents
-// template-bearing hosts from being lowercased by URL parsing.
-fn mask_curl_placeholders(
-    request: &Request,
-) -> Result<(Request, Vec<(String, String)>), HttpError> {
-    let variables = probe_core::discover_request_variables(request, &[], None)
-        .map_err(|error| HttpError::InvalidRequest(error.to_string()))?;
-    let source = format!("{request:?}");
-    let mut prefix = String::from("probe-curl-template-");
-    while source.contains(&prefix) {
-        prefix.push('x');
+fn curl_url(request: &Request) -> Result<String, HttpError> {
+    let mut url = request.url.clone().ok_or(HttpError::MissingUrl)?;
+    for span in probe_core::path_variable_spans(&url).into_iter().rev() {
+        if let Some(parameter) = request
+            .path_parameters
+            .iter()
+            .find(|parameter| !parameter.disabled && parameter.name == url[span.name.clone()])
+        {
+            url.replace_range(span.range, &curl_encode(&parameter.value, false));
+        }
     }
-    let overrides: Vec<_> = variables
+    let fragment = url.find('#').map(|index| url.split_off(index));
+    for parameter in request
+        .query_parameters
         .iter()
-        .enumerate()
-        .map(|(index, variable)| (variable.name.clone(), format!("{prefix}{index}-end")))
-        .collect();
-    let placeholders = overrides
-        .iter()
-        .map(|(name, marker)| (marker.clone(), format!("{{{{{name}}}}}")))
-        .collect();
-    let environment = probe_core::resolve_environment_with_overrides(&[], None, &overrides)
-        .map_err(|error| HttpError::InvalidRequest(error.to_string()))?;
-    let masked = probe_core::resolve_request(request, &environment)
-        .map_err(|error| HttpError::InvalidRequest(error.to_string()))?;
-    Ok((masked, placeholders))
+        .filter(|parameter| is_enabled_and_named(parameter.disabled, &parameter.name))
+    {
+        url.push(if url.contains('?') { '&' } else { '?' });
+        url.push_str(&format!(
+            "{}={}",
+            curl_encode(&parameter.name, true),
+            curl_encode(&parameter.value, true)
+        ));
+    }
+    if let Some(fragment) = fragment {
+        url.push_str(&fragment);
+    }
+    if url.contains("{{") {
+        return Ok(url);
+    }
+    reqwest::Url::parse(&url)
+        .map(|url| url.to_string())
+        .map_err(|error| HttpError::InvalidRequest(error.to_string()))
+}
+
+// Encode literal bytes, leaving complete {{variable}} references untouched.
+// Path segments use RFC 3986; query/form fields use application/x-www-form-urlencoded.
+fn curl_encode(value: &str, form: bool) -> String {
+    use std::fmt::Write as _;
+    let mut encoded = String::new();
+    for part in value.split_inclusive("}}") {
+        let start = if part.ends_with("}}") {
+            part.find("{{")
+        } else {
+            None
+        }
+        .unwrap_or(part.len());
+        let (literal, template) = part.split_at(start);
+        for byte in literal.bytes() {
+            if byte.is_ascii_alphanumeric()
+                || matches!(byte, b'-' | b'.' | b'_')
+                || (form && byte == b'*')
+                || (!form && byte == b'~')
+            {
+                encoded.push(char::from(byte));
+            } else if form && byte == b' ' {
+                encoded.push('+');
+            } else {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+        encoded.push_str(template);
+    }
+    encoded
 }
 
 fn curl_body_arguments(
-    command: &mut CurlArguments,
+    command: &mut String,
     body: Option<&Body>,
-    built: &reqwest::Request,
+    headers: &HeaderMap,
     options: &ExecutionOptions,
 ) -> Result<(), HttpError> {
-    if let Some(bytes) = built.body().and_then(reqwest::Body::as_bytes) {
-        let data = std::str::from_utf8(bytes)
-            .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
-        // --data-raw keeps leading @ characters literal.
-        curl_argument(command, "--data-raw", data);
-    }
     match body {
-        Some(Body::File(files)) => curl_file_arguments(command, files, built, options),
-        Some(Body::Multipart(parts)) => curl_multipart_arguments(command, parts, options),
-        _ => Ok(()),
+        Some(Body::Raw(body)) => {
+            curl_content_type(command, headers, raw_content_type(&body.kind));
+            curl_argument(command, "--data-raw", &raw_body_data(body));
+        }
+        Some(Body::FormUrlEncoded(fields)) => {
+            curl_content_type(command, headers, "application/x-www-form-urlencoded");
+            let data = fields
+                .iter()
+                .filter(|field| is_enabled_and_named(field.disabled, &field.name))
+                .map(|field| {
+                    format!(
+                        "{}={}",
+                        curl_encode(&field.name, true),
+                        curl_encode(&field.value, true)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("&");
+            curl_argument(command, "--data-raw", &data);
+        }
+        Some(Body::File(files)) => {
+            let mut selected = files.iter().filter(|file| file.selected);
+            let file = selected.next().ok_or_else(|| {
+                HttpError::InvalidBodySelection("file body has no selected file".into())
+            })?;
+            if selected.next().is_some() {
+                return Err(HttpError::InvalidBodySelection(
+                    "file body has multiple selected files".into(),
+                ));
+            }
+            curl_content_type(command, headers, &file.content_type);
+            curl_argument(
+                command,
+                "--data-binary",
+                &format!("@{}", resolve_path(&file.file_path, options).display()),
+            );
+        }
+        Some(Body::Multipart(parts)) => curl_multipart_arguments(command, parts, options)?,
+        None => {}
     }
-}
-
-fn curl_file_arguments(
-    command: &mut CurlArguments,
-    files: &[probe_core::FileReference],
-    built: &reqwest::Request,
-    options: &ExecutionOptions,
-) -> Result<(), HttpError> {
-    let mut selected = files.iter().filter(|file| file.selected);
-    let file = selected
-        .next()
-        .ok_or_else(|| HttpError::InvalidBodySelection("file body has no selected file".into()))?;
-    if selected.next().is_some() {
-        return Err(HttpError::InvalidBodySelection(
-            "file body has multiple selected files".into(),
-        ));
-    }
-    if !built.headers().contains_key(CONTENT_TYPE) {
-        curl_argument(
-            command,
-            "--header",
-            &format!("content-type: {}", file.content_type),
-        );
-    }
-    curl_argument(
-        command,
-        "--data-binary",
-        &format!("@{}", resolve_path(&file.file_path, options).display()),
-    );
     Ok(())
 }
 
+fn curl_content_type(command: &mut String, headers: &HeaderMap, value: &str) {
+    if !headers.contains_key(CONTENT_TYPE) {
+        curl_argument(command, "--header", &format!("content-type: {value}"));
+    }
+}
+
 fn curl_multipart_arguments(
-    command: &mut CurlArguments,
+    command: &mut String,
     parts: &[MultipartPart],
     options: &ExecutionOptions,
 ) -> Result<(), HttpError> {
@@ -245,80 +279,12 @@ fn curl_multipart_arguments(
     Ok(())
 }
 
-type CurlArguments = Vec<(&'static str, Option<String>)>;
-
-fn curl_argument(command: &mut CurlArguments, flag: &'static str, value: &str) {
-    command.push((flag, Some(value.to_owned())));
-}
-
-fn format_curl_command(arguments: &CurlArguments, shell: crate::CurlShell) -> String {
-    match shell {
-        crate::CurlShell::Posix => {
-            let mut command = String::from("curl");
-            for (flag, value) in arguments {
-                command.push(' ');
-                command.push_str(flag);
-                if let Some(value) = value {
-                    command.push_str(" '");
-                    command.push_str(&value.replace('\'', "'\\''"));
-                    command.push('\'');
-                }
-            }
-            command
-        }
-        crate::CurlShell::WindowsPowerShell => {
-            // A single ArgumentList string avoids PowerShell 5.1/7 differences
-            // in passing embedded quotes to native programs. No cmd.exe expansion.
-            let native = arguments
-                .iter()
-                .flat_map(|(flag, value)| {
-                    std::iter::once((*flag).to_owned())
-                        .chain(value.iter().map(|value| windows_argument(value)))
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!(
-                "Start-Process curl.exe -NoNewWindow -Wait -ArgumentList {}",
-                powershell_quote(&native)
-            )
-        }
-    }
-}
-
-fn powershell_quote(value: &str) -> String {
-    let mut quoted = String::from("'");
-    for character in value.chars() {
-        // PowerShell also treats typographic single quotes as quote delimiters.
-        if matches!(character, '\'' | '\u{2018}' | '\u{2019}') {
-            quoted.push(character);
-        }
-        quoted.push(character);
-    }
-    quoted.push('\'');
-    quoted
-}
-
-fn windows_argument(value: &str) -> String {
-    // Invert the Windows C runtime argv parser: double backslashes before
-    // quotes and before the closing delimiter, leaving other backslashes literal.
-    let mut quoted = String::from("\"");
-    let mut backslashes = 0;
-    for character in value.chars() {
-        if character == '\\' {
-            backslashes += 1;
-            continue;
-        }
-        if character == '\"' {
-            quoted.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
-        } else {
-            quoted.extend(std::iter::repeat_n('\\', backslashes));
-        }
-        quoted.push(character);
-        backslashes = 0;
-    }
-    quoted.extend(std::iter::repeat_n('\\', backslashes * 2));
-    quoted.push('\"');
-    quoted
+fn curl_argument(command: &mut String, flag: &str, value: &str) {
+    command.push(' ');
+    command.push_str(flag);
+    command.push_str(" '");
+    command.push_str(&value.replace('\'', "'\\''"));
+    command.push('\'');
 }
 
 fn curl_form_quote(value: &str) -> String {
@@ -628,49 +594,4 @@ fn strip_json_comments(source: &str) -> String {
     }
 
     stripped
-}
-
-#[cfg(test)]
-mod curl_tests {
-    use super::{format_curl_command, powershell_quote, windows_argument};
-    use crate::CurlShell;
-
-    #[test]
-    fn windows_native_arguments_preserve_quotes_and_backslashes() {
-        for (value, expected) in [
-            ("", r#""""#),
-            ("plain value", r#""plain value""#),
-            (r#"a"b"#, r#""a\"b""#),
-            (r#"a\"b"#, r#""a\\\"b""#),
-            (r"C:\with space\", r#""C:\with space\\""#),
-            ("\"", r#""\"""#),
-        ] {
-            assert_eq!(windows_argument(value), expected);
-        }
-    }
-
-    #[test]
-    fn powershell_output_uses_literal_arguments_and_curl_exe() {
-        let arguments = vec![
-            ("--globoff", None),
-            ("--header", Some("X-Test: it's %PATH% & $(literal)".into())),
-            ("--data-raw", Some(r#"{"text":"literal"}"#.into())),
-        ];
-        assert_eq!(
-            format_curl_command(&arguments, CurlShell::WindowsPowerShell),
-            r#"Start-Process curl.exe -NoNewWindow -Wait -ArgumentList '--globoff --header "X-Test: it''s %PATH% & $(literal)" --data-raw "{\"text\":\"literal\"}"'"#
-        );
-        assert_eq!(
-            powershell_quote("‘left’ and 'right'"),
-            "'‘‘left’’ and ''right'''"
-        );
-        assert_eq!(
-            CurlShell::native(),
-            if cfg!(windows) {
-                CurlShell::WindowsPowerShell
-            } else {
-                CurlShell::Posix
-            }
-        );
-    }
 }
