@@ -555,8 +555,8 @@ async fn failures_without_secrets_keep_their_diagnostics() {
     );
 }
 
-#[tokio::test]
-async fn curl_export_resolves_plain_variables_but_keeps_secret_references() {
+#[test]
+fn curl_export_resolves_plain_variables_but_keeps_secret_references() {
     let mut environments = environments();
     environments[0]
         .variables
@@ -569,7 +569,6 @@ async fn curl_export_resolves_plain_variables_but_keeps_secret_references() {
         &HttpEngine::new().unwrap(),
         &ExecutionOptions::default(),
     )
-    .await
     .unwrap();
     assert!(command.contains("https://example.com/current-draft"));
     assert!(command.contains("authorization: {{authorization}}"));
@@ -577,8 +576,8 @@ async fn curl_export_resolves_plain_variables_but_keeps_secret_references() {
     assert!(!command.contains("{{host}}"));
 }
 
-#[tokio::test]
-async fn curl_export_reports_resolution_and_protocol_errors() {
+#[test]
+fn curl_export_reports_resolution_and_protocol_errors() {
     let engine = HttpEngine::new().unwrap();
     let request = get("https://example.com");
     let bad_environment = RequestResolution {
@@ -592,7 +591,6 @@ async fn curl_export_reports_resolution_and_protocol_errors() {
             &engine,
             &ExecutionOptions::default()
         )
-        .await
         .is_err()
     );
     let mut graphql = request;
@@ -604,14 +602,13 @@ async fn curl_export_reports_resolution_and_protocol_errors() {
             &engine,
             &ExecutionOptions::default()
         )
-        .await
         .unwrap_err()
         .contains("only for HTTP")
     );
 }
 
-#[tokio::test]
-async fn curl_export_keeps_secret_placeholders_in_url_parameters_and_all_bodies() {
+#[test]
+fn curl_export_keeps_secret_placeholders_in_url_parameters_and_all_bodies() {
     use probe_core::{
         Body, FormField, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBody,
         RawBodyKind, RequestBody, RequestKind,
@@ -674,7 +671,6 @@ async fn curl_export_keeps_secret_placeholders_in_url_parameters_and_all_bodies(
             &engine,
             &ExecutionOptions::default(),
         )
-        .await
         .unwrap();
         assert!(command.contains("https://{{SecretHost}}/{{secret}}/{{secret}}?original={{secret}}&encoded=%7B%7Bsecret%7D%7D&{{secret}}=prefix+{{secret}}%2Btail"), "{command}");
         // This body must remain a template even when invocation overrides contain real secrets.

@@ -389,8 +389,7 @@ impl ExecutionService {
                     ..RequestResolution::default()
                 };
                 let result =
-                    probe_application::copy_as_curl(&input.request, &resolution, &engine, &options)
-                        .await;
+                    probe_application::copy_as_curl(&input.request, &resolution, &engine, &options);
                 let _ = sender.send(result);
             });
         receiver

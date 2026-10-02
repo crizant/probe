@@ -456,8 +456,8 @@ async fn follows_or_returns_redirects_according_to_request_settings() {
 #[path = "execution/response.rs"]
 mod response;
 
-#[tokio::test]
-async fn curl_export_preserves_enabled_fields_auth_body_and_shell_literals() {
+#[test]
+fn curl_export_preserves_enabled_fields_auth_body_and_shell_literals() {
     let engine = HttpEngine::new().unwrap();
     let mut request = request("POST", "https://example.com/:id?existing=yes".into());
     request.path_parameters = vec![
@@ -511,7 +511,6 @@ async fn curl_export_preserves_enabled_fields_auth_body_and_shell_literals() {
     })));
     let command = engine
         .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
-        .await
         .unwrap();
     assert!(command.contains("--request 'POST'"));
     assert!(command.contains("--url 'https://example.com/42?existing=yes&q=a+%26+b'"));
@@ -545,8 +544,8 @@ async fn curl_export_preserves_enabled_fields_auth_body_and_shell_literals() {
     }
 }
 
-#[tokio::test]
-async fn curl_export_encodes_forms_and_references_files_without_reading_them() {
+#[test]
+fn curl_export_encodes_forms_and_references_files_without_reading_them() {
     let engine = HttpEngine::new().unwrap();
     let mut request = request("PUT", "https://example.com".into());
     request.settings.follow_redirects = Some(false);
@@ -561,7 +560,6 @@ async fn curl_export_encodes_forms_and_references_files_without_reading_them() {
             &request.clone().into_http().unwrap(),
             &ExecutionOptions::default(),
         )
-        .await
         .unwrap();
     assert!(command.contains("--data-raw 'value=a+%26+b'"));
     assert!(!command.contains("--location"));
@@ -577,7 +575,6 @@ async fn curl_export_encodes_forms_and_references_files_without_reading_them() {
     }])));
     let command = engine
         .curl_command(&request.clone().into_http().unwrap(), &options)
-        .await
         .unwrap();
     assert!(command.contains(&format!(
             "--data-binary '@{}'",
@@ -614,7 +611,6 @@ async fn curl_export_encodes_forms_and_references_files_without_reading_them() {
     ])));
     let command = engine
         .curl_command(&request.into_http().unwrap(), &options)
-        .await
         .unwrap();
     assert!(command.contains("text=\"@literal;value\""));
     assert!(command.contains("missing-one.txt"));
@@ -623,8 +619,8 @@ async fn curl_export_encodes_forms_and_references_files_without_reading_them() {
     assert!(!command.contains("ignored"));
 }
 
-#[tokio::test]
-async fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
+#[test]
+fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
     let engine = HttpEngine::new().unwrap();
     let options = ExecutionOptions::default();
     let mut request = request("PATCH", "https://example.com".into());
@@ -652,7 +648,6 @@ async fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
     })));
     let command = engine
         .curl_command(&request.clone().into_http().unwrap(), &options)
-        .await
         .unwrap();
     assert!(command.contains("--user '{{username}}:{{password}}'"));
     assert!(!command.contains("authorization:"));
@@ -667,22 +662,17 @@ async fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
     request.kind = http_body(RequestBody::Single(Body::File(vec![file.clone()])));
     let command = engine
         .curl_command(&request.clone().into_http().unwrap(), &options)
-        .await
         .unwrap();
     assert!(command.contains("content-type: application/custom"));
     assert!(!command.contains("application/octet-stream"));
     request.kind = http_body(RequestBody::Single(Body::File(vec![])));
     assert!(matches!(
-        engine
-            .curl_command(&request.clone().into_http().unwrap(), &options,)
-            .await,
+        engine.curl_command(&request.clone().into_http().unwrap(), &options),
         Err(probe_http::HttpError::InvalidBodySelection(_))
     ));
     request.kind = http_body(RequestBody::Single(Body::File(vec![file.clone(), file])));
     assert!(matches!(
-        engine
-            .curl_command(&request.clone().into_http().unwrap(), &options,)
-            .await,
+        engine.curl_command(&request.clone().into_http().unwrap(), &options),
         Err(probe_http::HttpError::InvalidBodySelection(_))
     ));
     request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
@@ -693,19 +683,17 @@ async fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
         disabled: false,
     }])));
     assert!(matches!(
-        engine
-            .curl_command(&request.into_http().unwrap(), &options,)
-            .await,
+        engine.curl_command(&request.into_http().unwrap(), &options),
         Err(probe_http::HttpError::InvalidBody(_))
     ));
 }
 
-#[tokio::test]
-async fn curl_export_preserves_templates_without_decoding_real_url_escapes() {
+#[test]
+fn curl_export_preserves_templates_without_decoding_real_url_escapes() {
     let engine = HttpEngine::new().unwrap();
     let mut request = request(
         "POST",
-        "https://{{SecretHost}}/{{secret}}/:id?encoded=%7B%7Bsecret%7D%7D".into(),
+        "https://{{SecretHost}}/hello é<>\"`{}!~\u{7f}/{{secret}}/:id?encoded=%7B%7Bsecret%7D%7D&literal=雪 space#résumé {{secret}}".into(),
     );
     request.path_parameters = vec![QueryParameter {
         name: "id".into(),
@@ -724,14 +712,17 @@ async fn curl_export_preserves_templates_without_decoding_real_url_escapes() {
     }])));
     let command = engine
         .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
-        .await
         .unwrap();
-    assert!(command.contains("https://{{SecretHost}}/{{secret}}/~%2A%20%2F%C3%A9{{secret}}{{other}}%25?encoded=%7B%7Bsecret%7D%7D&{{secret}}=%7E*+%2F%C3%A9{{secret}}{{other}}%2B%25"), "{command}");
+    assert!(command.contains("https://{{SecretHost}}/hello%20%C3%A9%3C%3E%22%60%7B%7D!~%7F/{{secret}}/~%2A%20%2F%C3%A9{{secret}}{{other}}%25?encoded=%7B%7Bsecret%7D%7D&literal=%E9%9B%AA%20space&{{secret}}=%7E*+%2F%C3%A9{{secret}}{{other}}%2B%25"), "{command}");
     assert!(command.contains("--data-raw '{{secret}}=%7E*+%2F%C3%A9{{secret}}{{other}}%2B%25'"));
+    assert!(
+        command.contains("#r%C3%A9sum%C3%A9%20{{secret}}'"),
+        "{command}"
+    );
 }
 
-#[tokio::test]
-async fn curl_export_preserves_many_distinct_templates() {
+#[test]
+fn curl_export_preserves_many_distinct_templates() {
     let mut request = request("GET", "https://example.com".into());
     request.query_parameters = (0..12)
         .map(|index| QueryParameter {
@@ -743,7 +734,6 @@ async fn curl_export_preserves_many_distinct_templates() {
     let command = HttpEngine::new()
         .unwrap()
         .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
-        .await
         .unwrap();
     for index in 0..12 {
         assert!(

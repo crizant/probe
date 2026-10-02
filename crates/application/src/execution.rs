@@ -274,7 +274,7 @@ impl SecretDisclosure {
 
 /// Exports the current request, resolving plain variables while retaining secret placeholders.
 /// No credential backend is consulted and no files are read or requests sent.
-pub async fn copy_as_curl(
+pub fn copy_as_curl(
     request: &Request,
     resolution: &RequestResolution<'_>,
     engine: &HttpEngine,
@@ -303,6 +303,5 @@ pub async fn copy_as_curl(
     let prepared = request.into_http().map_err(|error| error.to_string())?;
     engine
         .curl_command(&prepared, options)
-        .await
         .map_err(|error| error.to_string())
 }

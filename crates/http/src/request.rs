@@ -147,7 +147,29 @@ fn curl_url(request: &Request) -> Result<String, HttpError> {
         url.push_str(&fragment);
     }
     if url.contains("{{") {
-        return Ok(url);
+        use std::fmt::Write as _;
+        let mut encoded = String::with_capacity(url.len());
+        // Preserve templates and URL delimiters; encode only unsafe literal bytes.
+        for part in url.split_inclusive("}}") {
+            let start = if part.ends_with("}}") {
+                part.find("{{")
+            } else {
+                None
+            }
+            .unwrap_or(part.len());
+            let (literal, template) = part.split_at(start);
+            for byte in literal.bytes() {
+                if !(b'!'..=b'~').contains(&byte)
+                    || matches!(byte, b'"' | b'<' | b'>' | b'`' | b'{' | b'}')
+                {
+                    let _ = write!(encoded, "%{byte:02X}");
+                } else {
+                    encoded.push(char::from(byte));
+                }
+            }
+            encoded.push_str(template);
+        }
+        return Ok(encoded);
     }
     reqwest::Url::parse(&url)
         .map(|url| url.to_string())

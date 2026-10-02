@@ -54,7 +54,7 @@ impl HttpEngine {
     }
 
     /// Exports a canonical POSIX-quoted cURL command without network or file I/O.
-    pub async fn curl_command(
+    pub fn curl_command(
         &self,
         request: &PreparedHttpRequest,
         options: &ExecutionOptions,
