@@ -333,23 +333,18 @@ mod tests {
         let directory = TestDirectory::new();
         let root = &directory.0;
         let temporary = root.join(".request.yaml.A2K5AL");
+        let reloads =
+            |kind| events_reload_workspace(&[Event::new(kind).add_path(temporary.clone())], root);
         fs::write(&temporary, "staging").unwrap();
-        let events = [
-            Event::new(EventKind::Create(CreateKind::Any)).add_path(temporary.clone()),
-            Event::new(EventKind::Modify(ModifyKind::Any)).add_path(temporary.clone()),
-            Event::new(EventKind::Modify(ModifyKind::Metadata(
-                MetadataKind::Permissions,
-            )))
-            .add_path(temporary.clone()),
+        let kinds = [
+            EventKind::Create(CreateKind::Any),
+            EventKind::Modify(ModifyKind::Any),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions)),
         ];
-        for event in &events {
-            assert!(!events_reload_workspace(std::slice::from_ref(event), root));
+        for kind in kinds {
+            assert!(!reloads(kind), "staging file: {kind:?}");
         }
-        let removal = Event::new(EventKind::Remove(RemoveKind::Any)).add_path(temporary.clone());
-        assert!(events_reload_workspace(
-            std::slice::from_ref(&removal),
-            root
-        ));
+        assert!(reloads(EventKind::Remove(RemoveKind::Any)));
 
         fs::remove_file(&temporary).unwrap();
         fs::create_dir(&temporary).unwrap();
@@ -358,22 +353,16 @@ mod tests {
             include_str!("../../../tests/fixtures/opencollection/unbundled/users/folder.yml"),
         )
         .unwrap();
-        for event in &events {
-            assert!(events_reload_workspace(std::slice::from_ref(event), root));
+        for kind in kinds {
+            assert!(reloads(kind), "directory: {kind:?}");
         }
-        assert!(events_reload_workspace(
-            &[Event::new(EventKind::Create(CreateKind::Folder)).add_path(temporary.clone())],
-            root,
-        ));
+        assert!(reloads(EventKind::Create(CreateKind::Folder)));
         fs::remove_dir_all(&temporary).unwrap();
-        for event in &events {
-            assert!(events_reload_workspace(std::slice::from_ref(event), root));
+        for kind in kinds {
+            assert!(reloads(kind), "missing path: {kind:?}");
         }
-        assert!(events_reload_workspace(
-            &[Event::new(EventKind::Remove(RemoveKind::Folder)).add_path(temporary)],
-            root,
-        ));
-        assert!(events_reload_workspace(&[removal], root));
+        assert!(reloads(EventKind::Remove(RemoveKind::Folder)));
+        assert!(reloads(EventKind::Remove(RemoveKind::Any)));
     }
 
     #[test]
