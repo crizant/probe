@@ -51,7 +51,7 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn request_editor_scrolls_headers_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
+fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
         ProbeApp::new(window, cx)
@@ -74,6 +74,11 @@ fn request_editor_scrolls_headers_when_the_pointer_is_over_a_field(cx: &mut Test
                             value: format!("value-{index}"),
                             disabled: false,
                         });
+                        request.query_parameters.push(QueryParameter {
+                            name: format!("query-{index}"),
+                            value: format!("value-{index}"),
+                            disabled: false,
+                        });
                     }
                 },
                 cx,
@@ -83,26 +88,57 @@ fn request_editor_scrolls_headers_when_the_pointer_is_over_a_field(cx: &mut Test
     cx.run_until_parked();
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let field = visual
-        .debug_bounds("header-name-field")
-        .expect("the first header name field should render");
-    let before = window
-        .update(cx, |view, _, _| view.request_section_scroll.offset().y)
-        .unwrap();
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(4.0), px(-160.0))),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    visual.run_until_parked();
-    let after = window
-        .update(cx, |view, _, _| view.request_section_scroll.offset().y)
-        .unwrap();
-    assert!(
-        after < before,
-        "wheeling over a header field should scroll the section, before={before:?} after={after:?}"
-    );
+    for (section, selector) in [
+        (EditorSection::Headers, "header-name-field"),
+        (EditorSection::Query, "query-name-row"),
+    ] {
+        window
+            .update(cx, |view, _, cx| {
+                let key = view.shell.active_tab().unwrap();
+                view.request_editor.set_section(key, section);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let field = visual.debug_bounds(selector).unwrap();
+        // A point within the name field, also when the selector covers its row.
+        let position = field.origin + point(field.size.width / 4.0, field.size.height / 2.0);
+        for tick in 0..48 {
+            let delta_y = if tick >= 24 && tick % 2 == 0 {
+                px(8.0)
+            } else {
+                px(-8.0)
+            };
+            let before = window
+                .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+                .unwrap();
+            visual.simulate_event(gpui::ScrollWheelEvent {
+                position,
+                delta: gpui::ScrollDelta::Pixels(if tick % 3 == 0 {
+                    point(px(0.0), delta_y)
+                } else {
+                    point(px(2.0), delta_y)
+                }),
+                modifiers: Modifiers::default(),
+                touch_phase: if tick == 0 {
+                    gpui::TouchPhase::Started
+                } else {
+                    gpui::TouchPhase::Moved
+                },
+            });
+            let after = window
+                .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+                .unwrap();
+            assert_eq!(
+                after,
+                before + delta_y,
+                "scrolling {section:?}, tick {tick}"
+            );
+            if tick % 4 == 3 {
+                visual.run_until_parked();
+            }
+        }
+    }
 }
 
 #[gpui::test]

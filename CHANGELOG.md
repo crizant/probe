@@ -4,6 +4,12 @@ User-facing changes in Probe, newest release first. This changelog follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Release dates use Australia/Brisbane time (UTC+10).
 
+## [Unreleased]
+
+### Fixed
+
+- Avoid unnecessary text measurements when scrolling lists over single-line fields.
+
 ## [0.9.3] - 2026-09-30
 
 ### Fixed
