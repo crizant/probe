@@ -8,6 +8,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Avoid reloading collections for temporary files created while saving requests.
 - Keep the focused Environment Manager variable field active when scrolling it out of view and back.
 - Avoid unnecessary text measurements when scrolling lists over single-line fields.
 

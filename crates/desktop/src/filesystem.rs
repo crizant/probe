@@ -8,7 +8,7 @@ use std::sync::mpsc;
 
 use notify::{
     Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
-    event::{AccessKind, AccessMode, ModifyKind, RenameMode},
+    event::{AccessKind, AccessMode, CreateKind, ModifyKind, RemoveKind, RenameMode},
 };
 
 pub(crate) const WATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -91,7 +91,37 @@ pub(crate) fn event_affects_workspace(event: &Event, workspace_path: &Path) -> b
 /// those events reads the file again and queues the same events, so the
 /// desktop refreshes continuously. A close-after-write still reloads, because
 /// some editors report a save only that way.
-fn event_changes_workspace_content(event: &Event) -> bool {
+fn event_changes_workspace_content(event: &Event, workspace_path: &Path) -> bool {
+    // atomic-write-file stages `.request.yml.XXXXXX` beside the destination.
+    // Creation/metadata can arrive more than one debounce before commit. These
+    // files are not YAML inputs; only the destination replacement invalidates
+    // the collection. Windows uses Any for creation and modification; metadata
+    // events can also describe directories. Only suppress these when the path
+    // identifies a file. Missing/uncertain paths, renames and rescans still reload.
+    if !event.need_rescan()
+        && matches!(
+            event.kind,
+            EventKind::Create(CreateKind::File)
+                | EventKind::Create(CreateKind::Any)
+                | EventKind::Remove(RemoveKind::File)
+                | EventKind::Modify(ModifyKind::Any)
+                | EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Metadata(_))
+                | EventKind::Access(AccessKind::Close(AccessMode::Write))
+        )
+        && !event.paths.is_empty()
+        && event.paths.iter().all(|path| {
+            // A bundled workspace can have any filename, including this shape.
+            path.file_name() != workspace_path.file_name()
+                && is_atomic_yaml_temporary(path)
+                && (!matches!(
+                    event.kind,
+                    EventKind::Create(CreateKind::Any)
+                        | EventKind::Modify(ModifyKind::Any | ModifyKind::Metadata(_))
+                ) || path.is_file())
+        })
+    {
+        return false;
+    }
     match event.kind {
         EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
         EventKind::Access(_) => false,
@@ -99,9 +129,30 @@ fn event_changes_workspace_content(event: &Event) -> bool {
     }
 }
 
+fn is_atomic_yaml_temporary(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some((destination, suffix)) = name
+        .strip_prefix('.')
+        .and_then(|name| name.rsplit_once('.'))
+    else {
+        return false;
+    };
+    matches!(
+        Path::new(destination)
+            .extension()
+            .and_then(|ext| ext.to_str()),
+        Some("yml" | "yaml")
+    ) && suffix.len() == 6
+        && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+/// Classifies filesystem hints using current path types; call off the UI thread.
 pub(crate) fn events_reload_workspace(events: &[Event], workspace_path: &Path) -> bool {
     events.iter().any(|event| {
-        event_affects_workspace(event, workspace_path) && event_changes_workspace_content(event)
+        event_affects_workspace(event, workspace_path)
+            && event_changes_workspace_content(event, workspace_path)
     })
 }
 
@@ -140,14 +191,42 @@ fn selector(root: &Path, path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     use notify::{
         Event, EventKind,
-        event::{AccessKind, AccessMode, ModifyKind, RenameMode},
+        event::{
+            AccessKind, AccessMode, CreateKind, DataChange, Flag, MetadataKind, ModifyKind,
+            RemoveKind, RenameMode,
+        },
     };
 
     use super::{drain_watch_events, events_reload_workspace, rename_hints};
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "probe-watch-filter-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
 
     #[test]
     fn extracts_repository_selectors_from_paired_rename_events() {
@@ -200,6 +279,126 @@ mod tests {
         assert!(events_reload_workspace(&[close_write], path));
         assert!(events_reload_workspace(&[modify], path));
         assert!(!events_reload_workspace(&[unrelated_write], path));
+    }
+
+    #[test]
+    fn atomic_request_save_only_reloads_at_commit_across_separate_batches() {
+        let directory = TestDirectory::new();
+        let root = directory.0.clone();
+        let temporary = root.join(".request.yml.A2K5AL");
+        let destination = root.join("request.yml");
+        fs::write(&temporary, "staging").unwrap();
+        // FSEvents delivers staging creation and metadata before the rename.
+        let staging = [
+            Event::new(EventKind::Create(CreateKind::File)).add_path(temporary.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Metadata(
+                MetadataKind::Ownership,
+            )))
+            .add_path(temporary.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Metadata(
+                MetadataKind::Extended,
+            )))
+            .add_path(temporary.clone()),
+            // Other backends also report staging writes and write-close.
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                .add_path(temporary.clone()),
+            Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)))
+                .add_path(temporary.clone()),
+        ];
+        assert!(!events_reload_workspace(&staging, &root));
+        // Check while staging still exists: without the external edit this
+        // batch must be ignored, so missing-path metadata cannot mask a failure.
+        let mut mixed = staging.to_vec();
+        mixed.push(
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                .add_path(destination.clone()),
+        );
+        assert!(events_reload_workspace(&mixed, &root));
+        let commit = [
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+                .add_path(temporary.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+                .add_path(destination.clone()),
+        ];
+        assert!(events_reload_workspace(&commit, &root));
+        fs::remove_file(&temporary).unwrap();
+        assert!(!events_reload_workspace(
+            &[Event::new(EventKind::Remove(RemoveKind::File)).add_path(temporary)],
+            &root,
+        ));
+    }
+
+    #[test]
+    fn ambiguous_staging_and_metadata_events_preserve_directories_and_unknown_paths() {
+        let directory = TestDirectory::new();
+        let root = &directory.0;
+        let temporary = root.join(".request.yaml.A2K5AL");
+        let reloads =
+            |kind| events_reload_workspace(&[Event::new(kind).add_path(temporary.clone())], root);
+        fs::write(&temporary, "staging").unwrap();
+        let kinds = [
+            EventKind::Create(CreateKind::Any),
+            EventKind::Modify(ModifyKind::Any),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions)),
+        ];
+        for kind in kinds {
+            assert!(!reloads(kind), "staging file: {kind:?}");
+        }
+        assert!(reloads(EventKind::Remove(RemoveKind::Any)));
+
+        fs::remove_file(&temporary).unwrap();
+        fs::create_dir(&temporary).unwrap();
+        fs::write(
+            temporary.join("folder.yml"),
+            include_str!("../../../tests/fixtures/opencollection/unbundled/users/folder.yml"),
+        )
+        .unwrap();
+        for kind in kinds {
+            assert!(reloads(kind), "directory: {kind:?}");
+        }
+        assert!(reloads(EventKind::Create(CreateKind::Folder)));
+        fs::remove_dir_all(&temporary).unwrap();
+        for kind in kinds {
+            assert!(reloads(kind), "missing path: {kind:?}");
+        }
+        assert!(reloads(EventKind::Remove(RemoveKind::Folder)));
+        assert!(reloads(EventKind::Remove(RemoveKind::Any)));
+    }
+
+    #[test]
+    fn temporary_filter_preserves_yaml_names_renames_and_rescans() {
+        let root = std::env::temp_dir();
+        for name in [
+            "request.yml",
+            ".request.yml",
+            ".request.yml.A2K5AL.yaml",
+            ".request.yaml.A2K5AL.yml",
+        ] {
+            let event = Event::new(EventKind::Create(CreateKind::File)).add_path(root.join(name));
+            assert!(events_reload_workspace(&[event], &root));
+        }
+        let temporary = root.join(".request.yaml.A2K5AL");
+        assert!(events_reload_workspace(
+            &[Event::new(EventKind::Create(CreateKind::File)).add_path(temporary.clone())],
+            &temporary,
+        ));
+        for kind in [
+            EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+            EventKind::Any,
+        ] {
+            assert!(events_reload_workspace(
+                &[Event::new(kind).add_path(temporary.clone())],
+                &root
+            ));
+        }
+        let paired = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(root.join("request.yml"))
+            .add_path(temporary.clone());
+        assert!(events_reload_workspace(&[paired], &root));
+        let rescan = Event::new(EventKind::Create(CreateKind::File))
+            .add_path(temporary)
+            .set_flag(Flag::Rescan);
+        assert!(events_reload_workspace(&[rescan], &root));
     }
 
     #[test]
