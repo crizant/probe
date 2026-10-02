@@ -158,6 +158,54 @@ impl EnvironmentWorkspace {
         cx.run_until_parked();
     }
 
+    fn add_manager_variables(&self, cx: &mut TestAppContext, prefix: &str, count: usize) {
+        self.update(cx, |view, _, cx| {
+            view.apply_environment_manager_draft(cx, |dialog| {
+                for index in 0..count {
+                    dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                        name: Some(format!("{prefix}-{index}")),
+                        value: Some(VariableValueSet::Single(VariableValue::String(format!(
+                            "value-{index}"
+                        )))),
+                        disabled: false,
+                    }));
+                }
+            });
+        });
+    }
+
+    fn scroll_manager_to(
+        &self,
+        cx: &mut TestAppContext,
+        index: usize,
+        strategy: gpui::ScrollStrategy,
+    ) {
+        self.update(cx, |view, _, cx| {
+            view.environment_variables_scroll
+                .scroll_to_item_strict(index, strategy);
+            cx.notify();
+        });
+    }
+
+    fn assert_manager_field_focus(
+        &self,
+        cx: &mut TestAppContext,
+        focus: &gpui::FocusHandle,
+        controller: gpui::EntityId,
+    ) {
+        self.update(cx, |view, window, cx| {
+            assert_eq!(window.focused(cx).as_ref(), Some(focus));
+            let active = view
+                .environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .active_field
+                .as_ref()
+                .expect("focused field should retain its controller");
+            assert_eq!(active.2.entity_id(), controller);
+        });
+    }
+
     fn credential(&self, environment: &str, name: &str) -> CredentialId {
         CredentialId::for_workspace(&self.path, environment, name).unwrap()
     }

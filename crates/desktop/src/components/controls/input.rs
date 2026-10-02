@@ -103,18 +103,24 @@ impl<'a> ResponseBodyInputOptions<'a> {
 }
 
 pub(in crate::components) type VisibleRangeHandler = Rc<dyn Fn(Range<usize>, &mut App)>;
+type FieldFocusHandler = Rc<dyn Fn(Entity<FieldInput>, bool, &mut App)>;
 type FocusChangeHandler = Rc<dyn Fn(bool, &mut App)>;
 
-struct FieldInput {
+pub(crate) struct FieldInput {
     state: Entity<InputState>,
     on_change: Option<InputChangeHandler>,
     on_enter: Option<InputChangeHandler>,
     on_focus: Option<FocusChangeHandler>,
+    on_field_focus: Option<FieldFocusHandler>,
     autofocused: bool,
     _subscription: Subscription,
 }
 
 impl FieldInput {
+    pub(crate) fn is_focused(&self, window: &Window, cx: &App) -> bool {
+        self.state.read(cx).focus_handle(cx).is_focused(window)
+    }
+
     fn on_event(
         this: &mut Self,
         input: &Entity<InputState>,
@@ -136,11 +142,21 @@ impl FieldInput {
                 }
             }
             InputEvent::Focus => {
+                if let Some(handler) = &this.on_field_focus {
+                    handler(cx.entity(), true, cx);
+                }
                 if let Some(on_focus) = &this.on_focus {
                     on_focus(true, cx);
                 }
             }
             InputEvent::Blur => {
+                // A virtualized editor leaves the dispatch tree without losing its focus ID.
+                if input.read(cx).focus_handle(cx).is_focused(window) {
+                    return;
+                }
+                if let Some(handler) = &this.on_field_focus {
+                    handler(cx.entity(), false, cx);
+                }
                 if let Some(on_focus) = &this.on_focus {
                     on_focus(false, cx);
                 }
@@ -168,6 +184,8 @@ pub(crate) struct ProbeTextInput {
     pub(in crate::components) on_focus: Option<FocusChangeHandler>,
     pub(in crate::components) autofocus: bool,
     pub(in crate::components) readonly: bool,
+    persistent_field: Option<Entity<FieldInput>>,
+    on_field_focus: Option<FieldFocusHandler>,
     pub(in crate::components) shared_input: Option<Entity<InputState>>,
     pub(in crate::components) flat: bool,
     pub(in crate::components) leading_icon: Option<gpui::Div>,
@@ -193,26 +211,31 @@ impl RenderOnce for ProbeTextInput {
         let state = if let Some(state) = self.shared_input.clone() {
             state
         } else {
-            let field = window.use_keyed_state(self.id.clone(), cx, |window, cx| {
-                let state = cx.new(|cx| {
-                    let mut state = InputState::new(window, cx).placeholder(placeholder.clone());
-                    state.set_editor_style(editor_paint_style(self.theme));
-                    state
-                });
-                let subscription = cx.subscribe_in(&state, window, FieldInput::on_event);
-                FieldInput {
-                    state,
-                    on_change: on_change.clone(),
-                    on_enter: on_enter.clone(),
-                    on_focus: None,
-                    autofocused: false,
-                    _subscription: subscription,
-                }
+            let field = self.persistent_field.clone().unwrap_or_else(|| {
+                window.use_keyed_state(self.id.clone(), cx, |window, cx| {
+                    let state = cx.new(|cx| {
+                        let mut state =
+                            InputState::new(window, cx).placeholder(placeholder.clone());
+                        state.set_editor_style(editor_paint_style(self.theme));
+                        state
+                    });
+                    let subscription = cx.subscribe_in(&state, window, FieldInput::on_event);
+                    FieldInput {
+                        state,
+                        on_change: on_change.clone(),
+                        on_enter: on_enter.clone(),
+                        on_focus: None,
+                        on_field_focus: None,
+                        autofocused: false,
+                        _subscription: subscription,
+                    }
+                })
             });
             field.update(cx, |field, _| {
                 field.on_change = self.on_change.clone();
                 field.on_enter = self.on_enter.clone();
                 field.on_focus = self.on_focus.clone();
+                field.on_field_focus = self.on_field_focus.clone();
             });
             if self.autofocus && !field.read(cx).autofocused {
                 field.update(cx, |field, _| field.autofocused = true);
@@ -376,6 +399,8 @@ pub(in crate::components) fn text_input_base(
         autofocus: false,
         readonly: false,
         shared_input: None,
+        persistent_field: None,
+        on_field_focus: None,
         flat: false,
         leading_icon: None,
         content_gap: theme.metrics.spacing_1,
@@ -560,6 +585,17 @@ pub(crate) fn dialog_text_input(
 }
 
 impl ProbeTextInput {
+    /// Reuse the active controller while its virtualized row is absent.
+    pub(crate) fn persistent_field(
+        mut self,
+        field: Option<Entity<FieldInput>>,
+        on_focus: impl Fn(Entity<FieldInput>, bool, &mut App) + 'static,
+    ) -> Self {
+        self.persistent_field = field;
+        self.on_field_focus = Some(Rc::new(on_focus));
+        self
+    }
+
     pub(crate) fn disabled(mut self, disabled: bool) -> Self {
         self.readonly = disabled;
         self.autofocus &= !disabled;
