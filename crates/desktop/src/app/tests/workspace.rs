@@ -3103,3 +3103,69 @@ fn restored_active_tab_highlights_matching_sidebar_request(cx: &mut TestAppConte
         .debug_bounds("request-tree-label")
         .expect("active sidebar request label should render");
 }
+
+#[gpui::test]
+fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_bundled_fixture("reload-scroll-owner-multi");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+
+            let old = view.loaded_workspace.as_ref().unwrap();
+            let old_key = old.requests()[0].key();
+            view.select_request(old_key, cx);
+            view.request_editor
+                .set_section(old_key, EditorSection::Headers);
+
+            view.request_section_scroll_owner
+                .set(Some((old_key, EditorSection::Headers)));
+        })
+        .unwrap();
+
+    for iteration in 1..=3 {
+        window
+            .update(cx, |view, _, _| {
+                let old = view.loaded_workspace.as_ref().unwrap();
+                let old_key = view.shell.active_tab().unwrap();
+                let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+                let selector_remaps = old
+                    .requests()
+                    .iter()
+                    .map(|located| (located.selector().to_owned(), located.selector().to_owned()))
+                    .collect::<BTreeMap<_, _>>();
+                let key_remaps = request_key_remaps(old, &fresh, &selector_remaps);
+                let baselines = fresh
+                    .requests()
+                    .iter()
+                    .filter_map(|located| {
+                        fresh
+                            .workspace()
+                            .request(located.key())
+                            .cloned()
+                            .map(|request| (located.key(), request))
+                    })
+                    .collect::<Vec<_>>();
+                let new_key = key_remaps[&old_key];
+
+                view.install_reloaded_workspace(fresh, baselines, &key_remaps);
+
+                let scroll_owner = view.request_section_scroll_owner.get();
+                assert_eq!(
+                    scroll_owner,
+                    Some((new_key, EditorSection::Headers)),
+                    "scroll owner should be remapped after reload {iteration}"
+                );
+            })
+            .unwrap();
+    }
+
+    fs::remove_file(fixture).unwrap();
+}
