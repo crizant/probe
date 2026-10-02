@@ -262,24 +262,8 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
         let workspace = EnvironmentWorkspace::open(cx);
         workspace.open_manager(cx, "base");
         workspace.update(cx, |_, window, _| window.activate_window());
-        workspace.update(cx, |view, _, cx| {
-            view.apply_environment_manager_draft(cx, |dialog| {
-                for index in 0..80 {
-                    dialog.add_variable(EnvironmentVariable::Plain(Variable {
-                        name: Some(format!("focus-{index}")),
-                        value: Some(VariableValueSet::Single(VariableValue::String(format!(
-                            "value-{index}"
-                        )))),
-                        disabled: false,
-                    }));
-                }
-            });
-        });
-        workspace.update(cx, |view, _, cx| {
-            view.environment_variables_scroll
-                .scroll_to_item_strict(4, ScrollStrategy::Top);
-            cx.notify();
-        });
+        workspace.add_manager_variables(cx, "focus", 80);
+        workspace.scroll_manager_to(cx, 4, ScrollStrategy::Top);
         cx.run_until_parked();
         let mut visual = workspace.visual(cx);
         let selector = if field_kind == "name" {
@@ -290,61 +274,58 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
         let field = visual.debug_bounds(selector).unwrap();
         visual.simulate_click(field.center(), Modifiers::default());
         visual.run_until_parked();
-        let (focus, controller, row_id) = workspace.update(cx, |view, window, cx| {
-            let (id, _, field) = view
-                .environment_manager_dialog
-                .as_ref()
-                .unwrap()
-                .active_field
-                .as_ref()
+        if field_kind == "value" {
+            cx.simulate_input(workspace.window.into(), "before");
+            visual.run_until_parked();
+        }
+        let (focus, controller, row_id, value_before) = workspace.update(cx, |view, window, cx| {
+            let dialog = view.environment_manager_dialog.as_ref().unwrap();
+            let (id, _, field) = dialog.active_field.as_ref().unwrap();
+            let index = dialog
+                .variable_row_ids
+                .iter()
+                .position(|row| crate::app::dialogs::EnvironmentVariableRowId::Direct(*row) == *id)
                 .unwrap();
-            (window.focused(cx).unwrap(), field.entity_id(), id.clone())
+            let EnvironmentVariable::Plain(variable) = &dialog.draft.variables[index] else {
+                panic!("plain variable")
+            };
+            (
+                window.focused(cx).unwrap(),
+                field.entity_id(),
+                id.clone(),
+                environment_variable_text(variable).0,
+            )
         });
-        let scroll = |index, workspace: &EnvironmentWorkspace, cx: &mut TestAppContext| {
-            workspace.update(cx, |view, _, cx| {
-                view.environment_variables_scroll
-                    .scroll_to_item_strict(index, ScrollStrategy::Top);
-                cx.notify();
-            });
-        };
-        scroll(70, &workspace, cx);
+        workspace.scroll_manager_to(cx, 70, ScrollStrategy::Top);
         visual.run_until_parked();
         assert!(
             visual.debug_bounds(selector).is_none(),
             "active row must actually be virtualized away"
         );
-        workspace.update(cx, |view, window, cx| {
-            assert_eq!(window.focused(cx), Some(focus.clone()));
-            assert_eq!(
-                view.environment_manager_dialog
-                    .as_ref()
-                    .unwrap()
-                    .active_field
-                    .as_ref()
-                    .unwrap()
-                    .2
-                    .entity_id(),
-                controller
-            );
+        workspace.assert_manager_field_focus(cx, &focus, controller);
+        workspace.update(cx, |view, _, cx| {
             // Remove a preceding row while the editor is offscreen. Its callback must follow the stable ID.
             view.apply_environment_manager_draft(cx, |dialog| dialog.remove_variable(0));
         });
         visual.run_until_parked();
-        scroll(0, &workspace, cx);
+        workspace.scroll_manager_to(cx, 0, ScrollStrategy::Top);
         visual.run_until_parked();
         visual.debug_bounds(selector).unwrap();
-        workspace.update(cx, |view, window, cx| {
-            assert_eq!(window.focused(cx), Some(focus.clone()));
+        workspace.assert_manager_field_focus(cx, &focus, controller);
+        workspace.update(cx, |view, _, _| {
+            let dialog = view.environment_manager_dialog.as_ref().unwrap();
+            let index = dialog
+                .variable_row_ids
+                .iter()
+                .position(|id| crate::app::dialogs::EnvironmentVariableRowId::Direct(*id) == row_id)
+                .unwrap();
+            let EnvironmentVariable::Plain(variable) = &dialog.draft.variables[index] else {
+                panic!("plain variable")
+            };
             assert_eq!(
-                view.environment_manager_dialog
-                    .as_ref()
-                    .unwrap()
-                    .active_field
-                    .as_ref()
-                    .unwrap()
-                    .2
-                    .entity_id(),
-                controller
+                environment_variable_text(variable).0,
+                value_before,
+                "scrolling must preserve an existing draft edit"
             );
         });
         cx.simulate_input(workspace.window.into(), "edited");
@@ -362,7 +343,8 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
             if field_kind == "name" {
                 assert!(variable.name.as_ref().unwrap().contains("edited"));
             } else {
-                assert!(environment_variable_text(variable).0.contains("edited"));
+                let value = environment_variable_text(variable).0;
+                assert!(value.contains("before") && value.contains("edited"));
             }
             let EnvironmentVariable::Plain(next) = &dialog.draft.variables[index + 1] else {
                 panic!("plain variable")
@@ -370,7 +352,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
             assert_eq!(next.name.as_deref(), Some("focus-1"));
             assert_eq!(environment_variable_text(next).0, "value-1");
         });
-        scroll(70, &workspace, cx);
+        workspace.scroll_manager_to(cx, 70, ScrollStrategy::Top);
         visual.run_until_parked();
         // The name may have changed, so check the value cell as the row's visibility marker.
         let updated_name = workspace.update(cx, |view, _, _| {
@@ -404,7 +386,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
             assert_ne!(field.entity_id(), controller);
             (window.focused(cx).unwrap(), id.clone(), field.downgrade())
         });
-        scroll(0, &workspace, cx);
+        workspace.scroll_manager_to(cx, 0, ScrollStrategy::Top);
         visual.run_until_parked();
         visual.debug_bounds(updated_selector).unwrap();
         workspace.update(cx, |view, window, cx| {
@@ -426,89 +408,105 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
             weak_field.upgrade().is_none(),
             "removed offscreen field must be released"
         );
-        let field = visual.debug_bounds(updated_selector).unwrap();
-        visual.simulate_click(field.center(), Modifiers::default());
-        visual.run_until_parked();
-        let blurred_field = workspace.update(cx, |view, _, _| {
+    }
+}
+
+#[gpui::test]
+fn environment_manager_releases_the_field_on_blur_environment_change_and_close(
+    cx: &mut TestAppContext,
+) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "base");
+    workspace.update(cx, |_, window, _| window.activate_window());
+    workspace.add_manager_variables(cx, "cleanup", 80);
+    cx.run_until_parked();
+    let mut visual = workspace.visual(cx);
+    let field = visual
+        .debug_bounds("environment-variable-value-host")
+        .unwrap();
+    visual.simulate_click(field.center(), Modifiers::default());
+    visual.run_until_parked();
+    let blurred_field = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .active_field
+            .as_ref()
+            .unwrap()
+            .2
+            .downgrade()
+    });
+    workspace.scroll_manager_to(cx, 70, ScrollStrategy::Top);
+    visual.run_until_parked();
+    workspace.update(cx, |view, window, cx| window.focus(&view.focus_handle, cx));
+    visual.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(
             view.environment_manager_dialog
                 .as_ref()
                 .unwrap()
                 .active_field
-                .as_ref()
-                .unwrap()
-                .2
-                .downgrade()
-        });
-        scroll(70, &workspace, cx);
-        visual.run_until_parked();
-        workspace.update(cx, |view, window, cx| window.focus(&view.focus_handle, cx));
-        visual.run_until_parked();
-        workspace.update(cx, |view, _, _| {
-            assert!(
-                view.environment_manager_dialog
-                    .as_ref()
-                    .unwrap()
-                    .active_field
-                    .is_none()
-            )
-        });
+                .is_none()
+        )
+    });
+    assert!(
+        blurred_field.upgrade().is_none(),
+        "ending an offscreen edit must release its controller"
+    );
+    workspace.scroll_manager_to(cx, 0, ScrollStrategy::Top);
+    visual.run_until_parked();
+    let field = visual
+        .debug_bounds("environment-variable-value-host")
+        .unwrap();
+    visual.simulate_click(field.center(), Modifiers::default());
+    visual.run_until_parked();
+    workspace.update(cx, |view, _, cx| {
         assert!(
-            blurred_field.upgrade().is_none(),
-            "ending an offscreen edit must release its controller"
-        );
-        scroll(0, &workspace, cx);
-        visual.run_until_parked();
-        let field = visual.debug_bounds(updated_selector).unwrap();
-        visual.simulate_click(field.center(), Modifiers::default());
-        visual.run_until_parked();
-        workspace.update(cx, |view, _, cx| {
-            assert!(
-                view.environment_manager_dialog
-                    .as_ref()
-                    .unwrap()
-                    .active_field
-                    .is_some()
-            );
-            // Discard the test draft so switching does not open a dirty-draft prompt.
-            let original = view
-                .loaded_workspace
+            view.environment_manager_dialog
                 .as_ref()
                 .unwrap()
-                .workspace()
-                .environments()
-                .iter()
-                .find(|environment| environment.name == "base")
+                .active_field
+                .is_some()
+        );
+        // Discard the test draft so switching does not open a dirty-draft prompt.
+        let original = view
+            .loaded_workspace
+            .as_ref()
+            .unwrap()
+            .workspace()
+            .environments()
+            .iter()
+            .find(|environment| environment.name == "base")
+            .unwrap()
+            .clone();
+        view.environment_manager_dialog.as_mut().unwrap().draft = original;
+        view.select_environment_manager_environment("development", cx);
+        assert!(
+            view.environment_manager_dialog
+                .as_ref()
                 .unwrap()
-                .clone();
-            view.environment_manager_dialog.as_mut().unwrap().draft = original;
-            view.select_environment_manager_environment("development", cx);
-            assert!(
-                view.environment_manager_dialog
-                    .as_ref()
-                    .unwrap()
-                    .active_field
-                    .is_none()
-            );
-        });
-        visual.run_until_parked();
-        let field = visual
-            .debug_bounds("environment-variable-value-host")
-            .unwrap();
-        visual.simulate_click(field.center(), Modifiers::default());
-        visual.run_until_parked();
-        workspace.update(cx, |view, window, cx| {
-            assert!(
-                view.environment_manager_dialog
-                    .as_ref()
-                    .unwrap()
-                    .active_field
-                    .is_some()
-            );
-            view.close_environment_manager_dialog(window, cx);
-            assert!(view.environment_manager_dialog.is_none());
-        });
-        visual.run_until_parked();
-    }
+                .active_field
+                .is_none()
+        );
+    });
+    visual.run_until_parked();
+    let field = visual
+        .debug_bounds("environment-variable-value-host")
+        .unwrap();
+    visual.simulate_click(field.center(), Modifiers::default());
+    visual.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .active_field
+                .is_some()
+        );
+        view.close_environment_manager_dialog(window, cx);
+        assert!(view.environment_manager_dialog.is_none());
+    });
+    visual.run_until_parked();
 }
 
 #[gpui::test]
@@ -517,20 +515,8 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
 ) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "development");
-    workspace.update(cx, |view, window, cx| {
-        window.activate_window();
-        view.apply_environment_manager_draft(cx, |dialog| {
-            for index in 0..80 {
-                dialog.add_variable(EnvironmentVariable::Plain(Variable {
-                    name: Some(format!("inherited-focus-{index}")),
-                    value: Some(VariableValueSet::Single(VariableValue::String(
-                        "filler".into(),
-                    ))),
-                    disabled: false,
-                }));
-            }
-        });
-    });
+    workspace.update(cx, |_, window, _| window.activate_window());
+    workspace.add_manager_variables(cx, "inherited-focus", 80);
     let inherited_index = workspace.update(cx, |view, _, _| {
         view.environment_manager_dialog
             .as_ref()
@@ -539,14 +525,7 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
             .variables
             .len()
     });
-    let scroll = |index, workspace: &EnvironmentWorkspace, cx: &mut TestAppContext| {
-        workspace.update(cx, |view, _, cx| {
-            view.environment_variables_scroll
-                .scroll_to_item_strict(index, ScrollStrategy::Top);
-            cx.notify();
-        });
-    };
-    scroll(inherited_index, &workspace, cx);
+    workspace.scroll_manager_to(cx, inherited_index, ScrollStrategy::Top);
     cx.run_until_parked();
     let mut visual = workspace.visual(cx);
     assert!(
@@ -571,7 +550,7 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
         assert!(matches!(&active.0, crate::app::dialogs::EnvironmentVariableRowId::Inherited { defined_in, name } if defined_in == "base" && name == "baseUrl"));
         (window.focused(cx).unwrap(), active.2.entity_id())
     });
-    scroll(0, &workspace, cx);
+    workspace.scroll_manager_to(cx, 0, ScrollStrategy::Top);
     visual.run_until_parked();
     assert!(
         visual
@@ -579,48 +558,23 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
             .is_none(),
         "inherited row must leave the rendered range"
     );
-    scroll(inherited_index, &workspace, cx);
+    workspace.scroll_manager_to(cx, inherited_index, ScrollStrategy::Top);
     visual.run_until_parked();
     visual
         .debug_bounds("environment-variable-value-baseUrl")
         .unwrap();
-    workspace.update(cx, |view, window, cx| {
-        assert_eq!(window.focused(cx), Some(focus.clone()));
-        assert_eq!(
-            view.environment_manager_dialog
-                .as_ref()
-                .unwrap()
-                .active_field
-                .as_ref()
-                .unwrap()
-                .2
-                .entity_id(),
-            controller
-        );
-    });
+    workspace.assert_manager_field_focus(cx, &focus, controller);
     cx.simulate_input(workspace.window.into(), "!");
     visual.run_until_parked();
     // The first edit changes the row's identity and makes its name directly editable.
     visual
         .debug_bounds("environment-variable-name-baseUrl")
         .unwrap();
-    workspace.update(cx, |view, window, cx| {
-        assert_eq!(window.focused(cx), Some(focus.clone()));
-        assert_eq!(
-            view.environment_manager_dialog
-                .as_ref()
-                .unwrap()
-                .active_field
-                .as_ref()
-                .unwrap()
-                .2
-                .entity_id(),
-            controller
-        );
-    });
+    workspace.assert_manager_field_focus(cx, &focus, controller);
     cx.simulate_input(workspace.window.into(), "continued");
     visual.run_until_parked();
-    let direct_index = workspace.update(cx, |view, window, cx| {
+    workspace.assert_manager_field_focus(cx, &focus, controller);
+    let direct_index = workspace.update(cx, |view, _, _| {
         let dialog = view.environment_manager_dialog.as_ref().unwrap();
         let matches: Vec<_> = dialog
             .draft
@@ -652,11 +606,7 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
             value.contains('!') && value.contains("continued"),
             "override value: {value}"
         );
-        assert_eq!(window.focused(cx), Some(focus.clone()));
-        assert_eq!(
-            dialog.active_field.as_ref().unwrap().2.entity_id(),
-            controller
-        );
+
         let parent = view
             .loaded_workspace
             .as_ref()
@@ -684,32 +634,19 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
         );
         matches[0].0
     });
-    scroll(0, &workspace, cx);
+    workspace.scroll_manager_to(cx, 0, ScrollStrategy::Top);
     visual.run_until_parked();
     assert!(
         visual
             .debug_bounds("environment-variable-value-baseUrl")
             .is_none()
     );
-    scroll(direct_index, &workspace, cx);
+    workspace.scroll_manager_to(cx, direct_index, ScrollStrategy::Top);
     visual.run_until_parked();
     visual
         .debug_bounds("environment-variable-value-baseUrl")
         .unwrap();
-    workspace.update(cx, |view, window, cx| {
-        assert_eq!(window.focused(cx), Some(focus));
-        assert_eq!(
-            view.environment_manager_dialog
-                .as_ref()
-                .unwrap()
-                .active_field
-                .as_ref()
-                .unwrap()
-                .2
-                .entity_id(),
-            controller
-        );
-    });
+    workspace.assert_manager_field_focus(cx, &focus, controller);
 }
 
 #[gpui::test]
@@ -855,53 +792,18 @@ fn environment_manager_scrolls_a_new_row_into_view(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn environment_manager_virtualizes_variables_and_preserves_row_identity(cx: &mut TestAppContext) {
+fn environment_manager_virtualizes_rows_and_resets_scroll_on_environment_change(
+    cx: &mut TestAppContext,
+) {
     let workspace = EnvironmentWorkspace::open(cx);
-    workspace.update(cx, |view, window, cx| {
-        view.select_environment(Some("base".to_owned()), cx);
-        view.open_environment_manager_dialog(window, cx);
-        view.apply_environment_manager_draft(cx, |dialog| {
-            for index in 0..500 {
-                dialog.add_variable(EnvironmentVariable::Plain(Variable {
-                    name: Some(format!("virtual-{index}")),
-                    value: Some(VariableValueSet::Single(VariableValue::String(format!(
-                        "value-{index}"
-                    )))),
-                    disabled: false,
-                }));
-            }
-        });
-    });
+    workspace.open_manager(cx, "base");
+    workspace.add_manager_variables(cx, "virtual", 500);
     cx.run_until_parked();
 
-    let plain_value = |view: &ProbeApp, name: &str| {
-        view.environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .draft
-            .variables
-            .iter()
-            .find_map(|variable| match variable {
-                EnvironmentVariable::Plain(variable) if variable.name.as_deref() == Some(name) => {
-                    Some(environment_variable_text(variable).0)
-                }
-                _ => None,
-            })
-            .unwrap()
-    };
-
     let mut visual = workspace.visual(cx);
-    let first_value = visual
+    visual
         .debug_bounds("environment-variable-value-virtual-0")
         .expect("first variable should render");
-    visual.simulate_click(
-        point(first_value.right() - px(8.0), first_value.center().y),
-        Modifiers::default(),
-    );
-    cx.simulate_input(workspace.window.into(), "draft");
-    visual.run_until_parked();
-    let first_draft = workspace.update(cx, |view, _, _| plain_value(view, "virtual-0"));
-    assert!(first_draft.contains("draft"));
     assert!(
         visual
             .debug_bounds("environment-variable-value-virtual-499")
@@ -945,39 +847,6 @@ fn environment_manager_virtualizes_variables_and_preserves_row_identity(cx: &mut
             .debug_bounds("environment-variable-value-virtual-0")
             .is_none()
     );
-
-    workspace.update(cx, |view, _, cx| {
-        let dialog = view.environment_manager_dialog.as_mut().unwrap();
-        let retained_id = dialog.variable_row_ids[2];
-        dialog.remove_variable(1);
-        assert_eq!(dialog.variable_row_ids[1], retained_id);
-        view.environment_variables_scroll
-            .scroll_to_item_strict(0, ScrollStrategy::Top);
-        cx.notify();
-    });
-    visual.run_until_parked();
-    let first_value = visual
-        .debug_bounds("environment-variable-value-virtual-0")
-        .expect("remaining first variable should render");
-    let retained_draft = workspace.update(cx, |view, _, _| plain_value(view, "virtual-0"));
-    assert_eq!(retained_draft, first_draft);
-    visual.simulate_click(
-        point(first_value.right() - px(8.0), first_value.center().y),
-        Modifiers::default(),
-    );
-    cx.simulate_input(workspace.window.into(), "more");
-    visual.run_until_parked();
-    workspace.update(cx, |view, _, _| {
-        let restored = plain_value(view, "virtual-0");
-        assert!(
-            restored.contains("draft") && restored.contains("more"),
-            "value after restoring virtualized row: {restored:?}"
-        );
-        assert_eq!(plain_value(view, "virtual-1"), "value-1");
-    });
-    visual
-        .debug_bounds("environment-variable-value-virtual-1")
-        .expect("remaining second variable should render");
 
     workspace.update(cx, |view, _, cx| {
         let original = view
