@@ -71,6 +71,8 @@ Do not report completion while a required check fails.
 
 ## Scope
 
+`CHANGELOG.md` is user-facing; include only changes meaningful to Probe users.
+
 Implement only the requested feature. Do not add cloud sync, accounts, telemetry,
 analytics, plugins, GraphQL, streaming protocols, Git provider APIs, or MCP without
 explicit scope. Avoid unrelated refactors, inspect source instead of guessing, and
