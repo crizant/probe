@@ -51,6 +51,153 @@ pub(crate) async fn build_request(
     Ok(builder)
 }
 
+/// Builds a POSIX-shell cURL command without reading files or sending a request.
+pub(crate) async fn curl_command(
+    client: &Client,
+    prepared: &PreparedHttpRequest,
+    options: &ExecutionOptions,
+) -> Result<String, HttpError> {
+    let body = selected_body(prepared.body())?;
+    let mut base = prepared.request().clone();
+    base.kind = probe_core::RequestKind::Http { body: None };
+    let base = base
+        .into_http()
+        .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
+    let mut builder = build_request(client, &base, options).await?;
+    if let Some(body @ (Body::Raw(_) | Body::FormUrlEncoded(_))) = body {
+        let has_content_type = request_headers(prepared.request())?.contains_key(CONTENT_TYPE);
+        builder = apply_body(builder, body, has_content_type, options).await?;
+    }
+    let built = builder
+        .build()
+        .map_err(|error| HttpError::InvalidRequest(error.to_string()))?;
+    let mut command = String::from("curl --globoff");
+    curl_argument(&mut command, "--request", built.method().as_str());
+    curl_argument(&mut command, "--url", built.url().as_str());
+    let settings = &prepared.request().settings;
+    if settings.follow_redirects != Some(false) {
+        command.push_str(" --location");
+        curl_argument(
+            &mut command,
+            "--max-redirs",
+            &settings.max_redirects.unwrap_or(10).to_string(),
+        );
+    }
+    if let Some(timeout) = settings.timeout.filter(|value| *value > Duration::ZERO) {
+        curl_argument(
+            &mut command,
+            "--max-time",
+            &timeout.as_secs_f64().to_string(),
+        );
+    }
+    let basic = prepared
+        .request()
+        .authentication
+        .as_ref()
+        .filter(|authentication| authentication.kind == AuthenticationKind::Basic);
+    if let Some(authentication) = basic {
+        curl_argument(
+            &mut command,
+            "--user",
+            &format!(
+                "{}:{}",
+                authentication_string(authentication, "username", "basic")?,
+                authentication_string(authentication, "password", "basic")?,
+            ),
+        );
+    }
+    for (name, value) in built.headers() {
+        if basic.is_some() && name == reqwest::header::AUTHORIZATION {
+            continue;
+        }
+        let value = value
+            .to_str()
+            .map_err(|_| HttpError::InvalidHeaderValue(name.to_string()))?;
+        curl_argument(&mut command, "--header", &format!("{name}: {value}"));
+    }
+    if let Some(bytes) = built.body().and_then(reqwest::Body::as_bytes) {
+        let data = std::str::from_utf8(bytes)
+            .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
+        // --data-raw keeps leading @ characters literal; newlines remain inside shell quotes.
+        curl_argument(&mut command, "--data-raw", data);
+    }
+    match body {
+        Some(Body::File(files)) => {
+            let mut selected = files.iter().filter(|file| file.selected);
+            let file = selected.next().ok_or_else(|| {
+                HttpError::InvalidBodySelection("file body has no selected file".into())
+            })?;
+            if selected.next().is_some() {
+                return Err(HttpError::InvalidBodySelection(
+                    "file body has multiple selected files".into(),
+                ));
+            }
+            if !built.headers().contains_key(CONTENT_TYPE) {
+                curl_argument(
+                    &mut command,
+                    "--header",
+                    &format!("content-type: {}", file.content_type),
+                );
+            }
+            curl_argument(
+                &mut command,
+                "--data-binary",
+                &format!("@{}", resolve_path(&file.file_path, options).display()),
+            );
+        }
+        Some(Body::Multipart(parts)) => {
+            for part in parts
+                .iter()
+                .filter(|part| is_enabled_and_named(part.disabled, &part.name))
+            {
+                let values: &[String] = match &part.value {
+                    MultipartValue::Single(value) => std::slice::from_ref(value),
+                    MultipartValue::Multiple(values) if part.kind == MultipartPartKind::File => {
+                        values
+                    }
+                    MultipartValue::Multiple(_) => {
+                        return Err(HttpError::InvalidBody(format!(
+                            "multipart text field '{}' must have one value",
+                            part.name
+                        )));
+                    }
+                };
+                for value in values {
+                    let name = &part.name;
+                    let value = match part.kind {
+                        MultipartPartKind::Text => curl_form_quote(value),
+                        MultipartPartKind::File => format!(
+                            "@{}",
+                            curl_form_quote(&resolve_path(value, options).to_string_lossy())
+                        ),
+                    };
+                    let mut field = format!("{name}={value}");
+                    if let Some(content_type) = &part.content_type {
+                        // Use the same MIME validation as HTTP execution.
+                        apply_part_content_type(Part::text(String::new()), part)?;
+                        field.push_str(&format!(";type={content_type}"));
+                    }
+                    curl_argument(&mut command, "--form", &field);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(command)
+}
+
+fn curl_argument(command: &mut String, flag: &str, value: &str) {
+    command.push(' ');
+    command.push_str(flag);
+    command.push_str(" '");
+    command.push_str(&value.replace('\'', "'\\''"));
+    command.push('\'');
+}
+
+fn curl_form_quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('\"', "\\\""))
+}
+
 fn is_enabled_and_named(disabled: bool, name: &str) -> bool {
     !disabled && !name.trim().is_empty()
 }

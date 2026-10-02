@@ -53,6 +53,15 @@ impl HttpEngine {
         })
     }
 
+    /// Exports a prepared request as a POSIX-shell cURL command without network or file I/O.
+    pub async fn curl_command(
+        &self,
+        request: &PreparedHttpRequest,
+        options: &ExecutionOptions,
+    ) -> Result<String, HttpError> {
+        crate::request::curl_command(&self.default_client, request, options).await
+    }
+
     /// Executes a request until completion.
     pub async fn execute(
         &self,

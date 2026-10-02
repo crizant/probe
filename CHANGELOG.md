@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Copy HTTP requests as cURL commands from the desktop Send dropdown. Plain environment variables are resolved; secret placeholders are retained.
+
 ### Fixed
 
 - Keep the focused Environment Manager variable field active when scrolling it out of view and back.

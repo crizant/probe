@@ -1,6 +1,70 @@
 use super::*;
 
 impl ProbeApp {
+    pub(super) fn copy_as_curl(&mut self, key: RequestKey, cx: &mut Context<Self>) {
+        self.transient.request_execution_menu_open = false;
+        cx.notify();
+        let Some(loaded) = self.loaded_workspace.as_ref() else {
+            return;
+        };
+        let Some(request) = loaded.workspace().request(key).cloned() else {
+            return;
+        };
+        if !matches!(request.kind, probe_core::RequestKind::Http { .. }) {
+            return;
+        }
+        let input = ExecutionInput {
+            request,
+            environments: loaded.workspace().environments().to_vec(),
+            environment: self.shell.selected_environment().map(str::to_owned),
+            credential_workspace: None,
+        };
+        let options = ExecutionOptions {
+            base_directory: self
+                .workspace_path
+                .as_deref()
+                .and_then(workspace_base_directory),
+            ..ExecutionOptions::default()
+        };
+        if self.execution_service.is_none() {
+            match ExecutionService::with_credentials(Arc::clone(&self.credential_store)) {
+                Ok(service) => self.execution_service = Some(service),
+                Err(error) => {
+                    self.show_toast(
+                        ToastIntent::Error,
+                        format!("Could not copy as cURL: {error}"),
+                        cx,
+                    );
+                    return;
+                }
+            }
+        }
+        let result = self
+            .execution_service
+            .as_ref()
+            .unwrap()
+            .copy_as_curl(input, options);
+        cx.spawn(async move |view, cx| {
+            let result = result
+                .await
+                .unwrap_or_else(|_| Err("request export ended without a result".into()));
+            let _ = view.update(cx, |view, cx| match result {
+                Ok(command) => {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(command));
+                    view.show_toast(ToastIntent::Success, "Request copied as cURL.", cx);
+                }
+                Err(error) => {
+                    view.show_toast(
+                        ToastIntent::Error,
+                        format!("Could not copy as cURL: {error}"),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn send_request(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         self.start_request(key, None, cx);
     }

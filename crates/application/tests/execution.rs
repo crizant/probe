@@ -554,3 +554,58 @@ async fn failures_without_secrets_keep_their_diagnostics() {
         matches!(error, HttpError::Transport(message) if message != SECRET_DIAGNOSTIC_WITHHELD)
     );
 }
+
+#[tokio::test]
+async fn curl_export_resolves_plain_variables_but_keeps_secret_references() {
+    let mut environments = environments();
+    environments[0]
+        .variables
+        .push(plain("host", "https://example.com"));
+    let mut request = secret_request("{{host}}");
+    request.url = Some("{{host}}/current-draft".into());
+    let command = probe_application::copy_as_curl(
+        &request,
+        &local(&environments),
+        &HttpEngine::new().unwrap(),
+        &ExecutionOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert!(command.contains("https://example.com/current-draft"));
+    assert!(command.contains("authorization: {{authorization}}"));
+    assert!(!command.contains(SECRET));
+    assert!(!command.contains("{{host}}"));
+}
+
+#[tokio::test]
+async fn curl_export_reports_resolution_and_protocol_errors() {
+    let engine = HttpEngine::new().unwrap();
+    let request = get("https://example.com");
+    let bad_environment = RequestResolution {
+        environment: Some("missing"),
+        ..RequestResolution::default()
+    };
+    assert!(
+        probe_application::copy_as_curl(
+            &request,
+            &bad_environment,
+            &engine,
+            &ExecutionOptions::default()
+        )
+        .await
+        .is_err()
+    );
+    let mut graphql = request;
+    graphql.kind = probe_core::RequestKind::Graphql { body: None };
+    assert!(
+        probe_application::copy_as_curl(
+            &graphql,
+            &RequestResolution::default(),
+            &engine,
+            &ExecutionOptions::default()
+        )
+        .await
+        .unwrap_err()
+        .contains("only for HTTP")
+    );
+}
