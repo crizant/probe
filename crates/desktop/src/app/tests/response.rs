@@ -124,7 +124,13 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
         cx.run_until_parked();
         if let Some(command) = cx
             .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
-            .filter(|text| text.starts_with("curl "))
+            .filter(|text| {
+                text.starts_with(if cfg!(windows) {
+                    "Start-Process curl.exe "
+                } else {
+                    "curl "
+                })
+            })
         {
             break command;
         }
@@ -135,9 +141,18 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
         );
         std::thread::sleep(Duration::from_millis(10));
     };
-    assert!(command.starts_with("curl "));
+    assert!(command.starts_with(if cfg!(windows) {
+        "Start-Process curl.exe "
+    } else {
+        "curl "
+    }));
     assert!(command.contains("https://example.com/current-draft"));
-    assert!(command.contains(&format!("--data-binary '@{}'", body_path.display())));
+    let body_argument = if cfg!(windows) {
+        format!("--data-binary \"@{}\"", body_path.display())
+    } else {
+        format!("--data-binary '@{}'", body_path.display())
+    };
+    assert!(command.contains(&body_argument));
     window
         .update(cx, |view, _, _| {
             assert!(!view.transient.request_execution_menu_open);

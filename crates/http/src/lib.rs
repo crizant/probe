@@ -28,3 +28,24 @@ pub struct ExecutionOptions {
     /// When absent, the complete large body is drained without being retained.
     pub response_cache: Option<ResponseCache>,
 }
+
+/// Shell syntax used by cURL exports.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CurlShell {
+    /// Single-quoted POSIX shell arguments for macOS and Linux.
+    Posix,
+    /// PowerShell invoking curl.exe with Windows native argument quoting.
+    WindowsPowerShell,
+}
+
+impl CurlShell {
+    /// The default shell format for the current operating system.
+    #[must_use]
+    pub const fn native() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::WindowsPowerShell
+        } else {
+            Self::Posix
+        }
+    }
+}

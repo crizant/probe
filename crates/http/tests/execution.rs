@@ -503,7 +503,11 @@ async fn curl_export_preserves_enabled_fields_auth_body_and_shell_literals() {
         data: "@it's\n$(literal)".into(),
     })));
     let command = engine
-        .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .curl_command_for_shell(
+            &request.into_http().unwrap(),
+            &ExecutionOptions::default(),
+            probe_http::CurlShell::Posix,
+        )
         .await
         .unwrap();
     assert!(command.contains("--request 'POST'"));
@@ -550,9 +554,10 @@ async fn curl_export_encodes_forms_and_references_files_without_reading_them() {
         disabled: false,
     }])));
     let command = engine
-        .curl_command(
+        .curl_command_for_shell(
             &request.clone().into_http().unwrap(),
             &ExecutionOptions::default(),
+            probe_http::CurlShell::Posix,
         )
         .await
         .unwrap();
@@ -569,7 +574,11 @@ async fn curl_export_encodes_forms_and_references_files_without_reading_them() {
         selected: true,
     }])));
     let command = engine
-        .curl_command(&request.clone().into_http().unwrap(), &options)
+        .curl_command_for_shell(
+            &request.clone().into_http().unwrap(),
+            &options,
+            probe_http::CurlShell::Posix,
+        )
         .await
         .unwrap();
     assert!(command.contains(&format!(
@@ -606,7 +615,11 @@ async fn curl_export_encodes_forms_and_references_files_without_reading_them() {
         },
     ])));
     let command = engine
-        .curl_command(&request.into_http().unwrap(), &options)
+        .curl_command_for_shell(
+            &request.into_http().unwrap(),
+            &options,
+            probe_http::CurlShell::Posix,
+        )
         .await
         .unwrap();
     assert!(command.contains("text=\"@literal;value\""));
@@ -644,7 +657,11 @@ async fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
         data: "{\"name\":\"value\" /*comment*/}".into(),
     })));
     let command = engine
-        .curl_command(&request.clone().into_http().unwrap(), &options)
+        .curl_command_for_shell(
+            &request.clone().into_http().unwrap(),
+            &options,
+            probe_http::CurlShell::Posix,
+        )
         .await
         .unwrap();
     assert!(command.contains("--user '{{username}}:{{password}}'"));
@@ -659,7 +676,11 @@ async fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
     };
     request.kind = http_body(RequestBody::Single(Body::File(vec![file.clone()])));
     let command = engine
-        .curl_command(&request.clone().into_http().unwrap(), &options)
+        .curl_command_for_shell(
+            &request.clone().into_http().unwrap(),
+            &options,
+            probe_http::CurlShell::Posix,
+        )
         .await
         .unwrap();
     assert!(command.contains("content-type: application/custom"));
@@ -667,14 +688,22 @@ async fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
     request.kind = http_body(RequestBody::Single(Body::File(vec![])));
     assert!(matches!(
         engine
-            .curl_command(&request.clone().into_http().unwrap(), &options)
+            .curl_command_for_shell(
+                &request.clone().into_http().unwrap(),
+                &options,
+                probe_http::CurlShell::Posix
+            )
             .await,
         Err(probe_http::HttpError::InvalidBodySelection(_))
     ));
     request.kind = http_body(RequestBody::Single(Body::File(vec![file.clone(), file])));
     assert!(matches!(
         engine
-            .curl_command(&request.clone().into_http().unwrap(), &options)
+            .curl_command_for_shell(
+                &request.clone().into_http().unwrap(),
+                &options,
+                probe_http::CurlShell::Posix
+            )
             .await,
         Err(probe_http::HttpError::InvalidBodySelection(_))
     ));
@@ -687,8 +716,160 @@ async fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
     }])));
     assert!(matches!(
         engine
-            .curl_command(&request.into_http().unwrap(), &options)
+            .curl_command_for_shell(
+                &request.into_http().unwrap(),
+                &options,
+                probe_http::CurlShell::Posix
+            )
             .await,
         Err(probe_http::HttpError::InvalidBody(_))
     ));
+}
+
+#[tokio::test]
+async fn curl_export_windows_quotes_json_and_shell_metacharacters() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request("POST", "https://example.com/{{secret}}".into());
+    request.headers = vec![Header {
+        name: "X-Test".into(),
+        value: "it's %PATH% & $(literal)".into(),
+        disabled: false,
+    }];
+    request.kind = http_body(RequestBody::Single(Body::Raw(RawBody {
+        kind: RawBodyKind::Json,
+        data: r#"{"secret":"{{secret}}","path":"C:\\temp\\"}"#.into(),
+    })));
+    let command = engine
+        .curl_command_for_shell(
+            &request.into_http().unwrap(),
+            &ExecutionOptions::default(),
+            probe_http::CurlShell::WindowsPowerShell,
+        )
+        .await
+        .unwrap();
+    assert!(command.starts_with("Start-Process curl.exe -NoNewWindow -Wait -ArgumentList '"));
+    assert!(command.contains(r#"--url "https://example.com/{{secret}}""#));
+    assert!(command.contains(r#"--header "x-test: it''s %PATH% & $(literal)""#));
+    assert!(
+        command.contains(r#"--data-raw "{\"secret\":\"{{secret}}\",\"path\":\"C:\\temp\\\\\"}""#)
+    );
+    assert!(!command.contains("%7B"));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn curl_export_runs_in_windows_powershell_without_changing_arguments() {
+    let (url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
+    let mut request = request("POST", url);
+    let data = "{\"text\":\"it's $env:PATH %PATH% & | < > ! ^ `\",\"path\":\"C:\\\\temp\\\\\"}\n";
+    request.headers = vec![Header {
+        name: "X-Test".into(),
+        value: "it's %PATH% & $(literal)".into(),
+        disabled: false,
+    }];
+    request.kind = http_body(RequestBody::Single(Body::Raw(RawBody {
+        kind: RawBodyKind::Text,
+        data: data.into(),
+    })));
+    let command = HttpEngine::new()
+        .unwrap()
+        .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .await
+        .unwrap();
+    let process = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &command])
+            .output()
+    });
+    let (output, captured) = tokio::time::timeout(Duration::from_secs(20), async {
+        (
+            process.await.unwrap().unwrap(),
+            captured.await.unwrap().unwrap(),
+        )
+    })
+    .await
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(captured.header("X-Test"), Some("it's %PATH% & $(literal)"));
+    assert_eq!(captured.body, data.as_bytes());
+}
+
+#[tokio::test]
+async fn curl_export_preserves_templates_without_decoding_real_url_escapes() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request("POST", "https://{{SecretHost}}/{{secret}}/:id?encoded=%7B%7Bsecret%7D%7D&literal=probe-curl-template-0".into());
+    request.path_parameters = vec![QueryParameter {
+        name: "id".into(),
+        value: "{{secret}}".into(),
+        disabled: false,
+    }];
+    request.query_parameters = vec![QueryParameter {
+        name: "{{secret}}".into(),
+        value: "a {{secret}}+b".into(),
+        disabled: false,
+    }];
+    request.kind = http_body(RequestBody::Single(Body::FormUrlEncoded(vec![FormField {
+        name: "{{secret}}".into(),
+        value: "a {{secret}}+b".into(),
+        disabled: false,
+    }])));
+    for shell in [
+        probe_http::CurlShell::Posix,
+        probe_http::CurlShell::WindowsPowerShell,
+    ] {
+        let command = engine
+            .curl_command_for_shell(
+                &request.clone().into_http().unwrap(),
+                &ExecutionOptions::default(),
+                shell,
+            )
+            .await
+            .unwrap();
+        assert!(command.contains("https://{{SecretHost}}/{{secret}}/{{secret}}?encoded=%7B%7Bsecret%7D%7D&literal=probe-curl-template-0&{{secret}}=a+{{secret}}%2Bb"), "{command}");
+        assert!(command.contains("{{secret}}=a+{{secret}}%2Bb"));
+        if shell == probe_http::CurlShell::native() {
+            assert_eq!(
+                engine
+                    .curl_command(
+                        &request.clone().into_http().unwrap(),
+                        &ExecutionOptions::default()
+                    )
+                    .await
+                    .unwrap(),
+                command
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn curl_export_restores_many_distinct_templates_without_prefix_collisions() {
+    let mut request = request("GET", "https://example.com".into());
+    request.query_parameters = (0..12)
+        .map(|index| QueryParameter {
+            name: format!("item{index}"),
+            value: format!("{{{{secret_{index}}}}}"),
+            disabled: false,
+        })
+        .collect();
+    let command = HttpEngine::new()
+        .unwrap()
+        .curl_command_for_shell(
+            &request.into_http().unwrap(),
+            &ExecutionOptions::default(),
+            probe_http::CurlShell::Posix,
+        )
+        .await
+        .unwrap();
+    for index in 0..12 {
+        assert!(
+            command.contains(&format!("item{index}={{{{secret_{index}}}}}")),
+            "{command}"
+        );
+    }
+    assert!(!command.contains("probe-curl-template-"));
 }

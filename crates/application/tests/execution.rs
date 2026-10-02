@@ -609,3 +609,81 @@ async fn curl_export_reports_resolution_and_protocol_errors() {
         .contains("only for HTTP")
     );
 }
+
+#[tokio::test]
+async fn curl_export_keeps_secret_placeholders_in_url_parameters_and_all_bodies() {
+    use probe_core::{
+        Body, FormField, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBody,
+        RawBodyKind, RequestBody, RequestKind,
+    };
+    let mut environments = environments();
+    environments[0]
+        .variables
+        .extend([secret("secret"), secret("SecretHost")]);
+    let mut request = get(
+        "https://{{SecretHost}}/{{secret}}/:id?original={{secret}}&encoded=%7B%7Bsecret%7D%7D&collision=probe-curl-template-0",
+    );
+    request.method = Some("POST".into());
+    request.path_parameters = vec![QueryParameter {
+        name: "id".into(),
+        value: "{{secret}}".into(),
+        disabled: false,
+    }];
+    request.query_parameters = vec![QueryParameter {
+        name: "{{secret}}".into(),
+        value: "prefix {{secret}}+tail".into(),
+        disabled: false,
+    }];
+    let engine = HttpEngine::new().unwrap();
+    let resolution = RequestResolution {
+        overrides: &[
+            ("secret".into(), SECRET.into()),
+            ("SecretHost".into(), "secret-host-value".into()),
+        ],
+        ..local(&environments)
+    };
+    for body in [
+        Body::Raw(RawBody {
+            kind: RawBodyKind::Json,
+            data: r#"{"secret":"{{secret}}"}"#.into(),
+        }),
+        Body::FormUrlEncoded(vec![FormField {
+            name: "{{secret}}".into(),
+            value: "a {{secret}}+b".into(),
+            disabled: false,
+        }]),
+        Body::Multipart(vec![MultipartPart {
+            name: "field".into(),
+            kind: MultipartPartKind::Text,
+            value: MultipartValue::Single("{{secret}}".into()),
+            content_type: None,
+            disabled: false,
+        }]),
+    ] {
+        let expected_body = match &body {
+            Body::Raw(_) if cfg!(windows) => r#"{\"secret\":\"{{secret}}\"}"#,
+            Body::Raw(_) => r#"{"secret":"{{secret}}"}"#,
+            Body::FormUrlEncoded(_) => "{{secret}}=a+{{secret}}%2Bb",
+            Body::Multipart(_) => "{{secret}}",
+            Body::File(_) => unreachable!(),
+        };
+        request.kind = RequestKind::Http {
+            body: Some(RequestBody::Single(body.clone())),
+        };
+        let command = probe_application::copy_as_curl(
+            &request,
+            &resolution,
+            &engine,
+            &ExecutionOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert!(command.contains("https://{{SecretHost}}/{{secret}}/{{secret}}?original={{secret}}&encoded=%7B%7Bsecret%7D%7D&collision=probe-curl-template-0&{{secret}}=prefix+{{secret}}%2Btail"), "{command}");
+        // This body must remain a template even when invocation overrides contain real secrets.
+        assert!(command.contains(expected_body), "{command}");
+        assert!(!command.contains(SECRET));
+        assert!(!command.contains("secret-host-value"));
+        assert!(!command.contains("%7B%7BSecretHost%7D%7D"));
+        assert!(!command.contains("%7B%7Bsecret%7D%7D%2B"));
+    }
+}

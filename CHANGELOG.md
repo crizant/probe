@@ -8,7 +8,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
-- Copy HTTP requests as cURL commands from the desktop Send dropdown. Plain environment variables are resolved; secret placeholders are retained.
+- Copy HTTP requests as cURL commands from the desktop Send dropdown. Plain environment variables are resolved; secret placeholders are retained. Commands use PowerShell on Windows and POSIX shell syntax on macOS/Linux.
 
 ### Fixed
 
