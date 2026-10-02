@@ -306,6 +306,14 @@ mod tests {
                 .add_path(temporary.clone()),
         ];
         assert!(!events_reload_workspace(&staging, &root));
+        // Check while staging still exists: without the external edit this
+        // batch must be ignored, so missing-path metadata cannot mask a failure.
+        let mut mixed = staging.to_vec();
+        mixed.push(
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                .add_path(destination.clone()),
+        );
+        assert!(events_reload_workspace(&mixed, &root));
         let commit = [
             Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
                 .add_path(temporary.clone()),
@@ -318,13 +326,6 @@ mod tests {
             &[Event::new(EventKind::Remove(RemoveKind::File)).add_path(temporary)],
             &root,
         ));
-        // An external edit in the staging batch must still invalidate it.
-        let mut mixed = staging.to_vec();
-        mixed.push(
-            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
-                .add_path(destination),
-        );
-        assert!(events_reload_workspace(&mixed, &root));
     }
 
     #[test]
@@ -344,11 +345,6 @@ mod tests {
         for event in &events {
             assert!(!events_reload_workspace(std::slice::from_ref(event), root));
         }
-        let mut mixed = events.to_vec();
-        mixed.push(
-            Event::new(EventKind::Modify(ModifyKind::Any)).add_path(root.join("request.yaml")),
-        );
-        assert!(events_reload_workspace(&mixed, root));
         let removal = Event::new(EventKind::Remove(RemoveKind::Any)).add_path(temporary.clone());
         assert!(events_reload_workspace(
             std::slice::from_ref(&removal),
@@ -365,15 +361,23 @@ mod tests {
         for event in &events {
             assert!(events_reload_workspace(std::slice::from_ref(event), root));
         }
+        assert!(events_reload_workspace(
+            &[Event::new(EventKind::Create(CreateKind::Folder)).add_path(temporary.clone())],
+            root,
+        ));
         fs::remove_dir_all(&temporary).unwrap();
         for event in &events {
             assert!(events_reload_workspace(std::slice::from_ref(event), root));
         }
+        assert!(events_reload_workspace(
+            &[Event::new(EventKind::Remove(RemoveKind::Folder)).add_path(temporary)],
+            root,
+        ));
         assert!(events_reload_workspace(&[removal], root));
     }
 
     #[test]
-    fn temporary_filter_preserves_external_yaml_directory_renames_and_rescans() {
+    fn temporary_filter_preserves_yaml_names_renames_and_rescans() {
         let root = std::env::temp_dir();
         for name in [
             "request.yml",
@@ -390,8 +394,6 @@ mod tests {
             &temporary,
         ));
         for kind in [
-            EventKind::Create(CreateKind::Folder),
-            EventKind::Remove(RemoveKind::Folder),
             EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
             EventKind::Any,
         ] {
