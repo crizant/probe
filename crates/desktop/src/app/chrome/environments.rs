@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::dialogs::EnvironmentFieldKind;
 
 const ENABLED_COLUMN_WIDTH: f32 = 44.0;
 
@@ -157,6 +158,38 @@ impl ProbeApp {
             .child(environment_list)
     }
 
+    fn environment_field_focus(
+        dialog: &EnvironmentManagerDialog,
+        row_id: Option<u64>,
+        kind: EnvironmentFieldKind,
+        cx: &Context<Self>,
+    ) -> impl Fn(gpui::Entity<components::FieldInput>, bool, &mut App) + 'static {
+        let view = cx.weak_entity();
+        let environment = dialog.original_name.clone();
+        move |field, focused, cx| {
+            let _ = view.update(cx, |view, cx| {
+                let Some(dialog) = view.environment_manager_dialog.as_mut() else {
+                    return;
+                };
+                let Some(row_id) = row_id else { return };
+                if dialog.original_name != environment || !dialog.variable_row_ids.contains(&row_id)
+                {
+                    return;
+                }
+                if focused {
+                    dialog.active_field = Some((row_id, kind, field));
+                } else if dialog
+                    .active_field
+                    .as_ref()
+                    .is_some_and(|(_, _, active)| active == &field)
+                {
+                    dialog.active_field = None;
+                }
+                cx.notify();
+            });
+        }
+    }
+
     fn render_environment_variable_row(
         &self,
         theme: Theme,
@@ -167,6 +200,9 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let row_index = row.direct_index.unwrap_or(0);
+        let stable_row_id = row
+            .direct_index
+            .and_then(|index| dialog.variable_row_ids.get(index).copied());
         let row_id = match row.direct_index {
             Some(direct_index) => format!(
                 "direct-{}-{}",
@@ -298,11 +334,16 @@ impl ProbeApp {
                                 format!("environment-variable-name-input-{row_id}"),
                                 name.clone(),
                                 "Name",
-                                name.is_empty() && !busy,
+                                name.is_empty() && !busy && dialog.active_field.is_none(),
                                 move |value, _, cx| {
                                     let _ = variable_name_view.update(cx, |view, cx| {
                                         view.apply_environment_manager_draft(cx, |dialog| {
-                                            if let Some(index) = direct_index {
+                                            if let Some(index) = stable_row_id.and_then(|id| {
+                                                dialog
+                                                    .variable_row_ids
+                                                    .iter()
+                                                    .position(|row| *row == id)
+                                            }) {
                                                 match dialog.draft.variables.get_mut(index) {
                                                     Some(EnvironmentVariable::Plain(variable)) => {
                                                         variable.name = Some(value.to_string())
@@ -317,6 +358,22 @@ impl ProbeApp {
                                     });
                                 },
                                 |_, _, _| {},
+                            )
+                            .persistent_field(
+                                dialog
+                                    .active_field
+                                    .as_ref()
+                                    .filter(|(id, kind, _)| {
+                                        Some(*id) == stable_row_id
+                                            && *kind == EnvironmentFieldKind::Name
+                                    })
+                                    .map(|(_, _, field)| field.clone()),
+                                Self::environment_field_focus(
+                                    dialog,
+                                    stable_row_id,
+                                    EnvironmentFieldKind::Name,
+                                    cx,
+                                ),
                             )
                             .disabled(busy),
                         ),
@@ -341,18 +398,28 @@ impl ProbeApp {
                             "Value",
                             false,
                             move |value, _, cx| {
-                                let EnvironmentVariable::Plain(mut variable) =
-                                    value_variable.clone()
-                                else {
-                                    return;
-                                };
-                                set_environment_variable_text(&mut variable, value.to_string());
                                 let _ = value_view.update(cx, |view, cx| {
                                     view.apply_environment_manager_draft(cx, |dialog| {
-                                        if let Some(index) = direct_index {
-                                            dialog.draft.variables[index] =
-                                                EnvironmentVariable::Plain(variable);
-                                        } else {
+                                        if let Some(id) = stable_row_id {
+                                            if let Some(index) = dialog
+                                                .variable_row_ids
+                                                .iter()
+                                                .position(|row| *row == id)
+                                                && let EnvironmentVariable::Plain(variable) =
+                                                    &mut dialog.draft.variables[index]
+                                            {
+                                                set_environment_variable_text(
+                                                    variable,
+                                                    value.to_string(),
+                                                );
+                                            }
+                                        } else if let EnvironmentVariable::Plain(mut variable) =
+                                            value_variable.clone()
+                                        {
+                                            set_environment_variable_text(
+                                                &mut variable,
+                                                value.to_string(),
+                                            );
                                             dialog
                                                 .add_variable(EnvironmentVariable::Plain(variable));
                                         }
@@ -360,6 +427,22 @@ impl ProbeApp {
                                 });
                             },
                             |_, _, _| {},
+                        )
+                        .persistent_field(
+                            dialog
+                                .active_field
+                                .as_ref()
+                                .filter(|(id, kind, _)| {
+                                    Some(*id) == stable_row_id
+                                        && *kind == EnvironmentFieldKind::Value
+                                })
+                                .map(|(_, _, field)| field.clone()),
+                            Self::environment_field_focus(
+                                dialog,
+                                stable_row_id,
+                                EnvironmentFieldKind::Value,
+                                cx,
+                            ),
                         )
                         .disabled(busy),
                     )

@@ -23,6 +23,17 @@ pub(crate) struct EnvironmentManagerDialog {
     pub(crate) secret_statuses: BTreeMap<String, SecretUiStatus>,
     pub(crate) variable_row_ids: Vec<u64>,
     pub(crate) next_variable_row_id: u64,
+    pub(crate) active_field: Option<(
+        u64,
+        EnvironmentFieldKind,
+        gpui::Entity<components::FieldInput>,
+    )>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EnvironmentFieldKind {
+    Name,
+    Value,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +55,7 @@ impl EnvironmentManagerDialog {
             secret_statuses: BTreeMap::new(),
             variable_row_ids: (0..next_variable_row_id).collect(),
             next_variable_row_id,
+            active_field: None,
         }
     }
 
@@ -62,6 +74,13 @@ impl EnvironmentManagerDialog {
 
     pub(crate) fn remove_variable(&mut self, index: usize) {
         if index < self.draft.variables.len() {
+            if self
+                .active_field
+                .as_ref()
+                .is_some_and(|(id, _, _)| *id == self.variable_row_ids[index])
+            {
+                self.active_field = None;
+            }
             self.draft.variables.remove(index);
             self.variable_row_ids.remove(index);
         }

@@ -148,6 +148,14 @@ pub(super) fn response_page_button(
 
 impl Render for ProbeApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(dialog) = self.environment_manager_dialog.as_mut()
+            && dialog
+                .active_field
+                .as_ref()
+                .is_some_and(|(_, _, field)| !field.read(cx).is_focused(window, cx))
+        {
+            dialog.active_field = None;
+        }
         self.clear_resolved_environment_dialog_error(cx);
         if !cx.has_active_drag()
             && (self.tree_drop_target.is_some() || self.tree_drag_source.is_some())

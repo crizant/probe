@@ -8,6 +8,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Keep the focused Environment Manager variable field active when scrolling it out of view and back.
 - Avoid unnecessary text measurements when scrolling lists over single-line fields.
 
 ## [0.9.3] - 2026-09-30
