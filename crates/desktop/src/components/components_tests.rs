@@ -78,6 +78,109 @@ fn secret_popup_does_not_focus_its_hidden_value_input(cx: &mut TestAppContext) {
         .unwrap();
 }
 
+struct PersistentInputFocusHarness {
+    field: Option<Entity<super::FieldInput>>,
+    visible: bool,
+    focus_changes: Vec<bool>,
+    field_focus_changes: Vec<bool>,
+}
+
+impl Render for PersistentInputFocusHarness {
+    fn render(&mut self, _: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let focus_view = cx.weak_entity();
+        let field_view = cx.weak_entity();
+        let mut input =
+            super::text_input_base(Theme::light(), "persistent-focus-input", "value", "Value");
+        input.debug_selector = Some("persistent-focus-input");
+        input.on_focus = Some(Rc::new(move |focused, cx| {
+            let _ = focus_view.update(cx, |view, _| view.focus_changes.push(focused));
+        }));
+        let input = input.persistent_field(self.field.clone(), move |field, focused, cx| {
+            let _ = field_view.update(cx, |view, cx| {
+                view.field_focus_changes.push(focused);
+                view.field = focused.then_some(field);
+                cx.notify();
+            });
+        });
+        div()
+            .size_full()
+            .when(self.visible, |view| view.child(input))
+    }
+}
+
+#[gpui::test]
+fn virtualizing_a_persistent_input_does_not_report_blur_to_either_focus_callback(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(320.0), px(180.0)), |window, _| {
+        window.activate_window();
+        PersistentInputFocusHarness {
+            field: None,
+            visible: true,
+            focus_changes: Vec::new(),
+            field_focus_changes: Vec::new(),
+        }
+    });
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let bounds = visual.debug_bounds("persistent-focus-input").unwrap();
+    visual.simulate_click(bounds.center(), Modifiers::default());
+    visual.run_until_parked();
+    let focus = window
+        .update(cx, |view, window, cx| {
+            assert_eq!(view.focus_changes, [true]);
+            assert_eq!(view.field_focus_changes, [true]);
+            let focus = window.focused(cx).unwrap();
+            view.visible = false;
+            cx.notify();
+            focus
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("persistent-focus-input").is_none());
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(window.focused(cx), Some(focus.clone()));
+            assert_eq!(view.focus_changes, [true]);
+            assert_eq!(view.field_focus_changes, [true]);
+            view.visible = true;
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(window.focused(cx), Some(focus));
+            assert!(!view.focus_changes.contains(&false));
+            assert!(!view.field_focus_changes.contains(&false));
+            window.blur();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.focus_changes.last(), Some(&false));
+            assert_eq!(view.field_focus_changes.last(), Some(&false));
+            assert_eq!(
+                view.focus_changes
+                    .iter()
+                    .filter(|focused| !**focused)
+                    .count(),
+                1
+            );
+            assert_eq!(
+                view.field_focus_changes
+                    .iter()
+                    .filter(|focused| !**focused)
+                    .count(),
+                1
+            );
+            assert!(view.field.is_none());
+        })
+        .unwrap();
+}
+
 #[derive(Clone, Copy)]
 enum TextContextMenuHarnessKind {
     Input,

@@ -151,9 +151,10 @@ impl FieldInput {
             }
             InputEvent::Blur => {
                 // A virtualized editor leaves the dispatch tree without losing its focus ID.
-                if !input.read(cx).focus_handle(cx).is_focused(window)
-                    && let Some(handler) = &this.on_field_focus
-                {
+                if input.read(cx).focus_handle(cx).is_focused(window) {
+                    return;
+                }
+                if let Some(handler) = &this.on_field_focus {
                     handler(cx.entity(), false, cx);
                 }
                 if let Some(on_focus) = &this.on_focus {

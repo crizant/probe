@@ -298,7 +298,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
                 .active_field
                 .as_ref()
                 .unwrap();
-            (window.focused(cx).unwrap(), field.entity_id(), *id)
+            (window.focused(cx).unwrap(), field.entity_id(), id.clone())
         });
         let scroll = |index, workspace: &EnvironmentWorkspace, cx: &mut TestAppContext| {
             workspace.update(cx, |view, _, cx| {
@@ -354,7 +354,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
             let index = dialog
                 .variable_row_ids
                 .iter()
-                .position(|id| *id == row_id)
+                .position(|id| crate::app::dialogs::EnvironmentVariableRowId::Direct(*id) == row_id)
                 .unwrap();
             let EnvironmentVariable::Plain(variable) = &dialog.draft.variables[index] else {
                 panic!("plain variable")
@@ -378,7 +378,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
             let index = dialog
                 .variable_row_ids
                 .iter()
-                .position(|id| *id == row_id)
+                .position(|id| crate::app::dialogs::EnvironmentVariableRowId::Direct(*id) == row_id)
                 .unwrap();
             let EnvironmentVariable::Plain(variable) = &dialog.draft.variables[index] else {
                 panic!("plain variable")
@@ -402,7 +402,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
                 .as_ref()
                 .unwrap();
             assert_ne!(field.entity_id(), controller);
-            (window.focused(cx).unwrap(), *id, field.downgrade())
+            (window.focused(cx).unwrap(), id.clone(), field.downgrade())
         });
         scroll(0, &workspace, cx);
         visual.run_until_parked();
@@ -413,7 +413,9 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
                 let index = dialog
                     .variable_row_ids
                     .iter()
-                    .position(|id| *id == other_id)
+                    .position(|id| {
+                        crate::app::dialogs::EnvironmentVariableRowId::Direct(*id) == other_id
+                    })
                     .unwrap();
                 dialog.remove_variable(index);
                 assert!(dialog.active_field.is_none());
@@ -507,6 +509,207 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
         });
         visual.run_until_parked();
     }
+}
+
+#[gpui::test]
+fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_override(
+    cx: &mut TestAppContext,
+) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "development");
+    workspace.update(cx, |view, window, cx| {
+        window.activate_window();
+        view.apply_environment_manager_draft(cx, |dialog| {
+            for index in 0..80 {
+                dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                    name: Some(format!("inherited-focus-{index}")),
+                    value: Some(VariableValueSet::Single(VariableValue::String(
+                        "filler".into(),
+                    ))),
+                    disabled: false,
+                }));
+            }
+        });
+    });
+    let inherited_index = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .draft
+            .variables
+            .len()
+    });
+    let scroll = |index, workspace: &EnvironmentWorkspace, cx: &mut TestAppContext| {
+        workspace.update(cx, |view, _, cx| {
+            view.environment_variables_scroll
+                .scroll_to_item_strict(index, ScrollStrategy::Top);
+            cx.notify();
+        });
+    };
+    scroll(inherited_index, &workspace, cx);
+    cx.run_until_parked();
+    let mut visual = workspace.visual(cx);
+    assert!(
+        visual
+            .debug_bounds("environment-variable-name-baseUrl")
+            .is_none(),
+        "inherited names stay read-only"
+    );
+    let field = visual
+        .debug_bounds("environment-variable-value-baseUrl")
+        .unwrap();
+    visual.simulate_click(field.center(), Modifiers::default());
+    visual.run_until_parked();
+    let (focus, controller) = workspace.update(cx, |view, window, cx| {
+        let active = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .active_field
+            .as_ref()
+            .expect("inherited value must retain its controller");
+        assert!(matches!(&active.0, crate::app::dialogs::EnvironmentVariableRowId::Inherited { defined_in, name } if defined_in == "base" && name == "baseUrl"));
+        (window.focused(cx).unwrap(), active.2.entity_id())
+    });
+    scroll(0, &workspace, cx);
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("environment-variable-value-baseUrl")
+            .is_none(),
+        "inherited row must leave the rendered range"
+    );
+    scroll(inherited_index, &workspace, cx);
+    visual.run_until_parked();
+    visual
+        .debug_bounds("environment-variable-value-baseUrl")
+        .unwrap();
+    workspace.update(cx, |view, window, cx| {
+        assert_eq!(window.focused(cx), Some(focus.clone()));
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .active_field
+                .as_ref()
+                .unwrap()
+                .2
+                .entity_id(),
+            controller
+        );
+    });
+    cx.simulate_input(workspace.window.into(), "!");
+    visual.run_until_parked();
+    // The first edit changes the row's identity and makes its name directly editable.
+    visual
+        .debug_bounds("environment-variable-name-baseUrl")
+        .unwrap();
+    workspace.update(cx, |view, window, cx| {
+        assert_eq!(window.focused(cx), Some(focus.clone()));
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .active_field
+                .as_ref()
+                .unwrap()
+                .2
+                .entity_id(),
+            controller
+        );
+    });
+    cx.simulate_input(workspace.window.into(), "continued");
+    visual.run_until_parked();
+    let direct_index = workspace.update(cx, |view, window, cx| {
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        let matches: Vec<_> = dialog
+            .draft
+            .variables
+            .iter()
+            .enumerate()
+            .filter_map(|(index, variable)| match variable {
+                EnvironmentVariable::Plain(variable)
+                    if variable.name.as_deref() == Some("baseUrl") =>
+                {
+                    Some((index, variable))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "continued typing must update one override"
+        );
+        assert_eq!(
+            dialog.active_field.as_ref().unwrap().0,
+            crate::app::dialogs::EnvironmentVariableRowId::Direct(
+                dialog.variable_row_ids[matches[0].0]
+            )
+        );
+        let value = environment_variable_text(matches[0].1).0;
+        assert!(
+            value.contains('!') && value.contains("continued"),
+            "override value: {value}"
+        );
+        assert_eq!(window.focused(cx), Some(focus.clone()));
+        assert_eq!(
+            dialog.active_field.as_ref().unwrap().2.entity_id(),
+            controller
+        );
+        let parent = view
+            .loaded_workspace
+            .as_ref()
+            .unwrap()
+            .workspace()
+            .environments()
+            .iter()
+            .find(|environment| environment.name == "base")
+            .unwrap();
+        let parent_variable = parent
+            .variables
+            .iter()
+            .find_map(|variable| match variable {
+                EnvironmentVariable::Plain(variable)
+                    if variable.name.as_deref() == Some("baseUrl") =>
+                {
+                    Some(variable)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            environment_variable_text(parent_variable).0,
+            "https://{{host}}"
+        );
+        matches[0].0
+    });
+    scroll(0, &workspace, cx);
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("environment-variable-value-baseUrl")
+            .is_none()
+    );
+    scroll(direct_index, &workspace, cx);
+    visual.run_until_parked();
+    visual
+        .debug_bounds("environment-variable-value-baseUrl")
+        .unwrap();
+    workspace.update(cx, |view, window, cx| {
+        assert_eq!(window.focused(cx), Some(focus));
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .active_field
+                .as_ref()
+                .unwrap()
+                .2
+                .entity_id(),
+            controller
+        );
+    });
 }
 
 #[gpui::test]

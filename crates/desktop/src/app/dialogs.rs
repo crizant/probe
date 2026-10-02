@@ -24,10 +24,16 @@ pub(crate) struct EnvironmentManagerDialog {
     pub(crate) variable_row_ids: Vec<u64>,
     pub(crate) next_variable_row_id: u64,
     pub(crate) active_field: Option<(
-        u64,
+        EnvironmentVariableRowId,
         EnvironmentFieldKind,
         gpui::Entity<components::FieldInput>,
     )>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EnvironmentVariableRowId {
+    Direct(u64),
+    Inherited { defined_in: String, name: String },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,11 +80,9 @@ impl EnvironmentManagerDialog {
 
     pub(crate) fn remove_variable(&mut self, index: usize) {
         if index < self.draft.variables.len() {
-            if self
-                .active_field
-                .as_ref()
-                .is_some_and(|(id, _, _)| *id == self.variable_row_ids[index])
-            {
+            if self.active_field.as_ref().is_some_and(|(id, _, _)| {
+                *id == EnvironmentVariableRowId::Direct(self.variable_row_ids[index])
+            }) {
                 self.active_field = None;
             }
             self.draft.variables.remove(index);
