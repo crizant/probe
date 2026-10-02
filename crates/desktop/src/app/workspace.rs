@@ -861,6 +861,12 @@ impl ProbeApp {
         self.execution.remap_requests(&remaps);
         self.response_viewer.remap_requests(&remaps);
         self.request_editor.remap_requests(&remaps);
+        if let Some((old_key, section)) = self.request_section_scroll_owner.get()
+            && let Some(&new_key) = remaps.get(&old_key)
+        {
+            self.request_section_scroll_owner
+                .set(Some((new_key, section)));
+        }
         if let Some(StructureDialog {
             mode: StructureDialogMode::SaveDetachedRequest { key },
             ..
