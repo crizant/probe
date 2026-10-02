@@ -8,7 +8,7 @@ use std::sync::mpsc;
 
 use notify::{
     Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
-    event::{AccessKind, AccessMode, ModifyKind, RenameMode},
+    event::{AccessKind, AccessMode, CreateKind, ModifyKind, RemoveKind, RenameMode},
 };
 
 pub(crate) const WATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -91,7 +91,28 @@ pub(crate) fn event_affects_workspace(event: &Event, workspace_path: &Path) -> b
 /// those events reads the file again and queues the same events, so the
 /// desktop refreshes continuously. A close-after-write still reloads, because
 /// some editors report a save only that way.
-fn event_changes_workspace_content(event: &Event) -> bool {
+fn event_changes_workspace_content(event: &Event, workspace_path: &Path) -> bool {
+    // atomic-write-file stages `.request.yml.XXXXXX` beside the destination.
+    // Creation/metadata can arrive more than one debounce before commit. These
+    // files are not YAML inputs; only the destination replacement invalidates
+    // the collection. Keep ambiguous events (especially directory renames) and
+    // rescan hints, rather than silencing writes for a time window.
+    if !event.need_rescan()
+        && matches!(
+            event.kind,
+            EventKind::Create(CreateKind::File)
+                | EventKind::Remove(RemoveKind::File)
+                | EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Metadata(_))
+                | EventKind::Access(AccessKind::Close(AccessMode::Write))
+        )
+        && !event.paths.is_empty()
+        && event.paths.iter().all(|path| {
+            // A bundled workspace can have any filename, including this shape.
+            path.file_name() != workspace_path.file_name() && is_atomic_yaml_temporary(path)
+        })
+    {
+        return false;
+    }
     match event.kind {
         EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
         EventKind::Access(_) => false,
@@ -99,9 +120,29 @@ fn event_changes_workspace_content(event: &Event) -> bool {
     }
 }
 
+fn is_atomic_yaml_temporary(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some((destination, suffix)) = name
+        .strip_prefix('.')
+        .and_then(|name| name.rsplit_once('.'))
+    else {
+        return false;
+    };
+    matches!(
+        Path::new(destination)
+            .extension()
+            .and_then(|ext| ext.to_str()),
+        Some("yml" | "yaml")
+    ) && suffix.len() == 6
+        && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
 pub(crate) fn events_reload_workspace(events: &[Event], workspace_path: &Path) -> bool {
     events.iter().any(|event| {
-        event_affects_workspace(event, workspace_path) && event_changes_workspace_content(event)
+        event_affects_workspace(event, workspace_path)
+            && event_changes_workspace_content(event, workspace_path)
     })
 }
 
@@ -144,7 +185,10 @@ mod tests {
 
     use notify::{
         Event, EventKind,
-        event::{AccessKind, AccessMode, ModifyKind, RenameMode},
+        event::{
+            AccessKind, AccessMode, CreateKind, DataChange, Flag, MetadataKind, ModifyKind,
+            RemoveKind, RenameMode,
+        },
     };
 
     use super::{drain_watch_events, events_reload_workspace, rename_hints};
@@ -200,6 +244,87 @@ mod tests {
         assert!(events_reload_workspace(&[close_write], path));
         assert!(events_reload_workspace(&[modify], path));
         assert!(!events_reload_workspace(&[unrelated_write], path));
+    }
+
+    #[test]
+    fn atomic_request_save_only_reloads_at_commit_across_separate_batches() {
+        let root = std::env::temp_dir();
+        let temporary = root.join(".request.yml.A2K5AL");
+        let destination = root.join("request.yml");
+        // FSEvents delivers staging creation and metadata before the rename.
+        let staging = [
+            Event::new(EventKind::Create(CreateKind::File)).add_path(temporary.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Metadata(
+                MetadataKind::Ownership,
+            )))
+            .add_path(temporary.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Metadata(
+                MetadataKind::Extended,
+            )))
+            .add_path(temporary.clone()),
+            // Other backends also report staging writes and write-close.
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                .add_path(temporary.clone()),
+            Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)))
+                .add_path(temporary.clone()),
+        ];
+        assert!(!events_reload_workspace(&staging, &root));
+        let commit = [
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+                .add_path(temporary.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+                .add_path(destination.clone()),
+        ];
+        assert!(events_reload_workspace(&commit, &root));
+        assert!(!events_reload_workspace(
+            &[Event::new(EventKind::Remove(RemoveKind::File)).add_path(temporary)],
+            &root,
+        ));
+        // An external edit in the staging batch must still invalidate it.
+        let mut mixed = staging.to_vec();
+        mixed.push(
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                .add_path(destination),
+        );
+        assert!(events_reload_workspace(&mixed, &root));
+    }
+
+    #[test]
+    fn temporary_filter_preserves_external_yaml_directory_renames_and_rescans() {
+        let root = std::env::temp_dir();
+        for name in [
+            "request.yml",
+            ".request.yml",
+            ".request.yml.A2K5AL.yaml",
+            ".request.yaml.A2K5AL.yml",
+        ] {
+            let event = Event::new(EventKind::Create(CreateKind::File)).add_path(root.join(name));
+            assert!(events_reload_workspace(&[event], &root));
+        }
+        let temporary = root.join(".request.yaml.A2K5AL");
+        assert!(events_reload_workspace(
+            &[Event::new(EventKind::Create(CreateKind::File)).add_path(temporary.clone())],
+            &temporary,
+        ));
+        for kind in [
+            EventKind::Create(CreateKind::Folder),
+            EventKind::Remove(RemoveKind::Folder),
+            EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+            EventKind::Any,
+        ] {
+            assert!(events_reload_workspace(
+                &[Event::new(kind).add_path(temporary.clone())],
+                &root
+            ));
+        }
+        let paired = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(root.join("request.yml"))
+            .add_path(temporary.clone());
+        assert!(events_reload_workspace(&[paired], &root));
+        let rescan = Event::new(EventKind::Create(CreateKind::File))
+            .add_path(temporary)
+            .set_flag(Flag::Rescan);
+        assert!(events_reload_workspace(&[rescan], &root));
     }
 
     #[test]
