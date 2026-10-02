@@ -95,20 +95,29 @@ fn event_changes_workspace_content(event: &Event, workspace_path: &Path) -> bool
     // atomic-write-file stages `.request.yml.XXXXXX` beside the destination.
     // Creation/metadata can arrive more than one debounce before commit. These
     // files are not YAML inputs; only the destination replacement invalidates
-    // the collection. Keep ambiguous events (especially directory renames) and
-    // rescan hints, rather than silencing writes for a time window.
+    // the collection. Windows uses Any for creation and modification; metadata
+    // events can also describe directories. Only suppress these when the path
+    // identifies a file. Missing/uncertain paths, renames and rescans still reload.
     if !event.need_rescan()
         && matches!(
             event.kind,
             EventKind::Create(CreateKind::File)
+                | EventKind::Create(CreateKind::Any)
                 | EventKind::Remove(RemoveKind::File)
+                | EventKind::Modify(ModifyKind::Any)
                 | EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Metadata(_))
                 | EventKind::Access(AccessKind::Close(AccessMode::Write))
         )
         && !event.paths.is_empty()
         && event.paths.iter().all(|path| {
             // A bundled workspace can have any filename, including this shape.
-            path.file_name() != workspace_path.file_name() && is_atomic_yaml_temporary(path)
+            path.file_name() != workspace_path.file_name()
+                && is_atomic_yaml_temporary(path)
+                && (!matches!(
+                    event.kind,
+                    EventKind::Create(CreateKind::Any)
+                        | EventKind::Modify(ModifyKind::Any | ModifyKind::Metadata(_))
+                ) || path.is_file())
         })
     {
         return false;
@@ -139,6 +148,7 @@ fn is_atomic_yaml_temporary(path: &Path) -> bool {
         && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
+/// Classifies filesystem hints using current path types; call off the UI thread.
 pub(crate) fn events_reload_workspace(events: &[Event], workspace_path: &Path) -> bool {
     events.iter().any(|event| {
         event_affects_workspace(event, workspace_path)
@@ -181,7 +191,11 @@ fn selector(root: &Path, path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     use notify::{
         Event, EventKind,
@@ -192,6 +206,27 @@ mod tests {
     };
 
     use super::{drain_watch_events, events_reload_workspace, rename_hints};
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "probe-watch-filter-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
 
     #[test]
     fn extracts_repository_selectors_from_paired_rename_events() {
@@ -248,9 +283,11 @@ mod tests {
 
     #[test]
     fn atomic_request_save_only_reloads_at_commit_across_separate_batches() {
-        let root = std::env::temp_dir();
+        let directory = TestDirectory::new();
+        let root = directory.0.clone();
         let temporary = root.join(".request.yml.A2K5AL");
         let destination = root.join("request.yml");
+        fs::write(&temporary, "staging").unwrap();
         // FSEvents delivers staging creation and metadata before the rename.
         let staging = [
             Event::new(EventKind::Create(CreateKind::File)).add_path(temporary.clone()),
@@ -276,6 +313,7 @@ mod tests {
                 .add_path(destination.clone()),
         ];
         assert!(events_reload_workspace(&commit, &root));
+        fs::remove_file(&temporary).unwrap();
         assert!(!events_reload_workspace(
             &[Event::new(EventKind::Remove(RemoveKind::File)).add_path(temporary)],
             &root,
@@ -287,6 +325,51 @@ mod tests {
                 .add_path(destination),
         );
         assert!(events_reload_workspace(&mixed, &root));
+    }
+
+    #[test]
+    fn ambiguous_staging_and_metadata_events_preserve_directories_and_unknown_paths() {
+        let directory = TestDirectory::new();
+        let root = &directory.0;
+        let temporary = root.join(".request.yaml.A2K5AL");
+        fs::write(&temporary, "staging").unwrap();
+        let events = [
+            Event::new(EventKind::Create(CreateKind::Any)).add_path(temporary.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Any)).add_path(temporary.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Metadata(
+                MetadataKind::Permissions,
+            )))
+            .add_path(temporary.clone()),
+        ];
+        for event in &events {
+            assert!(!events_reload_workspace(std::slice::from_ref(event), root));
+        }
+        let mut mixed = events.to_vec();
+        mixed.push(
+            Event::new(EventKind::Modify(ModifyKind::Any)).add_path(root.join("request.yaml")),
+        );
+        assert!(events_reload_workspace(&mixed, root));
+        let removal = Event::new(EventKind::Remove(RemoveKind::Any)).add_path(temporary.clone());
+        assert!(events_reload_workspace(
+            std::slice::from_ref(&removal),
+            root
+        ));
+
+        fs::remove_file(&temporary).unwrap();
+        fs::create_dir(&temporary).unwrap();
+        fs::write(
+            temporary.join("folder.yml"),
+            include_str!("../../../tests/fixtures/opencollection/unbundled/users/folder.yml"),
+        )
+        .unwrap();
+        for event in &events {
+            assert!(events_reload_workspace(std::slice::from_ref(event), root));
+        }
+        fs::remove_dir_all(&temporary).unwrap();
+        for event in &events {
+            assert!(events_reload_workspace(std::slice::from_ref(event), root));
+        }
+        assert!(events_reload_workspace(&[removal], root));
     }
 
     #[test]

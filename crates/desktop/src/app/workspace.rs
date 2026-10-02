@@ -408,17 +408,22 @@ impl ProbeApp {
                         );
                     });
                 }
-                if !events_reload_workspace(&events, &workspace_path) {
+                let reload_path = workspace_path.clone();
+                let reload = cx
+                    .background_spawn(async move {
+                        if !events_reload_workspace(&events, &reload_path) {
+                            return None;
+                        }
+                        let hints = rename_hints(&events, &reload_path);
+                        Some((load_workspace(&reload_path), hints))
+                    })
+                    .await;
+                let Some((result, hints)) = reload else {
                     if disconnected {
                         return;
                     }
                     continue;
-                }
-                let hints = rename_hints(&events, &workspace_path);
-                let reload_path = workspace_path.clone();
-                let result = cx
-                    .background_spawn(async move { load_workspace(&reload_path) })
-                    .await;
+                };
                 let _ = view.update_in(cx, |view, window, cx| {
                     if view.workspace_path.as_ref() != Some(&workspace_path) {
                         return;
