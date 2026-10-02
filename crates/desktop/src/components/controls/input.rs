@@ -408,12 +408,12 @@ fn active_list_scroll() -> Option<ScrollHandle> {
 /// the surrounding list.
 pub(crate) fn wheel_scrolls_field_text(
     focused: bool,
-    overflows: bool,
     shift: bool,
     delta_x: Pixels,
     delta_y: Pixels,
+    overflows: impl FnOnce() -> bool,
 ) -> bool {
-    focused && overflows && (shift || delta_x.abs() > delta_y.abs())
+    focused && (shift || delta_x.abs() > delta_y.abs()) && overflows()
 }
 
 fn shift_maps_vertical_wheel_to_text(shift: bool, delta_x: Pixels, delta_y: Pixels) -> bool {
@@ -468,13 +468,12 @@ fn defer_list_scroll(
                         }
                         let delta = event.delta.pixel_delta(window.line_height());
                         let focused = state.read(cx).focus_handle(cx).is_focused(window);
-                        let overflows = single_line_input_overflows(state.read(cx));
                         if wheel_scrolls_field_text(
                             focused,
-                            overflows,
                             event.modifiers.shift,
                             delta.x,
                             delta.y,
+                            || single_line_input_overflows(state.read(cx)),
                         ) {
                             if shift_maps_vertical_wheel_to_text(
                                 event.modifiers.shift,
@@ -596,24 +595,24 @@ mod tests {
     fn vertical_and_unfocused_wheels_stay_with_the_list() {
         assert!(!wheel_scrolls_field_text(
             true,
-            true,
             false,
             px(2.0),
-            px(-40.0)
+            px(-40.0),
+            || panic!("vertical scrolling must not inspect text overflow"),
         ));
         assert!(!wheel_scrolls_field_text(
             false,
-            true,
             false,
             px(40.0),
-            px(0.0)
+            px(0.0),
+            || panic!("unfocused scrolling must not inspect text overflow"),
         ));
         assert!(!wheel_scrolls_field_text(
             true,
-            false,
             true,
             px(0.0),
-            px(-40.0)
+            px(-40.0),
+            || false,
         ));
     }
 
@@ -621,17 +620,17 @@ mod tests {
     fn a_focused_overflowing_field_keeps_a_horizontal_wheel() {
         assert!(wheel_scrolls_field_text(
             true,
-            true,
             false,
             px(-30.0),
-            px(4.0)
+            px(4.0),
+            || true,
         ));
         assert!(wheel_scrolls_field_text(
             true,
             true,
-            true,
             px(0.0),
-            px(-40.0)
+            px(-40.0),
+            || true,
         ));
     }
 }

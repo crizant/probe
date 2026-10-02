@@ -18,6 +18,9 @@ impl ProbeApp {
             rows =
                 rows.child(
                     components::editor_key_value_row(theme)
+                        .when(index == 0, |row| {
+                            row.debug_selector(move || format!("{}-row", kind.name_id()))
+                        })
                         .child(div().flex_1().min_w(px(0.0)).child(
                             components::variable_text_input(
                                 theme,

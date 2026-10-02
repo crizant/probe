@@ -185,6 +185,34 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
     let field = visual
         .debug_bounds("environment-variable-value-host")
         .expect("a value field should accept the pointer");
+    // Keep the pointer stationary while rows and their gaps pass underneath it.
+    for tick in 0..48 {
+        let delta_y = if tick >= 24 && tick % 2 == 0 {
+            px(8.0)
+        } else {
+            px(-8.0)
+        };
+        let before = offset_y(&workspace, cx);
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position: field.center(),
+            delta: gpui::ScrollDelta::Pixels(if tick % 3 == 0 {
+                point(px(0.0), delta_y)
+            } else {
+                point(px(2.0), delta_y)
+            }),
+            modifiers: Modifiers::default(),
+            touch_phase: if tick == 0 {
+                gpui::TouchPhase::Started
+            } else {
+                gpui::TouchPhase::Moved
+            },
+        });
+        assert_eq!(offset_y(&workspace, cx), before + delta_y);
+        // Burst several events between frames, including rapid reversals.
+        if tick % 4 == 3 {
+            visual.run_until_parked();
+        }
+    }
     let before = offset_y(&workspace, cx);
     visual.simulate_event(gpui::ScrollWheelEvent {
         position: field.center(),
