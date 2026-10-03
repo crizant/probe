@@ -874,3 +874,301 @@ fn curl_export_allows_file_parts_with_normal_mime_parameters() {
     assert!(command.contains("type=text/plain; charset=utf-8"));
     assert!(command.contains("test.txt"));
 }
+
+fn api_key_auth(key: &str, value: &str, placement: &str) -> Authentication {
+    Authentication {
+        kind: AuthenticationKind::ApiKey,
+        properties: BTreeMap::from([
+            (
+                "key".to_owned(),
+                AuthenticationValue::String(key.to_owned()),
+            ),
+            (
+                "value".to_owned(),
+                AuthenticationValue::String(value.to_owned()),
+            ),
+            (
+                "placement".to_owned(),
+                AuthenticationValue::String(placement.to_owned()),
+            ),
+        ]),
+    }
+}
+
+fn shell_arguments(command: &str) -> Vec<String> {
+    let output = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("set -- {command}; printf '%s\\0' \"$@\""))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{command}");
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|bytes| !bytes.is_empty())
+        .map(|bytes| String::from_utf8(bytes.to_vec()).unwrap())
+        .collect()
+}
+
+fn flag_value<'a>(arguments: &'a [String], flag: &str) -> &'a str {
+    arguments
+        .windows(2)
+        .find(|pair| pair[0] == flag)
+        .map(|pair| pair[1].as_str())
+        .unwrap_or_else(|| panic!("missing {flag} in {arguments:?}"))
+}
+
+async fn serve_twice() -> io::Result<(
+    String,
+    tokio::task::JoinHandle<io::Result<(support::CapturedRequest, support::CapturedRequest)>>,
+)> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let first = read_request(&mut stream).await?;
+        write_response(&mut stream, "200 OK", &[], b"ok").await?;
+        let (mut stream, _) = listener.accept().await?;
+        let second = read_request(&mut stream).await?;
+        write_response(&mut stream, "200 OK", &[], b"ok").await?;
+        Ok((first, second))
+    });
+    Ok((format!("http://{address}"), handle))
+}
+
+#[tokio::test]
+async fn api_key_header_execution_matches_curl() {
+    let (base_url, captured) = serve_twice().await.unwrap();
+    let mut request = request("POST", format!("{base_url}/items?existing=yes"));
+    request.headers.push(Header {
+        name: "X-Trace".to_owned(),
+        value: "kept".to_owned(),
+        disabled: false,
+    });
+    request.kind = http_body(RequestBody::Single(Body::Raw(RawBody {
+        kind: RawBodyKind::Text,
+        data: "payload".to_owned(),
+    })));
+    request.authentication = Some(api_key_auth("X-API-Key", "secret value", "header"));
+    let prepared = request.into_http().unwrap();
+    let engine = HttpEngine::new().unwrap();
+    let command = engine
+        .curl_command(&prepared, &ExecutionOptions::default())
+        .unwrap();
+    engine
+        .execute(&prepared, &ExecutionOptions::default())
+        .await
+        .unwrap();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .output()
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (executed, curled) = tokio::time::timeout(Duration::from_secs(5), captured)
+        .await
+        .expect("timed out waiting for cURL")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(executed.request_line, curled.request_line);
+    assert_eq!(executed.request_line, "POST /items?existing=yes HTTP/1.1");
+    assert!(!executed.request_line.contains("secret"));
+    assert_eq!(executed.header("x-api-key"), Some("secret value"));
+    assert_eq!(curled.header("x-api-key"), Some("secret value"));
+    assert_eq!(executed.header("x-trace"), curled.header("x-trace"));
+    assert_eq!(executed.body, curled.body);
+    assert_eq!(executed.body, b"payload");
+}
+
+#[tokio::test]
+async fn api_key_query_execution_matches_curl() {
+    let (base_url, captured) = serve_twice().await.unwrap();
+    let mut request = request("GET", format!("{base_url}/items?existing=yes#section"));
+    request.query_parameters.push(QueryParameter {
+        name: "q".to_owned(),
+        value: "a & b".to_owned(),
+        disabled: false,
+    });
+    request.headers.push(Header {
+        name: "X-Trace".to_owned(),
+        value: "kept".to_owned(),
+        disabled: false,
+    });
+    request.authentication = Some(api_key_auth("api key", "p@ss/雪~*", "query"));
+    let prepared = request.into_http().unwrap();
+    let engine = HttpEngine::new().unwrap();
+    let command = engine
+        .curl_command(&prepared, &ExecutionOptions::default())
+        .unwrap();
+    let arguments = shell_arguments(&command);
+    let exported = flag_value(&arguments, "--url").to_owned();
+    assert!(exported.contains("#section"));
+    engine
+        .execute(&prepared, &ExecutionOptions::default())
+        .await
+        .unwrap();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .output()
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (executed, curled) = tokio::time::timeout(Duration::from_secs(5), captured)
+        .await
+        .expect("timed out waiting for cURL")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(executed.request_line, curled.request_line);
+    let target = executed.request_line.split_whitespace().nth(1).unwrap();
+    let exported_target = exported
+        .split_once(&base_url)
+        .unwrap()
+        .1
+        .split('#')
+        .next()
+        .unwrap();
+    assert_eq!(target, exported_target);
+    assert!(target.contains("existing=yes"));
+    assert!(target.contains("q=a+%26+b"));
+    assert!(target.contains("api+key="));
+    assert!(executed.header("x-api-key").is_none());
+    assert!(curled.header("x-api-key").is_none());
+    assert_eq!(executed.header("x-trace"), Some("kept"));
+    assert_eq!(curled.header("x-trace"), Some("kept"));
+}
+
+#[test]
+fn curl_export_keeps_api_key_templates_in_the_selected_placement() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request(
+        "GET",
+        "https://example.com/items?existing=yes#results".into(),
+    );
+    request.query_parameters.push(QueryParameter {
+        name: "q".into(),
+        value: "a & b".into(),
+        disabled: false,
+    });
+    request.authentication = Some(api_key_auth("X-API-Key", "token {{secret}}", "header"));
+    let command = engine
+        .curl_command(
+            &request.clone().into_http().unwrap(),
+            &ExecutionOptions::default(),
+        )
+        .unwrap();
+    assert!(command.contains("--header 'x-api-key: token {{secret}}'"));
+    assert!(command.contains("--url 'https://example.com/items?existing=yes&q=a+%26+b#results'"));
+    assert!(!command.contains("secret="));
+
+    request.authentication = Some(api_key_auth("api key", "a & b {{secret}}", "query"));
+    let command = engine
+        .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .unwrap();
+    assert!(command.contains(
+        "--url 'https://example.com/items?existing=yes&q=a+%26+b&api+key=a+%26+b+{{secret}}#results'"
+    ));
+    assert!(!command.contains("--header 'api"));
+}
+
+#[tokio::test]
+async fn api_key_execution_and_curl_reject_the_same_invalid_configuration() {
+    let engine = HttpEngine::new().unwrap();
+    let mut cases = Vec::new();
+    for (key, value, placement) in [
+        ("", "secret", "query"),
+        ("X-API-Key", "secret", "cookie"),
+        ("X-API-Key", "secret", "Header"),
+        ("Not A Header", "secret", "header"),
+        ("X-API-Key", "bad\nvalue", "header"),
+    ] {
+        let mut request = request("GET", "https://example.com/items".into());
+        request.authentication = Some(api_key_auth(key, value, placement));
+        cases.push(request);
+    }
+    let mut missing_placement = request("GET", "https://example.com/items".into());
+    missing_placement.authentication = Some(Authentication {
+        kind: AuthenticationKind::ApiKey,
+        properties: BTreeMap::from([
+            (
+                "key".to_owned(),
+                AuthenticationValue::String("X-API-Key".to_owned()),
+            ),
+            (
+                "value".to_owned(),
+                AuthenticationValue::String("secret".to_owned()),
+            ),
+        ]),
+    });
+    cases.push(missing_placement);
+    let mut missing_key = request("GET", "https://example.com/items".into());
+    missing_key.authentication = Some(Authentication {
+        kind: AuthenticationKind::ApiKey,
+        properties: BTreeMap::from([
+            (
+                "value".to_owned(),
+                AuthenticationValue::String("secret".to_owned()),
+            ),
+            (
+                "placement".to_owned(),
+                AuthenticationValue::String("header".to_owned()),
+            ),
+        ]),
+    });
+    cases.push(missing_key);
+    let mut numeric = request("GET", "https://example.com/items".into());
+    numeric.authentication = Some(Authentication {
+        kind: AuthenticationKind::ApiKey,
+        properties: BTreeMap::from([
+            (
+                "key".to_owned(),
+                AuthenticationValue::String("X-API-Key".to_owned()),
+            ),
+            (
+                "value".to_owned(),
+                AuthenticationValue::Number("123".to_owned()),
+            ),
+            (
+                "placement".to_owned(),
+                AuthenticationValue::String("header".to_owned()),
+            ),
+        ]),
+    });
+    cases.push(numeric);
+    let mut digest = request("GET", "https://example.com/items".into());
+    digest.authentication = Some(Authentication {
+        kind: AuthenticationKind::Digest,
+        properties: BTreeMap::new(),
+    });
+    cases.push(digest);
+
+    for request in cases {
+        let prepared = request.into_http().unwrap();
+        let exported = engine
+            .curl_command(&prepared, &ExecutionOptions::default())
+            .unwrap_err();
+        let executed = engine
+            .execute(&prepared, &ExecutionOptions::default())
+            .await
+            .unwrap_err();
+        assert_eq!(exported, executed);
+        assert!(exported.is_configuration());
+    }
+}

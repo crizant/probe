@@ -25,12 +25,11 @@ use gpui_base::{
     Tabs, ToastStack,
 };
 use probe_core::{
-    AuthenticationKind, AuthenticationValue, Body, Collection, Environment, EnvironmentVariable,
-    FileReference, FormField, Header, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBodyKind, Request, RequestBody, RequestKey, SecretVariable, Variable,
-    VariableValue, VariableValueSet, WorkspaceItemRef, add_path_parameter,
-    ensure_path_parameters_from_url, remove_path_parameter_at, rename_path_parameter_at,
-    resolve_environment,
+    AuthenticationValue, Body, Collection, Environment, EnvironmentVariable, FileReference,
+    FormField, Header, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter,
+    RawBodyKind, Request, RequestBody, RequestKey, SecretVariable, Variable, VariableValue,
+    VariableValueSet, WorkspaceItemRef, add_path_parameter, ensure_path_parameters_from_url,
+    remove_path_parameter_at, rename_path_parameter_at, resolve_environment,
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
 use probe_opencollection::{
@@ -97,7 +96,8 @@ use crate::{
     persistence::PersistenceState,
     request_editor::{
         BodyEditorKind, EditorSection, RequestEditorState, apply_url_bar_value, auth_label,
-        auth_value, body_kind, raw_body_mut, set_auth_property, set_authentication, url_bar_value,
+        auth_value, authentication_selector_choices, body_kind, raw_body_mut, set_auth_property,
+        set_authentication, url_bar_value,
     },
     response_inspector::{
         InspectSelection, inspect_json_file, inspect_response_body, inspect_xml_file,

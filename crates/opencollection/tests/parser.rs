@@ -343,6 +343,103 @@ fn parses_bodies_authentication_and_environments() {
 }
 
 #[test]
+fn api_key_authentication_is_executable_and_other_kinds_stay_diagnostic() {
+    let source = concat!(
+        "opencollection: 1.0.0\n",
+        "info: { name: Auth }\n",
+        "bundled: true\n",
+        "items:\n",
+        "  - info: { name: Key, type: http }\n",
+        "    http:\n",
+        "      method: GET\n",
+        "      url: https://example.com/items\n",
+        "      auth:\n",
+        "        type: apikey\n",
+        "        key: X-API-Key\n",
+        "        value: \"{{apiToken}}\"\n",
+        "        placement: query\n",
+        "        extra: kept\n",
+        "  - info: { name: Numeric, type: http }\n",
+        "    http:\n",
+        "      method: GET\n",
+        "      url: https://example.com/numeric\n",
+        "      auth:\n",
+        "        type: apikey\n",
+        "        key: api_key\n",
+        "        value: 123\n",
+        "        placement: header\n",
+        "  - info: { name: Token, type: http }\n",
+        "    http:\n",
+        "      method: GET\n",
+        "      url: https://example.com/oauth\n",
+        "      auth:\n",
+        "        type: oauth2\n",
+        "        flow: client_credentials\n",
+    );
+    let parsed = parse(source).unwrap();
+    let diagnostics: Vec<_> = parsed
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.path.as_str(),
+                diagnostic.kind,
+                diagnostic.value.as_str(),
+            )
+        })
+        .collect();
+    assert!(diagnostics.contains(&(
+        "items/0/http/auth/extra",
+        ProjectionDiagnosticKind::AuthenticationProperty,
+        "extra",
+    )));
+    assert!(diagnostics.contains(&(
+        "items/1/http/auth/value",
+        ProjectionDiagnosticKind::AuthenticationProperty,
+        "value",
+    )));
+    assert!(diagnostics.contains(&(
+        "items/2/http/auth/type",
+        ProjectionDiagnosticKind::AuthenticationKind,
+        "oauth2",
+    )));
+    assert!(!diagnostics.iter().any(|(_, kind, value)| *kind
+        == ProjectionDiagnosticKind::AuthenticationKind
+        && *value == "apikey"));
+
+    let CollectionItem::Request(request) = &parsed.collection().items[0] else {
+        panic!("first item should be a request");
+    };
+    let auth = request.authentication.as_ref().unwrap();
+    assert_eq!(auth.kind, AuthenticationKind::ApiKey);
+    assert_eq!(
+        auth.properties.get("placement"),
+        Some(&AuthenticationValue::String("query".to_owned()))
+    );
+    assert_eq!(
+        auth.properties.get("extra"),
+        Some(&AuthenticationValue::String("kept".to_owned()))
+    );
+    let CollectionItem::Request(numeric) = &parsed.collection().items[1] else {
+        panic!("second item should be a request");
+    };
+    assert_eq!(
+        numeric
+            .authentication
+            .as_ref()
+            .unwrap()
+            .properties
+            .get("value"),
+        Some(&AuthenticationValue::Number("123".to_owned()))
+    );
+    let serialized = parsed.to_yaml().unwrap();
+    assert_eq!(
+        parse(&serialized).unwrap().collection(),
+        parsed.collection()
+    );
+}
+
+#[test]
 fn loads_and_indexes_more_than_one_thousand_requests() {
     let parsed = parse(&fixture("phase2-large-workspace.yml"))
         .expect("large workspace fixture should parse");

@@ -13,19 +13,7 @@ impl ProbeApp {
             .authentication
             .as_ref()
             .map(|auth| auth_label(&auth.kind));
-        let choices = [
-            ("None", None),
-            ("Inherit", Some(AuthenticationKind::Inherit)),
-            ("Basic", Some(AuthenticationKind::Basic)),
-            ("Bearer", Some(AuthenticationKind::Bearer)),
-            ("API Key", Some(AuthenticationKind::ApiKey)),
-            ("OAuth 1", Some(AuthenticationKind::OAuth1)),
-            ("OAuth 2", Some(AuthenticationKind::OAuth2)),
-            ("AWS v4", Some(AuthenticationKind::AwsV4)),
-            ("WSSE", Some(AuthenticationKind::Wsse)),
-            ("Digest", Some(AuthenticationKind::Digest)),
-            ("NTLM", Some(AuthenticationKind::Ntlm)),
-        ];
+        let choices = authentication_selector_choices();
         let choice_count = choices.len();
         let mut kind_buttons = div().flex().flex_wrap().gap(px(theme.metrics.spacing_1));
         for (index, (label, kind)) in choices.into_iter().enumerate() {

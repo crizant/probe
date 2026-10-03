@@ -398,7 +398,7 @@ envelope body. The engine therefore never sees GraphQL.
 `probe-http` owns the single asynchronous HTTP implementation. It accepts only
 `PreparedHttpRequest` values and converts them into network requests, substitutes enabled `:variableName` path parameters,
 applies enabled headers and query parameters,
-selects body/file variants, implements Basic and Bearer authentication, and enforces
+selects body/file variants, implements Basic, Bearer, and API Key authentication, and enforces
 OpenCollection timeout and redirect settings. Neither CLI nor desktop constructs HTTP
 requests independently.
 

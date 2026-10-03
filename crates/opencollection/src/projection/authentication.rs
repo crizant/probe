@@ -40,7 +40,7 @@ pub(super) fn project_authentication(
                     )
                 })?
                 .to_owned();
-            if !matches!(kind.as_str(), "basic" | "bearer") {
+            if !matches!(kind.as_str(), "basic" | "bearer" | "apikey") {
                 diagnostic(
                     diagnostics,
                     format!("{path}/type"),
@@ -65,9 +65,12 @@ pub(super) fn project_authentication(
                 let supported = match kind.as_str() {
                     "basic" => matches!(name, "username" | "password"),
                     "bearer" => name == "token",
+                    "apikey" => matches!(name, "key" | "value" | "placement"),
                     _ => true,
                 };
-                if !supported || (matches!(kind.as_str(), "basic" | "bearer") && !value.is_string())
+                if !supported
+                    || (matches!(kind.as_str(), "basic" | "bearer" | "apikey")
+                        && !value.is_string())
                 {
                     diagnostic(
                         diagnostics,
