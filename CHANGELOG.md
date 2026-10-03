@@ -9,6 +9,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 ### Added
 
 - Show, set, and unset OpenCollection collection summary and docs, folder description and docs, and request description and docs from the CLI. Unset removes the key; `set --docs-json null` writes YAML null.
+- Execute OpenCollection API Key authentication from a header or query parameter. Copy as cURL uses the same placement.
+
+### Changed
+
+- The desktop authentication selector offers Inherit, Basic, Bearer, and API Key. Other OpenCollection authentication types remain in the collection file.
 
 ### Fixed
 

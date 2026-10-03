@@ -874,3 +874,183 @@ fn curl_export_allows_file_parts_with_normal_mime_parameters() {
     assert!(command.contains("type=text/plain; charset=utf-8"));
     assert!(command.contains("test.txt"));
 }
+
+fn api_key_auth(key: &str, value: &str, placement: &str) -> Authentication {
+    Authentication {
+        kind: AuthenticationKind::ApiKey,
+        properties: BTreeMap::from([
+            (
+                "key".to_owned(),
+                AuthenticationValue::String(key.to_owned()),
+            ),
+            (
+                "value".to_owned(),
+                AuthenticationValue::String(value.to_owned()),
+            ),
+            (
+                "placement".to_owned(),
+                AuthenticationValue::String(placement.to_owned()),
+            ),
+        ]),
+    }
+}
+
+#[tokio::test]
+async fn sends_an_api_key_header() {
+    let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
+    let mut request = request("GET", format!("{base_url}/items?existing=yes"));
+    request.authentication = Some(api_key_auth("X-API-Key", "secret value", "header"));
+
+    HttpEngine::new()
+        .unwrap()
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .await
+        .unwrap();
+    let captured = captured.await.unwrap().unwrap();
+
+    assert_eq!(captured.request_line, "GET /items?existing=yes HTTP/1.1");
+    assert_eq!(captured.header("x-api-key"), Some("secret value"));
+}
+
+#[tokio::test]
+async fn sends_an_api_key_query_parameter() {
+    let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
+    let mut request = request("GET", format!("{base_url}/items?existing=yes#section"));
+    request.query_parameters.push(QueryParameter {
+        name: "q".to_owned(),
+        value: "a & b".to_owned(),
+        disabled: false,
+    });
+    request.authentication = Some(api_key_auth("api key", "p@ss/雪~*", "query"));
+
+    HttpEngine::new()
+        .unwrap()
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .await
+        .unwrap();
+    let captured = captured.await.unwrap().unwrap();
+
+    assert_eq!(
+        captured.request_line,
+        "GET /items?existing=yes&q=a+%26+b&api+key=p%40ss%2F%E9%9B%AA%7E* HTTP/1.1"
+    );
+    assert!(captured.header("x-api-key").is_none());
+}
+
+#[test]
+fn curl_export_keeps_api_key_templates_in_the_selected_placement() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request(
+        "GET",
+        "https://example.com/items?existing=yes#results".into(),
+    );
+    request.query_parameters.push(QueryParameter {
+        name: "q".into(),
+        value: "a & b".into(),
+        disabled: false,
+    });
+    request.authentication = Some(api_key_auth("X-API-Key", "token {{secret}}", "header"));
+    let command = engine
+        .curl_command(
+            &request.clone().into_http().unwrap(),
+            &ExecutionOptions::default(),
+        )
+        .unwrap();
+    assert!(command.contains("--header 'x-api-key: token {{secret}}'"));
+    assert!(command.contains("--url 'https://example.com/items?existing=yes&q=a+%26+b#results'"));
+    assert!(!command.contains("secret="));
+
+    request.authentication = Some(api_key_auth("api key", "a & b {{secret}}", "query"));
+    let command = engine
+        .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .unwrap();
+    assert!(command.contains(
+        "--url 'https://example.com/items?existing=yes&q=a+%26+b&api+key=a+%26+b+{{secret}}#results'"
+    ));
+    assert!(!command.contains("--header 'api"));
+}
+
+#[tokio::test]
+async fn rejects_invalid_api_key_configuration() {
+    let engine = HttpEngine::new().unwrap();
+    let mut cases = Vec::new();
+    for (key, value, placement) in [
+        ("", "secret", "query"),
+        ("X-API-Key", "secret", "cookie"),
+        ("X-API-Key", "secret", "Header"),
+        ("Not A Header", "secret", "header"),
+        ("X-API-Key", "bad\nvalue", "header"),
+    ] {
+        let mut request = request("GET", "https://example.com/items".into());
+        request.authentication = Some(api_key_auth(key, value, placement));
+        cases.push(request);
+    }
+    let mut missing_placement = request("GET", "https://example.com/items".into());
+    missing_placement.authentication = Some(Authentication {
+        kind: AuthenticationKind::ApiKey,
+        properties: BTreeMap::from([
+            (
+                "key".to_owned(),
+                AuthenticationValue::String("X-API-Key".to_owned()),
+            ),
+            (
+                "value".to_owned(),
+                AuthenticationValue::String("secret".to_owned()),
+            ),
+        ]),
+    });
+    cases.push(missing_placement);
+    let mut missing_key = request("GET", "https://example.com/items".into());
+    missing_key.authentication = Some(Authentication {
+        kind: AuthenticationKind::ApiKey,
+        properties: BTreeMap::from([
+            (
+                "value".to_owned(),
+                AuthenticationValue::String("secret".to_owned()),
+            ),
+            (
+                "placement".to_owned(),
+                AuthenticationValue::String("header".to_owned()),
+            ),
+        ]),
+    });
+    cases.push(missing_key);
+    let mut numeric = request("GET", "https://example.com/items".into());
+    numeric.authentication = Some(Authentication {
+        kind: AuthenticationKind::ApiKey,
+        properties: BTreeMap::from([
+            (
+                "key".to_owned(),
+                AuthenticationValue::String("X-API-Key".to_owned()),
+            ),
+            (
+                "value".to_owned(),
+                AuthenticationValue::Number("123".to_owned()),
+            ),
+            (
+                "placement".to_owned(),
+                AuthenticationValue::String("header".to_owned()),
+            ),
+        ]),
+    });
+    cases.push(numeric);
+    let mut digest = request("GET", "https://example.com/items".into());
+    digest.authentication = Some(Authentication {
+        kind: AuthenticationKind::Digest,
+        properties: BTreeMap::new(),
+    });
+    cases.push(digest);
+
+    for request in cases {
+        let prepared = request.into_http().unwrap();
+        let exported = engine
+            .curl_command(&prepared, &ExecutionOptions::default())
+            .unwrap_err();
+        let executed = engine
+            .execute(&prepared, &ExecutionOptions::default())
+            .await
+            .unwrap_err();
+        assert_eq!(exported, executed);
+        assert!(exported.is_configuration());
+    }
+}

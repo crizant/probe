@@ -19,12 +19,6 @@ impl ProbeApp {
             ("Basic", Some(AuthenticationKind::Basic)),
             ("Bearer", Some(AuthenticationKind::Bearer)),
             ("API Key", Some(AuthenticationKind::ApiKey)),
-            ("OAuth 1", Some(AuthenticationKind::OAuth1)),
-            ("OAuth 2", Some(AuthenticationKind::OAuth2)),
-            ("AWS v4", Some(AuthenticationKind::AwsV4)),
-            ("WSSE", Some(AuthenticationKind::Wsse)),
-            ("Digest", Some(AuthenticationKind::Digest)),
-            ("NTLM", Some(AuthenticationKind::Ntlm)),
         ];
         let choice_count = choices.len();
         let mut kind_buttons = div().flex().flex_wrap().gap(px(theme.metrics.spacing_1));

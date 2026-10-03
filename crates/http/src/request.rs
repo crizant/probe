@@ -69,12 +69,13 @@ pub(crate) fn curl_command(
     if let Some(authentication) = &request.authentication {
         builder = apply_authentication(builder, authentication)?;
     }
+    let api_key_query = api_key_query_pair(request.authentication.as_ref())?;
     let built = builder
         .build()
         .map_err(|error| HttpError::InvalidRequest(error.to_string()))?;
     let mut command = String::from("curl --globoff");
     curl_argument(&mut command, "--request", built.method().as_str());
-    curl_argument(&mut command, "--url", &curl_url(request)?);
+    curl_argument(&mut command, "--url", &curl_url(request, api_key_query)?);
     let settings = &request.settings;
     if settings.follow_redirects != Some(false) {
         command.push_str(" --location");
@@ -119,7 +120,7 @@ pub(crate) fn curl_command(
     Ok(command)
 }
 
-fn curl_url(request: &Request) -> Result<String, HttpError> {
+fn curl_url(request: &Request, api_key_query: Option<(&str, &str)>) -> Result<String, HttpError> {
     let mut url = request.url.clone().ok_or(HttpError::MissingUrl)?;
     for span in probe_core::path_variable_spans(&url).into_iter().rev() {
         if let Some(parameter) = request
@@ -136,17 +137,12 @@ fn curl_url(request: &Request) -> Result<String, HttpError> {
         .iter()
         .filter(|parameter| is_enabled_and_named(parameter.disabled, &parameter.name))
     {
-        url.push(if url.contains('?') { '&' } else { '?' });
-        url.push_str(&format!(
-            "{}={}",
-            curl_encode(&parameter.name, true),
-            curl_encode(&parameter.value, true)
-        ));
+        append_form_query(&mut url, &parameter.name, &parameter.value);
     }
     if let Some(fragment) = fragment {
         url.push_str(&fragment);
     }
-    if url.contains("{{") {
+    let mut url = if url.contains("{{") {
         use std::fmt::Write as _;
         let mut encoded = String::with_capacity(url.len());
         // Preserve templates and URL delimiters; encode only unsafe literal bytes.
@@ -169,11 +165,27 @@ fn curl_url(request: &Request) -> Result<String, HttpError> {
             }
             encoded.push_str(template);
         }
-        return Ok(encoded);
+        encoded
+    } else {
+        reqwest::Url::parse(&url)
+            .map(|url| url.to_string())
+            .map_err(|error| HttpError::InvalidRequest(error.to_string()))?
+    };
+    if let Some((name, value)) = api_key_query {
+        append_form_query(&mut url, name, value);
     }
-    reqwest::Url::parse(&url)
-        .map(|url| url.to_string())
-        .map_err(|error| HttpError::InvalidRequest(error.to_string()))
+    Ok(url)
+}
+
+fn append_form_query(url: &mut String, name: &str, value: &str) {
+    let fragment = url.find('#').map(|index| url.split_off(index));
+    url.push(if url.contains('?') { '&' } else { '?' });
+    url.push_str(&curl_encode(name, true));
+    url.push('=');
+    url.push_str(&curl_encode(value, true));
+    if let Some(fragment) = fragment {
+        url.push_str(&fragment);
+    }
 }
 
 // Encode literal bytes, leaving complete {{variable}} references untouched.
@@ -544,10 +556,72 @@ fn apply_authentication(
             let token = authentication_string(authentication, "token", "bearer")?;
             Ok(builder.bearer_auth(token))
         }
+        AuthenticationKind::ApiKey => apply_api_key(builder, authentication),
         kind => Err(HttpError::UnsupportedAuthentication(
             kind.as_str().to_owned(),
         )),
     }
+}
+
+fn apply_api_key(
+    builder: RequestBuilder,
+    authentication: &Authentication,
+) -> Result<RequestBuilder, HttpError> {
+    let (key, value, placement) = api_key_fields(authentication)?;
+    match placement {
+        ApiKeyPlacement::Header => {
+            let name = HeaderName::from_bytes(key.as_bytes())
+                .map_err(|_| HttpError::InvalidHeaderName(key.to_owned()))?;
+            let header_value = HeaderValue::from_str(value)
+                .map_err(|_| HttpError::InvalidHeaderValue(key.to_owned()))?;
+            Ok(builder.header(name, header_value))
+        }
+        ApiKeyPlacement::Query => Ok(builder.query(&[(key, value)])),
+    }
+}
+
+enum ApiKeyPlacement {
+    Header,
+    Query,
+}
+
+fn api_key_fields(
+    authentication: &Authentication,
+) -> Result<(&str, &str, ApiKeyPlacement), HttpError> {
+    let key = authentication_string(authentication, "key", "apikey")?;
+    if key.is_empty() {
+        return Err(HttpError::MissingAuthenticationProperty {
+            scheme: "apikey",
+            property: "key",
+        });
+    }
+    let value = authentication_string(authentication, "value", "apikey")?;
+    let placement = match authentication_string(authentication, "placement", "apikey")? {
+        "header" => ApiKeyPlacement::Header,
+        "query" => ApiKeyPlacement::Query,
+        _ => {
+            return Err(HttpError::InvalidRequest(
+                "apikey authentication placement must be 'header' or 'query'".into(),
+            ));
+        }
+    };
+    Ok((key, value, placement))
+}
+
+fn api_key_query_pair(
+    authentication: Option<&Authentication>,
+) -> Result<Option<(&str, &str)>, HttpError> {
+    let Some(authentication) = authentication else {
+        return Ok(None);
+    };
+    if authentication.kind != AuthenticationKind::ApiKey {
+        return Ok(None);
+    }
+    let (key, value, placement) = api_key_fields(authentication)?;
+    Ok(match placement {
+        ApiKeyPlacement::Query => Some((key, value)),
+        ApiKeyPlacement::Header => None,
+    })
 }
 
 fn authentication_string<'a>(
