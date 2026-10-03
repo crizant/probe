@@ -305,6 +305,12 @@ fn body_content_updates_only_the_selected_http_variant() {
 #[test]
 fn failed_http_body_apply_leaves_the_request_unchanged() {
     let mut request = Request {
+        metadata: ItemMetadata {
+            name: Some("Original".to_owned()),
+            description: Some(Documentation::Text("keep description".to_owned())),
+            ..ItemMetadata::default()
+        },
+        docs: Some("keep docs".to_owned()),
         method: Some("POST".to_owned()),
         url: Some("https://example.test/pets".to_owned()),
         kind: RequestKind::Http {
@@ -348,6 +354,8 @@ fn failed_http_body_apply_leaves_the_request_unchanged() {
     for (variants, message) in cases {
         let error = RequestUpdate {
             name: Some("Renamed".to_owned()),
+            description: FieldPatch::Set(Documentation::Text("changed description".to_owned())),
+            docs: FieldPatch::Set("changed docs".to_owned()),
             method: FieldPatch::Set("PUT".to_owned()),
             url: FieldPatch::Set("https://changed.example".to_owned()),
             body: FieldPatch::Set(variants),
