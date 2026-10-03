@@ -438,6 +438,11 @@ fn sets_and_persists_request_fields_as_json() {
     assert_eq!(reloaded["name"], "Replace pet");
     assert_eq!(reloaded["method"], "PUT");
     assert_eq!(reloaded["url"], "https://api.example.com/pets/42");
+    assert_eq!(reloaded["authentication"]["type"], "bearer");
+    assert_eq!(
+        reloaded["authentication"]["properties"]["token"],
+        "not-used-by-phase-1"
+    );
     let saved = fs::read_to_string(&workspace).unwrap();
     assert!(saved.contains("vendor.example"));
     assert!(saved.contains("runtime:"));
@@ -1939,34 +1944,23 @@ fn sets_replaces_and_clears_headers_parameters_body_and_auth() {
         "items/0",
         &[
             "--auth",
-            r#"{"type":"oauth2","flow":"client_credentials","accessTokenUrl":"https://example.com/oauth/token","credentials":{"clientId":"probe","clientSecret":"secret","placement":"basic_auth_header"},"settings":{"autoFetchToken":true}}"#,
+            r#"{"type":"apikey","key":"X-API-Key","value":"{{apiToken}}","placement":"header"}"#,
         ],
     );
-    assert_eq!(nested["authentication"]["type"], "oauth2");
+    assert_eq!(nested["authentication"]["type"], "apikey");
+    assert_eq!(nested["authentication"]["properties"]["key"], "X-API-Key");
     assert_eq!(
-        nested["authentication"]["properties"]["flow"],
-        "client_credentials"
+        nested["authentication"]["properties"]["value"],
+        "{{apiToken}}"
     );
     assert_eq!(
-        nested["authentication"]["properties"]["credentials"]["clientId"],
-        "probe"
-    );
-    assert_eq!(
-        nested["authentication"]["properties"]["credentials"]["placement"],
-        "basic_auth_header"
-    );
-    assert_eq!(
-        nested["authentication"]["properties"]["settings"]["autoFetchToken"],
-        true
+        nested["authentication"]["properties"]["placement"],
+        "header"
     );
     let reloaded = request_json(&workspace, "items/0");
     assert_eq!(
-        reloaded["authentication"]["properties"]["accessTokenUrl"],
-        "https://example.com/oauth/token"
-    );
-    assert_eq!(
-        reloaded["authentication"]["properties"]["credentials"]["clientSecret"],
-        "secret"
+        reloaded["authentication"]["properties"]["placement"],
+        "header"
     );
 
     set_fields(&workspace, "items/0", &["--auth", r#""inherit""#]);
@@ -2098,6 +2092,11 @@ fn body_write_keeps_an_existing_variant_list() {
     assert_eq!(updated["body"]["variants"][1]["title"], "Text");
     assert_eq!(updated["body"]["variants"][1]["selected"], false);
     assert_eq!(updated["body"]["variants"][1]["body"]["data"], "enabled");
+    assert_eq!(updated["authentication"]["type"], "oauth2");
+    assert_eq!(
+        updated["authentication"]["properties"]["flow"],
+        "client_credentials"
+    );
     let saved = fs::read_to_string(&workspace).unwrap();
     assert!(saved.contains("title: JSON"));
     assert!(saved.contains("title: Text"));
@@ -2106,6 +2105,7 @@ fn body_write_keeps_an_existing_variant_list() {
     set_fields(&workspace, "items/4", &["--body", "null"]);
     let cleared = request_json(&workspace, "items/4");
     assert!(cleared["body"].is_null());
+    assert_eq!(cleared["authentication"]["type"], "oauth2");
     let saved = fs::read_to_string(&workspace).unwrap();
     assert!(!saved.contains("title: JSON"));
     assert!(!saved.contains("title: Text"));
@@ -2297,7 +2297,7 @@ fn http_field_writes_reject_invalid_values_and_graphql_bodies() {
         ),
         (
             &["--auth", r#"{"type":"whatever"}"#][..],
-            "authentication type must be inherit, awsv4, basic, wsse, bearer, digest, ntlm, apikey, oauth1, or oauth2",
+            "authentication type must be inherit, basic, bearer, or apikey",
         ),
         (
             &["--body", "null", "--body", "null"][..],

@@ -9,7 +9,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 ### Added
 
 - Show, set, and unset OpenCollection collection summary and docs, folder description and docs, and request description and docs from the CLI. Unset removes the key; `set --docs-json null` writes YAML null.
-- Set, replace, and clear a request's headers, query parameters, path parameters, HTTP body, and authentication with `probe request set` and `probe request create`. HTTP body writes cover the OpenCollection body types, and a body write keeps an existing variant list's titles and selection.
+- Set, replace, and clear a request's headers, query parameters, path parameters, HTTP body, and basic, bearer, API-key, or inherit authentication with `probe request set` and `probe request create`. HTTP body writes cover the OpenCollection body types, and a body write keeps an existing variant list's titles and selection.
 - Execute OpenCollection API Key authentication from a header or query parameter. Copy as cURL uses the same placement.
 
 ### Changed
