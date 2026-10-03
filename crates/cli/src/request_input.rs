@@ -85,7 +85,9 @@ pub(crate) fn parse_authentication(source: &str) -> Result<FieldPatch<Authentica
         })),
         Value::String(_) => Err(CliError::invalid_arguments(AUTHENTICATION_VALUE)),
         Value::Object(object) => Ok(FieldPatch::Set(parse_auth_object(&object)?)),
-        _ => Err(CliError::invalid_arguments(AUTHENTICATION_VALUE)),
+        Value::Bool(_) | Value::Number(_) | Value::Array(_) => {
+            Err(CliError::invalid_arguments(AUTHENTICATION_VALUE))
+        }
     }
 }
 
@@ -522,8 +524,8 @@ fn file_entry_error() -> CliError {
 #[cfg(test)]
 mod tests {
     use super::{
-        HttpBodyWrite, parse_authentication, parse_headers, parse_http_body, parse_path_parameters,
-        parse_query_parameters,
+        HttpBodyWrite, english_list, parse_authentication, parse_headers, parse_http_body,
+        parse_path_parameters, parse_query_parameters,
     };
     use probe_core::{
         AuthenticationKind, AuthenticationValue, Body, FieldPatch, MultipartPartKind,
@@ -532,6 +534,12 @@ mod tests {
 
     fn assert_invalid(error: crate::CliError, message: &str) {
         assert_eq!(error.message, message);
+    }
+
+    #[test]
+    fn english_list_names_empty_and_single_item_lists() {
+        assert_eq!(english_list(&[]), "");
+        assert_eq!(english_list(&["header"]), "header");
     }
 
     #[test]
@@ -616,6 +624,10 @@ mod tests {
         );
         assert_invalid(
             parse_authentication(r#""custom""#).unwrap_err(),
+            "authentication must be a JSON object, the string \"inherit\", or null",
+        );
+        assert_invalid(
+            parse_authentication(r#""bearer""#).unwrap_err(),
             "authentication must be a JSON object, the string \"inherit\", or null",
         );
         assert_invalid(
