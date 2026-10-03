@@ -206,18 +206,26 @@ fn body_content_updates_only_the_selected_http_variant() {
             },
         ])
     };
+    let content_update = RequestUpdate {
+        body_content: FieldPatch::Set(text_body("replaced")),
+        ..RequestUpdate::default()
+    };
+    assert!(RequestUpdate::default().is_empty());
+    assert!(!content_update.is_empty());
+    assert!(
+        !RequestUpdate {
+            body: FieldPatch::Clear,
+            ..RequestUpdate::default()
+        }
+        .is_empty()
+    );
     let mut request = Request {
         kind: RequestKind::Http {
             body: Some(variants()),
         },
         ..Request::default()
     };
-    RequestUpdate {
-        body_content: FieldPatch::Set(text_body("replaced")),
-        ..RequestUpdate::default()
-    }
-    .apply(&mut request)
-    .unwrap();
+    content_update.apply(&mut request).unwrap();
     let RequestBody::Variants(variants) = request.http_body().unwrap() else {
         panic!("variant list should remain");
     };
