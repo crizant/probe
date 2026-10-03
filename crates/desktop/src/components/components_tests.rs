@@ -147,6 +147,81 @@ fn input_placeholder_updates_when_label_or_shared_state_changes(cx: &mut TestApp
         .unwrap();
 }
 
+#[gpui::test]
+fn unchanged_placeholder_redraw_does_not_notify_input_state(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    // `set_placeholder` replaces the stored string and then notifies. GPUI does
+    // not deliver entity observers for a notify raised while the window is
+    // drawing, and painting the input notifies too, so an observer count stays
+    // at zero either way. These strings are long enough to be distinct heap
+    // allocations; the original allocation remaining is what shows the setter
+    // was skipped. The direct call below shows that setter does notify.
+    let text = "unchanged-placeholder-".repeat(4);
+    let original: SharedString = text.clone().into();
+    let label: SharedString = text.into();
+    let original_ptr = original.as_ptr();
+    let label_ptr = label.as_ptr();
+    assert_ne!(original_ptr, label_ptr);
+    assert_eq!(original.as_ref(), label.as_ref());
+
+    let window = cx.open_window(size(px(320.0), px(180.0)), |window, cx| {
+        PlaceholderHarness {
+            input: cx.new(|cx| InputState::new(window, cx).placeholder(original)),
+            placeholder: label,
+        }
+    });
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let notifications = Rc::new(Cell::new(0));
+    let observed = notifications.clone();
+    let _subscription = window
+        .update(cx, |view, _, cx| {
+            cx.observe(&view.input, move |_, _, _| {
+                observed.set(observed.get() + 1);
+            })
+        })
+        .unwrap();
+
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert_eq!(notifications.get(), 0);
+    window
+        .update(cx, |view, _, cx| {
+            let presentation = view.input.read(cx).presentation();
+            let shown = presentation.placeholder();
+            assert_eq!(shown.as_ref(), view.placeholder.as_ref());
+            assert_eq!(
+                shown.as_ptr(),
+                original_ptr,
+                "unchanged redraw stored a new placeholder"
+            );
+            assert_ne!(shown.as_ptr(), label_ptr);
+        })
+        .unwrap();
+
+    window
+        .update(cx, |view, window, cx| {
+            let placeholder = view.placeholder.clone();
+            view.input.update(cx, |input, cx| {
+                input.set_placeholder(placeholder, window, cx);
+            });
+        })
+        .unwrap();
+    assert_eq!(notifications.get(), 1);
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                view.input.read(cx).presentation().placeholder().as_ptr(),
+                label_ptr
+            );
+        })
+        .unwrap();
+}
+
 struct PersistentInputFocusHarness {
     field: Option<Entity<super::FieldInput>>,
     visible: bool,
