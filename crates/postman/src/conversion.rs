@@ -131,6 +131,7 @@ fn convert_items(
                     let effective_auth = item.auth.as_ref().or(inherited_auth);
                     Ok(CollectionItem::Folder(Folder {
                         metadata: item_metadata(item, index),
+                        docs: None,
                         items: convert_items(
                             children,
                             effective_auth,
@@ -245,6 +246,7 @@ fn convert_request(
                 authentication,
                 settings: RequestSettings::default(),
                 kind,
+                ..Request::default()
             }))
         }
     }
@@ -255,6 +257,7 @@ fn item_metadata(item: &PostmanItem, index: usize) -> ItemMetadata {
     ItemMetadata {
         name: nonempty(&item.name),
         sequence: Some(index as f64),
+        ..ItemMetadata::default()
     }
 }
 

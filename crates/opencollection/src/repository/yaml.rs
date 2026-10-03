@@ -1,12 +1,41 @@
 use probe_core::{
-    Authentication, AuthenticationKind, AuthenticationValue, Body, FileReference, FormField,
-    Header, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind,
-    RequestBody,
+    Authentication, AuthenticationKind, AuthenticationValue, Body, Documentation, FieldPatch,
+    FileReference, FormField, Header, MultipartPart, MultipartPartKind, MultipartValue,
+    QueryParameter, RawBodyKind, RequestBody,
 };
 use serde_yaml_ng::Value;
 
 pub(super) fn string_key(name: &str) -> Value {
     Value::String(name.to_owned())
+}
+
+pub(super) fn documentation_value(documentation: &Documentation) -> Value {
+    match documentation {
+        Documentation::Text(text) => Value::String(text.clone()),
+        Documentation::Null => Value::Null,
+        Documentation::Content {
+            content,
+            media_type,
+        } => {
+            let mut mapping = serde_yaml_ng::Mapping::new();
+            mapping.insert(string_key("content"), Value::String(content.clone()));
+            mapping.insert(string_key("type"), Value::String(media_type.clone()));
+            Value::Mapping(mapping)
+        }
+    }
+}
+
+pub(super) fn set_documentation(
+    mapping: &mut serde_yaml_ng::Mapping,
+    name: &str,
+    patch: &FieldPatch<Documentation>,
+) {
+    let value = match patch {
+        FieldPatch::Unchanged => return,
+        FieldPatch::Set(documentation) => Some(documentation_value(documentation)),
+        FieldPatch::Clear => None,
+    };
+    set_optional(mapping, name, value);
 }
 
 pub(super) fn set_optional(mapping: &mut serde_yaml_ng::Mapping, name: &str, value: Option<Value>) {

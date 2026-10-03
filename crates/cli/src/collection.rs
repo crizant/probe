@@ -1,5 +1,6 @@
 use std::{io::Read, path::PathBuf};
 
+use probe_core::CollectionUpdate;
 use probe_opencollection::{
     LoadedWorkspace, create_bundled_workspace, create_bundled_workspace_from_collection,
 };
@@ -7,7 +8,12 @@ use probe_postman::inspect_postman_source;
 use probe_yaak::inspect_yaak_source;
 use serde_json::{Value, json};
 
-use crate::{CliError, CommandOutput, WorkspaceInput, error::import_diagnostic_json, load};
+use crate::{
+    CliError, CommandOutput, WorkspaceInput,
+    error::import_diagnostic_json,
+    load,
+    presentation::{append_documentation, documentation_json},
+};
 
 pub(crate) fn create(path: PathBuf, name: Option<String>) -> Result<CommandOutput, CliError> {
     let loaded =
@@ -110,6 +116,59 @@ pub(crate) fn import_postman(
             "counts": workspace_counts(&loaded),
             "warnings": imported.diagnostics.iter().map(import_diagnostic_json).collect::<Vec<_>>(),
             "projectionWarnings": projection_warnings(&loaded),
+        }),
+    })
+}
+
+pub(crate) fn get(
+    input: &WorkspaceInput,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let loaded = load(input, stdin)?;
+    let metadata = loaded.workspace().metadata();
+    let mut human = format!(
+        "Name: {}\nSummary: {}\n",
+        metadata.name.as_deref().unwrap_or("<unnamed>"),
+        metadata.summary.as_deref().unwrap_or("<unset>"),
+    );
+    append_documentation(&mut human, "Docs", metadata.docs.as_ref());
+    Ok(CommandOutput {
+        human,
+        json: json!({
+            "collection": {
+                "docs": documentation_json(metadata.docs.as_ref()),
+                "name": metadata.name,
+                "summary": metadata.summary,
+            }
+        }),
+    })
+}
+
+pub(crate) fn set(
+    input: &WorkspaceInput,
+    update: &CollectionUpdate,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let mut loaded = load(input, stdin)?;
+    loaded
+        .update_collection(update)
+        .map_err(CliError::persistence)?;
+    let metadata = loaded.workspace().metadata();
+    let mut human = format!(
+        "Updated collection\nName: {}\nSummary: {}\n",
+        metadata.name.as_deref().unwrap_or("<unnamed>"),
+        metadata.summary.as_deref().unwrap_or("<unset>"),
+    );
+    append_documentation(&mut human, "Docs", metadata.docs.as_ref());
+    Ok(CommandOutput {
+        human,
+        json: json!({
+            "collection": {
+                "docs": documentation_json(metadata.docs.as_ref()),
+                "name": metadata.name,
+                "summary": metadata.summary,
+            },
+            "updated": true,
         }),
     })
 }

@@ -1,5 +1,6 @@
 use crate::{
-    Collection, CollectionItem, CollectionMetadata, Environment, ItemMetadata, Request,
+    Collection, CollectionItem, CollectionMetadata, Documentation, Environment, ItemMetadata,
+    Request,
     arena::{Arena, ArenaKey},
 };
 use std::collections::BTreeMap;
@@ -107,6 +108,8 @@ pub struct WorkspaceFolder {
     pub key: FolderKey,
     /// Folder metadata.
     pub metadata: ItemMetadata,
+    /// Folder documentation. Absent when the source omits `docs`.
+    pub docs: Option<Documentation>,
     /// Ordered direct children.
     pub children: Vec<WorkspaceItemRef>,
 }
@@ -195,6 +198,11 @@ impl Workspace {
         &self.metadata
     }
 
+    /// Returns mutable collection metadata.
+    pub const fn metadata_mut(&mut self) -> &mut CollectionMetadata {
+        &mut self.metadata
+    }
+
     /// Returns the ordered items at the workspace root.
     #[must_use]
     pub fn root_items(&self) -> &[WorkspaceItemRef] {
@@ -266,6 +274,7 @@ impl Workspace {
         let arena_key = self.folders.insert_with_key(|arena_key| WorkspaceFolder {
             key: FolderKey::in_workspace(workspace_generation, arena_key),
             metadata,
+            docs: None,
             children: Vec::new(),
         });
         let key = FolderKey::in_workspace(workspace_generation, arena_key);
@@ -381,6 +390,14 @@ impl Workspace {
             return None;
         }
         self.folders.get(key.into())
+    }
+
+    /// Mutably looks up a folder in constant time, rejecting stale generations.
+    pub fn folder_mut(&mut self, key: FolderKey) -> Option<&mut WorkspaceFolder> {
+        if key.workspace_generation != self.workspace_generation {
+            return None;
+        }
+        self.folders.get_mut(key.into())
     }
 
     /// Returns the number of live folders.
@@ -699,6 +716,7 @@ fn index_item(
             let arena_key = folders.insert_with_key(|arena_key| WorkspaceFolder {
                 key: FolderKey::in_workspace(workspace_generation, arena_key),
                 metadata: folder.metadata,
+                docs: folder.docs,
                 children: Vec::new(),
             });
             let key = FolderKey::in_workspace(workspace_generation, arena_key);
@@ -736,7 +754,7 @@ mod tests {
         Request {
             metadata: ItemMetadata {
                 name: Some(name.to_owned()),
-                sequence: None,
+                ..ItemMetadata::default()
             },
             ..Request::default()
         }
@@ -747,7 +765,7 @@ mod tests {
         let collection = || Collection {
             items: vec![CollectionItem::Folder(Folder {
                 metadata: ItemMetadata::default(),
-                items: Vec::new(),
+                ..Folder::default()
             })],
             ..Collection::default()
         };
@@ -783,7 +801,9 @@ mod tests {
                     metadata: ItemMetadata {
                         name: Some("Users".to_owned()),
                         sequence: Some(1.0),
+                        ..ItemMetadata::default()
                     },
+                    docs: None,
                     items: vec![request("List users")],
                 }),
                 request("Health"),
@@ -904,7 +924,7 @@ mod tests {
                 0,
                 ItemMetadata {
                     name: Some("Folder".to_owned()),
-                    sequence: None,
+                    ..ItemMetadata::default()
                 },
             )
             .unwrap();
@@ -914,7 +934,7 @@ mod tests {
                 0,
                 ItemMetadata {
                     name: Some("Child".to_owned()),
-                    sequence: None,
+                    ..ItemMetadata::default()
                 },
             )
             .unwrap();

@@ -1,6 +1,9 @@
 use std::{iter::Peekable, path::PathBuf, vec::IntoIter};
 
-use probe_core::{FieldPatch, GraphqlUpdate, RequestUpdate, StatusExpectation};
+use probe_core::{
+    CollectionUpdate, Documentation, FieldPatch, FolderUpdate, GraphqlUpdate, RequestUpdate,
+    StatusExpectation,
+};
 use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
 use serde_json::{Map, Value};
 
@@ -25,6 +28,22 @@ pub(crate) enum Command {
     },
     Validate {
         input: WorkspaceInput,
+    },
+    GetCollection {
+        input: WorkspaceInput,
+    },
+    SetCollection {
+        input: WorkspaceInput,
+        update: CollectionUpdate,
+    },
+    GetFolder {
+        input: WorkspaceInput,
+        selector: String,
+    },
+    SetFolder {
+        input: WorkspaceInput,
+        selector: String,
+        update: FolderUpdate,
     },
     ListRequests {
         input: WorkspaceInput,
@@ -104,12 +123,18 @@ pub(crate) fn parse(args: Vec<String>) -> Result<Command, CliError> {
         ("collection", "validate") => Ok(Command::Validate {
             input: workspace(parser)?,
         }),
+        ("collection", "get") => Ok(Command::GetCollection {
+            input: workspace(parser)?,
+        }),
+        ("collection", "set") => parse_collection_set(parser),
         ("request", "list") => Ok(Command::ListRequests {
             input: workspace(parser)?,
         }),
         ("folder", "list") => Ok(Command::ListFolders {
             input: workspace(parser)?,
         }),
+        ("folder", "get") => parse_folder_get(parser),
+        ("folder", "set") => parse_folder_set(parser),
         ("environment", "list") => Ok(Command::ListEnvironments {
             input: workspace(parser)?,
         }),
@@ -305,6 +330,9 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
 fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
     let mut positionals = Vec::new();
     let mut fields = RequestFields::default();
+    let mut description = None;
+    let mut description_json = None;
+    let mut docs = None;
     while let Some(argument) = parser.bump() {
         match argument.as_str() {
             "--name"
@@ -316,11 +344,21 @@ fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
             | "--graphql-extensions" => {
                 fields.take(&argument, &mut parser)?;
             }
+            "--description" => parser.once(&mut description, "--description")?,
+            "--description-json" => parser.once(&mut description_json, "--description-json")?,
+            "--docs" => parser.once(&mut docs, "--docs")?,
+            "--docs-json" => {
+                return Err(CliError::invalid_arguments(
+                    "request docs must be a string; an object or null is invalid",
+                ));
+            }
             other => push_positional(&mut positionals, other, 2)?,
         }
     }
     let (path, selector) = two_paths(&positionals)?;
-    let update = fields.update()?;
+    let mut update = fields.update()?;
+    update.description = documentation_patch(description, description_json, "description")?;
+    update.docs = docs.map(FieldPatch::Set).unwrap_or_default();
     if update.is_empty() {
         return Err(invalid_command());
     }
@@ -329,6 +367,131 @@ fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
         selector,
         update: Box::new(update),
     })
+}
+
+fn parse_collection_set(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut summary = None;
+    let mut docs = None;
+    let mut docs_json = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--summary" => parser.once(&mut summary, "--summary")?,
+            "--docs" => parser.once(&mut docs, "--docs")?,
+            "--docs-json" => parser.once(&mut docs_json, "--docs-json")?,
+            "--description" | "--description-json" => {
+                return Err(CliError::invalid_arguments(
+                    "collections have summary and docs, not description",
+                ));
+            }
+            other => push_positional(&mut path, other, 1)?,
+        }
+    }
+    let update = CollectionUpdate {
+        summary: summary.map(FieldPatch::Set).unwrap_or_default(),
+        docs: documentation_patch(docs, docs_json, "docs")?,
+    };
+    if update.is_empty() {
+        return Err(invalid_command());
+    }
+    Ok(Command::SetCollection {
+        input: input(&one_path(&path)?),
+        update,
+    })
+}
+
+fn parse_folder_get(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    while let Some(argument) = parser.bump() {
+        push_positional(&mut positionals, &argument, 2)?;
+    }
+    let (path, selector) = two_paths(&positionals)?;
+    Ok(Command::GetFolder {
+        input: input(&path),
+        selector,
+    })
+}
+
+fn parse_folder_set(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut description = None;
+    let mut description_json = None;
+    let mut docs = None;
+    let mut docs_json = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--description" => parser.once(&mut description, "--description")?,
+            "--description-json" => parser.once(&mut description_json, "--description-json")?,
+            "--docs" => parser.once(&mut docs, "--docs")?,
+            "--docs-json" => parser.once(&mut docs_json, "--docs-json")?,
+            "--summary" => {
+                return Err(CliError::invalid_arguments(
+                    "folders have description and docs, not summary",
+                ));
+            }
+            other => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    let (path, selector) = two_paths(&positionals)?;
+    let update = FolderUpdate {
+        description: documentation_patch(description, description_json, "description")?,
+        docs: documentation_patch(docs, docs_json, "docs")?,
+    };
+    if update.is_empty() {
+        return Err(invalid_command());
+    }
+    Ok(Command::SetFolder {
+        input: input(&path),
+        selector,
+        update,
+    })
+}
+
+fn documentation_patch(
+    text: Option<String>,
+    json: Option<String>,
+    flag: &str,
+) -> Result<FieldPatch<Documentation>, CliError> {
+    match (text, json) {
+        (None, None) => Ok(FieldPatch::Unchanged),
+        (Some(_), Some(_)) => Err(CliError::invalid_arguments(format!(
+            "--{flag} and --{flag}-json cannot be combined"
+        ))),
+        (Some(text), None) => Ok(FieldPatch::Set(Documentation::Text(text))),
+        (None, Some(source)) => Ok(FieldPatch::Set(parse_documentation_json(&source, flag)?)),
+    }
+}
+
+fn parse_documentation_json(source: &str, flag: &str) -> Result<Documentation, CliError> {
+    let value: Value = serde_json::from_str(source).map_err(|_| documentation_json_error(flag))?;
+    match value {
+        Value::Null => Ok(Documentation::Null),
+        Value::String(text) => Ok(Documentation::Text(text)),
+        Value::Object(object) => {
+            if object.len() != 2 {
+                return Err(documentation_json_error(flag));
+            }
+            let content = match object.get("content") {
+                Some(Value::String(content)) => content.clone(),
+                _ => return Err(documentation_json_error(flag)),
+            };
+            let media_type = match object.get("type") {
+                Some(Value::String(media_type)) => media_type.clone(),
+                _ => return Err(documentation_json_error(flag)),
+            };
+            Ok(Documentation::Content {
+                content,
+                media_type,
+            })
+        }
+        _ => Err(documentation_json_error(flag)),
+    }
+}
+
+fn documentation_json_error(flag: &str) -> CliError {
+    CliError::invalid_arguments(format!(
+        "--{flag}-json must be a JSON string, null, or object with string content and type"
+    ))
 }
 
 struct RequestCreateOptions {
@@ -854,6 +1017,11 @@ fn is_known_option(argument: &str) -> bool {
             | "--type"
             | "--dry-run"
             | "--expect"
+            | "--summary"
+            | "--description"
+            | "--description-json"
+            | "--docs"
+            | "--docs-json"
             | "--json"
             | "-q"
             | "--quiet"

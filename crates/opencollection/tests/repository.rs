@@ -15,6 +15,8 @@ mod support;
 
 use support::{copy_directory, fixture, temporary_path};
 
+#[path = "repository/documentation_persistence.rs"]
+mod documentation_persistence;
 #[path = "repository/environment_persistence.rs"]
 mod environment_persistence;
 #[path = "repository/request_persistence.rs"]

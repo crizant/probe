@@ -158,6 +158,7 @@ mod tests {
                 ..ItemMetadata::default()
             },
             items,
+            ..Folder::default()
         })
     }
 

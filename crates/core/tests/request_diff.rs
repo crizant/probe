@@ -1,6 +1,6 @@
 use probe_core::{
-    FieldPatch, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, Request, RequestDiffError,
-    RequestKind, RequestUpdate,
+    Documentation, FieldPatch, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, ItemMetadata,
+    Request, RequestDiffError, RequestKind, RequestUpdate,
 };
 
 #[test]
@@ -37,6 +37,38 @@ fn diff_round_trips_optional_field_clears() {
     assert_eq!(update.method, FieldPatch::Clear);
     assert_eq!(update.url, FieldPatch::Clear);
     assert_eq!(update.graphql.as_ref().unwrap().query, FieldPatch::Clear);
+    let mut restored = base;
+    update.apply(&mut restored).unwrap();
+    assert_eq!(restored, current);
+}
+
+#[test]
+fn diff_keeps_description_objects_and_request_docs_until_they_change() {
+    let base = Request {
+        metadata: ItemMetadata {
+            description: Some(Documentation::Content {
+                content: "Create a pet".into(),
+                media_type: "text/markdown".into(),
+            }),
+            ..ItemMetadata::default()
+        },
+        docs: Some("See the guide".into()),
+        ..Request::default()
+    };
+
+    let unchanged = RequestUpdate::between(Some(&base), &base).unwrap();
+    assert!(unchanged.description.is_unchanged());
+    assert!(unchanged.docs.is_unchanged());
+
+    let mut current = base.clone();
+    current.metadata.description = Some(Documentation::Text("plain".into()));
+    current.docs = Some("Updated guide".into());
+    let update = RequestUpdate::between(Some(&base), &current).unwrap();
+    assert_eq!(
+        update.description,
+        FieldPatch::Set(Documentation::Text("plain".into()))
+    );
+    assert_eq!(update.docs, FieldPatch::Set("Updated guide".into()));
     let mut restored = base;
     update.apply(&mut restored).unwrap();
     assert_eq!(restored, current);

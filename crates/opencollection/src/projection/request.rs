@@ -1,4 +1,6 @@
 use probe_core::{CollectionItem, Folder, QueryParameter, Request, RequestKind};
+
+use crate::document::{optional_documentation, request_docs_from_yaml};
 use serde_yaml_ng::Value;
 
 use super::{
@@ -75,17 +77,25 @@ fn project_item_contents(
     path: &str,
     diagnostics: &mut Vec<ProjectionDiagnostic>,
 ) -> Result<Option<CollectionItem>, serde_yaml_ng::Error> {
+    let description =
+        optional_documentation(value.get("info").and_then(|info| info.get("description")))?;
+    let docs = value.get("docs").cloned();
     let kind: ItemKindDocument = serde_yaml_ng::from_value(value.clone())?;
 
     match kind.info.item_type.as_deref() {
         Some("folder") => {
+            let docs = optional_documentation(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
+            let mut metadata = item.info.into_domain();
+            metadata.description = description;
             Ok(Some(CollectionItem::Folder(Folder {
-                metadata: item.info.into_domain(),
+                metadata,
+                docs,
                 items: project_items(item.items, &format!("{path}/items"), diagnostics)?,
             })))
         }
         Some("http") => {
+            let docs = request_docs_from_yaml(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_domain()?;
             let http = item.http.unwrap_or_default();
@@ -102,8 +112,11 @@ fn project_item_contents(
                 .transpose()?;
             let (query_parameters, path_parameters) =
                 project_parameters(http.params, &format!("{path}/http/params"), diagnostics)?;
+            let mut metadata = item.info.into_domain();
+            metadata.description = description;
             Ok(Some(CollectionItem::Request(Request {
-                metadata: item.info.into_domain(),
+                metadata,
+                docs,
                 method: http.method,
                 url: http.url,
                 headers: http
@@ -119,6 +132,7 @@ fn project_item_contents(
             })))
         }
         Some("graphql") => {
+            let docs = request_docs_from_yaml(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_domain()?;
             let graphql = item.graphql.unwrap_or_default();
@@ -134,8 +148,11 @@ fn project_item_contents(
                 &format!("{path}/graphql/params"),
                 diagnostics,
             )?;
+            let mut metadata = item.info.into_domain();
+            metadata.description = description;
             Ok(Some(CollectionItem::Request(Request {
-                metadata: item.info.into_domain(),
+                metadata,
+                docs,
                 method: graphql.method,
                 url: graphql.url,
                 headers: graphql

@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use probe_core::{
-    AuthenticationValue, Body, GraphqlOperation, GraphqlRequestError, MultipartPartKind,
-    MultipartValue, RawBodyKind, Request, RequestBody, VariableValueType,
+    AuthenticationValue, Body, Documentation, GraphqlOperation, GraphqlRequestError,
+    MultipartPartKind, MultipartValue, RawBodyKind, Request, RequestBody, VariableValueType,
 };
 use probe_http::{HttpResponse, MAX_IN_MEMORY_RESPONSE_BYTES};
 use serde_json::{Map, Value, json};
@@ -133,6 +133,12 @@ pub(super) fn request_human(
         request.method.as_deref().unwrap_or("<unset>"),
         request.url.as_deref().unwrap_or("<unset>"),
     ));
+    append_documentation(
+        &mut output,
+        "Description",
+        request.metadata.description.as_ref(),
+    );
+    append_text(&mut output, "Docs", request.docs.as_deref());
 
     output.push_str("Headers:\n");
     if request.headers.is_empty() {
@@ -259,6 +265,8 @@ pub(super) fn request_json(
     Ok(json!({
         "authentication": authentication,
         "body": request.http_body().map(request_body_json),
+        "description": documentation_json(request.metadata.description.as_ref()),
+        "docs": request.docs,
         "environment": environment,
         "graphql": request.selected_graphql()?.map(graphql_json),
         "headers": headers,
@@ -270,6 +278,52 @@ pub(super) fn request_json(
         "type": request.kind.as_str(),
         "url": request.url,
     }))
+}
+
+pub(super) fn documentation_json(value: Option<&Documentation>) -> Value {
+    match value {
+        None | Some(Documentation::Null) => Value::Null,
+        Some(Documentation::Text(text)) => json!(text),
+        Some(Documentation::Content {
+            content,
+            media_type,
+        }) => json!({
+            "content": content,
+            "type": media_type,
+        }),
+    }
+}
+
+pub(super) fn append_documentation(
+    output: &mut String,
+    label: &str,
+    value: Option<&Documentation>,
+) {
+    match value {
+        None => output.push_str(&format!("{label}: <unset>\n")),
+        Some(Documentation::Null) => output.push_str(&format!("{label}: null\n")),
+        Some(Documentation::Text(text)) => append_text(output, label, Some(text)),
+        Some(Documentation::Content {
+            content,
+            media_type,
+        }) => {
+            output.push_str(&format!("{label} type: {media_type}\n"));
+            append_text(output, label, Some(content));
+        }
+    }
+}
+
+fn append_text(output: &mut String, label: &str, value: Option<&str>) {
+    match value {
+        Some(text) if text.contains('\n') => {
+            output.push_str(&format!("{label}:\n{text}"));
+            if !text.ends_with('\n') {
+                output.push('\n');
+            }
+        }
+        Some(text) => output.push_str(&format!("{label}: {text}\n")),
+        None => output.push_str(&format!("{label}: <unset>\n")),
+    }
 }
 
 fn body_summary(body: Option<&RequestBody>) -> &'static str {

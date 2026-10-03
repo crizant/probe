@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Show and set OpenCollection collection summary and docs, folder description and docs, and request description and docs from the CLI.
+
 ## [0.9.5] - 2026-10-03
 
 ### Fixed

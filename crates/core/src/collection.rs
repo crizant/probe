@@ -1,6 +1,6 @@
 //! Collection structure and portable-import diagnostics.
 
-use crate::{Environment, Request};
+use crate::{Environment, Request, request::FieldPatch};
 
 /// A parsed API collection.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -157,7 +157,69 @@ mod tests {
     }
 }
 
+/// OpenCollection documentation or description content.
+///
+/// A plain string, a `{content, type}` object, and explicit null stay distinct.
+/// Writers must not collapse an object into its content string.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Documentation {
+    /// A plain string.
+    Text(String),
+    /// Structured content. `media_type` is the OpenCollection `type` field.
+    Content {
+        /// Documentation body.
+        content: String,
+        /// MIME type of `content`.
+        media_type: String,
+    },
+    /// Explicit null, which is distinct from an omitted field.
+    Null,
+}
+
+/// A non-interactive partial update to collection summary and docs.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CollectionUpdate {
+    /// Replacement short summary.
+    pub summary: FieldPatch<String>,
+    /// Replacement collection documentation.
+    pub docs: FieldPatch<Documentation>,
+}
+
+impl CollectionUpdate {
+    /// Returns whether every field is unchanged.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.summary.is_unchanged() && self.docs.is_unchanged()
+    }
+
+    /// Applies the update to collection metadata.
+    pub fn apply(&self, metadata: &mut CollectionMetadata) {
+        self.summary.apply(&mut metadata.summary);
+        self.docs.apply(&mut metadata.docs);
+    }
+}
+
+/// A non-interactive partial update to folder description and docs.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FolderUpdate {
+    /// Replacement folder description.
+    pub description: FieldPatch<Documentation>,
+    /// Replacement folder documentation.
+    pub docs: FieldPatch<Documentation>,
+}
+
+impl FolderUpdate {
+    /// Returns whether every field is unchanged.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.description.is_unchanged() && self.docs.is_unchanged()
+    }
+}
+
 /// Collection-level metadata.
+///
+/// OpenCollection collection info has `summary` and no `description`. Collection
+/// documentation lives on the document `docs` field.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CollectionMetadata {
     /// Human-readable collection name.
@@ -168,6 +230,8 @@ pub struct CollectionMetadata {
     pub version: Option<String>,
     /// Collection authors.
     pub authors: Vec<Author>,
+    /// Collection documentation. Absent when the source omits `docs`.
+    pub docs: Option<Documentation>,
 }
 
 /// A collection author.
@@ -198,6 +262,8 @@ pub struct ItemMetadata {
     pub name: Option<String>,
     /// User-interface ordering value.
     pub sequence: Option<f64>,
+    /// Item description from `info.description`. Absent when the source omits it.
+    pub description: Option<Documentation>,
 }
 
 /// A folder in a collection.
@@ -205,6 +271,8 @@ pub struct ItemMetadata {
 pub struct Folder {
     /// Folder metadata.
     pub metadata: ItemMetadata,
+    /// Folder documentation. Absent when the source omits `docs`.
+    pub docs: Option<Documentation>,
     /// Supported child items.
     pub items: Vec<CollectionItem>,
 }
