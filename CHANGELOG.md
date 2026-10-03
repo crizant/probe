@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-10-03
+
 ### Fixed
 
 - Reduce unnecessary desktop redraws while idle and when scrolling over request fields.
@@ -321,6 +323,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[0.9.5]: https://github.com/crizant/probe/releases/tag/v0.9.5
 [0.9.4]: https://github.com/crizant/probe/releases/tag/v0.9.4
 [0.9.3]: https://github.com/crizant/probe/releases/tag/v0.9.3
 [0.9.2]: https://github.com/crizant/probe/releases/tag/v0.9.2
