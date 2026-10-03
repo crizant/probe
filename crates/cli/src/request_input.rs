@@ -13,6 +13,7 @@ use crate::CliError;
 
 const BODY_TYPE: &str =
     "HTTP body type must be json, text, xml, sparql, form-urlencoded, multipart-form, or file";
+const AUTHENTICATION_TYPE: &str = "authentication type must be inherit, awsv4, basic, wsse, bearer, digest, ntlm, apikey, oauth1, or oauth2";
 
 struct NamedList {
     list: &'static str,
@@ -327,24 +328,19 @@ fn multipart_value(value: Option<&Value>) -> Result<MultipartValue, CliError> {
 }
 
 fn authentication_kind(kind: &str) -> Result<AuthenticationKind, CliError> {
-    if kind.is_empty() {
-        return Err(CliError::invalid_arguments(
-            "authentication type must be a non-empty string",
-        ));
+    match kind {
+        "inherit" => Ok(AuthenticationKind::Inherit),
+        "awsv4" => Ok(AuthenticationKind::AwsV4),
+        "basic" => Ok(AuthenticationKind::Basic),
+        "wsse" => Ok(AuthenticationKind::Wsse),
+        "bearer" => Ok(AuthenticationKind::Bearer),
+        "digest" => Ok(AuthenticationKind::Digest),
+        "ntlm" => Ok(AuthenticationKind::Ntlm),
+        "apikey" => Ok(AuthenticationKind::ApiKey),
+        "oauth1" => Ok(AuthenticationKind::OAuth1),
+        "oauth2" => Ok(AuthenticationKind::OAuth2),
+        _ => Err(CliError::invalid_arguments(AUTHENTICATION_TYPE)),
     }
-    Ok(match kind {
-        "inherit" => AuthenticationKind::Inherit,
-        "awsv4" => AuthenticationKind::AwsV4,
-        "basic" => AuthenticationKind::Basic,
-        "wsse" => AuthenticationKind::Wsse,
-        "bearer" => AuthenticationKind::Bearer,
-        "digest" => AuthenticationKind::Digest,
-        "ntlm" => AuthenticationKind::Ntlm,
-        "apikey" => AuthenticationKind::ApiKey,
-        "oauth1" => AuthenticationKind::OAuth1,
-        "oauth2" => AuthenticationKind::OAuth2,
-        other => AuthenticationKind::Other(other.to_owned()),
-    })
 }
 
 fn authentication_property(value: &Value) -> AuthenticationValue {
@@ -455,7 +451,7 @@ mod tests {
     fn authentication_schemes_keep_their_opencollection_names() {
         for kind in [
             "inherit", "awsv4", "basic", "wsse", "bearer", "digest", "ntlm", "apikey", "oauth1",
-            "oauth2", "custom",
+            "oauth2",
         ] {
             let FieldPatch::Set(auth) = parse_authentication(&format!("\"{kind}\"")).unwrap()
             else {
@@ -521,7 +517,15 @@ mod tests {
         );
         assert_invalid(
             parse_authentication("\"\"").unwrap_err(),
-            "authentication type must be a non-empty string",
+            "authentication type must be inherit, awsv4, basic, wsse, bearer, digest, ntlm, apikey, oauth1, or oauth2",
+        );
+        assert_invalid(
+            parse_authentication(r#"{"type":"whatever"}"#).unwrap_err(),
+            "authentication type must be inherit, awsv4, basic, wsse, bearer, digest, ntlm, apikey, oauth1, or oauth2",
+        );
+        assert_invalid(
+            parse_authentication(r#""custom""#).unwrap_err(),
+            "authentication type must be inherit, awsv4, basic, wsse, bearer, digest, ntlm, apikey, oauth1, or oauth2",
         );
         assert_invalid(
             parse_authentication("[]").unwrap_err(),

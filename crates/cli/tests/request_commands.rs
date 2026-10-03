@@ -2279,6 +2279,10 @@ fn http_field_writes_reject_invalid_values_and_graphql_bodies() {
             "authentication type must be a non-empty string",
         ),
         (
+            &["--auth", r#"{"type":"whatever"}"#][..],
+            "authentication type must be inherit, awsv4, basic, wsse, bearer, digest, ntlm, apikey, oauth1, or oauth2",
+        ),
+        (
             &["--body", "null", "--body", "null"][..],
             "--body may only be specified once",
         ),

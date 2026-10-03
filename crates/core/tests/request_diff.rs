@@ -302,6 +302,68 @@ fn body_content_updates_only_the_selected_http_variant() {
     );
 }
 
+#[test]
+fn failed_http_body_apply_leaves_the_request_unchanged() {
+    let mut request = Request {
+        method: Some("POST".to_owned()),
+        url: Some("https://example.test/pets".to_owned()),
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Single(text_body("original"))),
+        },
+        ..Request::default()
+    };
+    let original = request.clone();
+    let cases = [
+        (
+            RequestBody::Variants(vec![
+                BodyVariant {
+                    title: "Only".to_owned(),
+                    selected: false,
+                    body: text_body("kept"),
+                },
+                BodyVariant {
+                    title: "Other".to_owned(),
+                    selected: false,
+                    body: text_body("also"),
+                },
+            ]),
+            "request body variants have no selected value",
+        ),
+        (
+            RequestBody::Variants(vec![
+                BodyVariant {
+                    title: "One".to_owned(),
+                    selected: true,
+                    body: text_body("a"),
+                },
+                BodyVariant {
+                    title: "Two".to_owned(),
+                    selected: true,
+                    body: text_body("b"),
+                },
+            ]),
+            "request body variants have multiple selected values",
+        ),
+    ];
+    for (variants, message) in cases {
+        let error = RequestUpdate {
+            name: Some("Renamed".to_owned()),
+            method: FieldPatch::Set("PUT".to_owned()),
+            url: FieldPatch::Set("https://changed.example".to_owned()),
+            body: FieldPatch::Set(variants),
+            body_content: FieldPatch::Set(text_body("nope")),
+            ..RequestUpdate::default()
+        }
+        .apply(&mut request)
+        .unwrap_err();
+        assert_eq!(
+            error,
+            GraphqlRequestError::InvalidBodySelection(message.to_owned())
+        );
+        assert_eq!(request, original);
+    }
+}
+
 fn variants_without_selection() -> RequestBody {
     RequestBody::Variants(vec![BodyVariant {
         title: "Only".to_owned(),

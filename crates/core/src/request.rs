@@ -242,6 +242,13 @@ impl RequestUpdate {
     ///
     /// On error the request is left unchanged.
     pub fn apply(&self, request: &mut Request) -> Result<(), GraphqlRequestError> {
+        let mut updated = request.clone();
+        self.apply_to_candidate(&mut updated)?;
+        *request = updated;
+        Ok(())
+    }
+
+    fn apply_to_candidate(&self, request: &mut Request) -> Result<(), GraphqlRequestError> {
         let graphql = self.graphql.as_ref().filter(|update| !update.is_empty());
         let http_body_change = !self.body.is_unchanged() || !self.body_content.is_unchanged();
         if graphql.is_some() && !request.kind.is_graphql() {
