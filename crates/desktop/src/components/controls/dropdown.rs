@@ -93,6 +93,80 @@ impl DropdownController {
     }
 }
 
+struct DropdownSelection {
+    index: usize,
+    label: String,
+    color: gpui::Rgba,
+}
+
+/// Index, label, and color for the current value.
+/// An empty or unmatched value keeps the first row highlighted and shows "None".
+fn dropdown_selection<T: PartialEq>(
+    value: Option<&T>,
+    options: &[(T, String, Option<gpui::Rgba>)],
+    fallback_color: gpui::Rgba,
+) -> DropdownSelection {
+    value
+        .and_then(|value| {
+            options
+                .iter()
+                .enumerate()
+                .find_map(|(index, (option, label, color))| {
+                    (option == value).then(|| DropdownSelection {
+                        index,
+                        label: label.clone(),
+                        color: color.unwrap_or(fallback_color),
+                    })
+                })
+        })
+        .unwrap_or(DropdownSelection {
+            index: 0,
+            label: "None".to_owned(),
+            color: fallback_color,
+        })
+}
+
+fn dropdown_row(
+    theme: Theme,
+    row_id: String,
+    index: usize,
+    highlighted: bool,
+    color: gpui::Rgba,
+    controller: DropdownController,
+) -> gpui::Stateful<gpui::Div> {
+    let highlight_background = theme.colors.selection.inactive_background;
+    let debug_id = row_id.clone();
+    div()
+        .id(row_id)
+        .role(Role::ListBoxOption)
+        .when(highlighted, |item| item.aria_active_descendant())
+        .w_full()
+        .h(px(theme.metrics.control_height))
+        .px(px(theme.metrics.spacing_2))
+        .flex()
+        .items_center()
+        .gap(px(theme.metrics.spacing_1))
+        .overflow_hidden()
+        .rounded(px(theme.metrics.radius_small))
+        .text_color(color)
+        .cursor_pointer()
+        .debug_selector(move || debug_id)
+        .when(highlighted, |item| {
+            item.bg(highlight_background)
+                .border_1()
+                .border_color(theme.colors.borders.focused)
+        })
+        .when(!highlighted, |item| {
+            item.border_1().border_color(transparent_black())
+        })
+        .hover(move |item| item.bg(theme.colors.surfaces.sidebar))
+        .on_hover(move |hovered, _, cx| {
+            if *hovered {
+                controller.set_highlight(index, cx);
+            }
+        })
+}
+
 #[derive(IntoElement)]
 struct DropdownOption<T: Clone + Eq + 'static> {
     theme: Theme,
@@ -109,60 +183,34 @@ struct DropdownOption<T: Clone + Eq + 'static> {
 
 impl<T: Clone + Eq + 'static> RenderOnce for DropdownOption<T> {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let highlight_background = self.theme.colors.selection.inactive_background;
-        let theme = self.theme;
         let id = self.id;
         let index = self.index;
-        div()
-            .id(format!("{id}-item-{index}"))
-            .role(Role::ListBoxOption)
-            .aria_selected(self.selected)
-            .when(self.highlighted, |item| item.aria_active_descendant())
-            .w_full()
-            .h(px(theme.metrics.control_height))
-            .px(px(theme.metrics.spacing_2))
-            .flex()
-            .items_center()
-            .gap(px(theme.metrics.spacing_1))
-            .overflow_hidden()
-            .rounded(px(theme.metrics.radius_small))
-            .text_color(self.color)
-            .cursor_pointer()
-            .debug_selector(move || format!("{id}-item-{index}"))
-            .when(self.highlighted, |item| {
-                item.bg(highlight_background)
-                    .border_1()
-                    .border_color(theme.colors.borders.focused)
-            })
-            .when(!self.highlighted, |item| {
-                item.border_1().border_color(transparent_black())
-            })
-            .hover(move |item| item.bg(theme.colors.surfaces.sidebar))
-            .on_hover({
-                let controller = self.controller.clone();
-                move |hovered, _, cx| {
-                    if *hovered {
-                        controller.set_highlight(index, cx);
-                    }
-                }
-            })
-            .on_click({
-                let controller = self.controller.clone();
-                let value = self.value;
-                let on_value_change = self.on_value_change;
-                move |_, window, cx| {
-                    on_value_change(Some(&value), window, cx);
-                    controller.close_and_restore_trigger(window, cx);
-                }
-            })
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(14.0))
-                    .when(!self.selected, |marker| marker.invisible())
-                    .child("✓"),
-            )
-            .child(truncated_label(self.label).min_w(px(0.0)).flex_1())
+        dropdown_row(
+            self.theme,
+            format!("{id}-item-{index}"),
+            index,
+            self.highlighted,
+            self.color,
+            self.controller.clone(),
+        )
+        .aria_selected(self.selected)
+        .on_click({
+            let controller = self.controller;
+            let value = self.value;
+            let on_value_change = self.on_value_change;
+            move |_, window, cx| {
+                on_value_change(Some(&value), window, cx);
+                controller.close_and_restore_trigger(window, cx);
+            }
+        })
+        .child(
+            div()
+                .flex_none()
+                .w(px(14.0))
+                .when(!self.selected, |marker| marker.invisible())
+                .child("✓"),
+        )
+        .child(truncated_label(self.label).min_w(px(0.0)).flex_1())
     }
 }
 
@@ -180,53 +228,26 @@ struct DropdownActionItem {
 
 impl RenderOnce for DropdownActionItem {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let highlight_background = self.theme.colors.selection.inactive_background;
-        let theme = self.theme;
         let id = self.id;
-        let index = self.index;
         let action_index = self.action_index;
-        div()
-            .id(format!("{id}-action-{action_index}"))
-            .role(Role::ListBoxOption)
-            .when(self.highlighted, |item| item.aria_active_descendant())
-            .w_full()
-            .h(px(theme.metrics.control_height))
-            .px(px(theme.metrics.spacing_2))
-            .flex()
-            .items_center()
-            .gap(px(theme.metrics.spacing_1))
-            .overflow_hidden()
-            .rounded(px(theme.metrics.radius_small))
-            .text_color(theme.colors.text.primary)
-            .cursor_pointer()
-            .debug_selector(move || format!("{id}-action-{action_index}"))
-            .when(self.highlighted, |item| {
-                item.bg(highlight_background)
-                    .border_1()
-                    .border_color(theme.colors.borders.focused)
-            })
-            .when(!self.highlighted, |item| {
-                item.border_1().border_color(transparent_black())
-            })
-            .hover(move |item| item.bg(theme.colors.surfaces.sidebar))
-            .on_hover({
-                let controller = self.controller.clone();
-                move |hovered, _, cx| {
-                    if *hovered {
-                        controller.set_highlight(index, cx);
-                    }
-                }
-            })
-            .on_click({
-                let controller = self.controller.clone();
-                let on_activate = self.on_activate;
-                move |_, window, cx| {
-                    controller.close_and_restore_trigger(window, cx);
-                    on_activate(window, cx);
-                }
-            })
-            .child(div().flex_none().w(px(14.0)))
-            .child(truncated_label(self.label).min_w(px(0.0)).flex_1())
+        dropdown_row(
+            self.theme,
+            format!("{id}-action-{action_index}"),
+            self.index,
+            self.highlighted,
+            self.theme.colors.text.primary,
+            self.controller.clone(),
+        )
+        .on_click({
+            let controller = self.controller;
+            let on_activate = self.on_activate;
+            move |_, window, cx| {
+                controller.close_and_restore_trigger(window, cx);
+                on_activate(window, cx);
+            }
+        })
+        .child(div().flex_none().w(px(14.0)))
+        .child(truncated_label(self.label).min_w(px(0.0)).flex_1())
     }
 }
 
@@ -311,15 +332,16 @@ impl<T: Clone + Eq + 'static> ProbeDropdown<T> {
 
 impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let selected_index = self
-            .value
-            .as_ref()
-            .and_then(|selected| {
-                self.options
-                    .iter()
-                    .position(|(value, _, _)| value == selected)
-            })
-            .unwrap_or(0);
+        let theme = self.theme;
+        let DropdownSelection {
+            index: selected_index,
+            label: selected_label,
+            color: selected_color,
+        } = dropdown_selection(
+            self.value.as_ref(),
+            &self.options,
+            theme.colors.text.primary,
+        );
         let state =
             window.use_keyed_state(ElementId::from(format!("{}-state", self.id)), cx, |_, _| {
                 DropdownState {
@@ -336,7 +358,6 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
             }
         });
 
-        let theme = self.theme;
         let id = self.id;
         let open = state.read(cx).open;
         let highlighted_index = state.read(cx).highlighted;
@@ -355,27 +376,6 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
             trigger_focus: trigger_focus.clone(),
             selected_index,
         };
-
-        let selected_label = self
-            .value
-            .as_ref()
-            .and_then(|selected| {
-                self.options
-                    .iter()
-                    .find(|(value, _, _)| value == selected)
-                    .map(|(_, label, _)| label.clone())
-            })
-            .unwrap_or_else(|| "None".to_owned());
-        let selected_color = self
-            .value
-            .as_ref()
-            .and_then(|selected| {
-                self.options
-                    .iter()
-                    .find(|(value, _, _)| value == selected)
-                    .and_then(|(_, _, color)| *color)
-            })
-            .unwrap_or(theme.colors.text.primary);
 
         let option_count = self.options.len();
         let item_count = option_count + self.actions.len();
@@ -542,5 +542,41 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
 
         Popup::new(format!("{id}-popup"), select_root)
             .when(open, |popup| popup.content(popup_content))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dropdown_selection;
+    use gpui::rgba;
+
+    #[test]
+    fn selected_option_resolves_index_label_and_color_together() {
+        let fallback = rgba(0x111111ff);
+        let blue = rgba(0x2244aaff);
+        let options = vec![
+            ("GET".to_owned(), "GET".to_owned(), None),
+            ("POST".to_owned(), "Send".to_owned(), Some(blue)),
+        ];
+
+        let missing = dropdown_selection(None, &options, fallback);
+        assert_eq!(missing.index, 0);
+        assert_eq!(missing.label, "None");
+        assert_eq!(missing.color, fallback);
+
+        let unknown = dropdown_selection(Some(&"PUT".to_owned()), &options, fallback);
+        assert_eq!(unknown.index, 0);
+        assert_eq!(unknown.label, "None");
+        assert_eq!(unknown.color, fallback);
+
+        let plain = dropdown_selection(Some(&"GET".to_owned()), &options, fallback);
+        assert_eq!(plain.index, 0);
+        assert_eq!(plain.label, "GET");
+        assert_eq!(plain.color, fallback);
+
+        let colored = dropdown_selection(Some(&"POST".to_owned()), &options, fallback);
+        assert_eq!(colored.index, 1);
+        assert_eq!(colored.label, "Send");
+        assert_eq!(colored.color, blue);
     }
 }
