@@ -6,6 +6,7 @@ impl ProbeApp {
         key: RequestKey,
         request: &Request,
         theme: Theme,
+        list_scroll: Option<&ScrollHandle>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
@@ -30,6 +31,7 @@ impl ProbeApp {
                                     header.name.clone(),
                                     "Header",
                                     self.variable_context(cx),
+                                    list_scroll,
                                     move |value, _, input_cx| {
                                         let _ = name_view.update(input_cx, |view, cx| {
                                             view.edit_request(
@@ -54,6 +56,7 @@ impl ProbeApp {
                                 header.value.clone(),
                                 "Value",
                                 self.variable_context(cx),
+                                list_scroll,
                                 move |value, _, input_cx| {
                                     let _ = value_view.update(input_cx, |view, cx| {
                                         view.edit_request(

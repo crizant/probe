@@ -193,6 +193,7 @@ impl ProbeApp {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_environment_variable_row(
         &self,
         theme: Theme,
@@ -200,6 +201,7 @@ impl ProbeApp {
         row: probe_core::EffectiveEnvironmentVariable,
         busy: bool,
         dirty: bool,
+        list_scroll: &ScrollHandle,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let row_index = row.direct_index.unwrap_or(0);
@@ -369,6 +371,7 @@ impl ProbeApp {
                                 },
                                 |_, _, _| {},
                             )
+                            .list_scroll(Some(list_scroll))
                             .persistent_field(
                                 dialog
                                     .active_field
@@ -449,6 +452,7 @@ impl ProbeApp {
                             },
                             |_, _, _| {},
                         )
+                        .list_scroll(Some(list_scroll))
                         .persistent_field(
                             dialog
                                 .active_field
@@ -767,41 +771,43 @@ impl ProbeApp {
             let rows = rows.clone();
             let list_scroll = list_scroll.clone();
             cx.processor(move |view, range: std::ops::Range<usize>, _, cx| {
-                components::with_list_scroll(&list_scroll, || {
-                    #[cfg(test)]
-                    {
-                        view.rendered_environment_variable_rows =
-                            range.clone().filter(|index| *index < rows.len()).count();
-                    }
-                    let Some(dialog) = view.environment_manager_dialog.as_ref() else {
-                        return Vec::new();
-                    };
-                    range
-                        .filter_map(|index| {
-                            if rows_empty && index == 0 {
-                                return Some(
-                                    div()
-                                        .w_full()
-                                        .h(px(
-                                            theme.metrics.control_height + theme.metrics.spacing_2
-                                        ))
-                                        .px(px(theme.metrics.spacing_2))
-                                        .flex()
-                                        .items_center()
-                                        .border_b_1()
-                                        .border_color(theme.colors.borders.subtle)
-                                        .text_color(theme.colors.text.muted)
-                                        .child("No variables in this environment.")
-                                        .into_any_element(),
-                                );
-                            }
-                            let row = rows.get(index)?.clone();
-                            Some(view.render_environment_variable_row(
-                                theme, dialog, row, busy, dirty, cx,
-                            ))
-                        })
-                        .collect::<Vec<_>>()
-                })
+                #[cfg(test)]
+                {
+                    view.rendered_environment_variable_rows =
+                        range.clone().filter(|index| *index < rows.len()).count();
+                }
+                let Some(dialog) = view.environment_manager_dialog.as_ref() else {
+                    return Vec::new();
+                };
+                range
+                    .filter_map(|index| {
+                        if rows_empty && index == 0 {
+                            return Some(
+                                div()
+                                    .w_full()
+                                    .h(px(theme.metrics.control_height + theme.metrics.spacing_2))
+                                    .px(px(theme.metrics.spacing_2))
+                                    .flex()
+                                    .items_center()
+                                    .border_b_1()
+                                    .border_color(theme.colors.borders.subtle)
+                                    .text_color(theme.colors.text.muted)
+                                    .child("No variables in this environment.")
+                                    .into_any_element(),
+                            );
+                        }
+                        let row = rows.get(index)?.clone();
+                        Some(view.render_environment_variable_row(
+                            theme,
+                            dialog,
+                            row,
+                            busy,
+                            dirty,
+                            &list_scroll,
+                            cx,
+                        ))
+                    })
+                    .collect::<Vec<_>>()
             })
         })
         .size_full()

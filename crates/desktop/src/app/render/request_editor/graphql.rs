@@ -129,6 +129,7 @@ impl ProbeApp {
                 operation_name.to_owned(),
                 "MyQuery",
                 self.variable_context(cx),
+                None,
                 move |value, _, cx| {
                     let _ = view.update(cx, |view, cx| {
                         view.edit_graphql_request(

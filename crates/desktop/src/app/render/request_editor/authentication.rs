@@ -6,6 +6,7 @@ impl ProbeApp {
         key: RequestKey,
         request: &Request,
         theme: Theme,
+        list_scroll: Option<&ScrollHandle>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let active = request
@@ -67,6 +68,7 @@ impl ProbeApp {
                                 property_name.clone(),
                                 "Property",
                                 self.variable_context(cx),
+                                list_scroll,
                                 move |value, _, input_cx| {
                                     let old_name = old_name.clone();
                                     let _ = name_view.update(input_cx, |view, cx| {
@@ -99,6 +101,7 @@ impl ProbeApp {
                                 auth_value(value),
                                 "Value",
                                 self.variable_context(cx),
+                                list_scroll,
                                 move |value, _, input_cx| {
                                     let value_name = value_name.clone();
                                     let _ = value_view.update(input_cx, |view, cx| {
