@@ -612,7 +612,7 @@ fn curl_export_encodes_forms_and_references_files_without_reading_them() {
     let command = engine
         .curl_command(&request.into_http().unwrap(), &options)
         .unwrap();
-    assert!(command.contains("text=\"@literal;value\""));
+    assert!(command.contains("--form-string 'text=@literal;value'"));
     assert!(command.contains("missing-one.txt"));
     assert!(command.contains("missing-two.txt"));
     assert!(command.contains(";type=text/plain"));
@@ -741,4 +741,46 @@ fn curl_export_preserves_many_distinct_templates() {
             "{command}"
         );
     }
+}
+
+#[test]
+fn curl_export_uses_form_string_for_text_and_rejects_unsafe_field_names() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request("POST", "https://example.com/upload".into());
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![
+        MultipartPart {
+            name: "upload".into(),
+            kind: MultipartPartKind::Text,
+            value: MultipartValue::Single("@/etc/passwd;filename=hack".into()),
+            content_type: None,
+            disabled: false,
+        },
+        MultipartPart {
+            name: "description".into(),
+            kind: MultipartPartKind::Text,
+            value: MultipartValue::Single("normal text".into()),
+            content_type: None,
+            disabled: false,
+        },
+    ])));
+    let command = engine
+        .curl_command(
+            &request.clone().into_http().unwrap(),
+            &ExecutionOptions::default(),
+        )
+        .unwrap();
+    assert!(command.contains("--form-string 'upload=@/etc/passwd;filename=hack'"));
+    assert!(command.contains("--form-string 'description=normal text'"));
+    assert!(!command.contains("--form 'upload="));
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "field=malicious".into(),
+        kind: MultipartPartKind::Text,
+        value: MultipartValue::Single("value".into()),
+        content_type: None,
+        disabled: false,
+    }])));
+    assert!(matches!(
+        engine.curl_command(&request.into_http().unwrap(), &ExecutionOptions::default()),
+        Err(probe_http::HttpError::InvalidBody(_))
+    ));
 }

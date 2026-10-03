@@ -272,6 +272,12 @@ fn curl_multipart_arguments(
         .iter()
         .filter(|part| is_enabled_and_named(part.disabled, &part.name))
     {
+        if part.name.contains('=') {
+            return Err(HttpError::InvalidBody(format!(
+                "multipart field name '{}' contains '=' and cannot be exported safely",
+                part.name
+            )));
+        }
         let values: &[String] = match &part.value {
             MultipartValue::Single(value) => std::slice::from_ref(value),
             MultipartValue::Multiple(values) if part.kind == MultipartPartKind::File => values,
@@ -283,19 +289,28 @@ fn curl_multipart_arguments(
             }
         };
         for value in values {
-            let value = match part.kind {
-                MultipartPartKind::Text => curl_form_quote(value),
-                MultipartPartKind::File => format!(
-                    "@{}",
-                    curl_form_quote(&resolve_path(value, options).to_string_lossy())
-                ),
-            };
-            let mut field = format!("{}={value}", part.name);
-            if let Some(content_type) = &part.content_type {
-                apply_part_content_type(Part::text(String::new()), part)?;
-                field.push_str(&format!(";type={content_type}"));
+            match part.kind {
+                MultipartPartKind::Text => {
+                    let mut field = format!("{}={value}", part.name);
+                    if let Some(content_type) = &part.content_type {
+                        apply_part_content_type(Part::text(String::new()), part)?;
+                        field.push_str(&format!(";type={content_type}"));
+                    }
+                    curl_argument(command, "--form-string", &field);
+                }
+                MultipartPartKind::File => {
+                    let value = format!(
+                        "@{}",
+                        curl_form_quote(&resolve_path(value, options).to_string_lossy())
+                    );
+                    let mut field = format!("{}={value}", part.name);
+                    if let Some(content_type) = &part.content_type {
+                        apply_part_content_type(Part::text(String::new()), part)?;
+                        field.push_str(&format!(";type={content_type}"));
+                    }
+                    curl_argument(command, "--form", &field);
+                }
             }
-            curl_argument(command, "--form", &field);
         }
     }
     Ok(())
