@@ -294,8 +294,7 @@ fn curl_multipart_arguments(
                     if let Some(content_type) = &part.content_type {
                         return Err(HttpError::InvalidBody(format!(
                             "multipart text field '{}' has explicit content type '{}' which cannot be exported with --form-string",
-                            part.name,
-                            content_type
+                            part.name, content_type
                         )));
                     }
                     let field = format!("{}={value}", part.name);
