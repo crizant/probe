@@ -144,9 +144,11 @@ keeps every variant's title and selected flag. `--body null` removes the whole
 body, including a variant list. The CLI does not add, remove, rename, or
 reselect variants.
 
-Authentication is a JSON string, such as `"inherit"`, or a JSON object whose
-`type` is the scheme name and whose other fields are the scheme properties.
-Nested objects, arrays, booleans, numbers, and null are preserved. HTTP body
+Authentication is the JSON string `"inherit"`, or a JSON object whose `type`
+is an OpenCollection scheme (`awsv4`, `basic`, `wsse`, `bearer`, `digest`,
+`ntlm`, `apikey`, `oauth1`, or `oauth2`). Each scheme accepts only the
+properties defined for it, including nested OAuth 1.0 and OAuth 2.0 objects;
+unknown fields are rejected. HTTP body
 flags are rejected for a native GraphQL request.
 
 Repeatable `--var <name=value>` arguments provide invocation-only variables for `request run`.

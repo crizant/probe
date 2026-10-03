@@ -1939,24 +1939,34 @@ fn sets_replaces_and_clears_headers_parameters_body_and_auth() {
         "items/0",
         &[
             "--auth",
-            r#"{"type":"oauth2","flow":"client_credentials","retries":3,"enabled":true,"note":null,"credentials":{"clientId":"probe","scopes":["a"]}}"#,
+            r#"{"type":"oauth2","flow":"client_credentials","accessTokenUrl":"https://example.com/oauth/token","credentials":{"clientId":"probe","clientSecret":"secret","placement":"basic_auth_header"},"settings":{"autoFetchToken":true}}"#,
         ],
     );
     assert_eq!(nested["authentication"]["type"], "oauth2");
+    assert_eq!(
+        nested["authentication"]["properties"]["flow"],
+        "client_credentials"
+    );
     assert_eq!(
         nested["authentication"]["properties"]["credentials"]["clientId"],
         "probe"
     );
     assert_eq!(
-        nested["authentication"]["properties"]["retries"],
-        serde_json::json!({"data": "3", "type": "number"})
+        nested["authentication"]["properties"]["credentials"]["placement"],
+        "basic_auth_header"
     );
-    assert_eq!(nested["authentication"]["properties"]["enabled"], true);
-    assert!(nested["authentication"]["properties"]["note"].is_null());
+    assert_eq!(
+        nested["authentication"]["properties"]["settings"]["autoFetchToken"],
+        true
+    );
     let reloaded = request_json(&workspace, "items/0");
     assert_eq!(
-        reloaded["authentication"]["properties"]["credentials"]["scopes"],
-        serde_json::json!(["a"])
+        reloaded["authentication"]["properties"]["accessTokenUrl"],
+        "https://example.com/oauth/token"
+    );
+    assert_eq!(
+        reloaded["authentication"]["properties"]["credentials"]["clientSecret"],
+        "secret"
     );
 
     set_fields(&workspace, "items/0", &["--auth", r#""inherit""#]);
@@ -2272,7 +2282,14 @@ fn http_field_writes_reject_invalid_values_and_graphql_bodies() {
         ),
         (
             &["--auth", "inherit"][..],
-            "authentication must be a JSON object, string, or null",
+            "authentication must be a JSON object, the string \"inherit\", or null",
+        ),
+        (
+            &[
+                "--auth",
+                r#"{"type":"basic","username":"a","token":"nope"}"#,
+            ][..],
+            "basic authentication contains unsupported field 'token'",
         ),
         (
             &["--auth", "{}"][..],
