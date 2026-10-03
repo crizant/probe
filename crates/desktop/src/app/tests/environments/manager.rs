@@ -158,6 +158,15 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
     workspace.open_manager(cx, "base");
     workspace.update(cx, |view, _, cx| {
         view.apply_environment_manager_draft(cx, |dialog| {
+            for variable in &mut dialog.draft.variables {
+                if let EnvironmentVariable::Plain(variable) = variable
+                    && variable.name.as_deref() == Some("host")
+                {
+                    variable.value = Some(VariableValueSet::Single(VariableValue::String(
+                        "x".repeat(400),
+                    )));
+                }
+            }
             for index in 0..40 {
                 dialog.add_variable(EnvironmentVariable::Plain(Variable {
                     name: Some(format!("scroll-{index}")),
@@ -253,6 +262,33 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
     assert!(
         focused < focused_before,
         "a focused field should still let a vertical wheel scroll the list, before={focused_before:?} after={focused:?}"
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.environment_variables_scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    });
+    visual.run_until_parked();
+    let field = visual
+        .debug_bounds("environment-variable-value-host")
+        .expect("the overflowing value field should return to the top of the list");
+    visual.simulate_click(field.center(), Modifiers::default());
+    visual.run_until_parked();
+    let list_before = offset_y(&workspace, cx);
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(-160.0), px(-6.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Started,
+    });
+    visual.run_until_parked();
+    let list_after = offset_y(&workspace, cx);
+    assert_eq!(
+        list_after, list_before,
+        "a horizontal wheel on a focused overflowing field should leave the list in place"
     );
 }
 
@@ -647,74 +683,6 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
         .debug_bounds("environment-variable-value-baseUrl")
         .unwrap();
     workspace.assert_manager_field_focus(cx, &focus, controller);
-}
-
-#[gpui::test]
-fn environment_manager_keeps_a_horizontal_wheel_on_a_focused_overflowing_field(
-    cx: &mut TestAppContext,
-) {
-    let overflow_value = "x".repeat(400);
-    let workspace = EnvironmentWorkspace::open(cx);
-    workspace.open_manager(cx, "base");
-    workspace.update(cx, |view, _, cx| {
-        view.apply_environment_manager_draft(cx, |dialog| {
-            for variable in &mut dialog.draft.variables {
-                let EnvironmentVariable::Plain(variable) = variable else {
-                    continue;
-                };
-                if variable.name.as_deref() == Some("host") {
-                    variable.value = Some(VariableValueSet::Single(VariableValue::String(
-                        overflow_value.clone(),
-                    )));
-                }
-            }
-            for index in 0..40 {
-                dialog.add_variable(EnvironmentVariable::Plain(Variable {
-                    name: Some(format!("scroll-{index}")),
-                    value: Some(VariableValueSet::Single(VariableValue::String(format!(
-                        "value-{index}"
-                    )))),
-                    disabled: false,
-                }));
-            }
-        });
-    });
-    cx.run_until_parked();
-
-    let mut visual = workspace.visual(cx);
-    let field = visual
-        .debug_bounds("environment-variable-value-host")
-        .expect("the overflowing value field should accept the pointer");
-    visual.simulate_click(field.center(), Modifiers::default());
-    visual.run_until_parked();
-
-    let list_before = workspace.update(cx, |view, _, _| {
-        view.environment_variables_scroll
-            .0
-            .borrow()
-            .base_handle
-            .offset()
-            .y
-    });
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(-160.0), px(-6.0))),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    visual.run_until_parked();
-    let list_after = workspace.update(cx, |view, _, _| {
-        view.environment_variables_scroll
-            .0
-            .borrow()
-            .base_handle
-            .offset()
-            .y
-    });
-    assert_eq!(
-        list_after, list_before,
-        "a horizontal wheel on a focused overflowing field should leave the list in place"
-    );
 }
 
 #[gpui::test]
