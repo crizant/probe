@@ -169,7 +169,7 @@ atomically replaces the source file. It is unavailable for stdin workspaces.
 
 `collection get` reads collection `info.summary` and root `docs`. `collection set`
 writes those fields only. OpenCollection collections have no `description` field,
-and `--description` is rejected. `folder get` reads one folder's `info.description`
+and `--description` and `--description-json` are rejected. `folder get` reads one folder's `info.description`
 and `docs`. `folder set` writes those fields only. Folder and collection
 documentation accepts a plain string via `--description` or `--docs`, or a JSON
 string, `null`, or `{"content","type"}` object via `--description-json` or

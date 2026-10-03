@@ -472,8 +472,8 @@ fn parse_collection_unset(mut parser: Parser) -> Result<Command, CliError> {
         match argument.as_str() {
             "--summary" => parser.flag(&mut summary, "--summary")?,
             "--docs" => parser.flag(&mut docs, "--docs")?,
-            "--docs-json" | "--description-json" => return Err(unset_rejects_json_null()),
-            "--description" => {
+            "--docs-json" => return Err(unset_rejects_json_null()),
+            "--description" | "--description-json" => {
                 return Err(CliError::invalid_arguments(
                     "collections have summary and docs; use unset --summary or unset --docs",
                 ));

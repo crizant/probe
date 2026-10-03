@@ -341,6 +341,30 @@ fn unset_omits_documentation_keys_and_json_null_keeps_them() {
     fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn collection_unset_rejects_description_json_like_description() {
+    let description = probe()
+        .args(["collection", "unset", "unused.yml", "--description"])
+        .output()
+        .unwrap();
+    let description_json = probe()
+        .args([
+            "collection",
+            "unset",
+            "unused.yml",
+            "--description-json",
+            "null",
+        ])
+        .output()
+        .unwrap();
+    assert!(!description.status.success());
+    assert_eq!(description.stderr, description_json.stderr);
+    assert!(
+        String::from_utf8_lossy(&description.stderr).contains("collections have summary and docs")
+    );
+    assert!(!String::from_utf8_lossy(&description.stderr).contains("set --description-json null"));
+}
+
 fn yaml(path: &std::path::Path) -> serde_yaml_ng::Value {
     serde_yaml_ng::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }

@@ -164,7 +164,7 @@ impl fmt::Display for SaveError {
             Self::FolderNotFound(selector) => {
                 write!(formatter, "folder selector not found: {selector}")
             }
-            Self::EmptyUpdate => formatter.write_str("request update has no changed fields"),
+            Self::EmptyUpdate => formatter.write_str("update has no changed fields"),
             Self::ReadOnlySource => {
                 formatter.write_str("a workspace loaded from stdin cannot be persisted")
             }
