@@ -1,6 +1,7 @@
 use probe_core::{
-    Documentation, FieldPatch, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, ItemMetadata,
-    Request, RequestDiffError, RequestKind, RequestUpdate,
+    Body, BodyVariant, Documentation, FieldPatch, GraphqlBody, GraphqlBodyVariant,
+    GraphqlOperation, GraphqlRequestError, ItemMetadata, RawBody, RawBodyKind, Request,
+    RequestBody, RequestDiffError, RequestKind, RequestUpdate,
 };
 
 #[test]
@@ -180,4 +181,123 @@ fn diff_rejects_graphql_variant_metadata_changes() {
             probe_core::GraphqlRequestError::InvalidBodySelection(_)
         ))
     ));
+}
+
+fn text_body(data: &str) -> Body {
+    Body::Raw(RawBody {
+        kind: RawBodyKind::Text,
+        data: data.to_owned(),
+    })
+}
+
+#[test]
+fn body_content_updates_only_the_selected_http_variant() {
+    let variants = || {
+        RequestBody::Variants(vec![
+            BodyVariant {
+                title: "JSON".to_owned(),
+                selected: true,
+                body: text_body("old"),
+            },
+            BodyVariant {
+                title: "Text".to_owned(),
+                selected: false,
+                body: text_body("kept"),
+            },
+        ])
+    };
+    let mut request = Request {
+        kind: RequestKind::Http {
+            body: Some(variants()),
+        },
+        ..Request::default()
+    };
+    RequestUpdate {
+        body_content: FieldPatch::Set(text_body("replaced")),
+        ..RequestUpdate::default()
+    }
+    .apply(&mut request)
+    .unwrap();
+    let RequestBody::Variants(variants) = request.http_body().unwrap() else {
+        panic!("variant list should remain");
+    };
+    assert_eq!(variants[0].title, "JSON");
+    assert!(variants[0].selected);
+    assert_eq!(variants[0].body, text_body("replaced"));
+    assert_eq!(variants[1].title, "Text");
+    assert!(!variants[1].selected);
+    assert_eq!(variants[1].body, text_body("kept"));
+
+    let mut unselected = Request {
+        kind: RequestKind::Http {
+            body: Some(variants_without_selection()),
+        },
+        method: Some("POST".to_owned()),
+        ..Request::default()
+    };
+    let original = unselected.clone();
+    let error = RequestUpdate {
+        name: Some("renamed".to_owned()),
+        body_content: FieldPatch::Set(text_body("nope")),
+        ..RequestUpdate::default()
+    }
+    .apply(&mut unselected)
+    .unwrap_err();
+    assert_eq!(
+        error,
+        GraphqlRequestError::InvalidBodySelection(
+            "request body variants have no selected value".to_owned()
+        )
+    );
+    assert_eq!(unselected, original);
+
+    let mut ambiguous = Request {
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Variants(vec![
+                BodyVariant {
+                    title: "One".to_owned(),
+                    selected: true,
+                    body: text_body("a"),
+                },
+                BodyVariant {
+                    title: "Two".to_owned(),
+                    selected: true,
+                    body: text_body("b"),
+                },
+            ])),
+        },
+        ..Request::default()
+    };
+    assert_eq!(
+        RequestUpdate {
+            body_content: FieldPatch::Set(text_body("nope")),
+            ..RequestUpdate::default()
+        }
+        .apply(&mut ambiguous)
+        .unwrap_err(),
+        GraphqlRequestError::InvalidBodySelection(
+            "request body variants have multiple selected values".to_owned()
+        )
+    );
+
+    let mut graphql = Request {
+        kind: RequestKind::Graphql { body: None },
+        ..Request::default()
+    };
+    assert_eq!(
+        RequestUpdate {
+            body_content: FieldPatch::Set(text_body("nope")),
+            ..RequestUpdate::default()
+        }
+        .apply(&mut graphql),
+        Err(GraphqlRequestError::NotHttp)
+    );
+}
+
+fn variants_without_selection() -> RequestBody {
+    RequestBody::Variants(vec![BodyVariant {
+        title: "Only".to_owned(),
+        selected: false,
+        body: text_body("kept"),
+    }])
 }

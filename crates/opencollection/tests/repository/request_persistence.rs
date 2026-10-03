@@ -899,3 +899,107 @@ fn request_save_rejects_a_replaced_workspace_before_writing() {
     assert_eq!(fs::read(path.join("health.yml")).unwrap(), before);
     fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn http_body_content_keeps_variant_titles_and_unprojected_siblings() {
+    let path = temporary_path("body-content-variants.yml");
+    fs::write(
+        &path,
+        concat!(
+            "opencollection: 1.0.0\ninfo: { name: Variants }\nbundled: true\nitems:\n",
+            "  - info: { name: Variant body, type: http }\n    http:\n      method: POST\n",
+            "      url: https://example.com/variants\n      body:\n",
+            "        - title: JSON\n          selected: true\n          body:\n",
+            "              type: json\n              data: '{\"enabled\":true}'\n",
+            "              x-vendor: keep\n",
+            "        - title: Future\n          body:\n",
+            "              type: not-real\n              data: keep-future\n",
+            "        - title: Text\n          body:\n              type: text\n              data: enabled\n",
+        ),
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                body_content: FieldPatch::Set(Body::Raw(probe_core::RawBody {
+                    kind: probe_core::RawBodyKind::Text,
+                    data: "replaced".to_owned(),
+                })),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("title: JSON"));
+    assert!(saved.contains("title: Future"));
+    assert!(saved.contains("title: Text"));
+    assert!(saved.contains("x-vendor: keep"));
+    assert!(saved.contains("data: keep-future"));
+    assert!(saved.contains("data: enabled"));
+    assert!(saved.contains("data: replaced"));
+    assert!(!saved.contains("{\"enabled\":true}"));
+    let reloaded = load_workspace(&path).unwrap();
+    let request = reloaded
+        .workspace()
+        .request(reloaded.request_key("items/0").unwrap())
+        .unwrap();
+    let RequestBody::Variants(variants) = request.http_body().unwrap() else {
+        panic!("supported variants should reload");
+    };
+    assert_eq!(variants.len(), 2);
+    assert_eq!(variants[0].title, "JSON");
+    assert!(variants[0].selected);
+    assert_eq!(
+        variants[0].body,
+        Body::Raw(probe_core::RawBody {
+            kind: probe_core::RawBodyKind::Text,
+            data: "replaced".to_owned(),
+        })
+    );
+    assert_eq!(variants[1].title, "Text");
+    assert!(!variants[1].selected);
+
+    loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                body_content: FieldPatch::Clear,
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    let cleared = fs::read_to_string(&path).unwrap();
+    assert!(!cleared.contains("title: JSON"));
+    assert!(!cleared.contains("x-vendor: keep"));
+}
+
+#[test]
+fn http_body_content_refuses_ambiguous_yaml_selection_without_writing() {
+    let path = temporary_path("body-content-ambiguous.yml");
+    let source = concat!(
+        "opencollection: 1.0.0\ninfo: { name: Variants }\nbundled: true\nitems:\n",
+        "  - info: { name: Variant body, type: http }\n    http:\n      method: POST\n",
+        "      body:\n        - title: JSON\n          selected: true\n",
+        "          body: { type: json, data: '{}' }\n",
+        "        - title: Future\n          selected: true\n",
+        "          body: { type: not-real, data: keep }\n",
+    );
+    fs::write(&path, source).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let error = loaded
+        .update_request(
+            "items/0",
+            &RequestUpdate {
+                body_content: FieldPatch::Set(Body::Raw(probe_core::RawBody {
+                    kind: probe_core::RawBodyKind::Text,
+                    data: "nope".to_owned(),
+                })),
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("multiple selected values"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), source);
+}

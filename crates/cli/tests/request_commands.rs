@@ -1858,3 +1858,465 @@ fn rejects_json_and_quiet_together_as_structured_error() {
     assert_eq!(value["schemaVersion"], 1);
     assert_eq!(value["error"]["category"], "invalid_arguments");
 }
+
+fn request_json(workspace: &std::path::Path, selector: &str) -> Value {
+    let output = probe()
+        .args(["request", "get"])
+        .arg(workspace)
+        .args([selector, "--json"])
+        .output()
+        .expect("request get should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn set_fields(workspace: &std::path::Path, selector: &str, args: &[&str]) -> Value {
+    let output = probe()
+        .args(["request", "set"])
+        .arg(workspace)
+        .arg(selector)
+        .args(args)
+        .arg("--json")
+        .output()
+        .expect("request set should run");
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn sets_replaces_and_clears_headers_parameters_body_and_auth() {
+    let workspace = temporary_path("request-fields.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
+
+    let updated = set_fields(
+        &workspace,
+        "items/0",
+        &[
+            "--headers",
+            r#"[{"name":"X-Probe","value":"1","disabled":true}]"#,
+            "--body",
+            r#"{"type":"text","data":"hello"}"#,
+            "--auth",
+            r#"{"type":"basic","username":"demo","password":"secret"}"#,
+        ],
+    );
+    assert_eq!(updated["headers"][0]["name"], "X-Probe");
+    assert_eq!(updated["headers"][0]["disabled"], true);
+    assert_eq!(updated["body"]["value"]["type"], "text");
+    assert_eq!(updated["body"]["value"]["data"], "hello");
+    assert_eq!(updated["authentication"]["type"], "basic");
+    assert_eq!(updated["authentication"]["properties"]["username"], "demo");
+
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(saved.contains("description: Payload media type"));
+    assert!(saved.contains("vendor.example"));
+    assert!(saved.contains("runtime:"));
+    assert!(!saved.contains("not-used-by-phase-1"));
+
+    let cleared = set_fields(
+        &workspace,
+        "items/0",
+        &["--headers", "null", "--body", "null", "--auth", "null"],
+    );
+    assert_eq!(cleared["headers"].as_array().unwrap().len(), 0);
+    assert!(cleared["body"].is_null());
+    assert!(cleared["authentication"].is_null());
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(!saved.contains("auth:"));
+    assert!(saved.contains("vendor.example"));
+    assert_eq!(request_json(&workspace, "items/0")["body"], Value::Null);
+
+    let nested = set_fields(
+        &workspace,
+        "items/0",
+        &[
+            "--auth",
+            r#"{"type":"oauth2","flow":"client_credentials","retries":3,"enabled":true,"note":null,"credentials":{"clientId":"probe","scopes":["a"]}}"#,
+        ],
+    );
+    assert_eq!(nested["authentication"]["type"], "oauth2");
+    assert_eq!(
+        nested["authentication"]["properties"]["credentials"]["clientId"],
+        "probe"
+    );
+    assert_eq!(
+        nested["authentication"]["properties"]["retries"],
+        serde_json::json!({"data": "3", "type": "number"})
+    );
+    assert_eq!(nested["authentication"]["properties"]["enabled"], true);
+    assert!(nested["authentication"]["properties"]["note"].is_null());
+    let reloaded = request_json(&workspace, "items/0");
+    assert_eq!(
+        reloaded["authentication"]["properties"]["credentials"]["scopes"],
+        serde_json::json!(["a"])
+    );
+
+    set_fields(&workspace, "items/0", &["--auth", r#""inherit""#]);
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(saved.contains("auth: inherit"));
+    assert_eq!(
+        request_json(&workspace, "items/0")["authentication"]["type"],
+        "inherit"
+    );
+    fs::remove_file(workspace).unwrap();
+
+    let params = temporary_path("request-params.yml");
+    fs::copy(fixture("phase1-bundled.yml"), &params).unwrap();
+    let query = set_fields(
+        &params,
+        "items/0/items/0",
+        &[
+            "--query-parameters",
+            r#"[{"name":"preview","value":"true","disabled":true}]"#,
+        ],
+    );
+    assert_eq!(query["queryParameters"][0]["name"], "preview");
+    assert_eq!(query["queryParameters"][0]["disabled"], true);
+    assert_eq!(query["pathParameters"][0]["name"], "ownerId");
+    assert_eq!(query["pathParameters"][0]["value"], "42");
+
+    let path = set_fields(
+        &params,
+        "items/0/items/0",
+        &["--path-parameters", r#"[{"name":"petId","value":"7"}]"#],
+    );
+    assert_eq!(path["pathParameters"][0]["name"], "petId");
+    assert_eq!(path["pathParameters"][0]["value"], "7");
+    assert_eq!(path["pathParameters"][0]["disabled"], false);
+    assert_eq!(path["queryParameters"][0]["name"], "preview");
+
+    let cleared = set_fields(
+        &params,
+        "items/0/items/0",
+        &["--query-parameters", "[]", "--headers", "null"],
+    );
+    assert_eq!(cleared["queryParameters"].as_array().unwrap().len(), 0);
+    assert_eq!(cleared["headers"].as_array().unwrap().len(), 0);
+    assert_eq!(cleared["pathParameters"][0]["name"], "petId");
+    let saved = fs::read_to_string(&params).unwrap();
+    assert!(saved.contains("name: ownerId") || saved.contains("name: petId"));
+    assert!(saved.contains("type: path"));
+    assert!(!saved.contains("name: preview"));
+    assert!(saved.contains("name: Probe Team") || saved.contains("summary:"));
+    fs::remove_file(params).unwrap();
+}
+
+#[test]
+fn writes_every_http_body_kind() {
+    let workspace = temporary_path("request-body-kinds.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
+    let bodies = [
+        (r#"{"type":"json","data":"{}"}"#, "json", "data"),
+        (r#"{"type":"xml","data":"<pet/>"}"#, "xml", "data"),
+        (
+            r#"{"type":"sparql","data":"SELECT * WHERE { ?s ?p ?o }"}"#,
+            "sparql",
+            "data",
+        ),
+        (
+            r#"{"type":"form-urlencoded","data":[{"name":"title","value":"hello"},{"name":"draft","value":"true","disabled":true}]}"#,
+            "form-urlencoded",
+            "data",
+        ),
+        (
+            r#"{"type":"multipart-form","data":[{"name":"caption","type":"text","value":"Summer"},{"name":"files","type":"file","value":["./one.png","./two.png"],"contentType":"image/png"}]}"#,
+            "multipart-form",
+            "data",
+        ),
+        (
+            r#"{"type":"file","data":[{"filePath":"./archive.zip","contentType":"application/zip","selected":true},{"filePath":"./other.zip","contentType":"application/zip","selected":false}]}"#,
+            "file",
+            "data",
+        ),
+    ];
+    for (body, kind, field) in bodies {
+        set_fields(&workspace, "items/0", &["--body", body]);
+        let request = request_json(&workspace, "items/0");
+        assert_eq!(request["body"]["mode"], "single", "{kind}");
+        assert_eq!(request["body"]["value"]["type"], kind, "{kind}");
+        assert!(request["body"]["value"].get(field).is_some(), "{kind}");
+    }
+    let file = request_json(&workspace, "items/0");
+    assert_eq!(file["body"]["value"]["data"][0]["selected"], true);
+    assert_eq!(file["body"]["value"]["data"][1]["selected"], false);
+    assert_eq!(
+        file["body"]["value"]["data"][0]["filePath"],
+        "./archive.zip"
+    );
+
+    set_fields(&workspace, "items/0", &["--body", bodies[3].0]);
+    let form = request_json(&workspace, "items/0");
+    assert_eq!(form["body"]["value"]["data"][1]["disabled"], true);
+    assert_eq!(form["body"]["value"]["data"][0]["disabled"], false);
+
+    set_fields(&workspace, "items/0", &["--body", bodies[4].0]);
+    let multipart = request_json(&workspace, "items/0");
+    assert_eq!(multipart["body"]["value"]["data"][0]["type"], "text");
+    assert!(multipart["body"]["value"]["data"][0]["contentType"].is_null());
+    assert_eq!(
+        multipart["body"]["value"]["data"][1]["value"],
+        serde_json::json!(["./one.png", "./two.png"])
+    );
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(saved.contains("type: multipart-form"));
+    assert!(saved.contains("contentType: image/png"));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn body_write_keeps_an_existing_variant_list() {
+    let workspace = temporary_path("request-body-variants.yml");
+    fs::copy(fixture("phase1-bodies-auth-environments.yml"), &workspace).unwrap();
+    let updated = set_fields(
+        &workspace,
+        "items/4",
+        &["--body", r#"{"type":"text","data":"replaced"}"#],
+    );
+    assert_eq!(updated["body"]["mode"], "variants");
+    assert_eq!(updated["body"]["variants"][0]["title"], "JSON");
+    assert_eq!(updated["body"]["variants"][0]["selected"], true);
+    assert_eq!(updated["body"]["variants"][0]["body"]["type"], "text");
+    assert_eq!(updated["body"]["variants"][0]["body"]["data"], "replaced");
+    assert_eq!(updated["body"]["variants"][1]["title"], "Text");
+    assert_eq!(updated["body"]["variants"][1]["selected"], false);
+    assert_eq!(updated["body"]["variants"][1]["body"]["data"], "enabled");
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(saved.contains("title: JSON"));
+    assert!(saved.contains("title: Text"));
+    assert!(saved.contains("data: enabled"));
+
+    set_fields(&workspace, "items/4", &["--body", "null"]);
+    let cleared = request_json(&workspace, "items/4");
+    assert!(cleared["body"].is_null());
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(!saved.contains("title: JSON"));
+    assert!(!saved.contains("title: Text"));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn body_write_rejects_ambiguous_variant_selection_without_writing() {
+    let workspace = temporary_path("request-body-ambiguous.yml");
+    let source = concat!(
+        "opencollection: 1.0.0\ninfo: { name: Variants }\nbundled: true\nitems:\n",
+        "  - info: { name: Variant, type: http }\n    http:\n      method: POST\n      body:\n",
+        "        - { title: One, selected: true, body: { type: text, data: a } }\n",
+        "        - { title: Two, selected: true, body: { type: text, data: b } }\n",
+    );
+    fs::write(&workspace, source).unwrap();
+    let output = probe()
+        .args(["request", "set"])
+        .arg(&workspace)
+        .args([
+            "items/0",
+            "--body",
+            r#"{"type":"text","data":"nope"}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "request_configuration");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("multiple selected values")
+    );
+    assert_eq!(fs::read_to_string(&workspace).unwrap(), source);
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn create_persists_headers_parameters_body_and_auth() {
+    let workspace = temporary_path("request-create-fields.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
+    let output = probe()
+        .args(["request", "create"])
+        .arg(&workspace)
+        .args([
+            "--name",
+            "Upload",
+            "--method",
+            "POST",
+            "--url",
+            "https://example.com/upload",
+            "--headers",
+            r#"[{"name":"Accept","value":"application/json"}]"#,
+            "--query-parameters",
+            r#"[{"name":"limit","value":"10"}]"#,
+            "--path-parameters",
+            r#"[{"name":"id","value":"1"}]"#,
+            "--body",
+            r#"{"type":"xml","data":"<a/>"}"#,
+            "--auth",
+            r#"{"type":"bearer","token":"{{token}}"}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let created: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let selector = created["selector"].as_str().unwrap();
+    let request = request_json(&workspace, selector);
+    assert_eq!(request["name"], "Upload");
+    assert_eq!(request["method"], "POST");
+    assert_eq!(request["headers"][0]["name"], "Accept");
+    assert_eq!(request["headers"][0]["disabled"], false);
+    assert_eq!(request["queryParameters"][0]["value"], "10");
+    assert_eq!(request["pathParameters"][0]["name"], "id");
+    assert_eq!(request["body"]["value"]["type"], "xml");
+    assert_eq!(
+        request["authentication"]["properties"]["token"],
+        "{{token}}"
+    );
+    let saved = fs::read_to_string(&workspace).unwrap();
+    assert!(saved.contains("type: xml"));
+    assert!(saved.contains("type: bearer"));
+    assert!(saved.contains("type: path"));
+    assert!(saved.contains("type: query"));
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
+fn http_field_writes_reject_invalid_values_and_graphql_bodies() {
+    let graphql = temporary_path("request-graphql-fields.yml");
+    fs::copy(fixture("graphql-http.yml"), &graphql).unwrap();
+    let original = fs::read(&graphql).unwrap();
+    let output = probe()
+        .args(["request", "set"])
+        .arg(&graphql)
+        .args([
+            "items/0",
+            "--body",
+            r#"{"type":"text","data":"nope"}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert_eq!(
+        value["error"]["message"],
+        "HTTP body updates cannot be applied to a native GraphQL request"
+    );
+    assert_eq!(fs::read(&graphql).unwrap(), original);
+
+    let headers = set_fields(
+        &graphql,
+        "items/0",
+        &[
+            "--headers",
+            r#"[{"name":"Accept","value":"application/json"}]"#,
+            "--auth",
+            r#"{"type":"bearer","token":"{{login}}"}"#,
+        ],
+    );
+    assert_eq!(headers["type"], "graphql");
+    assert!(
+        headers["graphql"]["query"]
+            .as_str()
+            .unwrap()
+            .starts_with("query Viewer")
+    );
+    assert_eq!(headers["headers"][0]["name"], "Accept");
+    assert_eq!(headers["authentication"]["type"], "bearer");
+    let saved = fs::read_to_string(&graphql).unwrap();
+    assert!(saved.contains("type: graphql"));
+    assert!(!saved.contains("type: http"));
+    fs::remove_file(graphql).unwrap();
+
+    let workspace = temporary_path("request-invalid-fields.yml");
+    fs::copy(fixture("phase1-round-trip.yml"), &workspace).unwrap();
+    let cases = [
+        (
+            &["--headers", r#"{"name":"A","value":"B"}"#][..],
+            "headers must be a JSON array or null",
+        ),
+        (
+            &["--query-parameters", r#"[{"name":"a"}]"#][..],
+            "query parameter must be a JSON object with string name and value",
+        ),
+        (
+            &["--path-parameters", r#"[{"name":"a","value":1}]"#][..],
+            "path parameter must be a JSON object with string name and value",
+        ),
+        (
+            &["--headers", r#"[{"name":"A","value":"B","extra":true}]"#][..],
+            "header contains unsupported field 'extra'",
+        ),
+        (
+            &["--body", r#"{"type":"yaml","data":"nope"}"#][..],
+            "HTTP body type must be json, text, xml, sparql, form-urlencoded, multipart-form, or file",
+        ),
+        (
+            &[
+                "--body",
+                r#"{"type":"file","data":[{"filePath":"./a.zip","contentType":"application/zip"}]}"#,
+            ][..],
+            "file body entry must be a JSON object with string filePath, string contentType, and boolean selected",
+        ),
+        (
+            &["--auth", "inherit"][..],
+            "authentication must be a JSON object, string, or null",
+        ),
+        (
+            &["--auth", "{}"][..],
+            "authentication type must be a non-empty string",
+        ),
+        (
+            &["--body", "null", "--body", "null"][..],
+            "--body may only be specified once",
+        ),
+    ];
+    for (args, message) in cases {
+        let output = probe()
+            .args(["request", "set"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(args.iter().copied())
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments", "{args:?}");
+        assert_eq!(value["error"]["message"], message, "{args:?}");
+    }
+
+    let created = probe()
+        .args(["request", "create"])
+        .arg(&workspace)
+        .args([
+            "--name",
+            "Bad",
+            "--type",
+            "graphql",
+            "--body",
+            r#"{"type":"text","data":"nope"}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(created.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&created.stdout).unwrap();
+    assert_eq!(
+        value["error"]["message"],
+        "HTTP body updates cannot be applied to a native GraphQL request"
+    );
+    fs::remove_file(workspace).unwrap();
+}

@@ -99,8 +99,13 @@ pub struct RequestUpdate {
     pub query_parameters: Option<Vec<QueryParameter>>,
     /// Replacement path parameters.
     pub path_parameters: Option<Vec<QueryParameter>>,
-    /// Request body change.
+    /// Replacement for the entire HTTP body, including any variant list.
     pub body: FieldPatch<RequestBody>,
+    /// Replacement for HTTP body content.
+    ///
+    /// A single body is written directly. An existing variant list keeps every
+    /// variant title and selected flag; only the selected variant's body changes.
+    pub body_content: FieldPatch<Body>,
     /// Authentication change.
     pub authentication: FieldPatch<Authentication>,
     /// Partial native GraphQL body update.
@@ -174,6 +179,7 @@ impl RequestUpdate {
             } else {
                 FieldPatch::Unchanged
             },
+            body_content: FieldPatch::Unchanged,
             authentication: if base.and_then(|request| request.authentication.as_ref())
                 != current.authentication.as_ref()
             {
@@ -227,6 +233,7 @@ impl RequestUpdate {
             && self.query_parameters.is_none()
             && self.path_parameters.is_none()
             && self.body.is_unchanged()
+            && self.body_content.is_unchanged()
             && self.authentication.is_unchanged()
             && self.graphql.as_ref().is_none_or(GraphqlUpdate::is_empty)
     }
@@ -236,13 +243,17 @@ impl RequestUpdate {
     /// On error the request is left unchanged.
     pub fn apply(&self, request: &mut Request) -> Result<(), GraphqlRequestError> {
         let graphql = self.graphql.as_ref().filter(|update| !update.is_empty());
+        let http_body_change = !self.body.is_unchanged() || !self.body_content.is_unchanged();
+        if graphql.is_some() && !request.kind.is_graphql() {
+            return Err(GraphqlRequestError::NotGraphql);
+        }
+        if http_body_change && request.kind.is_graphql() {
+            return Err(GraphqlRequestError::NotHttp);
+        }
         match &mut request.kind {
-            RequestKind::Http { .. } if graphql.is_some() => {
-                return Err(GraphqlRequestError::NotGraphql);
-            }
-            RequestKind::Http { body } => self.body.apply(body),
-            RequestKind::Graphql { .. } if !self.body.is_unchanged() => {
-                return Err(GraphqlRequestError::NotHttp);
+            RequestKind::Http { body } => {
+                self.body.apply(body);
+                apply_body_content(body, &self.body_content)?;
             }
             RequestKind::Graphql { .. } => {}
         }
@@ -489,6 +500,48 @@ impl std::fmt::Display for RequestDiffError {
 }
 
 impl std::error::Error for RequestDiffError {}
+
+fn selected_http_variant_index(variants: &[BodyVariant]) -> Result<usize, GraphqlRequestError> {
+    let mut selected = variants
+        .iter()
+        .enumerate()
+        .filter(|(_, variant)| variant.selected);
+    let (index, _) = selected.next().ok_or_else(|| {
+        GraphqlRequestError::InvalidBodySelection(
+            "request body variants have no selected value".to_owned(),
+        )
+    })?;
+    if selected.next().is_some() {
+        return Err(GraphqlRequestError::InvalidBodySelection(
+            "request body variants have multiple selected values".to_owned(),
+        ));
+    }
+    Ok(index)
+}
+
+fn apply_body_content(
+    target: &mut Option<RequestBody>,
+    patch: &FieldPatch<Body>,
+) -> Result<(), GraphqlRequestError> {
+    match patch {
+        FieldPatch::Unchanged => Ok(()),
+        FieldPatch::Clear => {
+            *target = None;
+            Ok(())
+        }
+        FieldPatch::Set(content) => match target {
+            Some(RequestBody::Variants(variants)) => {
+                let index = selected_http_variant_index(variants)?;
+                variants[index].body = content.clone();
+                Ok(())
+            }
+            other => {
+                *other = Some(RequestBody::Single(content.clone()));
+                Ok(())
+            }
+        },
+    }
+}
 
 impl Request {
     /// Returns the HTTP body when this is an HTTP request with a body.
