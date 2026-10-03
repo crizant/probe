@@ -366,55 +366,6 @@ impl Render for ScrollableInputHarness {
 }
 
 #[gpui::test]
-fn horizontal_wheel_scrolls_focused_input_without_scrolling_its_list(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
-        ScrollableInputHarness {
-            input: cx.new(|cx| InputState::new(window, cx)),
-            list_scroll: ScrollHandle::new(),
-            value: "x".repeat(400).into(),
-        }
-    });
-    cx.run_until_parked();
-
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let field = visual
-        .debug_bounds("scrollable-input")
-        .expect("the overflowing input should render");
-    visual.simulate_click(field.center(), Modifiers::default());
-    visual.run_until_parked();
-    let (input, list_before, text_before) = window
-        .update(cx, |view, window, cx| {
-            assert!(view.input.read(cx).focus_handle(cx).is_focused(window));
-            assert!(view.list_scroll.max_offset().y > px(0.0));
-            (
-                view.input.clone(),
-                view.list_scroll.offset().y,
-                view.input.read(cx).scroll_offset().x,
-            )
-        })
-        .unwrap();
-
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(-160.0), px(-6.0))),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    visual.run_until_parked();
-    window
-        .update(cx, |view, _, cx| {
-            let text_after = input.read(cx).scroll_offset().x;
-            assert!(
-                text_after < text_before,
-                "horizontal wheel should move overflowing text, before={text_before:?} after={text_after:?}"
-            );
-            assert_eq!(view.list_scroll.offset().y, list_before);
-        })
-        .unwrap();
-}
-
-#[gpui::test]
 fn vertical_trackpad_frames_scroll_the_list_even_when_one_is_mostly_horizontal(
     cx: &mut TestAppContext,
 ) {
@@ -530,6 +481,7 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
     let (input, list_before, text_before) = window
         .update(cx, |view, window, cx| {
             assert!(view.input.read(cx).focus_handle(cx).is_focused(window));
+            assert!(view.list_scroll.max_offset().y > px(0.0));
             (
                 view.input.clone(),
                 view.list_scroll.offset().y,
@@ -559,64 +511,22 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
             assert_eq!(view.list_scroll.offset().y, list_before);
         })
         .unwrap();
-}
-
-#[gpui::test]
-fn reversing_at_the_horizontal_edge_moves_text_immediately(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
-        ScrollableInputHarness {
-            input: cx.new(|cx| InputState::new(window, cx)),
-            list_scroll: ScrollHandle::new(),
-            value: "x".repeat(400).into(),
-        }
-    });
-    cx.run_until_parked();
-
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let field = visual
-        .debug_bounds("scrollable-input")
-        .expect("the overflowing input should render");
-    visual.simulate_click(field.center(), Modifiers::default());
-    visual.run_until_parked();
-    let (input, list_before) = window
-        .update(cx, |view, window, cx| {
-            assert!(view.input.read(cx).focus_handle(cx).is_focused(window));
-            (view.input.clone(), view.list_scroll.offset().y)
-        })
+    let text_before = window
+        .update(cx, |_, _, cx| input.read(cx).scroll_offset().x)
         .unwrap();
     visual.simulate_event(gpui::ScrollWheelEvent {
         position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(-100_000.0), px(0.0))),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Started,
-    });
-    let edge = window
-        .update(cx, |view, _, cx| {
-            assert_eq!(
-                view.list_scroll.offset().y,
-                list_before,
-                "reaching the horizontal edge should not scroll the list"
-            );
-            input.read(cx).scroll_offset().x
-        })
-        .unwrap();
-    assert!(
-        edge < px(0.0),
-        "scrolling to the end of an overflowing value should move its text, offset={edge:?}"
-    );
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(40.0), px(0.0))),
+        delta: gpui::ScrollDelta::Pixels(point(px(-160.0), px(-6.0))),
         modifiers: Modifiers::default(),
         touch_phase: gpui::TouchPhase::Moved,
     });
+    visual.run_until_parked();
     window
         .update(cx, |view, _, cx| {
-            let reversed = input.read(cx).scroll_offset().x;
+            let text_after = input.read(cx).scroll_offset().x;
             assert!(
-                reversed > edge,
-                "reversing during the same gesture should move off the clamped edge, edge={edge:?} reversed={reversed:?}"
+                text_after < text_before,
+                "horizontal wheel should move overflowing text, before={text_before:?} after={text_after:?}"
             );
             assert_eq!(view.list_scroll.offset().y, list_before);
         })
@@ -624,7 +534,7 @@ fn reversing_at_the_horizontal_edge_moves_text_immediately(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn horizontal_gesture_at_the_edge_keeps_vertical_drift_off_the_list(cx: &mut TestAppContext) {
+fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
         ScrollableInputHarness {
@@ -678,6 +588,22 @@ fn horizontal_gesture_at_the_edge_keeps_vertical_drift_off_the_list(cx: &mut Tes
                 "vertical drift in a horizontal gesture should stay off the list"
             );
             assert_eq!(input.read(cx).scroll_offset().x, edge);
+        })
+        .unwrap();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(40.0), px(0.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    window
+        .update(cx, |view, _, cx| {
+            let reversed = input.read(cx).scroll_offset().x;
+            assert!(
+                reversed > edge,
+                "reversing during the same gesture should move off the clamped edge, edge={edge:?} reversed={reversed:?}"
+            );
+            assert_eq!(view.list_scroll.offset().y, list_before);
         })
         .unwrap();
 }
