@@ -300,12 +300,16 @@ fn unset_omits_documentation_keys_and_json_null_keeps_them() {
         path_arg,
         "items/0/items/0",
         "--description",
-        "--docs",
     ]);
-    assert_eq!(unset["selector"], "items/0/items/0");
-    assert_eq!(unset["fields"], serde_json::json!(["description", "docs"]));
+    assert_eq!(unset["fields"], serde_json::json!(["description"]));
     let request = &yaml(&path)["items"][0]["items"][0];
     assert!(request["info"].get("description").is_none());
+    assert_eq!(request["docs"].as_str(), Some("request docs text"));
+
+    let unset = run_json(&["request", "unset", path_arg, "items/0/items/0", "--docs"]);
+    assert_eq!(unset["selector"], "items/0/items/0");
+    assert_eq!(unset["fields"], serde_json::json!(["docs"]));
+    let request = &yaml(&path)["items"][0]["items"][0];
     assert!(request.get("docs").is_none());
     assert_eq!(request["http"]["method"].as_str(), Some("GET"));
 
@@ -318,11 +322,21 @@ fn unset_omits_documentation_keys_and_json_null_keeps_them() {
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("write YAML null"));
     assert!(yaml(&path).get("docs").is_some_and(|docs| docs.is_null()));
 
-    let rejected = probe()
-        .args(["collection", "unset", path_arg])
-        .output()
-        .unwrap();
-    assert!(!rejected.status.success());
+    for args in [
+        ["collection", "unset", path_arg, "", ""].as_slice(),
+        ["folder", "unset", path_arg, "items/0", ""].as_slice(),
+        ["request", "unset", path_arg, "items/0/items/0", ""].as_slice(),
+    ] {
+        let args: Vec<&str> = args.iter().copied().filter(|arg| !arg.is_empty()).collect();
+        let rejected = probe().args(&args).output().unwrap();
+        assert!(!rejected.status.success(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr).contains("invalid command"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+    }
+    assert!(yaml(&path).get("docs").is_some_and(|docs| docs.is_null()));
 
     fs::remove_file(path).unwrap();
 }
