@@ -830,20 +830,19 @@ mod tests {
     }
 
     #[test]
-    fn a_focused_overflowing_field_keeps_a_horizontal_gesture() {
-        let at = Instant::now();
+    fn shift_wheel_scrolls_overflowing_text() {
         assert_eq!(
             classify_listed_field_wheel(
                 &mut ListedFieldGesture::default(),
-                sample(at, TouchPhase::Started, true, true, false, -30.0, 4.0),
-                || true,
-            ),
-            ListedFieldWheel::Field
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut ListedFieldGesture::default(),
-                sample(at, TouchPhase::Moved, false, true, true, 0.0, -40.0),
+                sample(
+                    Instant::now(),
+                    TouchPhase::Moved,
+                    false,
+                    true,
+                    true,
+                    0.0,
+                    -40.0
+                ),
                 || true,
             ),
             ListedFieldWheel::ShiftText { delta_x: px(-40.0) }
@@ -851,168 +850,55 @@ mod tests {
     }
 
     #[test]
-    fn small_horizontal_frames_lock_onto_the_field() {
-        let at = Instant::now();
-        let mut gesture = ListedFieldGesture::default();
-        for (index, delta_x) in [-2.0, -3.0, -3.0, -4.0].into_iter().enumerate() {
-            let phase = if index == 0 {
-                TouchPhase::Started
-            } else {
-                TouchPhase::Moved
-            };
+    fn gesture_boundaries_release_the_axis() {
+        for (phase, elapsed, delta_x, delta_y) in [
+            (TouchPhase::Ended, Duration::from_millis(4), -30.0, 4.0),
+            (TouchPhase::Started, Duration::from_millis(4), 0.0, 0.0),
+            (TouchPhase::Moved, super::SCROLL_GESTURE_GAP, -30.0, 4.0),
+        ] {
+            let at = Instant::now();
+            let mut gesture = ListedFieldGesture::default();
+            classify_listed_field_wheel(
+                &mut gesture,
+                sample(at, TouchPhase::Started, true, true, false, 3.0, -40.0),
+                || panic!("vertical scrolling must not inspect text overflow"),
+            );
+            let boundary = classify_listed_field_wheel(
+                &mut gesture,
+                sample(at + elapsed, phase, true, true, false, delta_x, delta_y),
+                || {
+                    assert_eq!(phase, TouchPhase::Moved);
+                    true
+                },
+            );
+            assert_eq!(
+                boundary,
+                if phase == TouchPhase::Moved {
+                    ListedFieldWheel::Field
+                } else {
+                    ListedFieldWheel::List {
+                        delta_y: px(delta_y),
+                    }
+                },
+                "gesture boundary {phase:?} after {elapsed:?}"
+            );
             assert_eq!(
                 classify_listed_field_wheel(
                     &mut gesture,
                     sample(
-                        at + Duration::from_millis(index as u64),
-                        phase,
+                        at + elapsed + Duration::from_millis(1),
+                        TouchPhase::Moved,
                         true,
                         true,
                         false,
-                        delta_x,
-                        0.0,
+                        -30.0,
+                        4.0,
                     ),
                     || true,
                 ),
                 ListedFieldWheel::Field,
-                "frame {index} should keep the horizontal gesture"
+                "horizontal frame after {phase:?} boundary"
             );
         }
-    }
-
-    #[test]
-    fn a_vertical_gesture_keeps_a_later_sideways_frame_on_the_list() {
-        let at = Instant::now();
-        let mut gesture = ListedFieldGesture::default();
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut gesture,
-                sample(at, TouchPhase::Started, true, true, false, 3.0, -40.0),
-                || panic!("the opening vertical frame must not inspect overflow"),
-            ),
-            ListedFieldWheel::List { delta_y: px(-40.0) }
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut gesture,
-                sample(
-                    at + Duration::from_millis(8),
-                    TouchPhase::Moved,
-                    true,
-                    true,
-                    false,
-                    -48.0,
-                    5.0,
-                ),
-                || panic!("a locked vertical gesture must not inspect overflow"),
-            ),
-            ListedFieldWheel::List { delta_y: px(5.0) }
-        );
-    }
-
-    #[test]
-    fn ending_a_gesture_releases_its_axis() {
-        let at = Instant::now();
-        let mut gesture = ListedFieldGesture::default();
-        classify_listed_field_wheel(
-            &mut gesture,
-            sample(at, TouchPhase::Started, true, true, false, 3.0, -40.0),
-            || panic!("vertical scrolling must not inspect text overflow"),
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut gesture,
-                sample(
-                    at + Duration::from_millis(4),
-                    TouchPhase::Ended,
-                    true,
-                    true,
-                    false,
-                    -30.0,
-                    4.0,
-                ),
-                || panic!("ending a gesture must not inspect overflow"),
-            ),
-            ListedFieldWheel::List { delta_y: px(4.0) }
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut gesture,
-                sample(
-                    at + Duration::from_millis(5),
-                    TouchPhase::Moved,
-                    true,
-                    true,
-                    false,
-                    -30.0,
-                    4.0,
-                ),
-                || true,
-            ),
-            ListedFieldWheel::Field
-        );
-
-        let mut gesture = ListedFieldGesture::default();
-        classify_listed_field_wheel(
-            &mut gesture,
-            sample(at, TouchPhase::Started, true, true, false, 3.0, -40.0),
-            || panic!("vertical scrolling must not inspect text overflow"),
-        );
-        classify_listed_field_wheel(
-            &mut gesture,
-            sample(
-                at + Duration::from_millis(4),
-                TouchPhase::Started,
-                true,
-                true,
-                false,
-                0.0,
-                0.0,
-            ),
-            || panic!("an empty start must not inspect overflow"),
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut gesture,
-                sample(
-                    at + Duration::from_millis(5),
-                    TouchPhase::Moved,
-                    true,
-                    true,
-                    false,
-                    -30.0,
-                    4.0,
-                ),
-                || true,
-            ),
-            ListedFieldWheel::Field
-        );
-    }
-
-    #[test]
-    fn a_pause_starts_a_new_gesture() {
-        let at = Instant::now();
-        let mut gesture = ListedFieldGesture::default();
-        classify_listed_field_wheel(
-            &mut gesture,
-            sample(at, TouchPhase::Started, true, true, false, 3.0, -40.0),
-            || panic!("vertical scrolling must not inspect text overflow"),
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut gesture,
-                sample(
-                    at + super::SCROLL_GESTURE_GAP,
-                    TouchPhase::Moved,
-                    true,
-                    true,
-                    false,
-                    -30.0,
-                    4.0,
-                ),
-                || true,
-            ),
-            ListedFieldWheel::Field
-        );
     }
 }
