@@ -8,7 +8,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
-- Copy HTTP requests as cURL commands from the desktop Send dropdown. Plain environment variables are resolved; secret placeholders are retained. Commands use one canonical POSIX-quoted format.
+- Copy HTTP and GraphQL requests as cURL commands from the desktop Send dropdown. Plain environment variables are resolved; secret placeholders are retained. Commands use one canonical POSIX-quoted format.
 
 ### Fixed
 

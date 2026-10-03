@@ -10,9 +10,6 @@ impl ProbeApp {
         let Some(request) = loaded.workspace().request(key).cloned() else {
             return;
         };
-        if !matches!(request.kind, probe_core::RequestKind::Http { .. }) {
-            return;
-        }
         let input = ExecutionInput {
             request,
             environments: loaded.workspace().environments().to_vec(),

@@ -316,25 +316,16 @@ impl ProbeApp {
                                             },
                                         ),
                                     );
-                                    let popup = popup.when(
-                                        matches!(
-                                            request.kind,
-                                            probe_core::RequestKind::Http { .. }
-                                        ),
-                                        |popup| {
-                                            popup.child(components::menu_button(
-                                                theme,
-                                                "request-copy-as-curl",
-                                                "Copy as cURL",
-                                                None,
-                                                move |_, cx| {
-                                                    let _ = copy_view.update(cx, |view, cx| {
-                                                        view.copy_as_curl(key, cx)
-                                                    });
-                                                },
-                                            ))
+                                    let popup = popup.child(components::menu_button(
+                                        theme,
+                                        "request-copy-as-curl",
+                                        "Copy as cURL",
+                                        None,
+                                        move |_, cx| {
+                                            let _ = copy_view
+                                                .update(cx, |view, cx| view.copy_as_curl(key, cx));
                                         },
-                                    );
+                                    ));
                                     components::DropdownButton::new(
                                         theme,
                                         "request-execution",
