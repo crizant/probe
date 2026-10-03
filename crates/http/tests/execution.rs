@@ -784,3 +784,22 @@ fn curl_export_uses_form_string_for_text_and_rejects_unsafe_field_names() {
         Err(probe_http::HttpError::InvalidBody(_))
     ));
 }
+
+#[test]
+fn curl_export_rejects_multipart_text_with_explicit_content_type() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request("POST", "https://example.com/upload".into());
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "data".into(),
+        kind: MultipartPartKind::Text,
+        value: MultipartValue::Single("some json".into()),
+        content_type: Some("application/json".into()),
+        disabled: false,
+    }])));
+    let result = engine.curl_command(&request.into_http().unwrap(), &ExecutionOptions::default());
+    assert!(matches!(result, Err(probe_http::HttpError::InvalidBody(_))));
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("data"));
+    assert!(err_msg.contains("application/json"));
+    assert!(err_msg.contains("--form-string"));
+}

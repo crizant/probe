@@ -291,11 +291,14 @@ fn curl_multipart_arguments(
         for value in values {
             match part.kind {
                 MultipartPartKind::Text => {
-                    let mut field = format!("{}={value}", part.name);
                     if let Some(content_type) = &part.content_type {
-                        apply_part_content_type(Part::text(String::new()), part)?;
-                        field.push_str(&format!(";type={content_type}"));
+                        return Err(HttpError::InvalidBody(format!(
+                            "multipart text field '{}' has explicit content type '{}' which cannot be exported with --form-string",
+                            part.name,
+                            content_type
+                        )));
                     }
+                    let field = format!("{}={value}", part.name);
                     curl_argument(command, "--form-string", &field);
                 }
                 MultipartPartKind::File => {
