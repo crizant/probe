@@ -623,6 +623,65 @@ fn reversing_at_the_horizontal_edge_moves_text_immediately(cx: &mut TestAppConte
         .unwrap();
 }
 
+#[gpui::test]
+fn horizontal_gesture_at_the_edge_keeps_vertical_drift_off_the_list(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
+        ScrollableInputHarness {
+            input: cx.new(|cx| InputState::new(window, cx)),
+            list_scroll: ScrollHandle::new(),
+            value: "x".repeat(400).into(),
+        }
+    });
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let field = visual
+        .debug_bounds("scrollable-input")
+        .expect("the overflowing input should render");
+    visual.simulate_click(field.center(), Modifiers::default());
+    visual.run_until_parked();
+    let (input, list_before) = window
+        .update(cx, |view, window, cx| {
+            assert!(view.input.read(cx).focus_handle(cx).is_focused(window));
+            assert!(view.list_scroll.max_offset().y > px(0.0));
+            (view.input.clone(), view.list_scroll.offset().y)
+        })
+        .unwrap();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(-100_000.0), px(0.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Started,
+    });
+    let edge = window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.list_scroll.offset().y, list_before);
+            input.read(cx).scroll_offset().x
+        })
+        .unwrap();
+    assert!(
+        edge < px(0.0),
+        "the field should be at its horizontal edge before the drift frame, offset={edge:?}"
+    );
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-20.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                view.list_scroll.offset().y,
+                list_before,
+                "vertical drift in a horizontal gesture should stay off the list"
+            );
+            assert_eq!(input.read(cx).scroll_offset().x, edge);
+        })
+        .unwrap();
+}
+
 #[test]
 fn changing_editor_language_refreshes_unchanged_text() {
     let xml: SharedString = r#"<root id="1"/>"#.into();

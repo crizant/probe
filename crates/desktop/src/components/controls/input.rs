@@ -485,6 +485,9 @@ struct ListedFieldWheelSample {
 struct ListedFieldGesture {
     axis: Option<ListedFieldAxis>,
     last_event: Option<Instant>,
+    /// This wheel frame was handed to the field. The wrapper stops it in the
+    /// bubble phase when the field's own handler leaves it unconsumed.
+    yielded_to_field: bool,
 }
 
 impl ListedFieldGesture {
@@ -590,9 +593,19 @@ fn defer_list_scroll(
     scroll: ScrollHandle,
     gesture: Entity<ListedFieldGesture>,
 ) -> gpui::AnyElement {
+    let yielded_gesture = gesture.clone();
     div()
         .relative()
         .w_full()
+        // The wrapper is painted before the field, so this bubble listener
+        // runs after the input. The input stops a wheel only when its offset
+        // changes; a locked horizontal frame can still carry vertical drift
+        // once the text is clamped, and that frame must not reach the list.
+        .on_scroll_wheel(move |_event, _window, cx| {
+            if yielded_gesture.read(cx).yielded_to_field {
+                cx.stop_propagation();
+            }
+        })
         .child(field)
         .child(
             canvas(
@@ -610,7 +623,7 @@ fn defer_list_scroll(
                         let delta = event.delta.pixel_delta(window.line_height());
                         let focused = state.read(cx).focus_handle(cx).is_focused(window);
                         let target = gesture.update(cx, |gesture, cx| {
-                            classify_listed_field_wheel(
+                            let target = classify_listed_field_wheel(
                                 gesture,
                                 ListedFieldWheelSample {
                                     at: Instant::now(),
@@ -622,7 +635,9 @@ fn defer_list_scroll(
                                     delta_y: delta.y,
                                 },
                                 || single_line_input_overflows(state.read(cx)),
-                            )
+                            );
+                            gesture.yielded_to_field = matches!(target, ListedFieldWheel::Field);
+                            target
                         });
                         match target {
                             // The field's own handler applies this delta and
