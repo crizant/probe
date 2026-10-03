@@ -7,7 +7,13 @@ use probe_core::{
 use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
 use serde_json::{Map, Value};
 
-use crate::{CliError, WorkspaceInput};
+use crate::{
+    CliError, WorkspaceInput,
+    request_input::{
+        HttpBodyWrite, parse_authentication, parse_headers, parse_http_body, parse_path_parameters,
+        parse_query_parameters,
+    },
+};
 
 #[derive(Debug)]
 pub(crate) enum Command {
@@ -355,6 +361,11 @@ fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
             "--name"
             | "--method"
             | "--url"
+            | "--headers"
+            | "--query-parameters"
+            | "--path-parameters"
+            | "--body"
+            | "--auth"
             | "--graphql-query"
             | "--graphql-variables"
             | "--graphql-operation-name"
@@ -642,6 +653,11 @@ fn parse_request_create(mut parser: Parser) -> Result<Command, CliError> {
             "--name"
             | "--method"
             | "--url"
+            | "--headers"
+            | "--query-parameters"
+            | "--path-parameters"
+            | "--body"
+            | "--auth"
             | "--graphql-query"
             | "--graphql-variables"
             | "--graphql-operation-name"
@@ -656,8 +672,19 @@ fn parse_request_create(mut parser: Parser) -> Result<Command, CliError> {
     }
     let path = one_path(&path)?;
     let protocol = created_request_protocol(options.request_type.as_deref(), &options.fields)?;
-    let update = options.fields.update()?;
-    let name = update.name.ok_or_else(invalid_command)?;
+    let mut update = options.fields.update()?;
+    if protocol == CreatedRequestProtocol::Graphql
+        && (!update.body.is_unchanged() || !update.body_content.is_unchanged())
+    {
+        return Err(CliError::invalid_arguments(
+            "HTTP body updates cannot be applied to a native GraphQL request",
+        ));
+    }
+    let name = update.name.take().ok_or_else(invalid_command)?;
+    let method = std::mem::take(&mut update.method).into_set();
+    let url = std::mem::take(&mut update.url).into_set();
+    let graphql = update.graphql.take();
+    let update = (!update.is_empty()).then_some(update);
     Ok(structure(
         input(&path),
         "create",
@@ -665,11 +692,11 @@ fn parse_request_create(mut parser: Parser) -> Result<Command, CliError> {
             parent: options.parent,
             index: options.index,
             name,
-            method: update.method.into_set(),
-            url: update.url.into_set(),
+            method,
+            url,
             protocol,
-            graphql: update.graphql,
-            update: None,
+            graphql,
+            update,
         },
     ))
 }
@@ -858,6 +885,11 @@ struct RequestFields {
     name: Option<String>,
     method: Option<String>,
     url: Option<String>,
+    headers: Option<String>,
+    query_parameters: Option<String>,
+    path_parameters: Option<String>,
+    body: Option<String>,
+    auth: Option<String>,
     graphql_query: Option<String>,
     graphql_variables: Option<String>,
     graphql_operation_name: Option<String>,
@@ -870,6 +902,11 @@ impl RequestFields {
             "--name" => &mut self.name,
             "--method" => &mut self.method,
             "--url" => &mut self.url,
+            "--headers" => &mut self.headers,
+            "--query-parameters" => &mut self.query_parameters,
+            "--path-parameters" => &mut self.path_parameters,
+            "--body" => &mut self.body,
+            "--auth" => &mut self.auth,
             "--graphql-query" => &mut self.graphql_query,
             "--graphql-variables" => &mut self.graphql_variables,
             "--graphql-operation-name" => &mut self.graphql_operation_name,
@@ -892,8 +929,31 @@ impl RequestFields {
             name: self.name,
             method: self.method.map(FieldPatch::Set).unwrap_or_default(),
             url: self.url.map(FieldPatch::Set).unwrap_or_default(),
+            headers: self.headers.as_deref().map(parse_headers).transpose()?,
+            query_parameters: self
+                .query_parameters
+                .as_deref()
+                .map(parse_query_parameters)
+                .transpose()?,
+            path_parameters: self
+                .path_parameters
+                .as_deref()
+                .map(parse_path_parameters)
+                .transpose()?,
+            authentication: self
+                .auth
+                .as_deref()
+                .map(parse_authentication)
+                .transpose()?
+                .unwrap_or_default(),
             ..RequestUpdate::default()
         };
+        if let Some(source) = self.body.as_deref() {
+            match parse_http_body(source)? {
+                HttpBodyWrite::Clear => update.body = FieldPatch::Clear,
+                HttpBodyWrite::Content(body) => update.body_content = FieldPatch::Set(body),
+            }
+        }
         if !graphql_requested {
             return Ok(update);
         }
@@ -1138,6 +1198,11 @@ fn is_known_option(argument: &str) -> bool {
             | "--allow-partial"
             | "--var"
             | "--strict-variables"
+            | "--headers"
+            | "--query-parameters"
+            | "--path-parameters"
+            | "--body"
+            | "--auth"
             | "--graphql-query"
             | "--graphql-variables"
             | "--graphql-operation-name"

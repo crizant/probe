@@ -11,10 +11,10 @@ use std::{
 
 use atomic_write_file::AtomicWriteFile;
 use probe_core::{
-    CollectionItem, CollectionUpdate, Environment, EnvironmentResolutionError, EnvironmentVariable,
-    FieldPatch, FolderKey, FolderUpdate, RequestKey, RequestUpdate, Variable, VariableValue,
-    VariableValueSet, VariableValueVariant, Workspace, WorkspaceItemRef, validate_environments,
-    validate_unique_variable_names,
+    Body, CollectionItem, CollectionUpdate, Environment, EnvironmentResolutionError,
+    EnvironmentVariable, FieldPatch, FolderKey, FolderUpdate, RequestKey, RequestUpdate, Variable,
+    VariableValue, VariableValueSet, VariableValueVariant, Workspace, WorkspaceItemRef,
+    validate_environments, validate_unique_variable_names,
 };
 use serde_yaml_ng::Value;
 
@@ -1291,6 +1291,7 @@ pub(crate) fn apply_request_update(
         || update.query_parameters.is_some()
         || update.path_parameters.is_some()
         || !update.body.is_unchanged()
+        || !update.body_content.is_unchanged()
         || !update.authentication.is_unchanged()
         || update.graphql.is_some()
     {
@@ -1345,6 +1346,16 @@ pub(crate) fn apply_request_update(
             };
             set_optional_merged(details, "body", value);
         }
+        if !update.body_content.is_unchanged() {
+            if is_graphql {
+                return Err(SaveError::Graphql(probe_core::GraphqlRequestError::NotHttp));
+            }
+            match &update.body_content {
+                FieldPatch::Set(body) => apply_http_body_content(details, body)?,
+                FieldPatch::Clear => set_optional(details, "body", None),
+                FieldPatch::Unchanged => unreachable!(),
+            }
+        }
         if !update.authentication.is_unchanged() {
             let value = match &update.authentication {
                 FieldPatch::Set(authentication) => Some(authentication_value(authentication)),
@@ -1363,6 +1374,57 @@ pub(crate) fn apply_request_update(
         }
     }
     Ok(())
+}
+
+fn apply_http_body_content(
+    details: &mut serde_yaml_ng::Mapping,
+    body: &Body,
+) -> Result<(), SaveError> {
+    let key = string_key("body");
+    match details.get(&key) {
+        None => {
+            details.insert(key, body_value(body));
+            Ok(())
+        }
+        Some(Value::Mapping(_)) => {
+            set_optional_merged(details, "body", Some(body_value(body)));
+            Ok(())
+        }
+        Some(Value::Sequence(_)) => {
+            let Some(Value::Sequence(variants)) = details.get_mut(&key) else {
+                return Err(SaveError::InvalidDocument(
+                    "HTTP body must be a mapping or variants".to_owned(),
+                ));
+            };
+            let mut selected = variants.iter_mut().filter(|variant| {
+                variant
+                    .as_mapping()
+                    .and_then(|variant| variant.get(string_key("selected")))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            });
+            let variant = selected.next().ok_or_else(|| {
+                SaveError::Graphql(probe_core::GraphqlRequestError::InvalidBodySelection(
+                    "request body variants have no selected value".to_owned(),
+                ))
+            })?;
+            if selected.next().is_some() {
+                return Err(SaveError::Graphql(
+                    probe_core::GraphqlRequestError::InvalidBodySelection(
+                        "request body variants have multiple selected values".to_owned(),
+                    ),
+                ));
+            }
+            let variant = variant.as_mapping_mut().ok_or_else(|| {
+                SaveError::InvalidDocument("HTTP body variant is not a mapping".to_owned())
+            })?;
+            set_optional_merged(variant, "body", Some(body_value(body)));
+            Ok(())
+        }
+        Some(_) => Err(SaveError::InvalidDocument(
+            "HTTP body must be a mapping or variants".to_owned(),
+        )),
+    }
 }
 
 fn apply_collection_update(
@@ -1620,5 +1682,41 @@ mod tests {
         assert_eq!(reloaded.baseline, baseline_before);
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn http_body_content_rejects_unusable_variant_lists() {
+        use probe_core::{Body, RawBody, RawBodyKind};
+
+        let body = Body::Raw(RawBody {
+            kind: RawBodyKind::Text,
+            data: "next".to_owned(),
+        });
+        let mut missing = serde_yaml_ng::Mapping::new();
+        missing.insert(
+            super::string_key("body"),
+            serde_yaml_ng::from_str(
+                "- { title: One, body: { type: text, data: a } }\n- { title: Two, body: { type: text, data: b } }\n",
+            )
+            .unwrap(),
+        );
+        let error = super::apply_http_body_content(&mut missing, &body).unwrap_err();
+        assert!(error.to_string().contains("no selected value"));
+
+        let mut several = serde_yaml_ng::Mapping::new();
+        several.insert(
+            super::string_key("body"),
+            serde_yaml_ng::from_str(
+                "- { title: One, selected: true, body: { type: text, data: a } }\n- { title: Two, selected: true, body: { type: text, data: b } }\n",
+            )
+            .unwrap(),
+        );
+        let error = super::apply_http_body_content(&mut several, &body).unwrap_err();
+        assert!(error.to_string().contains("multiple selected values"));
+
+        let mut scalar = serde_yaml_ng::Mapping::new();
+        scalar.insert(super::string_key("body"), serde_yaml_ng::Value::Bool(true));
+        let error = super::apply_http_body_content(&mut scalar, &body).unwrap_err();
+        assert!(error.to_string().contains("mapping or variants"));
     }
 }
