@@ -308,6 +308,12 @@ fn curl_multipart_arguments(
                     let mut field = format!("{}={value}", part.name);
                     if let Some(content_type) = &part.content_type {
                         apply_part_content_type(Part::text(String::new()), part)?;
+                        if has_reserved_curl_form_parameter(content_type) {
+                            return Err(HttpError::InvalidBody(format!(
+                                "multipart file field '{}' has content type '{}' containing cURL-reserved form parameter (filename, headers, or encoder)",
+                                part.name, content_type
+                            )));
+                        }
                         field.push_str(&format!(";type={content_type}"));
                     }
                     curl_argument(command, "--form", &field);
@@ -316,6 +322,16 @@ fn curl_multipart_arguments(
         }
     }
     Ok(())
+}
+
+fn has_reserved_curl_form_parameter(content_type: &str) -> bool {
+    let lower = content_type.to_ascii_lowercase();
+    for reserved in ["filename=", "headers=", "encoder="] {
+        if lower.contains(reserved) {
+            return true;
+        }
+    }
+    false
 }
 
 fn curl_argument(command: &mut String, flag: &str, value: &str) {

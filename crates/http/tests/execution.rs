@@ -804,3 +804,73 @@ fn curl_export_rejects_multipart_text_with_explicit_content_type() {
     assert!(err_msg.contains("application/json"));
     assert!(err_msg.contains("--form-string"));
 }
+
+#[test]
+fn curl_export_rejects_file_parts_with_reserved_curl_form_parameters() {
+    let engine = HttpEngine::new().unwrap();
+    let options = ExecutionOptions {
+        base_directory: Some(std::env::temp_dir()),
+        ..ExecutionOptions::default()
+    };
+    let mut request = request("POST", "https://example.com/upload".into());
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "file".into(),
+        kind: MultipartPartKind::File,
+        value: MultipartValue::Single("test.txt".into()),
+        content_type: Some("text/plain; filename=\"hijack.txt\"".into()),
+        disabled: false,
+    }])));
+    let result = engine.curl_command(&request.clone().into_http().unwrap(), &options);
+    let error = result.unwrap_err();
+    assert!(matches!(&error, probe_http::HttpError::InvalidBody(_)));
+    let err_msg = error.to_string();
+    assert!(err_msg.contains("file"));
+    assert!(err_msg.contains("filename"));
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "file".into(),
+        kind: MultipartPartKind::File,
+        value: MultipartValue::Single("test.txt".into()),
+        content_type: Some("text/plain; Headers=\"X-Evil: yes\"".into()),
+        disabled: false,
+    }])));
+    let result = engine.curl_command(&request.clone().into_http().unwrap(), &options);
+    let error = result.unwrap_err();
+    assert!(matches!(&error, probe_http::HttpError::InvalidBody(_)));
+    let err_msg = error.to_string();
+    assert!(err_msg.contains("Headers"));
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "file".into(),
+        kind: MultipartPartKind::File,
+        value: MultipartValue::Single("test.txt".into()),
+        content_type: Some("application/octet-stream; ENCODER=binary".into()),
+        disabled: false,
+    }])));
+    let result = engine.curl_command(&request.into_http().unwrap(), &options);
+    let error = result.unwrap_err();
+    assert!(matches!(&error, probe_http::HttpError::InvalidBody(_)));
+    let err_msg = error.to_string();
+    assert!(err_msg.contains("ENCODER"));
+}
+
+#[test]
+fn curl_export_allows_file_parts_with_normal_mime_parameters() {
+    let engine = HttpEngine::new().unwrap();
+    let options = ExecutionOptions {
+        base_directory: Some(std::env::temp_dir()),
+        ..ExecutionOptions::default()
+    };
+    let mut request = request("POST", "https://example.com/upload".into());
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "file".into(),
+        kind: MultipartPartKind::File,
+        value: MultipartValue::Single("test.txt".into()),
+        content_type: Some("text/plain; charset=utf-8".into()),
+        disabled: false,
+    }])));
+    let command = engine
+        .curl_command(&request.into_http().unwrap(), &options)
+        .unwrap();
+    assert!(command.contains("--form"));
+    assert!(command.contains("type=text/plain; charset=utf-8"));
+    assert!(command.contains("test.txt"));
+}
