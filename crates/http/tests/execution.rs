@@ -797,8 +797,9 @@ fn curl_export_rejects_multipart_text_with_explicit_content_type() {
         disabled: false,
     }])));
     let result = engine.curl_command(&request.into_http().unwrap(), &ExecutionOptions::default());
-    assert!(matches!(result, Err(probe_http::HttpError::InvalidBody(_))));
-    let err_msg = result.unwrap_err().to_string();
+    let error = result.unwrap_err();
+    assert!(matches!(&error, probe_http::HttpError::InvalidBody(_)));
+    let err_msg = error.to_string();
     assert!(err_msg.contains("data"));
     assert!(err_msg.contains("application/json"));
     assert!(err_msg.contains("--form-string"));
