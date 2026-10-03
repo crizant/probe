@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Reduce unnecessary desktop redraws while idle and when scrolling over request fields.
+
 ## [0.9.4] - 2026-10-03
 
 ### Added

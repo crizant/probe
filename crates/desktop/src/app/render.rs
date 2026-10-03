@@ -190,10 +190,6 @@ impl Render for ProbeApp {
             .line_height(relative(theme.typography.body_line_height))
             .flex()
             .flex_col()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _, _, cx| view.reset_caret_blink(cx)),
-            )
             .on_action(cx.listener(|view, _: &SaveRequest, window, cx| {
                 if view.application_dialog.is_some()
                     || view

@@ -78,6 +78,75 @@ fn secret_popup_does_not_focus_its_hidden_value_input(cx: &mut TestAppContext) {
         .unwrap();
 }
 
+struct PlaceholderHarness {
+    input: Entity<InputState>,
+    placeholder: SharedString,
+}
+
+impl Render for PlaceholderHarness {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+        let mut input = super::text_input_base(
+            Theme::light(),
+            "placeholder-input",
+            "",
+            self.placeholder.clone(),
+        );
+        input.shared_input = Some(self.input.clone());
+        div().size_full().child(input)
+    }
+}
+
+#[gpui::test]
+fn input_placeholder_updates_when_label_or_shared_state_changes(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(320.0), px(180.0)), |window, cx| {
+        PlaceholderHarness {
+            input: cx.new(|cx| InputState::new(window, cx).placeholder("Name")),
+            placeholder: "Name".into(),
+        }
+    });
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                view.input.read(cx).presentation().placeholder().as_ref(),
+                "Name"
+            );
+            view.placeholder = "Value".into();
+            cx.notify();
+        })
+        .unwrap();
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(
+                view.input.read(cx).presentation().placeholder().as_ref(),
+                "Value"
+            );
+            // Replacing the shared state must apply the controlled placeholder even
+            // when the component's label has not changed.
+            view.input = cx.new(|cx| InputState::new(window, cx));
+            cx.notify();
+        })
+        .unwrap();
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                view.input.read(cx).presentation().placeholder().as_ref(),
+                "Value"
+            );
+        })
+        .unwrap();
+}
+
 struct PersistentInputFocusHarness {
     field: Option<Entity<super::FieldInput>>,
     visible: bool,
