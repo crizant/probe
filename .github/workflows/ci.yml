@@ -13,6 +13,9 @@ jobs:
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     strategy:
       fail-fast: false
       matrix:
@@ -23,6 +26,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
       - name: Install GPUI Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -47,7 +51,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install cargo-deny --locked --version 0.20.2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+          fallback: none
       - run: cargo deny check advisories
 
   quality:
@@ -58,8 +68,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-      - run: cargo install cargo-llvm-cov --locked --version 0.9.1
-      - run: cargo install cargo-crap --locked --version 0.5.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/llvm-cov-target"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1,cargo-crap@0.5.0
+          fallback: none
       - run: cargo llvm-cov --workspace --all-features --json --output-path target/coverage.json
       - run: cargo llvm-cov report --lcov --output-path target/coverage.lcov
       - run: python3 scripts/check-coverage.py target/coverage.json target/coverage.lcov
@@ -106,6 +121,17 @@ jobs:
             echo 'changed=true' >> "$GITHUB_OUTPUT"
           fi
       - if: steps.diff.outputs.changed == 'true'
-        run: cargo install cargo-mutants --locked --version 27.1.0
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Mutant builds use temporary directories, so only cache Cargo downloads.
+          cache-targets: "false"
       - if: steps.diff.outputs.changed == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+          fallback: none
+      - if: steps.diff.outputs.changed == 'true'
+        env:
+          # Override rust-cache's default for repeated builds of mutated source.
+          CARGO_INCREMENTAL: "1"
         run: cargo mutants --workspace --in-diff target/mutants.diff -j 2
