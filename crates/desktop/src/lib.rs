@@ -6,7 +6,6 @@
 #![forbid(unsafe_code)]
 
 mod app;
-mod caret;
 mod components;
 mod credential_presence;
 pub mod credentials;

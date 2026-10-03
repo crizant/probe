@@ -356,9 +356,7 @@ pub(crate) struct ProbeApp {
     rendered_response_rows: usize,
     #[cfg(test)]
     rendered_environment_variable_rows: usize,
-    _caret_blink: Task<()>,
     _response_elapsed_refresh: Task<()>,
-    _keystrokes: gpui::Subscription,
     _quit_subscription: gpui::Subscription,
 }
 
@@ -380,10 +378,6 @@ impl ProbeApp {
                     let _ = executor.spawn(async move { store.save(&state) }).await;
                 }
             }
-        });
-        crate::caret::CaretBlink::show(cx);
-        let keystrokes = cx.observe_keystrokes(|this, _, _, cx| {
-            this.reset_caret_blink(cx);
         });
         let close_view = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
@@ -484,30 +478,9 @@ impl ProbeApp {
             rendered_response_rows: 0,
             #[cfg(test)]
             rendered_environment_variable_rows: 0,
-            _caret_blink: Self::spawn_caret_blink(cx),
             _response_elapsed_refresh: Self::spawn_response_elapsed_refresh(cx),
-            _keystrokes: keystrokes,
             _quit_subscription: quit_subscription,
         }
-    }
-
-    fn spawn_caret_blink(cx: &mut Context<Self>) -> Task<()> {
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(crate::caret::CARET_BLINK_INTERVAL)
-                    .await;
-                if this
-                    .update(cx, |_, cx| {
-                        crate::caret::CaretBlink::toggle(cx);
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
     }
 
     fn spawn_response_elapsed_refresh(cx: &mut Context<Self>) -> Task<()> {
@@ -594,15 +567,6 @@ impl ProbeApp {
             });
         })
         .detach();
-    }
-
-    fn reset_caret_blink(&mut self, cx: &mut Context<Self>) {
-        let was_visible = crate::caret::CaretBlink::is_visible(cx);
-        crate::caret::CaretBlink::show(cx);
-        self._caret_blink = Self::spawn_caret_blink(cx);
-        if !was_visible {
-            cx.notify();
-        }
     }
 
     fn workspace_name(&self) -> String {

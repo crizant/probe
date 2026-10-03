@@ -259,13 +259,40 @@ impl RenderOnce for ProbeTextInput {
             }
             field.read(cx).state.clone()
         };
+        // The pinned setter always notifies. Cache the applied placeholder because
+        // reading presentation() on every frame would also copy the entire value.
+        let applied_placeholder = window.use_keyed_state(
+            text_context_menu_id(&component_id, "applied-placeholder"),
+            cx,
+            |_, cx| {
+                (
+                    state.entity_id(),
+                    state.read(cx).presentation().placeholder().clone(),
+                )
+            },
+        );
+        let placeholder_changed = applied_placeholder.update(cx, |applied, cx| {
+            if applied.0 != state.entity_id() {
+                *applied = (
+                    state.entity_id(),
+                    state.read(cx).presentation().placeholder().clone(),
+                );
+            }
+            if applied.1 == placeholder {
+                return false;
+            }
+            applied.1 = placeholder.clone();
+            true
+        });
         let focused = state.read(cx).focus_handle(cx).is_focused(window);
         let context_focus = state.read(cx).focus_handle(cx);
         let open_context_menu = context_menu.clone();
         state.update(cx, |input, cx| {
             input.set_editor_style(editor_paint_style(self.theme));
             input.set_readonly(self.readonly, cx);
-            input.set_placeholder(placeholder, window, cx);
+            if placeholder_changed {
+                input.set_placeholder(placeholder, window, cx);
+            }
             input.on_context_menu(Rc::new(move |_, capabilities, position, window, cx| {
                 context_focus.focus(window, cx);
                 open_context_menu.update(cx, |state, cx| {

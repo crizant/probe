@@ -16,8 +16,7 @@ pub(in crate::components) fn variable_input_overlay(
 ) -> gpui::AnyElement {
     let ranges = input_variable_ranges(&value, highlight_path_variables);
     // Input paints first so it keeps native caret, selection, and scroll.
-    // The overlay sits on top, recolors supported variable spans, and covers
-    // the native caret while blink is off.
+    // The overlay sits on top and recolors supported variable spans.
     let mut wrapper = div()
         .id(tooltip_id.clone())
         .relative()

@@ -43,6 +43,25 @@ fn toast_debug(view: &ProbeApp) -> Vec<String> {
         .collect()
 }
 
+#[gpui::test]
+fn idle_app_does_not_notify_for_caret_blink(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    cx.run_until_parked();
+    let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = notifications.clone();
+    let _subscription = window
+        .update(cx, |_, _, cx| {
+            cx.observe(&cx.entity(), move |_, _, _| {
+                observed.set(observed.get() + 1)
+            })
+        })
+        .unwrap();
+    cx.executor().advance_clock(Duration::from_millis(1600));
+    cx.run_until_parked();
+    assert_eq!(notifications.get(), 0);
+}
+
 #[test]
 fn projection_warning_identifies_unsupported_value_and_containing_item() {
     let workspace = probe_opencollection::load_workspace_from_str(include_str!(
