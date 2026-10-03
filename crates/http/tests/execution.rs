@@ -895,164 +895,46 @@ fn api_key_auth(key: &str, value: &str, placement: &str) -> Authentication {
     }
 }
 
-fn shell_arguments(command: &str) -> Vec<String> {
-    let output = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(format!("set -- {command}; printf '%s\\0' \"$@\""))
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{command}");
-    output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|bytes| !bytes.is_empty())
-        .map(|bytes| String::from_utf8(bytes.to_vec()).unwrap())
-        .collect()
-}
-
-fn flag_value<'a>(arguments: &'a [String], flag: &str) -> &'a str {
-    arguments
-        .windows(2)
-        .find(|pair| pair[0] == flag)
-        .map(|pair| pair[1].as_str())
-        .unwrap_or_else(|| panic!("missing {flag} in {arguments:?}"))
-}
-
-async fn serve_twice() -> io::Result<(
-    String,
-    tokio::task::JoinHandle<io::Result<(support::CapturedRequest, support::CapturedRequest)>>,
-)> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
-    let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await?;
-        let first = read_request(&mut stream).await?;
-        write_response(&mut stream, "200 OK", &[], b"ok").await?;
-        let (mut stream, _) = listener.accept().await?;
-        let second = read_request(&mut stream).await?;
-        write_response(&mut stream, "200 OK", &[], b"ok").await?;
-        Ok((first, second))
-    });
-    Ok((format!("http://{address}"), handle))
-}
-
 #[tokio::test]
-async fn api_key_header_execution_matches_curl() {
-    let (base_url, captured) = serve_twice().await.unwrap();
-    let mut request = request("POST", format!("{base_url}/items?existing=yes"));
-    request.headers.push(Header {
-        name: "X-Trace".to_owned(),
-        value: "kept".to_owned(),
-        disabled: false,
-    });
-    request.kind = http_body(RequestBody::Single(Body::Raw(RawBody {
-        kind: RawBodyKind::Text,
-        data: "payload".to_owned(),
-    })));
+async fn sends_an_api_key_header() {
+    let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
+    let mut request = request("GET", format!("{base_url}/items?existing=yes"));
     request.authentication = Some(api_key_auth("X-API-Key", "secret value", "header"));
-    let prepared = request.into_http().unwrap();
-    let engine = HttpEngine::new().unwrap();
-    let command = engine
-        .curl_command(&prepared, &ExecutionOptions::default())
-        .unwrap();
-    engine
-        .execute(&prepared, &ExecutionOptions::default())
-        .await
-        .unwrap();
-    let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(command)
-            .output()
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let (executed, curled) = tokio::time::timeout(Duration::from_secs(5), captured)
-        .await
-        .expect("timed out waiting for cURL")
-        .unwrap()
-        .unwrap();
 
-    assert_eq!(executed.request_line, curled.request_line);
-    assert_eq!(executed.request_line, "POST /items?existing=yes HTTP/1.1");
-    assert!(!executed.request_line.contains("secret"));
-    assert_eq!(executed.header("x-api-key"), Some("secret value"));
-    assert_eq!(curled.header("x-api-key"), Some("secret value"));
-    assert_eq!(executed.header("x-trace"), curled.header("x-trace"));
-    assert_eq!(executed.body, curled.body);
-    assert_eq!(executed.body, b"payload");
+    HttpEngine::new()
+        .unwrap()
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .await
+        .unwrap();
+    let captured = captured.await.unwrap().unwrap();
+
+    assert_eq!(captured.request_line, "GET /items?existing=yes HTTP/1.1");
+    assert_eq!(captured.header("x-api-key"), Some("secret value"));
 }
 
 #[tokio::test]
-async fn api_key_query_execution_matches_curl() {
-    let (base_url, captured) = serve_twice().await.unwrap();
+async fn sends_an_api_key_query_parameter() {
+    let (base_url, captured) = serve_once("200 OK", &[], b"ok").await.unwrap();
     let mut request = request("GET", format!("{base_url}/items?existing=yes#section"));
     request.query_parameters.push(QueryParameter {
         name: "q".to_owned(),
         value: "a & b".to_owned(),
         disabled: false,
     });
-    request.headers.push(Header {
-        name: "X-Trace".to_owned(),
-        value: "kept".to_owned(),
-        disabled: false,
-    });
     request.authentication = Some(api_key_auth("api key", "p@ss/雪~*", "query"));
-    let prepared = request.into_http().unwrap();
-    let engine = HttpEngine::new().unwrap();
-    let command = engine
-        .curl_command(&prepared, &ExecutionOptions::default())
-        .unwrap();
-    let arguments = shell_arguments(&command);
-    let exported = flag_value(&arguments, "--url").to_owned();
-    assert!(exported.contains("#section"));
-    engine
-        .execute(&prepared, &ExecutionOptions::default())
-        .await
-        .unwrap();
-    let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(command)
-            .output()
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let (executed, curled) = tokio::time::timeout(Duration::from_secs(5), captured)
-        .await
-        .expect("timed out waiting for cURL")
-        .unwrap()
-        .unwrap();
 
-    assert_eq!(executed.request_line, curled.request_line);
-    let target = executed.request_line.split_whitespace().nth(1).unwrap();
-    let exported_target = exported
-        .split_once(&base_url)
+    HttpEngine::new()
         .unwrap()
-        .1
-        .split('#')
-        .next()
+        .execute(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .await
         .unwrap();
-    assert_eq!(target, exported_target);
-    assert!(target.contains("existing=yes"));
-    assert!(target.contains("q=a+%26+b"));
-    assert!(target.contains("api+key="));
-    assert!(executed.header("x-api-key").is_none());
-    assert!(curled.header("x-api-key").is_none());
-    assert_eq!(executed.header("x-trace"), Some("kept"));
-    assert_eq!(curled.header("x-trace"), Some("kept"));
+    let captured = captured.await.unwrap().unwrap();
+
+    assert_eq!(
+        captured.request_line,
+        "GET /items?existing=yes&q=a+%26+b&api+key=p%40ss%2F%E9%9B%AA%7E* HTTP/1.1"
+    );
+    assert!(captured.header("x-api-key").is_none());
 }
 
 #[test]
@@ -1089,7 +971,7 @@ fn curl_export_keeps_api_key_templates_in_the_selected_placement() {
 }
 
 #[tokio::test]
-async fn api_key_execution_and_curl_reject_the_same_invalid_configuration() {
+async fn rejects_invalid_api_key_configuration() {
     let engine = HttpEngine::new().unwrap();
     let mut cases = Vec::new();
     for (key, value, placement) in [

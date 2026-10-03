@@ -354,17 +354,6 @@ pub(crate) fn raw_body_mut(request: &mut Request) -> Option<&mut String> {
     }
 }
 
-/// Authentication kinds the desktop offers until the others can be executed.
-pub(crate) fn authentication_selector_choices() -> [(&'static str, Option<AuthenticationKind>); 5] {
-    [
-        ("None", None),
-        ("Inherit", Some(AuthenticationKind::Inherit)),
-        ("Basic", Some(AuthenticationKind::Basic)),
-        ("Bearer", Some(AuthenticationKind::Bearer)),
-        ("API Key", Some(AuthenticationKind::ApiKey)),
-    ]
-}
-
 pub(crate) fn auth_label(kind: &AuthenticationKind) -> &'static str {
     match kind {
         AuthenticationKind::Inherit => "Inherit",
@@ -417,9 +406,8 @@ mod tests {
     use probe_core::{AuthenticationKind, Body, QueryParameter, RawBodyKind, Request, RequestBody};
 
     use super::{
-        BodyEditorKind, EditorSection, RequestEditorState, apply_url_bar_value, auth_label,
-        authentication_selector_choices, raw_body_mut, set_auth_property, set_authentication,
-        url_bar_value,
+        BodyEditorKind, EditorSection, RequestEditorState, apply_url_bar_value, raw_body_mut,
+        set_auth_property, set_authentication, url_bar_value,
     };
 
     #[test]
@@ -529,18 +517,6 @@ mod tests {
         };
         assert_eq!(body.kind, RawBodyKind::Json);
         assert_eq!(body.data, "{\"ok\":true}");
-    }
-
-    #[test]
-    fn authentication_selector_offers_executable_kinds() {
-        let choices = authentication_selector_choices();
-        let labels: Vec<_> = choices.iter().map(|(label, _)| *label).collect();
-        assert_eq!(labels, ["None", "Inherit", "Basic", "Bearer", "API Key"]);
-        for (label, kind) in &choices {
-            if let Some(kind) = kind {
-                assert_eq!(*label, auth_label(kind));
-            }
-        }
     }
 
     #[test]

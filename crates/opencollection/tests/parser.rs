@@ -368,6 +368,15 @@ fn api_key_authentication_is_executable_and_other_kinds_stay_diagnostic() {
         "        key: api_key\n",
         "        value: 123\n",
         "        placement: header\n",
+        "  - info: { name: Cookie, type: http }\n",
+        "    http:\n",
+        "      method: GET\n",
+        "      url: https://example.com/cookie\n",
+        "      auth:\n",
+        "        type: apikey\n",
+        "        key: session\n",
+        "        value: secret\n",
+        "        placement: cookie\n",
         "  - info: { name: Token, type: http }\n",
         "    http:\n",
         "      method: GET\n",
@@ -399,7 +408,18 @@ fn api_key_authentication_is_executable_and_other_kinds_stay_diagnostic() {
         "value",
     )));
     assert!(diagnostics.contains(&(
-        "items/2/http/auth/type",
+        "items/2/http/auth/placement",
+        ProjectionDiagnosticKind::AuthenticationProperty,
+        "placement",
+    )));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|(path, _, _)| *path == "items/0/http/auth/placement"
+                || *path == "items/1/http/auth/placement")
+    );
+    assert!(diagnostics.contains(&(
+        "items/3/http/auth/type",
         ProjectionDiagnosticKind::AuthenticationKind,
         "oauth2",
     )));
@@ -431,6 +451,18 @@ fn api_key_authentication_is_executable_and_other_kinds_stay_diagnostic() {
             .properties
             .get("value"),
         Some(&AuthenticationValue::Number("123".to_owned()))
+    );
+    let CollectionItem::Request(cookie) = &parsed.collection().items[2] else {
+        panic!("third item should be a request");
+    };
+    assert_eq!(
+        cookie
+            .authentication
+            .as_ref()
+            .unwrap()
+            .properties
+            .get("placement"),
+        Some(&AuthenticationValue::String("cookie".to_owned()))
     );
     let serialized = parsed.to_yaml().unwrap();
     assert_eq!(

@@ -13,7 +13,13 @@ impl ProbeApp {
             .authentication
             .as_ref()
             .map(|auth| auth_label(&auth.kind));
-        let choices = authentication_selector_choices();
+        let choices = [
+            ("None", None),
+            ("Inherit", Some(AuthenticationKind::Inherit)),
+            ("Basic", Some(AuthenticationKind::Basic)),
+            ("Bearer", Some(AuthenticationKind::Bearer)),
+            ("API Key", Some(AuthenticationKind::ApiKey)),
+        ];
         let choice_count = choices.len();
         let mut kind_buttons = div().flex().flex_wrap().gap(px(theme.metrics.spacing_1));
         for (index, (label, kind)) in choices.into_iter().enumerate() {
