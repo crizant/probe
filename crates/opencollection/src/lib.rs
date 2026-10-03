@@ -153,9 +153,11 @@ pub fn parse(source: &str) -> Result<ParsedCollection, ParseError> {
         ));
     }
     let bundled = wire.bundled;
+    let docs = document::optional_documentation(document.get("docs")).map_err(ParseError::new)?;
     let mut diagnostics = Vec::new();
-    let collection =
+    let mut collection =
         projection::project_collection(wire, &mut diagnostics).map_err(ParseError::new)?;
+    collection.metadata.docs = docs;
     projection::sort_diagnostics(&mut diagnostics);
     validate_environments(&collection.environments).map_err(|error| {
         ParseError::new(<serde_yaml_ng::Error as serde::de::Error>::custom(

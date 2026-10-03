@@ -243,7 +243,9 @@ fn convert_items(
                     metadata: ItemMetadata {
                         name: nonempty(&folder.name),
                         sequence: Some(folder.sort_priority),
+                        ..ItemMetadata::default()
                     },
+                    docs: None,
                     items: convert_items(
                         workspace,
                         Some(&folder.id),

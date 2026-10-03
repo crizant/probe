@@ -28,3 +28,4 @@ workspace = true
 
 [dev-dependencies]
 criterion = "0.7.0"
+serde_yaml_ng = "0.10"

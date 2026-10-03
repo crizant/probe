@@ -11,9 +11,9 @@ use std::{
 
 use atomic_write_file::AtomicWriteFile;
 use probe_core::{
-    CollectionItem, Environment, EnvironmentResolutionError, EnvironmentVariable, FieldPatch,
-    FolderKey, RequestKey, RequestUpdate, Variable, VariableValue, VariableValueSet,
-    VariableValueVariant, Workspace, WorkspaceItemRef, validate_environments,
+    CollectionItem, CollectionUpdate, Environment, EnvironmentResolutionError, EnvironmentVariable,
+    FieldPatch, FolderKey, FolderUpdate, RequestKey, RequestUpdate, Variable, VariableValue,
+    VariableValueSet, VariableValueVariant, Workspace, WorkspaceItemRef, validate_environments,
     validate_unique_variable_names,
 };
 use serde_yaml_ng::Value;
@@ -69,6 +69,7 @@ impl LocatedRequest {
 pub struct LocatedFolder {
     selector: String,
     key: FolderKey,
+    persistence: Option<FolderPersistence>,
 }
 
 impl LocatedFolder {
@@ -776,6 +777,94 @@ impl LoadedWorkspace {
         Ok(())
     }
 
+    /// Persists collection summary and docs without rewriting unrelated fields.
+    pub fn update_collection(&mut self, update: &CollectionUpdate) -> Result<(), SaveError> {
+        if update.is_empty() {
+            return Err(SaveError::EmptyUpdate);
+        }
+        let document_path = self.collection_document_path()?;
+        update.apply(self.workspace.metadata_mut());
+        let original_source = self
+            .documents
+            .get(&document_path)
+            .expect("collection document must retain its source")
+            .original_source
+            .clone();
+        let serialized = mutate_existing_document(&document_path, &original_source, |document| {
+            apply_collection_update(document, update)
+        })?;
+        self.documents.insert(
+            document_path,
+            SourceDocument {
+                original_source: serialized.into(),
+            },
+        );
+        self.advance_baseline();
+        Ok(())
+    }
+
+    /// Persists folder description and docs without rewriting unrelated fields.
+    pub fn update_folder(
+        &mut self,
+        selector: &str,
+        update: &FolderUpdate,
+    ) -> Result<(), SaveError> {
+        if update.is_empty() {
+            return Err(SaveError::EmptyUpdate);
+        }
+        let located = self
+            .folders
+            .iter()
+            .find(|folder| folder.selector == selector)
+            .cloned()
+            .ok_or_else(|| SaveError::FolderNotFound(selector.to_owned()))?;
+        let folder = self
+            .workspace
+            .folder_mut(located.key)
+            .expect("repository folder key must resolve");
+        update.description.apply(&mut folder.metadata.description);
+        update.docs.apply(&mut folder.docs);
+
+        let persistence = located.persistence.ok_or(SaveError::ReadOnlySource)?;
+        let original_source = self
+            .documents
+            .get(&persistence.document_path)
+            .expect("filesystem folder must retain its source document")
+            .original_source
+            .clone();
+        let serialized =
+            mutate_existing_document(&persistence.document_path, &original_source, |document| {
+                let folder_document = request_document_mut(document, &persistence.item_path)?;
+                apply_folder_update(folder_document, update)
+            })?;
+        self.documents.insert(
+            persistence.document_path,
+            SourceDocument {
+                original_source: serialized.into(),
+            },
+        );
+        self.advance_baseline();
+        Ok(())
+    }
+
+    fn collection_document_path(&self) -> Result<PathBuf, SaveError> {
+        match &self.source {
+            WorkspaceSource::Bundled(path) => Ok(path.clone()),
+            WorkspaceSource::Unbundled(root) => self
+                .documents
+                .keys()
+                .find(|path| {
+                    path.parent() == Some(root.as_path())
+                        && path.file_stem().and_then(|stem| stem.to_str()) == Some("opencollection")
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    SaveError::InvalidDocument("collection root document is missing".to_owned())
+                }),
+            WorkspaceSource::Memory => Err(SaveError::ReadOnlySource),
+        }
+    }
+
     /// Captures a request save that can be executed away from the UI thread.
     ///
     /// Preparing is in-memory only. [`PreparedRequestSave::execute`] performs the
@@ -1125,6 +1214,12 @@ struct RequestPersistence {
     item_path: Vec<usize>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FolderPersistence {
+    document_path: PathBuf,
+    item_path: Vec<usize>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SourceDocument {
     pub(crate) original_source: Arc<[u8]>,
@@ -1166,6 +1261,21 @@ pub(crate) fn apply_request_update(
         info.insert(
             Value::String("name".to_owned()),
             Value::String(name.clone()),
+        );
+    }
+    if !update.description.is_unchanged() {
+        let info = mapping_child(request, "info")?;
+        set_documentation(info, "description", &update.description);
+    }
+    if !update.docs.is_unchanged() {
+        set_optional(
+            request,
+            "docs",
+            match &update.docs {
+                FieldPatch::Set(docs) => Some(Value::String(docs.clone())),
+                FieldPatch::Clear => None,
+                FieldPatch::Unchanged => unreachable!("docs patch was checked"),
+            },
         );
     }
     let is_graphql = request
@@ -1251,6 +1361,45 @@ pub(crate) fn apply_request_update(
             }
             apply_graphql_update(details, graphql)?;
         }
+    }
+    Ok(())
+}
+
+fn apply_collection_update(
+    document: &mut Value,
+    update: &CollectionUpdate,
+) -> Result<(), SaveError> {
+    let root = document.as_mapping_mut().ok_or_else(|| {
+        SaveError::InvalidDocument("the collection document is not a mapping".to_owned())
+    })?;
+    if !update.summary.is_unchanged() {
+        let info = mapping_child(root, "info")?;
+        set_optional(
+            info,
+            "summary",
+            match &update.summary {
+                FieldPatch::Set(summary) => Some(Value::String(summary.clone())),
+                FieldPatch::Clear => None,
+                FieldPatch::Unchanged => unreachable!("summary patch was checked"),
+            },
+        );
+    }
+    if !update.docs.is_unchanged() {
+        set_documentation(root, "docs", &update.docs);
+    }
+    Ok(())
+}
+
+fn apply_folder_update(document: &mut Value, update: &FolderUpdate) -> Result<(), SaveError> {
+    let folder = document
+        .as_mapping_mut()
+        .ok_or_else(|| SaveError::InvalidDocument("the folder item is not a mapping".to_owned()))?;
+    if !update.description.is_unchanged() {
+        let info = mapping_child(folder, "info")?;
+        set_documentation(info, "description", &update.description);
+    }
+    if !update.docs.is_unchanged() {
+        set_documentation(folder, "docs", &update.docs);
     }
     Ok(())
 }

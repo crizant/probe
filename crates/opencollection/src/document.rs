@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use probe_core::{
-    Author, CollectionMetadata, Environment, EnvironmentVariable, FileReference, FormField, Header,
-    ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind,
-    RequestSettings, SecretVariable, Variable, VariableValue, VariableValueSet, VariableValueType,
-    VariableValueVariant,
+    Author, CollectionMetadata, Documentation, Environment, EnvironmentVariable, FileReference,
+    FormField, Header, ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue,
+    QueryParameter, RawBodyKind, RequestSettings, SecretVariable, Variable, VariableValue,
+    VariableValueSet, VariableValueType, VariableValueVariant,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -47,6 +47,7 @@ impl CollectionInfoDocument {
                 .into_iter()
                 .map(AuthorDocument::into_domain)
                 .collect(),
+            docs: None,
         }
     }
 }
@@ -91,8 +92,69 @@ impl ItemInfoDocument {
         ItemMetadata {
             name: self.name,
             sequence: self.seq,
+            description: None,
         }
     }
+}
+
+pub(crate) fn optional_documentation(
+    value: Option<&Value>,
+) -> Result<Option<Documentation>, serde_yaml_ng::Error> {
+    value.map(documentation_from_yaml).transpose()
+}
+
+pub(crate) fn documentation_from_yaml(
+    value: &Value,
+) -> Result<Documentation, serde_yaml_ng::Error> {
+    match value {
+        Value::Null => Ok(Documentation::Null),
+        Value::String(text) => Ok(Documentation::Text(text.clone())),
+        Value::Mapping(mapping) => documentation_object(mapping),
+        _ => Err(yaml_error(
+            "documentation must be a string, an object with content and type, or null",
+        )),
+    }
+}
+
+fn documentation_object(
+    mapping: &serde_yaml_ng::Mapping,
+) -> Result<Documentation, serde_yaml_ng::Error> {
+    if mapping.len() != 2 {
+        return Err(yaml_error(
+            "documentation object must contain only content and type",
+        ));
+    }
+    let content = mapping_string(mapping, "content")
+        .ok_or_else(|| yaml_error("documentation content must be a string"))?;
+    let media_type = mapping_string(mapping, "type")
+        .ok_or_else(|| yaml_error("documentation type must be a string"))?;
+    Ok(Documentation::Content {
+        content,
+        media_type,
+    })
+}
+
+fn mapping_string(mapping: &serde_yaml_ng::Mapping, key: &str) -> Option<String> {
+    mapping
+        .get(Value::String(key.to_owned()))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+pub(crate) fn request_docs_from_yaml(
+    value: Option<&Value>,
+) -> Result<Option<String>, serde_yaml_ng::Error> {
+    match value {
+        None => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(yaml_error(
+            "request docs must be a string; an object or null is invalid",
+        )),
+    }
+}
+
+fn yaml_error(message: &str) -> serde_yaml_ng::Error {
+    <serde_yaml_ng::Error as serde::de::Error>::custom(message)
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -25,6 +25,7 @@ pub fn load_workspace_from_str(source: &str) -> Result<LoadedWorkspace, LoadErro
 enum LocatorNode {
     Folder {
         selector: String,
+        persistence: Option<FolderPersistence>,
         children: Vec<LocatorNode>,
     },
     Request {
@@ -189,6 +190,10 @@ fn read_items(
                 CollectionItem::Folder(folder),
                 LocatorNode::Folder {
                     selector: relative_selector(root, &path),
+                    persistence: Some(FolderPersistence {
+                        document_path: folder_config,
+                        item_path: Vec::new(),
+                    }),
                     children: child_nodes,
                 },
             ));
@@ -370,6 +375,10 @@ fn locator_nodes_from_items(
                         .map_or(&[][..], Vec::as_slice);
                     Some(LocatorNode::Folder {
                         selector: format!("{prefix}/{index}"),
+                        persistence: document_path.map(|path| FolderPersistence {
+                            document_path: path.to_owned(),
+                            item_path: item_path.clone(),
+                        }),
                         children: locator_nodes_from_items(
                             children,
                             &format!("{prefix}/{index}/items"),
@@ -473,10 +482,18 @@ fn index_locator_nodes(
                     persistence: persistence.clone(),
                 });
             }
-            (WorkspaceItemRef::Folder(key), LocatorNode::Folder { selector, children }) => {
+            (
+                WorkspaceItemRef::Folder(key),
+                LocatorNode::Folder {
+                    selector,
+                    persistence,
+                    children,
+                },
+            ) => {
                 folders.push(LocatedFolder {
                     selector: selector.clone(),
                     key: *key,
+                    persistence: persistence.clone(),
                 });
                 let folder = workspace
                     .folder(*key)

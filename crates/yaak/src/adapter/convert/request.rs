@@ -62,6 +62,7 @@ pub(super) fn convert_request(
     let metadata = ItemMetadata {
         name: nonempty(&request.name),
         sequence: Some(request.sort_priority),
+        ..ItemMetadata::default()
     };
     let method = nonempty(&request.method);
     let url = Some(convert_templates(
@@ -90,6 +91,7 @@ pub(super) fn convert_request(
         authentication,
         settings,
         kind,
+        ..Request::default()
     }))
 }
 

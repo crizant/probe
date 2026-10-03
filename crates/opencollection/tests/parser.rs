@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf, time::Duration};
 
 use probe_core::{
-    AuthenticationKind, AuthenticationValue, Body, CollectionItem, EnvironmentVariable,
-    MultipartValue, RawBodyKind, RequestBody, VariableValue, VariableValueSet, VariableValueType,
-    Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
+    AuthenticationKind, AuthenticationValue, Body, CollectionItem, Documentation,
+    EnvironmentVariable, MultipartValue, RawBodyKind, RequestBody, VariableValue, VariableValueSet,
+    VariableValueType, Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
 };
 use probe_opencollection::{ProjectionDiagnosticKind, parse};
 
@@ -385,4 +385,94 @@ fn rejects_invalid_environment_inheritance_during_parse() {
     );
 
     assert!(parse(source).is_err());
+}
+
+#[test]
+fn loads_documentation_without_flattening_objects_or_request_docs() {
+    let source = concat!(
+        "opencollection: 1.0.0\n",
+        "info:\n",
+        "  name: Docs\n",
+        "  summary: short\n",
+        "  description: collection has no description field\n",
+        "bundled: true\n",
+        "docs:\n",
+        "  content: Collection guide\n",
+        "  type: text/markdown\n",
+        "items:\n",
+        "  - info:\n",
+        "      name: Pets\n",
+        "      type: folder\n",
+        "      description:\n",
+        "        content: Pet folder\n",
+        "        type: text/plain\n",
+        "    docs: null\n",
+        "    items:\n",
+        "      - info:\n",
+        "          name: Create pet\n",
+        "          type: http\n",
+        "          description:\n",
+        "            content: Creates a pet\n",
+        "            type: text/markdown\n",
+        "        docs: request docs stay a string\n",
+        "        http:\n",
+        "          method: POST\n",
+        "          url: https://example.com/pets\n",
+    );
+    let parsed = parse(source).expect("documentation fixture should parse");
+    let collection = parsed.collection();
+    assert_eq!(collection.metadata.summary.as_deref(), Some("short"));
+    assert_eq!(
+        collection.metadata.docs,
+        Some(Documentation::Content {
+            content: "Collection guide".into(),
+            media_type: "text/markdown".into(),
+        })
+    );
+    let CollectionItem::Folder(folder) = &collection.items[0] else {
+        panic!("first item should be a folder");
+    };
+    assert_eq!(
+        folder.metadata.description,
+        Some(Documentation::Content {
+            content: "Pet folder".into(),
+            media_type: "text/plain".into(),
+        })
+    );
+    assert_eq!(folder.docs, Some(Documentation::Null));
+    let CollectionItem::Request(request) = &folder.items[0] else {
+        panic!("folder child should be a request");
+    };
+    assert_eq!(
+        request.metadata.description,
+        Some(Documentation::Content {
+            content: "Creates a pet".into(),
+            media_type: "text/markdown".into(),
+        })
+    );
+    assert_eq!(request.docs.as_deref(), Some("request docs stay a string"));
+
+    let retained: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&parsed.to_yaml().unwrap()).unwrap();
+    assert_eq!(
+        retained["info"]["description"].as_str(),
+        Some("collection has no description field")
+    );
+}
+
+#[test]
+fn rejects_request_docs_that_are_not_strings() {
+    for docs in [
+        "    docs: null\n",
+        "    docs:\n      content: nope\n      type: text/plain\n",
+    ] {
+        let source = format!(
+            "opencollection: 1.0.0\ninfo:\n  name: Docs\nbundled: true\nitems:\n  - info:\n      name: Create\n      type: http\n{docs}    http:\n      method: GET\n      url: https://example.com\n"
+        );
+        let error = parse(&source).expect_err("invalid request docs should be rejected");
+        assert!(
+            error.to_string().contains("request docs must be a string"),
+            "{error}\n{source}"
+        );
+    }
 }

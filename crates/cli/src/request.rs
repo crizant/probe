@@ -2,10 +2,10 @@ use std::{borrow::Cow, io::Read, path::PathBuf};
 
 use probe_application::{NoSecrets, RequestResolution, prepare_request};
 use probe_core::{
-    ExpectationOutcome, Request, RequestUpdate, RequestVariableInfo, SecretContext, SecretError,
-    SecretProvider, SecretValue, StatusExpectation, VariableUsage, discover_request_variables,
-    evaluate_expectations, resolve_environment_with_overrides, resolve_request,
-    resolve_request_strict,
+    ExpectationOutcome, FieldPatch, Request, RequestUpdate, RequestVariableInfo, SecretContext,
+    SecretError, SecretProvider, SecretValue, StatusExpectation, VariableUsage,
+    discover_request_variables, evaluate_expectations, resolve_environment_with_overrides,
+    resolve_request, resolve_request_strict,
 };
 use probe_http::{ExecutionOptions, HttpEngine, HttpResponse};
 use serde_json::json;
@@ -16,7 +16,7 @@ use crate::{
     load,
     presentation::{
         dry_run_human, dry_run_json, request_human, request_json, response_human, response_json,
-        run_request_json,
+        run_request_json, unset_documentation,
     },
 };
 
@@ -196,6 +196,26 @@ pub(crate) fn update(
         ),
         json: request_json(selector, None, request).map_err(CliError::graphql)?,
     })
+}
+
+pub(crate) fn unset(
+    input: &WorkspaceInput,
+    selector: &str,
+    update: &RequestUpdate,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let mut fields = Vec::new();
+    if matches!(update.description, FieldPatch::Clear) {
+        fields.push("description");
+    }
+    if matches!(update.docs, FieldPatch::Clear) {
+        fields.push("docs");
+    }
+    let mut loaded = load(input, stdin)?;
+    loaded
+        .update_request(selector, update)
+        .map_err(CliError::persistence)?;
+    Ok(unset_documentation("request", Some(selector), &fields))
 }
 
 pub(crate) struct RunOptions<'a> {

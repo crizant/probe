@@ -143,6 +143,9 @@ fn bundled_collection_value(collection: &probe_core::Collection) -> Value {
         string_key("info"),
         collection_info_value(&collection.metadata),
     );
+    if let Some(docs) = &collection.metadata.docs {
+        root.insert(string_key("docs"), documentation_value(docs));
+    }
     root.insert(string_key("bundled"), Value::Bool(true));
     if !collection.environments.is_empty() {
         root.insert(
@@ -208,6 +211,9 @@ fn collection_item_value(item: &CollectionItem) -> Value {
     match item {
         CollectionItem::Folder(folder) => {
             let mut item = item_info_value(&folder.metadata, "folder");
+            if let Some(docs) = &folder.docs {
+                item.insert(string_key("docs"), documentation_value(docs));
+            }
             item.insert(
                 string_key("items"),
                 Value::Sequence(folder.items.iter().map(collection_item_value).collect()),
@@ -252,6 +258,9 @@ fn collection_item_value(item: &CollectionItem) -> Value {
             item.insert(string_key(section), Value::Mapping(details));
             if let Some(settings) = request_settings_value(&request.settings) {
                 item.insert(string_key("settings"), settings);
+            }
+            if let Some(docs) = &request.docs {
+                item.insert(string_key("docs"), Value::String(docs.clone()));
             }
             Value::Mapping(item)
         }
@@ -314,6 +323,9 @@ fn item_info_value(metadata: &probe_core::ItemMetadata, item_type: &str) -> serd
         && let Ok(value) = serde_yaml_ng::to_value(sequence)
     {
         info.insert(string_key("seq"), value);
+    }
+    if let Some(description) = &metadata.description {
+        info.insert(string_key("description"), documentation_value(description));
     }
     let mut item = serde_yaml_ng::Mapping::new();
     item.insert(string_key("info"), Value::Mapping(info));
