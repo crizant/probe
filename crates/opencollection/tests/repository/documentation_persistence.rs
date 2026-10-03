@@ -136,6 +136,24 @@ fn documentation_edits_round_trip_without_flattening_objects() {
     let request = request_at(&loaded, "items/0/items/0");
     assert_eq!(request.metadata.description, Some(markdown("Updated pet")));
     assert_eq!(request.docs.as_deref(), Some("Updated request docs"));
+
+    let mut loaded = load_workspace(&path).unwrap();
+    loaded
+        .update_request(
+            "items/0/items/0",
+            &RequestUpdate {
+                description: FieldPatch::Clear,
+                docs: FieldPatch::Clear,
+                ..RequestUpdate::default()
+            },
+        )
+        .unwrap();
+    let saved = fs::read_to_string(&path).unwrap();
+    let document: serde_yaml_ng::Value = serde_yaml_ng::from_str(&saved).unwrap();
+    let request = &document["items"][0]["items"][0];
+    assert!(request.get("docs").is_none());
+    assert!(request["info"].get("description").is_none());
+    assert_eq!(request["http"]["method"].as_str(), Some("PUT"));
 }
 
 #[test]

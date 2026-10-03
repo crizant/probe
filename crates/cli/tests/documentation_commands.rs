@@ -139,6 +139,23 @@ fn reads_and_writes_documentation_without_listing_docs_or_flattening_objects() {
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("request docs must be a string"));
 
     let rejected = probe()
+        .args([
+            "folder",
+            "set",
+            path_arg,
+            "items/0",
+            "--description-json",
+            "{",
+        ])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("--description-json must be a JSON string")
+    );
+
+    let rejected = probe()
         .args(["collection", "set", path_arg, "--description", "nope"])
         .output()
         .unwrap();
