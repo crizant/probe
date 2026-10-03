@@ -535,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn authentication_schemes_keep_their_opencollection_names() {
+    fn writable_auth_forms_are_inherit_basic_bearer_and_apikey() {
         let FieldPatch::Set(inherit) = parse_authentication("\"inherit\"").unwrap() else {
             panic!("inherit should be the JSON string");
         };
