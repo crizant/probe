@@ -20,7 +20,6 @@ pub(crate) struct PaneSplitter {
     id: ElementId,
     axis: Axis,
     show_line: bool,
-    trailing: bool,
     on_mouse_down: Option<MouseDownHandler>,
     debug_selector: Option<String>,
 }
@@ -31,7 +30,6 @@ pub(crate) fn pane_splitter(theme: Theme, id: impl Into<ElementId>, axis: Axis) 
         id: id.into(),
         axis,
         show_line: true,
-        trailing: false,
         on_mouse_down: None,
         debug_selector: None,
     }
@@ -42,14 +40,6 @@ impl PaneSplitter {
     /// only the hit target. The default is `true`.
     pub(crate) fn show_line(mut self, show_line: bool) -> Self {
         self.show_line = show_line;
-        self
-    }
-
-    /// Pin the handle to the trailing edge (right for a horizontal axis, bottom
-    /// for a vertical axis). The default is the leading edge.
-    #[allow(dead_code)]
-    pub(crate) fn trailing(mut self) -> Self {
-        self.trailing = true;
         self
     }
 
@@ -72,7 +62,6 @@ impl RenderOnce for PaneSplitter {
         let along_x = self.axis == Axis::Horizontal;
         let line_color = self.theme.colors.borders.subtle;
         let debug_selector = self.debug_selector;
-        let trailing = self.trailing;
 
         let mut handle = div()
             .id(self.id)
@@ -93,19 +82,17 @@ impl RenderOnce for PaneSplitter {
                 handle.debug_selector(move || selector.clone())
             });
         if along_x {
-            handle = handle.w(px(HIT_TARGET_SIZE)).top(px(0.0)).bottom(px(0.0));
-            handle = if trailing {
-                handle.right(px(-HIT_INSET))
-            } else {
-                handle.left(px(-HIT_INSET))
-            };
+            handle = handle
+                .w(px(HIT_TARGET_SIZE))
+                .top(px(0.0))
+                .bottom(px(0.0))
+                .left(px(-HIT_INSET));
         } else {
-            handle = handle.h(px(HIT_TARGET_SIZE)).left(px(0.0)).right(px(0.0));
-            handle = if trailing {
-                handle.bottom(px(-HIT_INSET))
-            } else {
-                handle.top(px(-HIT_INSET))
-            };
+            handle = handle
+                .h(px(HIT_TARGET_SIZE))
+                .left(px(0.0))
+                .right(px(0.0))
+                .top(px(-HIT_INSET));
         }
 
         handle.when(self.show_line, |handle| {
