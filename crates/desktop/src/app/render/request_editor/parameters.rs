@@ -16,20 +16,19 @@ impl ProbeApp {
             let value_view = cx.weak_entity();
             let enabled_view = cx.weak_entity();
             let remove_view = cx.weak_entity();
-            rows =
-                rows.child(
-                    components::editor_key_value_row(theme)
-                        .when(index == 0, |row| {
-                            row.debug_selector(move || format!("{}-row", kind.name_id()))
-                        })
-                        .child(div().flex_1().min_w(px(0.0)).child(
+            rows = rows.child(
+                components::editor_key_value_row(theme)
+                    .when(index == 0, |row| {
+                        row.debug_selector(move || format!("{}-row", kind.name_id()))
+                    })
+                    .child(
+                        div().flex_1().min_w(px(0.0)).child(
                             components::variable_text_input(
                                 theme,
                                 (kind.name_id(), index),
                                 parameter.name.clone(),
                                 "Parameter",
                                 self.variable_context(cx),
-                                list_scroll,
                                 move |value, _, input_cx| {
                                     let _ = name_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -41,16 +40,18 @@ impl ProbeApp {
                                         );
                                     });
                                 },
-                            ),
-                        ))
-                        .child(div().flex_1().min_w(px(0.0)).child(
+                            )
+                            .list_scroll(list_scroll),
+                        ),
+                    )
+                    .child(
+                        div().flex_1().min_w(px(0.0)).child(
                             components::variable_text_input(
                                 theme,
                                 (kind.value_id(), index),
                                 parameter.value.clone(),
                                 "Value",
                                 self.variable_context(cx),
-                                list_scroll,
                                 move |value, _, input_cx| {
                                     let _ = value_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -66,48 +67,49 @@ impl ProbeApp {
                                         );
                                     });
                                 },
-                            ),
-                        ))
-                        .child(components::switch(
-                            theme,
-                            (kind.enabled_id(), index),
-                            kind.enable_label(),
-                            !parameter.disabled,
-                            false,
-                            move |enabled, _, cx| {
-                                let _ = enabled_view.update(cx, |view, cx| {
-                                    view.edit_request(
-                                        key,
-                                        |request| {
-                                            if let Some(parameter) =
-                                                kind.parameter_mut(request, index)
-                                            {
-                                                parameter.disabled = !enabled;
-                                            }
-                                        },
-                                        cx,
-                                    );
-                                });
-                            },
-                        ))
-                        .child(components::remove_row_button(
-                            theme,
-                            (kind.remove_id(), index),
-                            kind.remove_label(),
-                            move |_, window, cx| {
-                                let _ = remove_view.update(cx, |view, cx| {
-                                    view.edit_request(
-                                        key,
-                                        |request| {
-                                            kind.remove(request, index);
-                                        },
-                                        cx,
-                                    );
-                                    view.focus_handle.focus(window, cx);
-                                });
-                            },
-                        )),
-                );
+                            )
+                            .list_scroll(list_scroll),
+                        ),
+                    )
+                    .child(components::switch(
+                        theme,
+                        (kind.enabled_id(), index),
+                        kind.enable_label(),
+                        !parameter.disabled,
+                        false,
+                        move |enabled, _, cx| {
+                            let _ = enabled_view.update(cx, |view, cx| {
+                                view.edit_request(
+                                    key,
+                                    |request| {
+                                        if let Some(parameter) = kind.parameter_mut(request, index)
+                                        {
+                                            parameter.disabled = !enabled;
+                                        }
+                                    },
+                                    cx,
+                                );
+                            });
+                        },
+                    ))
+                    .child(components::remove_row_button(
+                        theme,
+                        (kind.remove_id(), index),
+                        kind.remove_label(),
+                        move |_, window, cx| {
+                            let _ = remove_view.update(cx, |view, cx| {
+                                view.edit_request(
+                                    key,
+                                    |request| {
+                                        kind.remove(request, index);
+                                    },
+                                    cx,
+                                );
+                                view.focus_handle.focus(window, cx);
+                            });
+                        },
+                    )),
+            );
         }
         let add_view = cx.weak_entity();
         rows.child(components::editor_add_button(

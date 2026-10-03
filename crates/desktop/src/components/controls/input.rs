@@ -522,16 +522,14 @@ pub(crate) fn variable_text_input(
     value: impl Into<SharedString>,
     placeholder: impl Into<SharedString>,
     variables: VariableContext,
-    list_scroll: Option<&ScrollHandle>,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> ProbeTextInput {
     let mut input = text_input_base(theme, id, value, placeholder);
     input.variables = variables;
     input.variable_overlay = true;
     input.font_family = theme.typography.monospace_family;
     input.on_change = Some(Rc::new(on_value_change));
-    input.list_scroll = list_scroll.cloned();
-    input.into_any_element()
+    input
 }
 
 pub(crate) fn url_text_input(

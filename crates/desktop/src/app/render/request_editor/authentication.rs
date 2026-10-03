@@ -61,65 +61,69 @@ impl ProbeApp {
                 let remove_view = cx.weak_entity();
                 editor = editor.child(
                     components::editor_key_value_row(theme)
-                        .child(div().flex_1().min_w(px(0.0)).child(
-                            components::variable_text_input(
-                                theme,
-                                ("authentication-property-name", index),
-                                property_name.clone(),
-                                "Property",
-                                self.variable_context(cx),
-                                list_scroll,
-                                move |value, _, input_cx| {
-                                    let old_name = old_name.clone();
-                                    let _ = name_view.update(input_cx, |view, cx| {
-                                        view.edit_request(
-                                            key,
-                                            |request| {
-                                                let Some(authentication) =
-                                                    request.authentication.as_mut()
-                                                else {
-                                                    return;
-                                                };
-                                                if let Some(old_value) =
-                                                    authentication.properties.remove(&old_name)
-                                                {
-                                                    authentication
-                                                        .properties
-                                                        .insert(value.to_string(), old_value);
-                                                }
-                                            },
-                                            cx,
-                                        );
-                                    });
-                                },
+                        .child(
+                            div().flex_1().min_w(px(0.0)).child(
+                                components::variable_text_input(
+                                    theme,
+                                    ("authentication-property-name", index),
+                                    property_name.clone(),
+                                    "Property",
+                                    self.variable_context(cx),
+                                    move |value, _, input_cx| {
+                                        let old_name = old_name.clone();
+                                        let _ = name_view.update(input_cx, |view, cx| {
+                                            view.edit_request(
+                                                key,
+                                                |request| {
+                                                    let Some(authentication) =
+                                                        request.authentication.as_mut()
+                                                    else {
+                                                        return;
+                                                    };
+                                                    if let Some(old_value) =
+                                                        authentication.properties.remove(&old_name)
+                                                    {
+                                                        authentication
+                                                            .properties
+                                                            .insert(value.to_string(), old_value);
+                                                    }
+                                                },
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                )
+                                .list_scroll(list_scroll),
                             ),
-                        ))
-                        .child(div().flex_1().min_w(px(0.0)).child(
-                            components::variable_text_input(
-                                theme,
-                                ("authentication-property-value", index),
-                                auth_value(value),
-                                "Value",
-                                self.variable_context(cx),
-                                list_scroll,
-                                move |value, _, input_cx| {
-                                    let value_name = value_name.clone();
-                                    let _ = value_view.update(input_cx, |view, cx| {
-                                        view.edit_request(
-                                            key,
-                                            |request| {
-                                                set_auth_property(
-                                                    request,
-                                                    value_name,
-                                                    value.to_string(),
-                                                )
-                                            },
-                                            cx,
-                                        );
-                                    });
-                                },
+                        )
+                        .child(
+                            div().flex_1().min_w(px(0.0)).child(
+                                components::variable_text_input(
+                                    theme,
+                                    ("authentication-property-value", index),
+                                    auth_value(value),
+                                    "Value",
+                                    self.variable_context(cx),
+                                    move |value, _, input_cx| {
+                                        let value_name = value_name.clone();
+                                        let _ = value_view.update(input_cx, |view, cx| {
+                                            view.edit_request(
+                                                key,
+                                                |request| {
+                                                    set_auth_property(
+                                                        request,
+                                                        value_name,
+                                                        value.to_string(),
+                                                    )
+                                                },
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                )
+                                .list_scroll(list_scroll),
                             ),
-                        ))
+                        )
                         .child(components::remove_row_button(
                             theme,
                             ("remove-authentication-property", index),

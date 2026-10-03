@@ -193,7 +193,6 @@ impl ProbeApp {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_environment_variable_row(
         &self,
         theme: Theme,
@@ -201,7 +200,6 @@ impl ProbeApp {
         row: probe_core::EffectiveEnvironmentVariable,
         busy: bool,
         dirty: bool,
-        list_scroll: &ScrollHandle,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let row_index = row.direct_index.unwrap_or(0);
@@ -332,6 +330,12 @@ impl ProbeApp {
                 } else {
                     format!("environment-variable-name-{name}")
                 };
+                let list_scroll = self
+                    .environment_variables_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .clone();
                 div()
                     .id(format!("environment-variable-name-{row_id}"))
                     .debug_selector({
@@ -371,7 +375,7 @@ impl ProbeApp {
                                 },
                                 |_, _, _| {},
                             )
-                            .list_scroll(Some(list_scroll))
+                            .list_scroll(Some(&list_scroll))
                             .persistent_field(
                                 dialog
                                     .active_field
@@ -395,6 +399,12 @@ impl ProbeApp {
             })
             .child(if editable {
                 let input_id = format!("environment-variable-value-input-{row_id}");
+                let list_scroll = self
+                    .environment_variables_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .clone();
                 div()
                     .id(value_selector.clone())
                     .debug_selector({
@@ -452,7 +462,7 @@ impl ProbeApp {
                             },
                             |_, _, _| {},
                         )
-                        .list_scroll(Some(list_scroll))
+                        .list_scroll(Some(&list_scroll))
                         .persistent_field(
                             dialog
                                 .active_field
@@ -761,15 +771,8 @@ impl ProbeApp {
             .relative();
         let row_count = rows.len() + usize::from(rows_empty);
         let rows = Rc::new(rows);
-        let list_scroll = self
-            .environment_variables_scroll
-            .0
-            .borrow()
-            .base_handle
-            .clone();
         let list = uniform_list("environment-manager-variable-list", row_count, {
             let rows = rows.clone();
-            let list_scroll = list_scroll.clone();
             cx.processor(move |view, range: std::ops::Range<usize>, _, cx| {
                 #[cfg(test)]
                 {
@@ -797,15 +800,11 @@ impl ProbeApp {
                             );
                         }
                         let row = rows.get(index)?.clone();
-                        Some(view.render_environment_variable_row(
-                            theme,
-                            dialog,
-                            row,
-                            busy,
-                            dirty,
-                            &list_scroll,
-                            cx,
-                        ))
+                        Some(
+                            view.render_environment_variable_row(
+                                theme, dialog, row, busy, dirty, cx,
+                            ),
+                        )
                     })
                     .collect::<Vec<_>>()
             })

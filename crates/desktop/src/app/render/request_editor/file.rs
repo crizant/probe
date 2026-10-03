@@ -32,7 +32,6 @@ impl ProbeApp {
                                         file.file_path.clone(),
                                         "File path",
                                         self.variable_context(cx),
-                                        None,
                                         move |value, _, input_cx| {
                                             let _ = path_view.update(input_cx, |view, cx| {
                                                 view.edit_request(
@@ -70,7 +69,6 @@ impl ProbeApp {
                                 file.content_type.clone(),
                                 "Content type",
                                 self.variable_context(cx),
-                                None,
                                 move |value, _, input_cx| {
                                     let _ = type_view.update(input_cx, |view, cx| {
                                         view.edit_request(

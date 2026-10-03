@@ -24,7 +24,6 @@ impl ProbeApp {
                                 field.name.clone(),
                                 "Field",
                                 self.variable_context(cx),
-                                None,
                                 move |value, _, input_cx| {
                                     let _ = name_view.update(input_cx, |view, cx| {
                                         view.edit_request(
@@ -51,7 +50,6 @@ impl ProbeApp {
                                 field.value.clone(),
                                 "Value",
                                 self.variable_context(cx),
-                                None,
                                 move |value, _, input_cx| {
                                     let _ = value_view.update(input_cx, |view, cx| {
                                         view.edit_request(
