@@ -320,6 +320,7 @@ impl ProbeApp {
                                         matches!(
                                             request.kind,
                                             probe_core::RequestKind::Http { .. }
+                                                | probe_core::RequestKind::Graphql { .. }
                                         ),
                                         |popup| {
                                             popup.child(components::menu_button(

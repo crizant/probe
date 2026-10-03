@@ -577,7 +577,7 @@ fn curl_export_resolves_plain_variables_but_keeps_secret_references() {
 }
 
 #[test]
-fn curl_export_reports_resolution_and_protocol_errors() {
+fn curl_export_reports_resolution_errors() {
     let engine = HttpEngine::new().unwrap();
     let request = get("https://example.com");
     let bad_environment = RequestResolution {
@@ -592,18 +592,6 @@ fn curl_export_reports_resolution_and_protocol_errors() {
             &ExecutionOptions::default()
         )
         .is_err()
-    );
-    let mut graphql = request;
-    graphql.kind = probe_core::RequestKind::Graphql { body: None };
-    assert!(
-        probe_application::copy_as_curl(
-            &graphql,
-            &RequestResolution::default(),
-            &engine,
-            &ExecutionOptions::default()
-        )
-        .unwrap_err()
-        .contains("only for HTTP")
     );
 }
 
@@ -680,4 +668,136 @@ fn curl_export_keeps_secret_placeholders_in_url_parameters_and_all_bodies() {
         assert!(!command.contains("%7B%7BSecretHost%7D%7D"));
         assert!(!command.contains("%7B%7Bsecret%7D%7D%2B"));
     }
+}
+
+#[test]
+fn graphql_curl_export_preserves_selected_operation_resolution_and_http_semantics() {
+    use probe_core::{
+        Authentication, AuthenticationKind, AuthenticationValue, GraphqlBody, GraphqlBodyVariant,
+        GraphqlOperation, RequestKind,
+    };
+
+    let loaded = probe_opencollection::load_workspace_from_str(include_str!(
+        "../../../tests/fixtures/opencollection/graphql-http.yml"
+    ))
+    .unwrap();
+    let key = loaded.requests()[0].key();
+    let mut request = loaded.workspace().request(key).unwrap().clone();
+    let mut operation = request.selected_graphql().unwrap().unwrap().clone();
+    operation
+        .variables
+        .as_mut()
+        .unwrap()
+        .insert("token".into(), "{{token}}".into());
+    operation
+        .extensions
+        .as_mut()
+        .unwrap()
+        .insert("credential".into(), "{{authorization}}".into());
+    request.kind = RequestKind::Graphql {
+        body: Some(GraphqlBody::Variants(vec![
+            GraphqlBodyVariant {
+                title: "Inactive".into(),
+                selected: false,
+                body: GraphqlOperation {
+                    query: Some("INACTIVE_QUERY".into()),
+                    ..GraphqlOperation::default()
+                },
+            },
+            GraphqlBodyVariant {
+                title: "Viewer".into(),
+                selected: true,
+                body: operation,
+            },
+        ])),
+    };
+    request.headers.push(Header {
+        name: "X-Login".into(),
+        value: "{{login}}".into(),
+        disabled: false,
+    });
+    request.authentication = Some(Authentication {
+        kind: AuthenticationKind::Bearer,
+        properties: [(
+            "token".into(),
+            AuthenticationValue::String("{{token}}".into()),
+        )]
+        .into(),
+    });
+    let mut environments = environments();
+    environments[0].variables.extend([
+        plain("serverUrl", "https://example.com"),
+        plain("login", "octocat"),
+    ]);
+    let resolution = RequestResolution {
+        strict_variables: true,
+        ..local(&environments)
+    };
+    let engine = HttpEngine::new().unwrap();
+    let options = ExecutionOptions::default();
+    for method in ["POST", "GET"] {
+        request.method = Some(method.into());
+        let command =
+            probe_application::copy_as_curl(&request, &resolution, &engine, &options).unwrap();
+        assert!(command.contains(&format!("--request '{method}'")));
+        assert!(command.contains("https://example.com/graphql"));
+        assert!(command.contains("--header 'x-login: octocat'"));
+        assert!(command.contains("--header 'authorization: Bearer {{token}}'"));
+        assert!(!command.contains("INACTIVE_QUERY"));
+        assert!(!command.contains("{{login}}"));
+        assert!(!command.contains(SECRET));
+        if method == "POST" {
+            assert!(command.contains("--header 'content-type: application/json'"));
+            let payload = command
+                .split_once("--data-raw '")
+                .unwrap()
+                .1
+                .strip_suffix("'")
+                .unwrap();
+            let payload: serde_json::Value = serde_json::from_str(payload).unwrap();
+            assert_eq!(
+                payload,
+                serde_json::json!({
+                    "query": "query Viewer($login: String!) { viewer(login: $login) { login } }",
+                    "variables": {"login": "octocat", "token": "{{token}}"},
+                    "operationName": "Viewer",
+                    "extensions": {"credential": "{{authorization}}", "trace": {"enabled": true}},
+                })
+            );
+        } else {
+            assert!(!command.contains("--data-raw"));
+            assert!(command.contains("query=query+Viewer%28%24login%3A+String%21%29+%7B+viewer%28login%3A+%24login%29+%7B+login+%7D+%7D"));
+            assert!(command.contains("variables=%7B"));
+            assert!(command.contains("%22login%22%3A%22octocat%22"));
+            assert!(command.contains("%22token%22%3A%22{{token}}%22"));
+            assert!(command.contains("operationName=Viewer"));
+            assert!(command.contains("extensions=%7B"));
+            assert!(command.contains("%22credential%22%3A%22{{authorization}}%22"));
+            assert!(command.contains("%22trace%22%3A%7B%22enabled%22%3Atrue%7D"));
+        }
+    }
+    let RequestKind::Graphql {
+        body: Some(GraphqlBody::Variants(variants)),
+    } = &mut request.kind
+    else {
+        unreachable!()
+    };
+    variants[1].selected = false;
+    assert!(
+        probe_application::copy_as_curl(&request, &RequestResolution::default(), &engine, &options)
+            .is_err()
+    );
+    let RequestKind::Graphql {
+        body: Some(GraphqlBody::Variants(variants)),
+    } = &mut request.kind
+    else {
+        unreachable!()
+    };
+    for variant in variants {
+        variant.selected = true;
+    }
+    assert!(
+        probe_application::copy_as_curl(&request, &RequestResolution::default(), &engine, &options)
+            .is_err()
+    );
 }

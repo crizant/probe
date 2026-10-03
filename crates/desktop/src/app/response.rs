@@ -10,7 +10,10 @@ impl ProbeApp {
         let Some(request) = loaded.workspace().request(key).cloned() else {
             return;
         };
-        if !matches!(request.kind, probe_core::RequestKind::Http { .. }) {
+        if !matches!(
+            request.kind,
+            probe_core::RequestKind::Http { .. } | probe_core::RequestKind::Graphql { .. }
+        ) {
             return;
         }
         let input = ExecutionInput {

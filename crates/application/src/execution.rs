@@ -280,8 +280,11 @@ pub fn copy_as_curl(
     engine: &HttpEngine,
     options: &ExecutionOptions,
 ) -> Result<String, String> {
-    if !matches!(request.kind, probe_core::RequestKind::Http { .. }) {
-        return Err("Copy as cURL is available only for HTTP requests".into());
+    if !matches!(
+        request.kind,
+        probe_core::RequestKind::Http { .. } | probe_core::RequestKind::Graphql { .. }
+    ) {
+        return Err("Copy as cURL is available only for HTTP and GraphQL requests".into());
     }
     // Symbolic values let the shared resolver classify secret-derived variables
     // without consulting credentials. Export only the presentation request.

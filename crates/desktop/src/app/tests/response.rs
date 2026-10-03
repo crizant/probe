@@ -164,7 +164,10 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
         .update(cx, |view, _, cx| {
             view.edit_request(
                 request_key,
-                |request| request.kind = probe_core::RequestKind::Graphql { body: None },
+                |request| {
+                    request.method = Some("POST".into());
+                    request.kind = probe_core::RequestKind::Graphql { body: None };
+                },
                 cx,
             );
         })
@@ -177,7 +180,34 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
     visual.simulate_click(trigger.center(), Modifiers::default());
     visual.run_until_parked();
     assert!(visual.debug_bounds("request-send-and-save").is_some());
-    assert!(visual.debug_bounds("request-copy-as-curl").is_none());
+    let copy_item = visual
+        .debug_bounds("request-copy-as-curl")
+        .expect("GraphQL requests should offer Copy as cURL");
+    visual.simulate_click(copy_item.center(), Modifiers::default());
+    drop(visual);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        cx.run_until_parked();
+        if cx
+            .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .is_some_and(|text| text.contains("--data-raw '{}'"))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "GraphQL clipboard export timed out: clipboard={:?}, toast={:?}",
+            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())),
+            window.update(cx, |view, _, _| toast_debug(view)).unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    window
+        .update(cx, |view, _, _| {
+            assert!(!view.transient.request_execution_menu_open);
+            assert!(view.execution.response(request_key).is_none());
+        })
+        .unwrap();
 }
 
 #[gpui::test]
