@@ -201,9 +201,10 @@ is pushed. Use the release helper from a clean worktree:
 scripts/release.sh 0.2.0
 ```
 
-The script updates the workspace version in `Cargo.toml`, runs the release checks,
-commits the version bump, creates an annotated tag, and pushes the branch and tag
-to `origin`. The tag then triggers CLI and desktop release artifacts.
+The script updates the workspace version in `Cargo.toml`, moves unreleased
+changelog notes under the new version and Australia/Brisbane date, runs the
+release checks, commits those updates, creates an annotated tag, and pushes the
+branch and tag to `origin`. The tag then triggers CLI and desktop release artifacts.
 
 Core performance baselines cover parsing, workspace construction, request lookup,
 CLI startup, and practical peak-memory profiling at 100, 1,000, and 10,000 requests.
