@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Vertical trackpad scrolling keeps moving the list when the pointer is over a single-line field, instead of stuttering on sideways drift.
+
 ## [0.9.5] - 2026-10-03
 
 ### Fixed
