@@ -149,6 +149,10 @@ impl From<SaveError> for StructureError {
                 kind: ItemKind::Request,
                 selector,
             },
+            SaveError::FolderNotFound(selector) => Self::ItemNotFound {
+                kind: ItemKind::Folder,
+                selector,
+            },
             SaveError::EmptyUpdate => Self::InvalidDocument("empty structural update".to_owned()),
             SaveError::Graphql(error) => Self::InvalidDocument(error.to_string()),
             SaveError::Environment(error) => Self::InvalidDocument(error.to_string()),

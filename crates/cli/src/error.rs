@@ -148,6 +148,7 @@ impl CliError {
     pub(crate) fn persistence(error: SaveError) -> Self {
         let (category, exit_code) = match &error {
             SaveError::RequestNotFound(_) => ("request_not_found", REQUEST_NOT_FOUND_EXIT_CODE),
+            SaveError::FolderNotFound(_) => ("folder_not_found", REQUEST_NOT_FOUND_EXIT_CODE),
             SaveError::EmptyUpdate => ("invalid_arguments", INVALID_ARGUMENTS_EXIT_CODE),
             SaveError::ReadOnlySource => ("persistence_read_only", PERSISTENCE_EXIT_CODE),
             SaveError::ConcurrentModification(_)

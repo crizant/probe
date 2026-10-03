@@ -661,6 +661,7 @@ mod tests {
                     ..ItemMetadata::default()
                 },
                 items: vec![CollectionItem::Request(Request::default())],
+                ..Folder::default()
             })],
             ..Collection::default()
         });
@@ -701,6 +702,7 @@ mod tests {
                         },
                         ..Request::default()
                     })],
+                    ..Folder::default()
                 }),
             ],
             ..Collection::default()

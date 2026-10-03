@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use serde_json::{Map, Value};
 
-use crate::ItemMetadata;
+use crate::{Documentation, ItemMetadata};
 
 /// A native API request definition.
 ///
@@ -14,6 +14,8 @@ use crate::ItemMetadata;
 pub struct Request {
     /// Request metadata.
     pub metadata: ItemMetadata,
+    /// Request documentation. OpenCollection request `docs` is a plain string.
+    pub docs: Option<String>,
     /// HTTP method as written in the collection.
     pub method: Option<String>,
     /// Request URL, which may contain variables.
@@ -66,7 +68,7 @@ impl<T> FieldPatch<T> {
         }
     }
 
-    fn apply_to(&self, target: &mut Option<T>)
+    pub fn apply(&self, target: &mut Option<T>)
     where
         T: Clone,
     {
@@ -83,6 +85,10 @@ impl<T> FieldPatch<T> {
 pub struct RequestUpdate {
     /// Replacement request name. Removing a name is unsupported and rejected by `between`.
     pub name: Option<String>,
+    /// Replacement description.
+    pub description: FieldPatch<Documentation>,
+    /// Replacement request documentation string.
+    pub docs: FieldPatch<String>,
     /// Replacement HTTP method.
     pub method: FieldPatch<String>,
     /// Replacement URL.
@@ -133,6 +139,18 @@ impl RequestUpdate {
                 != current.metadata.name.as_ref())
             .then(|| current.metadata.name.clone())
             .flatten(),
+            description: if base.and_then(|request| request.metadata.description.as_ref())
+                != current.metadata.description.as_ref()
+            {
+                FieldPatch::from_optional(current.metadata.description.clone())
+            } else {
+                FieldPatch::Unchanged
+            },
+            docs: if base.and_then(|request| request.docs.as_ref()) != current.docs.as_ref() {
+                FieldPatch::from_optional(current.docs.clone())
+            } else {
+                FieldPatch::Unchanged
+            },
             method: if base.and_then(|request| request.method.as_ref()) != current.method.as_ref() {
                 FieldPatch::from_optional(current.method.clone())
             } else {
@@ -201,6 +219,8 @@ impl RequestUpdate {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.name.is_none()
+            && self.description.is_unchanged()
+            && self.docs.is_unchanged()
             && self.method.is_unchanged()
             && self.url.is_unchanged()
             && self.headers.is_none()
@@ -220,7 +240,7 @@ impl RequestUpdate {
             RequestKind::Http { .. } if graphql.is_some() => {
                 return Err(GraphqlRequestError::NotGraphql);
             }
-            RequestKind::Http { body } => self.body.apply_to(body),
+            RequestKind::Http { body } => self.body.apply(body),
             RequestKind::Graphql { .. } if !self.body.is_unchanged() => {
                 return Err(GraphqlRequestError::NotHttp);
             }
@@ -233,8 +253,10 @@ impl RequestUpdate {
         if let Some(name) = &self.name {
             request.metadata.name = Some(name.clone());
         }
-        self.method.apply_to(&mut request.method);
-        self.url.apply_to(&mut request.url);
+        self.description.apply(&mut request.metadata.description);
+        self.docs.apply(&mut request.docs);
+        self.method.apply(&mut request.method);
+        self.url.apply(&mut request.url);
         if let Some(headers) = &self.headers {
             request.headers.clone_from(headers);
         }
@@ -244,7 +266,7 @@ impl RequestUpdate {
         if let Some(parameters) = &self.path_parameters {
             request.path_parameters.clone_from(parameters);
         }
-        self.authentication.apply_to(&mut request.authentication);
+        self.authentication.apply(&mut request.authentication);
         Ok(())
     }
 }
@@ -411,10 +433,10 @@ impl GraphqlUpdate {
 
     /// Applies this update to one operation.
     pub fn apply(&self, operation: &mut GraphqlOperation) {
-        self.query.apply_to(&mut operation.query);
-        self.variables.apply_to(&mut operation.variables);
-        self.operation_name.apply_to(&mut operation.operation_name);
-        self.extensions.apply_to(&mut operation.extensions);
+        self.query.apply(&mut operation.query);
+        self.variables.apply(&mut operation.variables);
+        self.operation_name.apply(&mut operation.operation_name);
+        self.extensions.apply(&mut operation.extensions);
     }
 }
 

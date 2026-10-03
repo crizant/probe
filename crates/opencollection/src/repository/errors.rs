@@ -130,6 +130,8 @@ impl Error for LoadError {
 pub enum SaveError {
     /// No request matched the repository selector.
     RequestNotFound(String),
+    /// No folder matched the repository selector.
+    FolderNotFound(String),
     /// The requested update did not contain any changed fields.
     EmptyUpdate,
     /// The workspace came from an in-memory source such as stdin.
@@ -159,7 +161,10 @@ impl fmt::Display for SaveError {
             Self::RequestNotFound(selector) => {
                 write!(formatter, "request selector not found: {selector}")
             }
-            Self::EmptyUpdate => formatter.write_str("request update has no changed fields"),
+            Self::FolderNotFound(selector) => {
+                write!(formatter, "folder selector not found: {selector}")
+            }
+            Self::EmptyUpdate => formatter.write_str("update has no changed fields"),
             Self::ReadOnlySource => {
                 formatter.write_str("a workspace loaded from stdin cannot be persisted")
             }
@@ -198,6 +203,7 @@ impl Error for SaveError {
             Self::Io { source, .. } => Some(source),
             Self::Graphql(error) => Some(error),
             Self::RequestNotFound(_)
+            | Self::FolderNotFound(_)
             | Self::EmptyUpdate
             | Self::ReadOnlySource
             | Self::ConcurrentModification(_)
