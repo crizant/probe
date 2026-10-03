@@ -1,6 +1,6 @@
 use std::{io::Read, path::PathBuf};
 
-use probe_core::CollectionUpdate;
+use probe_core::{CollectionUpdate, FieldPatch};
 use probe_opencollection::{
     LoadedWorkspace, create_bundled_workspace, create_bundled_workspace_from_collection,
 };
@@ -12,7 +12,7 @@ use crate::{
     CliError, CommandOutput, WorkspaceInput,
     error::import_diagnostic_json,
     load,
-    presentation::{append_documentation, documentation_json},
+    presentation::{append_documentation, documentation_json, unset_documentation},
 };
 
 pub(crate) fn create(path: PathBuf, name: Option<String>) -> Result<CommandOutput, CliError> {
@@ -171,6 +171,25 @@ pub(crate) fn set(
             "updated": true,
         }),
     })
+}
+
+pub(crate) fn unset(
+    input: &WorkspaceInput,
+    update: &CollectionUpdate,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let mut fields = Vec::new();
+    if matches!(update.summary, FieldPatch::Clear) {
+        fields.push("summary");
+    }
+    if matches!(update.docs, FieldPatch::Clear) {
+        fields.push("docs");
+    }
+    let mut loaded = load(input, stdin)?;
+    loaded
+        .update_collection(update)
+        .map_err(CliError::persistence)?;
+    Ok(unset_documentation("collection", None, &fields))
 }
 
 pub(crate) fn validate(

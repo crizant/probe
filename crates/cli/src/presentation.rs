@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::CommandOutput;
+
 use probe_core::{
     AuthenticationValue, Body, Documentation, GraphqlOperation, GraphqlRequestError,
     MultipartPartKind, MultipartValue, RawBodyKind, Request, RequestBody, VariableValueType,
@@ -278,6 +280,30 @@ pub(super) fn request_json(
         "type": request.kind.as_str(),
         "url": request.url,
     }))
+}
+
+pub(super) fn unset_documentation(
+    kind: &str,
+    selector: Option<&str>,
+    fields: &[&str],
+) -> CommandOutput {
+    let mut human = String::new();
+    for field in fields {
+        match selector {
+            Some(selector) => human.push_str(&format!("Unset {kind} {selector} {field}\n")),
+            None => human.push_str(&format!("Unset {kind} {field}\n")),
+        }
+    }
+    let mut value = serde_json::Map::new();
+    value.insert("operation".to_owned(), json!("unset"));
+    if let Some(selector) = selector {
+        value.insert("selector".to_owned(), json!(selector));
+    }
+    value.insert("fields".to_owned(), json!(fields));
+    CommandOutput {
+        human,
+        json: Value::Object(value),
+    }
 }
 
 pub(super) fn documentation_json(value: Option<&Documentation>) -> Value {

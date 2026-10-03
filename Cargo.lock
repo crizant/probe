@@ -4965,6 +4965,7 @@ dependencies = [
  "probe-postman",
  "probe-yaak",
  "serde_json",
+ "serde_yaml_ng",
  "tokio",
 ]
 

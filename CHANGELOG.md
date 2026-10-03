@@ -8,7 +8,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
-- Show and set OpenCollection collection summary and docs, folder description and docs, and request description and docs from the CLI.
+- Show, set, and unset OpenCollection collection summary and docs, folder description and docs, and request description and docs from the CLI. Unset removes the key; `set --docs-json null` writes YAML null.
 
 ## [0.9.5] - 2026-10-03
 

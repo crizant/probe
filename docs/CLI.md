@@ -12,11 +12,13 @@ probe collection import yaak <source> <destination> [--workspace <id>] [--allow-
 probe collection validate <path> [--json]
 probe collection get <path> [--json]
 probe collection set <path> [--summary <text>] [--docs <text>] [--docs-json <json>] [--json]
+probe collection unset <path> [--summary] [--docs] [--json]
 probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--strict-variables] [--json]
 probe request variables <path> <selector> [--environment <name>] [--json]
 probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--secret-provider env] [--output <file>] [--dry-run] [--expect <expr>]... [--json]
 probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
+probe request unset <path> <selector> [--description] [--docs] [--json]
 probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request rename <path> <selector> --name <name> [--json]
 probe request delete <path> <selector> [--json]
@@ -25,6 +27,7 @@ probe request reorder <path> <selector> --index <index> [--json]
 probe folder list <path> [--json]
 probe folder get <path> <selector> [--json]
 probe folder set <path> <selector> [--description <text>] [--description-json <json>] [--docs <text>] [--docs-json <json>] [--json]
+probe folder unset <path> <selector> [--description] [--docs] [--json]
 probe folder create <path> --name <name> [--parent <folder>] [--index <index>] [--json]
 probe folder rename <path> <selector> --name <name> [--json]
 probe folder delete <path> <selector> [--json]
@@ -171,7 +174,14 @@ and `docs`. `folder set` writes those fields only. Folder and collection
 documentation accepts a plain string via `--description` or `--docs`, or a JSON
 string, `null`, or `{"content","type"}` object via `--description-json` or
 `--docs-json`. An object is stored as `{content, type}` and is not flattened to
-its content string. Explicit JSON `null` is stored as YAML null.
+its content string. Explicit JSON `null` is stored as YAML null. `null` does not
+remove the field.
+
+`collection unset`, `folder unset`, and `request unset` remove fields from the
+file, following `environment unset`. At least one field flag is required.
+`--summary` and `--docs` on collection unset, and `--description` and `--docs` on
+folder and request unset, take no value and omit that key. They do not write
+YAML null. `set` remains set-only.
 
 Request `info.description` uses the same documentation value. Request `docs` is a
 plain string: `--docs <text>` writes that string, and `--docs-json` is rejected
@@ -333,7 +343,10 @@ List entries omit `description` and `docs`.
 and `docs`. Documentation JSON is a string, `null`, or an object
 `{"content","type"}`. `null` covers both an omitted field and explicit null.
 `collection set --json` and `folder set --json` return the same objects after the
-write, with `"updated": true`.
+write, with `"updated": true`. `collection unset --json` returns `operation` and
+`fields`. `folder unset --json` and `request unset --json` also return
+`selector`. `fields` lists the removed names in command order: `summary`,
+`description`, then `docs`.
 
 `request get --json` returns `authentication`, `body`, `description`, `docs`, `environment`, `graphql`, `headers`,
 `method`, `name`, `pathParameters`, `queryParameters`, `selector`, and `url`. `description`

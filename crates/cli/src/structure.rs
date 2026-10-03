@@ -1,12 +1,12 @@
 use std::{collections::BTreeMap, io::Read};
 
-use probe_core::{FolderKey, FolderUpdate, WorkspaceItemRef};
+use probe_core::{FieldPatch, FolderKey, FolderUpdate, WorkspaceItemRef};
 use probe_opencollection::{LoadedWorkspace, StructureOperation, StructureResult};
 use serde_json::json;
 
 use crate::{
     CliError, CommandOutput, WorkspaceInput, load,
-    presentation::{append_documentation, documentation_json},
+    presentation::{append_documentation, documentation_json, unset_documentation},
 };
 
 pub(crate) fn edit(
@@ -93,6 +93,26 @@ pub(crate) fn set_folder(
             "updated": true,
         }),
     })
+}
+
+pub(crate) fn unset_folder(
+    input: &WorkspaceInput,
+    selector: &str,
+    update: &FolderUpdate,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let mut fields = Vec::new();
+    if matches!(update.description, FieldPatch::Clear) {
+        fields.push("description");
+    }
+    if matches!(update.docs, FieldPatch::Clear) {
+        fields.push("docs");
+    }
+    let mut loaded = load(input, stdin)?;
+    loaded
+        .update_folder(selector, update)
+        .map_err(CliError::persistence)?;
+    Ok(unset_documentation("folder", Some(selector), &fields))
 }
 
 fn folder_not_found(selector: &str) -> CliError {

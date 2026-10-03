@@ -36,6 +36,10 @@ pub(crate) enum Command {
         input: WorkspaceInput,
         update: CollectionUpdate,
     },
+    UnsetCollection {
+        input: WorkspaceInput,
+        update: CollectionUpdate,
+    },
     GetFolder {
         input: WorkspaceInput,
         selector: String,
@@ -44,6 +48,16 @@ pub(crate) enum Command {
         input: WorkspaceInput,
         selector: String,
         update: FolderUpdate,
+    },
+    UnsetFolder {
+        input: WorkspaceInput,
+        selector: String,
+        update: FolderUpdate,
+    },
+    UnsetRequest {
+        input: WorkspaceInput,
+        selector: String,
+        update: Box<RequestUpdate>,
     },
     ListRequests {
         input: WorkspaceInput,
@@ -127,6 +141,7 @@ pub(crate) fn parse(args: Vec<String>) -> Result<Command, CliError> {
             input: workspace(parser)?,
         }),
         ("collection", "set") => parse_collection_set(parser),
+        ("collection", "unset") => parse_collection_unset(parser),
         ("request", "list") => Ok(Command::ListRequests {
             input: workspace(parser)?,
         }),
@@ -135,6 +150,8 @@ pub(crate) fn parse(args: Vec<String>) -> Result<Command, CliError> {
         }),
         ("folder", "get") => parse_folder_get(parser),
         ("folder", "set") => parse_folder_set(parser),
+        ("folder", "unset") => parse_folder_unset(parser),
+        ("request", "unset") => parse_request_unset(parser),
         ("environment", "list") => Ok(Command::ListEnvironments {
             input: workspace(parser)?,
         }),
@@ -445,6 +462,117 @@ fn parse_folder_set(mut parser: Parser) -> Result<Command, CliError> {
         selector,
         update,
     })
+}
+
+fn parse_collection_unset(mut parser: Parser) -> Result<Command, CliError> {
+    let mut path = Vec::new();
+    let mut summary = false;
+    let mut docs = false;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--summary" => parser.flag(&mut summary, "--summary")?,
+            "--docs" => parser.flag(&mut docs, "--docs")?,
+            "--docs-json" | "--description-json" => return Err(unset_rejects_json_null()),
+            "--description" => {
+                return Err(CliError::invalid_arguments(
+                    "collections have summary and docs; use unset --summary or unset --docs",
+                ));
+            }
+            other => push_positional(&mut path, other, 1)?,
+        }
+    }
+    if !summary && !docs {
+        return Err(invalid_command());
+    }
+    Ok(Command::UnsetCollection {
+        input: input(&one_path(&path)?),
+        update: CollectionUpdate {
+            summary: clear_if(summary),
+            docs: clear_if(docs),
+        },
+    })
+}
+
+fn parse_folder_unset(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut description = false;
+    let mut docs = false;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--description" => parser.flag(&mut description, "--description")?,
+            "--docs" => parser.flag(&mut docs, "--docs")?,
+            "--docs-json" | "--description-json" => return Err(unset_rejects_json_null()),
+            "--summary" => {
+                return Err(CliError::invalid_arguments(
+                    "folders have description and docs; use unset --description or unset --docs",
+                ));
+            }
+            other => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    if !description && !docs {
+        return Err(invalid_command());
+    }
+    let (path, selector) = two_paths(&positionals)?;
+    Ok(Command::UnsetFolder {
+        input: input(&path),
+        selector,
+        update: FolderUpdate {
+            description: clear_if(description),
+            docs: clear_if(docs),
+        },
+    })
+}
+
+fn parse_request_unset(mut parser: Parser) -> Result<Command, CliError> {
+    let mut positionals = Vec::new();
+    let mut description = false;
+    let mut docs = false;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--description" => parser.flag(&mut description, "--description")?,
+            "--docs" => parser.flag(&mut docs, "--docs")?,
+            "--docs-json" => {
+                return Err(CliError::invalid_arguments(
+                    "request docs must be a string; use unset --docs to remove the field",
+                ));
+            }
+            "--description-json" => return Err(unset_rejects_json_null()),
+            "--summary" => {
+                return Err(CliError::invalid_arguments(
+                    "requests have description and docs; use unset --description or unset --docs",
+                ));
+            }
+            other => push_positional(&mut positionals, other, 2)?,
+        }
+    }
+    if !description && !docs {
+        return Err(invalid_command());
+    }
+    let (path, selector) = two_paths(&positionals)?;
+    Ok(Command::UnsetRequest {
+        input: input(&path),
+        selector,
+        update: Box::new(RequestUpdate {
+            description: clear_if(description),
+            docs: clear_if(docs),
+            ..RequestUpdate::default()
+        }),
+    })
+}
+
+fn clear_if<T>(clear: bool) -> FieldPatch<T> {
+    if clear {
+        FieldPatch::Clear
+    } else {
+        FieldPatch::Unchanged
+    }
+}
+
+fn unset_rejects_json_null() -> CliError {
+    CliError::invalid_arguments(
+        "unset removes the field; use set --docs-json null or set --description-json null to write YAML null",
+    )
 }
 
 fn documentation_patch(

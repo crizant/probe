@@ -200,3 +200,133 @@ fn reads_and_writes_documentation_without_listing_docs_or_flattening_objects() {
 
     fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn unset_omits_documentation_keys_and_json_null_keeps_them() {
+    let path = temporary_path("documentation-unset.yml");
+    let path_arg = path.to_str().unwrap();
+    fs::write(
+        &path,
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n",
+            "  name: Docs\n",
+            "  summary: short\n",
+            "bundled: true\n",
+            "items:\n",
+            "  - info:\n",
+            "      name: Pets\n",
+            "      type: folder\n",
+            "      description: plain folder\n",
+            "    docs: null\n",
+            "    items:\n",
+            "      - info:\n",
+            "          name: Create pet\n",
+            "          type: http\n",
+            "          description: null\n",
+            "        docs: request docs text\n",
+            "        http:\n",
+            "          method: GET\n",
+            "          url: https://example.com\n",
+        ),
+    )
+    .unwrap();
+
+    let document = yaml(&path);
+    assert!(document.get("docs").is_none());
+    assert_eq!(document["info"]["summary"].as_str(), Some("short"));
+    assert!(document["items"][0]["docs"].is_null());
+    assert!(document["items"][0]["items"][0]["info"]["description"].is_null());
+    assert_eq!(
+        document["items"][0]["items"][0]["docs"].as_str(),
+        Some("request docs text")
+    );
+
+    run_json(&["collection", "set", path_arg, "--docs-json", "null"]);
+    let document = yaml(&path);
+    assert!(document.get("docs").is_some_and(|docs| docs.is_null()));
+
+    let unset = run_json(&["collection", "unset", path_arg, "--docs"]);
+    assert_eq!(unset["operation"], "unset");
+    assert_eq!(unset["fields"], serde_json::json!(["docs"]));
+    let document = yaml(&path);
+    assert!(document.get("docs").is_none());
+    assert_eq!(document["info"]["summary"].as_str(), Some("short"));
+
+    let unset = run_json(&["collection", "unset", path_arg, "--summary", "--docs"]);
+    assert_eq!(unset["fields"], serde_json::json!(["summary", "docs"]));
+    let document = yaml(&path);
+    assert!(document["info"].get("summary").is_none());
+    assert_eq!(document["info"]["name"].as_str(), Some("Docs"));
+    assert!(document.get("docs").is_none());
+
+    let unset = run_json(&["folder", "unset", path_arg, "items/0", "--docs"]);
+    assert_eq!(unset["selector"], "items/0");
+    assert_eq!(unset["fields"], serde_json::json!(["docs"]));
+    let folder = &yaml(&path)["items"][0];
+    assert!(folder.get("docs").is_none());
+    assert_eq!(folder["info"]["description"].as_str(), Some("plain folder"));
+
+    run_json(&[
+        "folder",
+        "set",
+        path_arg,
+        "items/0",
+        "--description-json",
+        "null",
+        "--docs-json",
+        "null",
+    ]);
+    let folder = &yaml(&path)["items"][0];
+    assert!(folder["info"]["description"].is_null());
+    assert!(folder["docs"].is_null());
+
+    run_json(&[
+        "folder",
+        "unset",
+        path_arg,
+        "items/0",
+        "--description",
+        "--docs",
+    ]);
+    let folder = &yaml(&path)["items"][0];
+    assert!(folder["info"].get("description").is_none());
+    assert!(folder.get("docs").is_none());
+    assert_eq!(folder["info"]["name"].as_str(), Some("Pets"));
+
+    let unset = run_json(&[
+        "request",
+        "unset",
+        path_arg,
+        "items/0/items/0",
+        "--description",
+        "--docs",
+    ]);
+    assert_eq!(unset["selector"], "items/0/items/0");
+    assert_eq!(unset["fields"], serde_json::json!(["description", "docs"]));
+    let request = &yaml(&path)["items"][0]["items"][0];
+    assert!(request["info"].get("description").is_none());
+    assert!(request.get("docs").is_none());
+    assert_eq!(request["http"]["method"].as_str(), Some("GET"));
+
+    run_json(&["collection", "set", path_arg, "--docs-json", "null"]);
+    let rejected = probe()
+        .args(["collection", "unset", path_arg, "--docs-json", "null"])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("write YAML null"));
+    assert!(yaml(&path).get("docs").is_some_and(|docs| docs.is_null()));
+
+    let rejected = probe()
+        .args(["collection", "unset", path_arg])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+
+    fs::remove_file(path).unwrap();
+}
+
+fn yaml(path: &std::path::Path) -> serde_yaml_ng::Value {
+    serde_yaml_ng::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
