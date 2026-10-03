@@ -271,3 +271,37 @@ impl SecretDisclosure {
         }
     }
 }
+
+/// Exports the current request, resolving plain variables while retaining secret placeholders.
+/// No credential backend is consulted and no files are read or requests sent.
+pub fn copy_as_curl(
+    request: &Request,
+    resolution: &RequestResolution<'_>,
+    engine: &HttpEngine,
+    options: &ExecutionOptions,
+) -> Result<String, String> {
+    if !matches!(request.kind, probe_core::RequestKind::Http { .. }) {
+        return Err("Copy as cURL is available only for HTTP requests".into());
+    }
+    // Symbolic values let the shared resolver classify secret-derived variables
+    // without consulting credentials. Export only the presentation request.
+    struct SecretPlaceholders;
+    impl SecretProvider for SecretPlaceholders {
+        fn resolve_secret(
+            &self,
+            context: &SecretContext<'_>,
+        ) -> Result<Option<SecretValue>, SecretError> {
+            Ok(Some(SecretValue::new(format!(
+                "{{{{{}}}}}",
+                context.variable_name
+            ))))
+        }
+    }
+    let request = prepare_request(request, resolution, &SecretPlaceholders)
+        .map_err(|error| error.to_string())?
+        .presentation;
+    let prepared = request.into_http().map_err(|error| error.to_string())?;
+    engine
+        .curl_command(&prepared, options)
+        .map_err(|error| error.to_string())
+}

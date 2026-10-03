@@ -70,13 +70,39 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
     let fixture = bundled_fixture()
         .canonicalize()
         .expect("fixture should exist");
-    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let source = format!(
+        "{}\nconfig:\n  environments:\n    - name: curl-export\n      variables:\n        - name: host\n          value: https://example.com\n",
+        fs::read_to_string(&fixture).unwrap()
+    );
+    let workspace = probe_opencollection::load_workspace_from_str(&source).unwrap();
+    let body_path = crate::filesystem::workspace_base_directory(&fixture)
+        .unwrap()
+        .join("current-draft-body.bin");
+
     let request_key = workspace.requests()[0].key();
     window
         .update(cx, |view, _, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
             view.select_request(request_key, cx);
+            view.select_environment(Some("curl-export".into()), cx);
+            view.edit_request(
+                request_key,
+                |request| {
+                    request.url = Some("{{host}}/current-draft".into());
+                    request.kind = probe_core::RequestKind::Http {
+                        body: Some(probe_core::RequestBody::Single(probe_core::Body::File(
+                            vec![probe_core::FileReference {
+                                file_path: "current-draft-body.bin".into(),
+                                content_type: "application/octet-stream".into(),
+                                selected: true,
+                            }],
+                        ))),
+                    };
+                },
+                cx,
+            );
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(String::new()));
         })
         .expect("test window should be open");
     cx.run_until_parked();
@@ -85,6 +111,44 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
     let trigger = visual
         .debug_bounds("request-execution-menu-trigger")
         .expect("send options should render");
+    visual.simulate_click(trigger.center(), Modifiers::default());
+    visual.run_until_parked();
+    let copy_item = visual
+        .debug_bounds("request-copy-as-curl")
+        .expect("HTTP requests should offer Copy as cURL");
+    visual.simulate_click(copy_item.center(), Modifiers::default());
+    drop(visual);
+    cx.executor().allow_parking();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let command = loop {
+        cx.run_until_parked();
+        if let Some(command) = cx
+            .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .filter(|text| text.starts_with("curl "))
+        {
+            break command;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "clipboard export timed out: {:?}",
+            window.update(cx, |view, _, _| toast_debug(view)).unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(command.starts_with("curl "));
+    assert!(command.contains("https://example.com/current-draft"));
+    let body_argument = format!("--data-binary '@{}'", body_path.display());
+    assert!(command.contains(&body_argument));
+    window
+        .update(cx, |view, _, _| {
+            assert!(!view.transient.request_execution_menu_open);
+            assert!(view.execution.response(request_key).is_none());
+        })
+        .unwrap();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let trigger = visual
+        .debug_bounds("request-execution-menu-trigger")
+        .unwrap();
     visual.simulate_click(trigger.center(), Modifiers::default());
     visual.run_until_parked();
     let menu_item = visual
@@ -96,6 +160,24 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
     assert!(cx.did_prompt_for_new_path());
     cx.simulate_new_path_selection(|_| None);
     cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.edit_request(
+                request_key,
+                |request| request.kind = probe_core::RequestKind::Graphql { body: None },
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let trigger = visual
+        .debug_bounds("request-execution-menu-trigger")
+        .unwrap();
+    visual.simulate_click(trigger.center(), Modifiers::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("request-send-and-save").is_some());
+    assert!(visual.debug_bounds("request-copy-as-curl").is_none());
 }
 
 #[gpui::test]

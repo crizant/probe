@@ -297,6 +297,7 @@ impl ProbeApp {
                                     let send_view = execution_view.clone();
                                     let menu_state_view = cx.weak_entity();
                                     let download_view = cx.weak_entity();
+                                    let copy_view = cx.weak_entity();
                                     let popup = components::popup_surface(
                                         theme,
                                         "request-execution-menu-popup",
@@ -314,6 +315,25 @@ impl ProbeApp {
                                                 });
                                             },
                                         ),
+                                    );
+                                    let popup = popup.when(
+                                        matches!(
+                                            request.kind,
+                                            probe_core::RequestKind::Http { .. }
+                                        ),
+                                        |popup| {
+                                            popup.child(components::menu_button(
+                                                theme,
+                                                "request-copy-as-curl",
+                                                "Copy as cURL",
+                                                None,
+                                                move |_, cx| {
+                                                    let _ = copy_view.update(cx, |view, cx| {
+                                                        view.copy_as_curl(key, cx)
+                                                    });
+                                                },
+                                            ))
+                                        },
                                     );
                                     components::DropdownButton::new(
                                         theme,

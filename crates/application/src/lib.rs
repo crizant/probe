@@ -9,5 +9,5 @@ mod execution;
 
 pub use execution::{
     ExecutedResponse, HttpExecution, NoSecrets, PreparedRequest, RequestResolution,
-    SECRET_DIAGNOSTIC_WITHHELD, prepare_request,
+    SECRET_DIAGNOSTIC_WITHHELD, copy_as_curl, prepare_request,
 };

@@ -455,3 +455,422 @@ async fn follows_or_returns_redirects_according_to_request_settings() {
 
 #[path = "execution/response.rs"]
 mod response;
+
+#[test]
+fn curl_export_preserves_enabled_fields_auth_body_and_shell_literals() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request("POST", "https://example.com/:id?existing=yes".into());
+    request.path_parameters = vec![
+        QueryParameter {
+            name: "id".into(),
+            value: "ignored".into(),
+            disabled: true,
+        },
+        QueryParameter {
+            name: "id".into(),
+            value: "42".into(),
+            disabled: false,
+        },
+    ];
+    request.query_parameters = vec![
+        QueryParameter {
+            name: "q".into(),
+            value: "a & b".into(),
+            disabled: false,
+        },
+        QueryParameter {
+            name: "ignored".into(),
+            value: "ignored".into(),
+            disabled: true,
+        },
+    ];
+    request.headers = vec![
+        Header {
+            name: "X-Test".into(),
+            value: "it's $(literal)".into(),
+            disabled: false,
+        },
+        Header {
+            name: "X-Ignored".into(),
+            value: "ignored".into(),
+            disabled: true,
+        },
+    ];
+    request.authentication = Some(Authentication {
+        kind: AuthenticationKind::Bearer,
+        properties: BTreeMap::from([(
+            "token".into(),
+            AuthenticationValue::String("token-value".into()),
+        )]),
+    });
+    request.settings.timeout = Some(Duration::from_millis(1500));
+    request.settings.max_redirects = Some(3);
+    request.kind = http_body(RequestBody::Single(Body::Raw(RawBody {
+        kind: RawBodyKind::Text,
+        data: "@it's\n$(literal)".into(),
+    })));
+    let command = engine
+        .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .unwrap();
+    assert!(command.contains("--request 'POST'"));
+    assert!(command.contains("--url 'https://example.com/42?existing=yes&q=a+%26+b'"));
+    assert!(command.contains("--max-time '1.5'"));
+    assert!(command.contains("--max-redirs '3'"));
+    assert!(command.contains("--location"));
+    assert!(command.contains("authorization: Bearer token-value"));
+    assert!(command.contains("content-type: text/plain; charset=utf-8"));
+    assert!(!command.contains("ignored"));
+    #[cfg(unix)]
+    {
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("set -- {command}; printf '%s\\0' \"$@\""))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let args: Vec<_> = output
+            .stdout
+            .split(|byte| *byte == 0)
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--data-raw", "@it's\n$(literal)"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--header", "x-test: it's $(literal)"])
+        );
+    }
+}
+
+#[test]
+fn curl_export_encodes_forms_and_references_files_without_reading_them() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request("PUT", "https://example.com".into());
+    request.settings.follow_redirects = Some(false);
+    request.settings.timeout = Some(Duration::ZERO);
+    request.kind = http_body(RequestBody::Single(Body::FormUrlEncoded(vec![FormField {
+        name: "value".into(),
+        value: "a & b".into(),
+        disabled: false,
+    }])));
+    let command = engine
+        .curl_command(
+            &request.clone().into_http().unwrap(),
+            &ExecutionOptions::default(),
+        )
+        .unwrap();
+    assert!(command.contains("--data-raw 'value=a+%26+b'"));
+    assert!(!command.contains("--location"));
+    assert!(!command.contains("--max-time"));
+    let options = ExecutionOptions {
+        base_directory: Some(std::env::temp_dir()),
+        ..ExecutionOptions::default()
+    };
+    request.kind = http_body(RequestBody::Single(Body::File(vec![FileReference {
+        file_path: "nonexistent-export-body.bin".into(),
+        content_type: "application/octet-stream".into(),
+        selected: true,
+    }])));
+    let command = engine
+        .curl_command(&request.clone().into_http().unwrap(), &options)
+        .unwrap();
+    assert!(command.contains(&format!(
+            "--data-binary '@{}'",
+            std::env::temp_dir()
+                .join("nonexistent-export-body.bin")
+                .display()
+        )));
+    assert!(command.contains("content-type: application/octet-stream"));
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![
+        MultipartPart {
+            name: "text".into(),
+            kind: MultipartPartKind::Text,
+            value: MultipartValue::Single("@literal;value".into()),
+            content_type: None,
+            disabled: false,
+        },
+        MultipartPart {
+            name: "upload".into(),
+            kind: MultipartPartKind::File,
+            value: MultipartValue::Multiple(vec![
+                "missing-one.txt".into(),
+                "missing-two.txt".into(),
+            ]),
+            content_type: Some("text/plain".into()),
+            disabled: false,
+        },
+        MultipartPart {
+            name: "ignored".into(),
+            kind: MultipartPartKind::Text,
+            value: MultipartValue::Single("ignored".into()),
+            content_type: None,
+            disabled: true,
+        },
+    ])));
+    let command = engine
+        .curl_command(&request.into_http().unwrap(), &options)
+        .unwrap();
+    assert!(command.contains("--form-string 'text=@literal;value'"));
+    assert!(command.contains("missing-one.txt"));
+    assert!(command.contains("missing-two.txt"));
+    assert!(command.contains(";type=text/plain"));
+    assert!(!command.contains("ignored"));
+}
+
+#[test]
+fn curl_export_basic_auth_custom_content_type_and_selection_failures() {
+    let engine = HttpEngine::new().unwrap();
+    let options = ExecutionOptions::default();
+    let mut request = request("PATCH", "https://example.com".into());
+    request.authentication = Some(Authentication {
+        kind: AuthenticationKind::Basic,
+        properties: BTreeMap::from([
+            (
+                "username".into(),
+                AuthenticationValue::String("{{username}}".into()),
+            ),
+            (
+                "password".into(),
+                AuthenticationValue::String("{{password}}".into()),
+            ),
+        ]),
+    });
+    request.headers.push(Header {
+        name: "Content-Type".into(),
+        value: "application/custom".into(),
+        disabled: false,
+    });
+    request.kind = http_body(RequestBody::Single(Body::Raw(RawBody {
+        kind: RawBodyKind::Json,
+        data: "{\"name\":\"value\" /*comment*/}".into(),
+    })));
+    let command = engine
+        .curl_command(&request.clone().into_http().unwrap(), &options)
+        .unwrap();
+    assert!(command.contains("--user '{{username}}:{{password}}'"));
+    assert!(!command.contains("authorization:"));
+    assert!(command.contains("content-type: application/custom"));
+    assert!(!command.contains("application/json"));
+    assert!(!command.contains("/*comment*/"));
+    let file = FileReference {
+        file_path: "missing".into(),
+        content_type: "application/octet-stream".into(),
+        selected: true,
+    };
+    request.kind = http_body(RequestBody::Single(Body::File(vec![file.clone()])));
+    let command = engine
+        .curl_command(&request.clone().into_http().unwrap(), &options)
+        .unwrap();
+    assert!(command.contains("content-type: application/custom"));
+    assert!(!command.contains("application/octet-stream"));
+    request.kind = http_body(RequestBody::Single(Body::File(vec![])));
+    assert!(matches!(
+        engine.curl_command(&request.clone().into_http().unwrap(), &options),
+        Err(probe_http::HttpError::InvalidBodySelection(_))
+    ));
+    request.kind = http_body(RequestBody::Single(Body::File(vec![file.clone(), file])));
+    assert!(matches!(
+        engine.curl_command(&request.clone().into_http().unwrap(), &options),
+        Err(probe_http::HttpError::InvalidBodySelection(_))
+    ));
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "text".into(),
+        kind: MultipartPartKind::Text,
+        value: MultipartValue::Multiple(vec!["one".into(), "two".into()]),
+        content_type: None,
+        disabled: false,
+    }])));
+    assert!(matches!(
+        engine.curl_command(&request.into_http().unwrap(), &options),
+        Err(probe_http::HttpError::InvalidBody(_))
+    ));
+}
+
+#[test]
+fn curl_export_preserves_templates_without_decoding_real_url_escapes() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request(
+        "POST",
+        "https://{{SecretHost}}/hello é<>\"`{}!~\u{7f}/{{secret}}/:id?encoded=%7B%7Bsecret%7D%7D&literal=雪 space#résumé {{secret}}".into(),
+    );
+    request.path_parameters = vec![QueryParameter {
+        name: "id".into(),
+        value: "~* /é{{secret}}{{other}}%".into(),
+        disabled: false,
+    }];
+    request.query_parameters = vec![QueryParameter {
+        name: "{{secret}}".into(),
+        value: "~* /é{{secret}}{{other}}+%".into(),
+        disabled: false,
+    }];
+    request.kind = http_body(RequestBody::Single(Body::FormUrlEncoded(vec![FormField {
+        name: "{{secret}}".into(),
+        value: "~* /é{{secret}}{{other}}+%".into(),
+        disabled: false,
+    }])));
+    let command = engine
+        .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .unwrap();
+    assert!(command.contains("https://{{SecretHost}}/hello%20%C3%A9%3C%3E%22%60%7B%7D!~%7F/{{secret}}/~%2A%20%2F%C3%A9{{secret}}{{other}}%25?encoded=%7B%7Bsecret%7D%7D&literal=%E9%9B%AA%20space&{{secret}}=%7E*+%2F%C3%A9{{secret}}{{other}}%2B%25"), "{command}");
+    assert!(command.contains("--data-raw '{{secret}}=%7E*+%2F%C3%A9{{secret}}{{other}}%2B%25'"));
+    assert!(
+        command.contains("#r%C3%A9sum%C3%A9%20{{secret}}'"),
+        "{command}"
+    );
+}
+
+#[test]
+fn curl_export_preserves_many_distinct_templates() {
+    let mut request = request("GET", "https://example.com".into());
+    request.query_parameters = (0..12)
+        .map(|index| QueryParameter {
+            name: format!("item{index}"),
+            value: format!("{{{{secret_{index}}}}}"),
+            disabled: false,
+        })
+        .collect();
+    let command = HttpEngine::new()
+        .unwrap()
+        .curl_command(&request.into_http().unwrap(), &ExecutionOptions::default())
+        .unwrap();
+    for index in 0..12 {
+        assert!(
+            command.contains(&format!("item{index}={{{{secret_{index}}}}}")),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn curl_export_uses_form_string_for_text_and_rejects_unsafe_field_names() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request("POST", "https://example.com/upload".into());
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![
+        MultipartPart {
+            name: "upload".into(),
+            kind: MultipartPartKind::Text,
+            value: MultipartValue::Single("@/etc/passwd;filename=hack".into()),
+            content_type: None,
+            disabled: false,
+        },
+        MultipartPart {
+            name: "description".into(),
+            kind: MultipartPartKind::Text,
+            value: MultipartValue::Single("normal text".into()),
+            content_type: None,
+            disabled: false,
+        },
+    ])));
+    let command = engine
+        .curl_command(
+            &request.clone().into_http().unwrap(),
+            &ExecutionOptions::default(),
+        )
+        .unwrap();
+    assert!(command.contains("--form-string 'upload=@/etc/passwd;filename=hack'"));
+    assert!(command.contains("--form-string 'description=normal text'"));
+    assert!(!command.contains("--form 'upload="));
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "field=malicious".into(),
+        kind: MultipartPartKind::Text,
+        value: MultipartValue::Single("value".into()),
+        content_type: None,
+        disabled: false,
+    }])));
+    assert!(matches!(
+        engine.curl_command(&request.into_http().unwrap(), &ExecutionOptions::default()),
+        Err(probe_http::HttpError::InvalidBody(_))
+    ));
+}
+
+#[test]
+fn curl_export_rejects_multipart_text_with_explicit_content_type() {
+    let engine = HttpEngine::new().unwrap();
+    let mut request = request("POST", "https://example.com/upload".into());
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "data".into(),
+        kind: MultipartPartKind::Text,
+        value: MultipartValue::Single("some json".into()),
+        content_type: Some("application/json".into()),
+        disabled: false,
+    }])));
+    let result = engine.curl_command(&request.into_http().unwrap(), &ExecutionOptions::default());
+    let error = result.unwrap_err();
+    assert!(matches!(&error, probe_http::HttpError::InvalidBody(_)));
+    let err_msg = error.to_string();
+    assert!(err_msg.contains("data"));
+    assert!(err_msg.contains("application/json"));
+    assert!(err_msg.contains("--form-string"));
+}
+
+#[test]
+fn curl_export_rejects_file_parts_with_reserved_curl_form_parameters() {
+    let engine = HttpEngine::new().unwrap();
+    let options = ExecutionOptions {
+        base_directory: Some(std::env::temp_dir()),
+        ..ExecutionOptions::default()
+    };
+    let mut request = request("POST", "https://example.com/upload".into());
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "file".into(),
+        kind: MultipartPartKind::File,
+        value: MultipartValue::Single("test.txt".into()),
+        content_type: Some("text/plain; filename=\"hijack.txt\"".into()),
+        disabled: false,
+    }])));
+    let result = engine.curl_command(&request.clone().into_http().unwrap(), &options);
+    let error = result.unwrap_err();
+    assert!(matches!(&error, probe_http::HttpError::InvalidBody(_)));
+    let err_msg = error.to_string();
+    assert!(err_msg.contains("file"));
+    assert!(err_msg.contains("filename"));
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "file".into(),
+        kind: MultipartPartKind::File,
+        value: MultipartValue::Single("test.txt".into()),
+        content_type: Some("text/plain; Headers=\"X-Evil: yes\"".into()),
+        disabled: false,
+    }])));
+    let result = engine.curl_command(&request.clone().into_http().unwrap(), &options);
+    let error = result.unwrap_err();
+    assert!(matches!(&error, probe_http::HttpError::InvalidBody(_)));
+    let err_msg = error.to_string();
+    assert!(err_msg.contains("Headers"));
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "file".into(),
+        kind: MultipartPartKind::File,
+        value: MultipartValue::Single("test.txt".into()),
+        content_type: Some("application/octet-stream; ENCODER=binary".into()),
+        disabled: false,
+    }])));
+    let result = engine.curl_command(&request.into_http().unwrap(), &options);
+    let error = result.unwrap_err();
+    assert!(matches!(&error, probe_http::HttpError::InvalidBody(_)));
+    let err_msg = error.to_string();
+    assert!(err_msg.contains("ENCODER"));
+}
+
+#[test]
+fn curl_export_allows_file_parts_with_normal_mime_parameters() {
+    let engine = HttpEngine::new().unwrap();
+    let options = ExecutionOptions {
+        base_directory: Some(std::env::temp_dir()),
+        ..ExecutionOptions::default()
+    };
+    let mut request = request("POST", "https://example.com/upload".into());
+    request.kind = http_body(RequestBody::Single(Body::Multipart(vec![MultipartPart {
+        name: "file".into(),
+        kind: MultipartPartKind::File,
+        value: MultipartValue::Single("test.txt".into()),
+        content_type: Some("text/plain; charset=utf-8".into()),
+        disabled: false,
+    }])));
+    let command = engine
+        .curl_command(&request.into_http().unwrap(), &options)
+        .unwrap();
+    assert!(command.contains("--form"));
+    assert!(command.contains("type=text/plain; charset=utf-8"));
+    assert!(command.contains("test.txt"));
+}

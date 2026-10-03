@@ -51,6 +51,301 @@ pub(crate) async fn build_request(
     Ok(builder)
 }
 
+/// Builds one canonical, POSIX-quoted cURL command without file or network I/O.
+pub(crate) fn curl_command(
+    client: &Client,
+    prepared: &PreparedHttpRequest,
+    options: &ExecutionOptions,
+) -> Result<String, HttpError> {
+    let request = prepared.request();
+    let body = selected_body(prepared.body())?;
+    // Reuse HTTP header/auth validation without parsing a template-bearing URL.
+    let mut builder = client
+        .request(
+            supported_method(request.method.as_deref())?,
+            "http://localhost",
+        )
+        .headers(request_headers(request)?);
+    if let Some(authentication) = &request.authentication {
+        builder = apply_authentication(builder, authentication)?;
+    }
+    let built = builder
+        .build()
+        .map_err(|error| HttpError::InvalidRequest(error.to_string()))?;
+    let mut command = String::from("curl --globoff");
+    curl_argument(&mut command, "--request", built.method().as_str());
+    curl_argument(&mut command, "--url", &curl_url(request)?);
+    let settings = &request.settings;
+    if settings.follow_redirects != Some(false) {
+        command.push_str(" --location");
+        curl_argument(
+            &mut command,
+            "--max-redirs",
+            &settings.max_redirects.unwrap_or(10).to_string(),
+        );
+    }
+    if let Some(timeout) = settings.timeout.filter(|value| *value > Duration::ZERO) {
+        curl_argument(
+            &mut command,
+            "--max-time",
+            &timeout.as_secs_f64().to_string(),
+        );
+    }
+    let basic = request
+        .authentication
+        .as_ref()
+        .filter(|authentication| authentication.kind == AuthenticationKind::Basic);
+    if let Some(authentication) = basic {
+        curl_argument(
+            &mut command,
+            "--user",
+            &format!(
+                "{}:{}",
+                authentication_string(authentication, "username", "basic")?,
+                authentication_string(authentication, "password", "basic")?
+            ),
+        );
+    }
+    for (name, value) in built.headers() {
+        if basic.is_some() && name == reqwest::header::AUTHORIZATION {
+            continue;
+        }
+        let value = value
+            .to_str()
+            .map_err(|_| HttpError::InvalidHeaderValue(name.to_string()))?;
+        curl_argument(&mut command, "--header", &format!("{name}: {value}"));
+    }
+    curl_body_arguments(&mut command, body, built.headers(), options)?;
+    Ok(command)
+}
+
+fn curl_url(request: &Request) -> Result<String, HttpError> {
+    let mut url = request.url.clone().ok_or(HttpError::MissingUrl)?;
+    for span in probe_core::path_variable_spans(&url).into_iter().rev() {
+        if let Some(parameter) = request
+            .path_parameters
+            .iter()
+            .find(|parameter| !parameter.disabled && parameter.name == url[span.name.clone()])
+        {
+            url.replace_range(span.range, &curl_encode(&parameter.value, false));
+        }
+    }
+    let fragment = url.find('#').map(|index| url.split_off(index));
+    for parameter in request
+        .query_parameters
+        .iter()
+        .filter(|parameter| is_enabled_and_named(parameter.disabled, &parameter.name))
+    {
+        url.push(if url.contains('?') { '&' } else { '?' });
+        url.push_str(&format!(
+            "{}={}",
+            curl_encode(&parameter.name, true),
+            curl_encode(&parameter.value, true)
+        ));
+    }
+    if let Some(fragment) = fragment {
+        url.push_str(&fragment);
+    }
+    if url.contains("{{") {
+        use std::fmt::Write as _;
+        let mut encoded = String::with_capacity(url.len());
+        // Preserve templates and URL delimiters; encode only unsafe literal bytes.
+        for part in url.split_inclusive("}}") {
+            let start = if part.ends_with("}}") {
+                part.find("{{")
+            } else {
+                None
+            }
+            .unwrap_or(part.len());
+            let (literal, template) = part.split_at(start);
+            for byte in literal.bytes() {
+                if !(b'!'..=b'~').contains(&byte)
+                    || matches!(byte, b'"' | b'<' | b'>' | b'`' | b'{' | b'}')
+                {
+                    let _ = write!(encoded, "%{byte:02X}");
+                } else {
+                    encoded.push(char::from(byte));
+                }
+            }
+            encoded.push_str(template);
+        }
+        return Ok(encoded);
+    }
+    reqwest::Url::parse(&url)
+        .map(|url| url.to_string())
+        .map_err(|error| HttpError::InvalidRequest(error.to_string()))
+}
+
+// Encode literal bytes, leaving complete {{variable}} references untouched.
+// Path segments use RFC 3986; query/form fields use application/x-www-form-urlencoded.
+fn curl_encode(value: &str, form: bool) -> String {
+    use std::fmt::Write as _;
+    let mut encoded = String::new();
+    for part in value.split_inclusive("}}") {
+        let start = if part.ends_with("}}") {
+            part.find("{{")
+        } else {
+            None
+        }
+        .unwrap_or(part.len());
+        let (literal, template) = part.split_at(start);
+        for byte in literal.bytes() {
+            if byte.is_ascii_alphanumeric()
+                || matches!(byte, b'-' | b'.' | b'_')
+                || (form && byte == b'*')
+                || (!form && byte == b'~')
+            {
+                encoded.push(char::from(byte));
+            } else if form && byte == b' ' {
+                encoded.push('+');
+            } else {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+        encoded.push_str(template);
+    }
+    encoded
+}
+
+fn curl_body_arguments(
+    command: &mut String,
+    body: Option<&Body>,
+    headers: &HeaderMap,
+    options: &ExecutionOptions,
+) -> Result<(), HttpError> {
+    match body {
+        Some(Body::Raw(body)) => {
+            curl_content_type(command, headers, raw_content_type(&body.kind));
+            curl_argument(command, "--data-raw", &raw_body_data(body));
+        }
+        Some(Body::FormUrlEncoded(fields)) => {
+            curl_content_type(command, headers, "application/x-www-form-urlencoded");
+            let data = fields
+                .iter()
+                .filter(|field| is_enabled_and_named(field.disabled, &field.name))
+                .map(|field| {
+                    format!(
+                        "{}={}",
+                        curl_encode(&field.name, true),
+                        curl_encode(&field.value, true)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("&");
+            curl_argument(command, "--data-raw", &data);
+        }
+        Some(Body::File(files)) => {
+            let mut selected = files.iter().filter(|file| file.selected);
+            let file = selected.next().ok_or_else(|| {
+                HttpError::InvalidBodySelection("file body has no selected file".into())
+            })?;
+            if selected.next().is_some() {
+                return Err(HttpError::InvalidBodySelection(
+                    "file body has multiple selected files".into(),
+                ));
+            }
+            curl_content_type(command, headers, &file.content_type);
+            curl_argument(
+                command,
+                "--data-binary",
+                &format!("@{}", resolve_path(&file.file_path, options).display()),
+            );
+        }
+        Some(Body::Multipart(parts)) => curl_multipart_arguments(command, parts, options)?,
+        None => {}
+    }
+    Ok(())
+}
+
+fn curl_content_type(command: &mut String, headers: &HeaderMap, value: &str) {
+    if !headers.contains_key(CONTENT_TYPE) {
+        curl_argument(command, "--header", &format!("content-type: {value}"));
+    }
+}
+
+fn curl_multipart_arguments(
+    command: &mut String,
+    parts: &[MultipartPart],
+    options: &ExecutionOptions,
+) -> Result<(), HttpError> {
+    for part in parts
+        .iter()
+        .filter(|part| is_enabled_and_named(part.disabled, &part.name))
+    {
+        if part.name.contains('=') {
+            return Err(HttpError::InvalidBody(format!(
+                "multipart field name '{}' contains '=' and cannot be exported safely",
+                part.name
+            )));
+        }
+        let values: &[String] = match &part.value {
+            MultipartValue::Single(value) => std::slice::from_ref(value),
+            MultipartValue::Multiple(values) if part.kind == MultipartPartKind::File => values,
+            MultipartValue::Multiple(_) => {
+                return Err(HttpError::InvalidBody(format!(
+                    "multipart text field '{}' must have one value",
+                    part.name
+                )));
+            }
+        };
+        for value in values {
+            match part.kind {
+                MultipartPartKind::Text => {
+                    if let Some(content_type) = &part.content_type {
+                        return Err(HttpError::InvalidBody(format!(
+                            "multipart text field '{}' has explicit content type '{}' which cannot be exported with --form-string",
+                            part.name, content_type
+                        )));
+                    }
+                    let field = format!("{}={value}", part.name);
+                    curl_argument(command, "--form-string", &field);
+                }
+                MultipartPartKind::File => {
+                    let value = format!(
+                        "@{}",
+                        curl_form_quote(&resolve_path(value, options).to_string_lossy())
+                    );
+                    let mut field = format!("{}={value}", part.name);
+                    if let Some(content_type) = &part.content_type {
+                        apply_part_content_type(Part::text(String::new()), part)?;
+                        if has_reserved_curl_form_parameter(content_type) {
+                            return Err(HttpError::InvalidBody(format!(
+                                "multipart file field '{}' has content type '{}' containing cURL-reserved form parameter (filename, headers, or encoder)",
+                                part.name, content_type
+                            )));
+                        }
+                        field.push_str(&format!(";type={content_type}"));
+                    }
+                    curl_argument(command, "--form", &field);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn has_reserved_curl_form_parameter(content_type: &str) -> bool {
+    let lower = content_type.to_ascii_lowercase();
+    for reserved in ["filename=", "headers=", "encoder="] {
+        if lower.contains(reserved) {
+            return true;
+        }
+    }
+    false
+}
+
+fn curl_argument(command: &mut String, flag: &str, value: &str) {
+    command.push(' ');
+    command.push_str(flag);
+    command.push_str(" '");
+    command.push_str(&value.replace('\'', "'\\''"));
+    command.push('\'');
+}
+
+fn curl_form_quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('\"', "\\\""))
+}
+
 fn is_enabled_and_named(disabled: bool, name: &str) -> bool {
     !disabled && !name.trim().is_empty()
 }

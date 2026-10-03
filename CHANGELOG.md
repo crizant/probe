@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Copy HTTP requests as cURL commands from the desktop Send dropdown. Plain environment variables are resolved; secret placeholders are retained. Commands use one canonical POSIX-quoted format.
+
 ### Fixed
 
 - Avoid reloading collections for temporary files created while saving requests.
