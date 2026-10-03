@@ -138,6 +138,7 @@ pub fn nonempty_string(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
+        CollectionMetadata, CollectionUpdate, Documentation, FieldPatch, FolderUpdate,
         ImportDiagnosticSeverity, lossy_import_diagnostic, sort_import_diagnostics,
         warning_import_diagnostic,
     };
@@ -154,6 +155,44 @@ mod tests {
         assert_eq!(diagnostics.len(), 2);
         assert_eq!(diagnostics[0].severity, ImportDiagnosticSeverity::Warning);
         assert_eq!(diagnostics[1].severity, ImportDiagnosticSeverity::Lossy);
+    }
+
+    #[test]
+    fn documentation_updates_apply_only_the_changed_field() {
+        let empty = CollectionUpdate::default();
+        assert!(empty.is_empty());
+        let summary_only = CollectionUpdate {
+            summary: FieldPatch::Set("short".into()),
+            ..CollectionUpdate::default()
+        };
+        let docs_only = CollectionUpdate {
+            docs: FieldPatch::Set(Documentation::Text("guide".into())),
+            ..CollectionUpdate::default()
+        };
+        assert!(!summary_only.is_empty());
+        assert!(!docs_only.is_empty());
+        let mut metadata = CollectionMetadata::default();
+        summary_only.apply(&mut metadata);
+        docs_only.apply(&mut metadata);
+        assert_eq!(metadata.summary.as_deref(), Some("short"));
+        assert_eq!(metadata.docs, Some(Documentation::Text("guide".into())));
+
+        let empty_folder = FolderUpdate::default();
+        assert!(empty_folder.is_empty());
+        assert!(
+            !FolderUpdate {
+                description: FieldPatch::Set(Documentation::Null),
+                ..FolderUpdate::default()
+            }
+            .is_empty()
+        );
+        assert!(
+            !FolderUpdate {
+                docs: FieldPatch::Set(Documentation::Text("folder".into())),
+                ..FolderUpdate::default()
+            }
+            .is_empty()
+        );
     }
 }
 

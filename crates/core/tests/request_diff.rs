@@ -57,8 +57,24 @@ fn diff_keeps_description_objects_and_request_docs_until_they_change() {
     };
 
     let unchanged = RequestUpdate::between(Some(&base), &base).unwrap();
+    assert!(unchanged.is_empty());
     assert!(unchanged.description.is_unchanged());
     assert!(unchanged.docs.is_unchanged());
+
+    let mut only_description = base.clone();
+    only_description.metadata.description = Some(Documentation::Text("plain".into()));
+    assert!(
+        !RequestUpdate::between(Some(&base), &only_description)
+            .unwrap()
+            .is_empty()
+    );
+    let mut only_docs = base.clone();
+    only_docs.docs = Some("other".into());
+    assert!(
+        !RequestUpdate::between(Some(&base), &only_docs)
+            .unwrap()
+            .is_empty()
+    );
 
     let mut current = base.clone();
     current.metadata.description = Some(Documentation::Text("plain".into()));

@@ -160,6 +160,7 @@ fn documentation_edits_round_trip_without_flattening_objects() {
 fn unbundled_folder_and_collection_documentation_round_trip() {
     let root = temporary_path("documentation-unbundled");
     fs::create_dir_all(root.join("pets")).unwrap();
+    fs::write(root.join("notes.yml"), "note: unrelated\n").unwrap();
     fs::write(
         root.join("opencollection.yml"),
         concat!(
@@ -222,6 +223,10 @@ fn unbundled_folder_and_collection_documentation_round_trip() {
     );
     assert_eq!(collection["docs"]["type"].as_str(), Some("text/markdown"));
     assert_eq!(collection["info"]["summary"].as_str(), Some("short"));
+    assert_eq!(
+        fs::read_to_string(root.join("notes.yml")).unwrap(),
+        "note: unrelated\n"
+    );
     let folder: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&fs::read_to_string(root.join("pets/folder.yml")).unwrap())
             .unwrap();

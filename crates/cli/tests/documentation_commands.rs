@@ -63,6 +63,16 @@ fn reads_and_writes_documentation_without_listing_docs_or_flattening_objects() {
     let folder_list = String::from_utf8_lossy(&folder_list.stdout);
     assert!(!folder_list.contains("FOLDER-DOCS-SHOULD-NOT-APPEAR-IN-LIST"));
 
+    let human = probe()
+        .args(["request", "get", path_arg, "items/0/items/0"])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(human.contains("Description type: text/markdown\n"));
+    assert!(human.contains("Description: Creates a pet\n"));
+    assert!(human.contains("Docs: REQUEST-DOCS-SHOULD-NOT-APPEAR-IN-LIST\n"));
+
     let request = run_json(&["request", "get", path_arg, "items/0/items/0"]);
     assert_eq!(request["description"]["content"], "Creates a pet");
     assert_eq!(request["description"]["type"], "text/markdown");
@@ -89,8 +99,34 @@ fn reads_and_writes_documentation_without_listing_docs_or_flattening_objects() {
         "--description-json",
         r#"{"content":"Updated folder","type":"text/markdown"}"#,
         "--docs-json",
-        "null",
+        r#""folder string""#,
     ]);
+    let folder = run_json(&["folder", "get", path_arg, "items/0"]);
+    assert_eq!(folder["docs"], "folder string");
+    let multiline = probe()
+        .args([
+            "request",
+            "set",
+            path_arg,
+            "items/0/items/0",
+            "--docs",
+            "one\ntwo",
+        ])
+        .output()
+        .unwrap();
+    assert!(multiline.status.success(), "{multiline:?}");
+    let human = String::from_utf8(multiline.stdout).unwrap();
+    assert!(human.contains("Docs:\none\ntwo\n"));
+    assert!(!human.contains("Docs: one\ntwo"));
+    run_json(&[
+        "request",
+        "set",
+        path_arg,
+        "items/0/items/0",
+        "--docs",
+        "Updated request docs",
+    ]);
+    run_json(&["folder", "set", path_arg, "items/0", "--docs-json", "null"]);
     run_json(&[
         "collection",
         "set",

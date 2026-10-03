@@ -775,6 +775,15 @@ mod tests {
             unreachable!()
         };
         assert!(second.folder(key).is_none());
+        assert!(second.folder_mut(key).is_none());
+        let WorkspaceItemRef::Folder(local) = second.root_items()[0] else {
+            unreachable!()
+        };
+        second.folder_mut(local).unwrap().docs = Some(crate::Documentation::Text("kept".into()));
+        assert_eq!(
+            second.folder(local).unwrap().docs,
+            Some(crate::Documentation::Text("kept".into()))
+        );
         assert_eq!(
             second.rename_folder(key, "wrong".into()),
             Err(WorkspaceEditError::ItemNotFound)
