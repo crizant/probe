@@ -202,13 +202,8 @@ impl ProbeApp {
                 .set(Some((key, section_kind)));
         }
         let section_scroll = self.request_section_scroll.clone();
-        let section = if section_scrolls {
-            components::with_list_scroll(&section_scroll, || {
-                self.render_request_section(key, &request, theme, cx)
-            })
-        } else {
-            self.render_request_section(key, &request, theme, cx)
-        };
+        let list_scroll = section_scrolls.then_some(&section_scroll);
+        let section = self.render_request_section(key, &request, theme, list_scroll, cx);
 
         div()
             .flex_1()
@@ -382,19 +377,32 @@ impl ProbeApp {
         key: RequestKey,
         request: &Request,
         theme: Theme,
+        list_scroll: Option<&ScrollHandle>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         match self.request_editor.section(key) {
-            EditorSection::Query => {
-                self.render_parameter_editor(key, request, ParameterEditorKind::Query, theme, cx)
+            EditorSection::Query => self.render_parameter_editor(
+                key,
+                request,
+                ParameterEditorKind::Query,
+                theme,
+                list_scroll,
+                cx,
+            ),
+            EditorSection::Path => self.render_parameter_editor(
+                key,
+                request,
+                ParameterEditorKind::Path,
+                theme,
+                list_scroll,
+                cx,
+            ),
+            EditorSection::Headers => {
+                self.render_header_editor(key, request, theme, list_scroll, cx)
             }
-            EditorSection::Path => {
-                self.render_parameter_editor(key, request, ParameterEditorKind::Path, theme, cx)
-            }
-            EditorSection::Headers => self.render_header_editor(key, request, theme, cx),
             EditorSection::Body => self.render_body_editor(key, request, theme, cx),
             EditorSection::Authentication => {
-                self.render_authentication_editor(key, request, theme, cx)
+                self.render_authentication_editor(key, request, theme, list_scroll, cx)
             }
             EditorSection::GraphqlQuery => {
                 self.render_graphql_query_editor(key, request, theme, cx)

@@ -15,5 +15,5 @@ pub(super) use input::{
 };
 pub(crate) use input::{
     FieldInput, ResponseBodyInputOptions, dialog_text_input, sidebar_search_input, url_text_input,
-    variable_text_input, with_list_scroll,
+    variable_text_input,
 };

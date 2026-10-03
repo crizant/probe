@@ -6,6 +6,7 @@ impl ProbeApp {
         key: RequestKey,
         request: &Request,
         theme: Theme,
+        list_scroll: Option<&ScrollHandle>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
@@ -14,17 +15,17 @@ impl ProbeApp {
             let value_view = cx.weak_entity();
             let enabled_view = cx.weak_entity();
             let remove_view = cx.weak_entity();
-            rows =
-                rows.child(
-                    components::editor_key_value_row(theme)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .when(index == 0, |cell| {
-                                    cell.debug_selector(|| "header-name-field".into())
-                                })
-                                .child(components::variable_text_input(
+            rows = rows.child(
+                components::editor_key_value_row(theme)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .when(index == 0, |cell| {
+                                cell.debug_selector(|| "header-name-field".into())
+                            })
+                            .child(
+                                components::variable_text_input(
                                     theme,
                                     ("header-name", index),
                                     header.name.clone(),
@@ -45,9 +46,12 @@ impl ProbeApp {
                                             );
                                         });
                                     },
-                                )),
-                        )
-                        .child(div().flex_1().min_w(px(0.0)).child(
+                                )
+                                .list_scroll(list_scroll),
+                            ),
+                    )
+                    .child(
+                        div().flex_1().min_w(px(0.0)).child(
                             components::variable_text_input(
                                 theme,
                                 ("header-value", index),
@@ -68,48 +72,50 @@ impl ProbeApp {
                                         );
                                     });
                                 },
-                            ),
-                        ))
-                        .child(components::switch(
-                            theme,
-                            ("header-enabled", index),
-                            "Enable header",
-                            !header.disabled,
-                            false,
-                            move |enabled, _, cx| {
-                                let _ = enabled_view.update(cx, |view, cx| {
-                                    view.edit_request(
-                                        key,
-                                        |request| {
-                                            if let Some(header) = request.headers.get_mut(index) {
-                                                header.disabled = !enabled;
-                                            }
-                                        },
-                                        cx,
-                                    );
-                                });
-                            },
-                        ))
-                        .child(components::remove_row_button(
-                            theme,
-                            ("remove-header", index),
-                            "Remove header",
-                            move |_, window, cx| {
-                                let _ = remove_view.update(cx, |view, cx| {
-                                    view.edit_request(
-                                        key,
-                                        |request| {
-                                            if index < request.headers.len() {
-                                                request.headers.remove(index);
-                                            }
-                                        },
-                                        cx,
-                                    );
-                                    view.focus_handle.focus(window, cx);
-                                });
-                            },
-                        )),
-                );
+                            )
+                            .list_scroll(list_scroll),
+                        ),
+                    )
+                    .child(components::switch(
+                        theme,
+                        ("header-enabled", index),
+                        "Enable header",
+                        !header.disabled,
+                        false,
+                        move |enabled, _, cx| {
+                            let _ = enabled_view.update(cx, |view, cx| {
+                                view.edit_request(
+                                    key,
+                                    |request| {
+                                        if let Some(header) = request.headers.get_mut(index) {
+                                            header.disabled = !enabled;
+                                        }
+                                    },
+                                    cx,
+                                );
+                            });
+                        },
+                    ))
+                    .child(components::remove_row_button(
+                        theme,
+                        ("remove-header", index),
+                        "Remove header",
+                        move |_, window, cx| {
+                            let _ = remove_view.update(cx, |view, cx| {
+                                view.edit_request(
+                                    key,
+                                    |request| {
+                                        if index < request.headers.len() {
+                                            request.headers.remove(index);
+                                        }
+                                    },
+                                    cx,
+                                );
+                                view.focus_handle.focus(window, cx);
+                            });
+                        },
+                    )),
+            );
         }
         let add_view = cx.weak_entity();
         rows.child(components::editor_add_button(

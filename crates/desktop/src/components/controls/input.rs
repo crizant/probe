@@ -433,26 +433,8 @@ pub(in crate::components) fn text_input_base(
         content_gap: theme.metrics.spacing_1,
         quiet_focus: false,
         focus_on_render: false,
-        list_scroll: active_list_scroll(),
+        list_scroll: None,
     }
-}
-
-thread_local! {
-    static ACTIVE_LIST_SCROLL: RefCell<Option<ScrollHandle>> = const { RefCell::new(None) };
-}
-
-/// Single-line fields built while `render` runs defer vertical wheel events to `scroll`.
-pub(crate) fn with_list_scroll<T>(scroll: &ScrollHandle, render: impl FnOnce() -> T) -> T {
-    ACTIVE_LIST_SCROLL.with(|slot| {
-        let previous = slot.replace(Some(scroll.clone()));
-        let value = render();
-        *slot.borrow_mut() = previous;
-        value
-    })
-}
-
-fn active_list_scroll() -> Option<ScrollHandle> {
-    ACTIVE_LIST_SCROLL.with(|slot| slot.borrow().clone())
 }
 
 /// A focused single-line field keeps a wheel gesture only when that gesture is
@@ -568,13 +550,13 @@ pub(crate) fn variable_text_input(
     placeholder: impl Into<SharedString>,
     variables: VariableContext,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> ProbeTextInput {
     let mut input = text_input_base(theme, id, value, placeholder);
     input.variables = variables;
     input.variable_overlay = true;
     input.font_family = theme.typography.monospace_family;
     input.on_change = Some(Rc::new(on_value_change));
-    input.into_any_element()
+    input
 }
 
 pub(crate) fn url_text_input(
@@ -612,6 +594,12 @@ pub(crate) fn dialog_text_input(
 }
 
 impl ProbeTextInput {
+    /// Defer this field's vertical wheel events to `scroll`.
+    pub(crate) fn list_scroll(mut self, scroll: Option<&ScrollHandle>) -> Self {
+        self.list_scroll = scroll.cloned();
+        self
+    }
+
     /// Reuse the active controller while its virtualized row is absent.
     pub(crate) fn persistent_field(
         mut self,
