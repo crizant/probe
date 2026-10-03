@@ -1043,7 +1043,6 @@ impl Render for HiddenLineSplitterHarness {
                 .child(
                     pane_splitter(Theme::light(), "hidden-splitter", Axis::Horizontal)
                         .show_line(false)
-                        .trailing()
                         .debug_selector("hidden-splitter")
                         .on_mouse_down(move |_, _, _| {
                             presses.set(presses.get() + 1);
@@ -1074,7 +1073,7 @@ fn pane_splitter_without_idle_line_still_exposes_a_hit_target(cx: &mut TestAppCo
         .expect("hidden-line splitter parent pane should render");
     assert_eq!(handle.size.width, px(5.0));
     assert!(handle.size.height > px(10.0));
-    assert_eq!(handle.center().x, pane.right());
+    assert_eq!(handle.center().x, pane.left());
     assert_eq!(presses.get(), 1);
 }
 
