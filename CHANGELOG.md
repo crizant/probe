@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-10-03
+
 ### Added
 
 - Copy HTTP and GraphQL requests as cURL commands from the desktop Send dropdown. Plain environment variables are resolved; secret placeholders are retained. Commands use one canonical POSIX-quoted format.
@@ -315,6 +317,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[0.9.4]: https://github.com/crizant/probe/releases/tag/v0.9.4
 [0.9.3]: https://github.com/crizant/probe/releases/tag/v0.9.3
 [0.9.2]: https://github.com/crizant/probe/releases/tag/v0.9.2
 [0.9.1]: https://github.com/crizant/probe/releases/tag/v0.9.1
