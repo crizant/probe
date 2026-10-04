@@ -181,14 +181,15 @@ pub struct StructureResult {
 impl LoadedWorkspace {
     /// Applies a structural edit and refreshes all runtime keys and repository selectors.
     ///
-    /// In-memory request drafts are carried to their remapped selectors.
+    /// In-memory request drafts are carried to their remapped selectors. Renaming a
+    /// request updates that draft's name; renaming a folder does not.
     pub fn apply_structure(
         &mut self,
         operation: StructureOperation,
     ) -> Result<StructureResult, StructureError> {
-        let renamed = match &operation {
-            StructureOperation::Rename { target, name } if target.kind == ItemKind::Request => {
-                Some((target.selector.clone(), name.clone()))
+        let rename = match &operation {
+            StructureOperation::Rename { target, name } => {
+                Some((target.kind, target.selector.clone(), name.clone()))
             }
             _ => None,
         };
@@ -201,10 +202,14 @@ impl LoadedWorkspace {
                     .selector_remaps
                     .get(located.selector())
                     .and_then(|selector| fresh.request_key(selector))?;
-                let renamed_to = renamed
-                    .as_ref()
-                    .filter(|(selector, _)| selector == located.selector())
-                    .map(|(_, name)| name.clone());
+                let renamed_to = match &rename {
+                    Some((kind, selector, name))
+                        if *kind == ItemKind::Request && selector == located.selector() =>
+                    {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                };
                 Some((located.key(), new_key, renamed_to))
             })
             .collect::<Vec<_>>();

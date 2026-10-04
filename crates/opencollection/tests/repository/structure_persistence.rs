@@ -181,6 +181,58 @@ fn bundled_structure_edits_save_reload_and_preserve_unknown_fields() {
 }
 
 #[test]
+fn structural_rename_replaces_only_the_targeted_request_name() {
+    let path = temporary_path("phase16-rename-draft-names.yml");
+    fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let alpha = loaded.request_key("items/0").unwrap();
+    let nested = loaded.request_key("items/1/items/0").unwrap();
+    loaded.request_mut(alpha).unwrap().metadata.name = Some("Dirty Alpha".to_owned());
+    loaded.request_mut(nested).unwrap().metadata.name = Some("Dirty Nested".to_owned());
+
+    loaded
+        .apply_structure(StructureOperation::Rename {
+            target: ItemLocator::new(ItemKind::Folder, "items/1"),
+            name: "Renamed Folder".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(
+        request_name(&loaded, "items/0").as_deref(),
+        Some("Dirty Alpha")
+    );
+    assert_eq!(
+        request_name(&loaded, "items/1/items/0").as_deref(),
+        Some("Dirty Nested")
+    );
+
+    loaded
+        .apply_structure(StructureOperation::Rename {
+            target: ItemLocator::new(ItemKind::Request, "items/0"),
+            name: "Renamed Alpha".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(
+        request_name(&loaded, "items/0").as_deref(),
+        Some("Renamed Alpha")
+    );
+    assert_eq!(
+        request_name(&loaded, "items/1/items/0").as_deref(),
+        Some("Dirty Nested")
+    );
+    fs::remove_file(path).unwrap();
+}
+
+fn request_name(loaded: &probe_opencollection::LoadedWorkspace, selector: &str) -> Option<String> {
+    loaded
+        .workspace()
+        .request(loaded.request_key(selector).unwrap())
+        .unwrap()
+        .metadata
+        .name
+        .clone()
+}
+
+#[test]
 fn bundled_move_handles_reordering_and_destination_index_shifts() {
     let path = temporary_path("phase16-bundled-moves.yml");
     fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
