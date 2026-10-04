@@ -157,6 +157,9 @@ pub(crate) fn request_method_options(
 
 pub(crate) struct ShellSelectors {
     pub(crate) tab_selectors: Vec<String>,
+    // None identifies the collection; Some identifies a folder.
+    pub(crate) overview_selectors: Vec<Option<String>>,
+    pub(crate) active_overview_selector: Option<Option<String>>,
     pub(crate) active_selector: Option<String>,
     pub(crate) folder_selectors: Vec<String>,
     pub(crate) selected: Option<(probe_opencollection::ItemKind, String)>,

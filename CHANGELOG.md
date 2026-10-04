@@ -10,6 +10,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 - Set and unset an OpenCollection environment description from the CLI. `probe environment set --environment <name> --description <text>` writes a string, and `--description-json` writes a JSON string, null, or `{content, type}` object. `probe environment unset --environment <name> --description` removes the key and does not write null.
 - `environment list --json` includes each environment's description. An environment with no description omits that field. The text table remains name and parent.
+- View and edit request documentation in a Documentation tab and collection or folder documentation in reusable overview tabs, with the editor save icon and unsaved-change protection. The sidebar collection header opens its overview; folder names open overviews and disclosure chevrons expand or collapse folders.
 - Show, set, and unset OpenCollection collection summary and docs, folder description and docs, and request description and docs from the CLI. Unset removes the key; `set --docs-json null` writes YAML null.
 - Set, replace, and clear a request's headers, query parameters, path parameters, HTTP body, and basic, bearer, API-key, or inherit authentication with `probe request set` and `probe request create`. HTTP body writes cover the OpenCollection body types, and a body write keeps an existing variant list's titles and selection.
 - Execute OpenCollection API Key authentication from a header or query parameter. Copy as cURL uses the same placement.

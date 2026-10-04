@@ -45,6 +45,7 @@ use probe_yaak::{ImportedYaakWorkspace, YaakImportError, YaakImportPreview, insp
 mod chrome;
 mod detached_requests;
 mod dialogs;
+mod documentation;
 mod environments;
 mod imports;
 mod interactions;
@@ -297,6 +298,9 @@ pub(crate) struct ProbeApp {
     session: SessionState,
     session_save_task: Option<Task<()>>,
     request_save_task: Option<Task<()>>,
+    documentation_save_task: Option<Task<()>>,
+    overview_drafts: BTreeMap<Option<String>, documentation::OverviewDraft>,
+    pending_documentation_saves: std::collections::VecDeque<Option<String>>,
     environment_save_task: Option<Task<()>>,
     environment_save_workspace_path: Option<PathBuf>,
     environment_manager_close_after_save: bool,
@@ -419,6 +423,9 @@ impl ProbeApp {
             session: SessionState::default(),
             session_save_task: None,
             request_save_task: None,
+            documentation_save_task: None,
+            overview_drafts: BTreeMap::new(),
+            pending_documentation_saves: std::collections::VecDeque::new(),
             environment_save_task: None,
             environment_save_workspace_path: None,
             environment_manager_close_after_save: false,

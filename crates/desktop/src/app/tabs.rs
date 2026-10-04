@@ -209,6 +209,9 @@ impl ProbeApp {
                 self.close_tab_now(key, cx);
             }
         }
+        for tab in self.shell.overview_tabs().to_vec() {
+            self.shell.close_overview(tab);
+        }
         self.shell.open_request(keep);
         self.select_and_reveal_active_request_in_sidebar();
         self.reveal_active_tab();
@@ -277,7 +280,8 @@ impl ProbeApp {
             return;
         }
         let dirty = self.other_dirty_tab_keys(keep);
-        if dirty.is_empty() {
+        if dirty.is_empty() && !self.has_dirty_overviews() && self.documentation_save_task.is_none()
+        {
             self.close_other_tabs_now(keep, cx);
         } else {
             self.prompt_unsaved(dirty, PendingClose::OtherTabs { keep }, window, cx);
@@ -286,7 +290,8 @@ impl ProbeApp {
 
     pub(super) fn request_close_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() {
+        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
+        {
             self.prompt_unsaved(dirty, PendingClose::Workspace, window, cx);
             return;
         }
@@ -307,7 +312,8 @@ impl ProbeApp {
             return false;
         }
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() {
+        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
+        {
             self.prompt_unsaved(dirty, PendingClose::Window, window, cx);
             return false;
         }
@@ -345,7 +351,8 @@ impl ProbeApp {
             return;
         }
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() {
+        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
+        {
             self.prompt_unsaved(dirty, PendingClose::Quit, window, cx);
             return;
         }
@@ -367,7 +374,20 @@ impl ProbeApp {
         if self.pending_close.is_some() {
             return;
         }
-        self.show_application_dialog(ApplicationDialog::Unsaved { keys, pending }, window, cx);
+        if self.documentation_save_task.is_some() {
+            self.pending_close = Some(pending);
+            return;
+        }
+        let documentation = !self.pending_overview_targets(&pending).is_empty();
+        self.show_application_dialog(
+            ApplicationDialog::Unsaved {
+                keys,
+                documentation,
+                pending,
+            },
+            window,
+            cx,
+        );
     }
 
     pub(super) fn discard_dirty_requests(&mut self, keys: &[RequestKey]) {
@@ -387,6 +407,13 @@ impl ProbeApp {
     }
 
     pub(super) fn save_active_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.shell.active_overview() {
+            if let Some(target) = self.overview_target(tab) {
+                self.enqueue_documentation_save(target);
+                self.start_next_documentation_save(window, cx);
+            }
+            return;
+        }
         if let Some(key) = self.shell.active_tab() {
             if self.detached_requests.contains(&key) {
                 self.open_save_detached_request_dialog(key, window, cx);
@@ -418,6 +445,7 @@ impl ProbeApp {
             return;
         }
         if self.structure_task.is_some()
+            || self.documentation_save_task.is_some()
             || self.request_save_task.is_some()
             || self.environment_save_task.is_some()
         {
@@ -569,7 +597,10 @@ impl ProbeApp {
     }
 
     pub(super) fn start_next_request_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.loading || self.request_save_task.is_some() || self.environment_save_task.is_some()
+        if self.loading
+            || self.documentation_save_task.is_some()
+            || self.request_save_task.is_some()
+            || self.environment_save_task.is_some()
         {
             return;
         }
@@ -664,6 +695,22 @@ impl ProbeApp {
     ) {
         self.pending_close = None;
         match pending {
+            PendingClose::Overview(target) => {
+                let tab = match target {
+                    None => Some(crate::shell::OverviewTab::Collection),
+                    Some(selector) => self
+                        .loaded_workspace
+                        .as_ref()
+                        .and_then(|loaded| loaded.folder_key(&selector))
+                        .map(crate::shell::OverviewTab::Folder),
+                };
+                if let Some(tab) = tab {
+                    self.shell.close_overview(tab);
+                }
+                self.select_and_reveal_active_request_in_sidebar();
+                self.reveal_active_tab();
+                cx.notify();
+            }
             PendingClose::Tab(key) => self.close_tab_now(key, cx),
             PendingClose::OtherTabs { keep } => self.close_other_tabs_now(keep, cx),
             PendingClose::Workspace => self.close_workspace_now(cx),
@@ -703,6 +750,18 @@ impl ProbeApp {
     }
 
     pub(super) fn scroll_active_tab_into_view(&self) {
+        if let Some(active) = self.shell.active_overview() {
+            if let Some(index) = self
+                .shell
+                .overview_tabs()
+                .iter()
+                .position(|tab| *tab == active)
+            {
+                self.tab_bar_scroll
+                    .scroll_to_item(self.shell.tabs().len() + index);
+            }
+            return;
+        }
         let Some(active) = self.shell.active_tab() else {
             return;
         };

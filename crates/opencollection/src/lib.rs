@@ -16,12 +16,13 @@ mod repository;
 mod structure;
 
 pub use repository::{
-    CompletedEnvironmentCreate, CompletedEnvironmentDelete, CompletedEnvironmentReplace,
-    CompletedEnvironmentSave, CompletedRequestSave, CreateError, LoadError, LoadedWorkspace,
-    LocatedFolder, LocatedRequest, PreparedEnvironmentCreate, PreparedEnvironmentDelete,
-    PreparedEnvironmentReplace, PreparedEnvironmentSave, PreparedRequestSave, SaveError,
-    WorkspaceBaseline, create_bundled_workspace, create_bundled_workspace_from_collection,
-    load_workspace, load_workspace_from_str,
+    CompletedDocumentationSave, CompletedEnvironmentCreate, CompletedEnvironmentDelete,
+    CompletedEnvironmentReplace, CompletedEnvironmentSave, CompletedRequestSave, CreateError,
+    LoadError, LoadedWorkspace, LocatedFolder, LocatedRequest, PreparedDocumentationSave,
+    PreparedEnvironmentCreate, PreparedEnvironmentDelete, PreparedEnvironmentReplace,
+    PreparedEnvironmentSave, PreparedRequestSave, SaveError, WorkspaceBaseline,
+    create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
+    load_workspace_from_str,
 };
 pub use structure::{
     CreatedRequestProtocol, ItemKind, PreparedStructureEdit, StructureError, StructureOperation,

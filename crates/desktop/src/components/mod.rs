@@ -50,8 +50,8 @@ mod icons;
 use editor::SecretTooltipState;
 pub(crate) use editor::editor_paint_style;
 pub(crate) use editor::{
-    BodySyntax, body_text_input, response_body_input, response_headers_input,
-    response_inspector_input, single_line,
+    BodySyntax, body_text_input, documentation_text_input, response_body_input,
+    response_headers_input, response_inspector_input, single_line,
 };
 #[cfg(test)]
 use editor::{ProbeEditor, editor_value_needs_refresh};
@@ -80,7 +80,7 @@ use icons::{CHECK_SVG, CHEVRON_RIGHT_SVG, SEARCH_SVG, folder_open_icon, library_
 pub(crate) use icons::{
     add_menu_button, add_menu_button_with_id, chevron_icon, close_icon, download_icon, home_button,
     hover_fill, locate_icon, lock_icon, menu_folder_icon, plus_icon, save_icon, sidebar_toggle,
-    trash_icon, tree_folder_icon,
+    trash_icon, tree_disclosure_icon, tree_folder_icon,
 };
 use menus::{MenuButtonContent, MenuButtonStyle, context_menu_separator, menu_button_with_style};
 pub(crate) use menus::{

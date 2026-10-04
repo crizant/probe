@@ -61,7 +61,6 @@ impl ProbeApp {
                 .unwrap_or("Untitled request")
                 .to_owned(),
         );
-        let save_view = cx.weak_entity();
         let mut breadcrumb_path = div()
             .id("request-breadcrumb-path")
             .flex_1()
@@ -110,41 +109,7 @@ impl ProbeApp {
                 .mr(px(theme.metrics.spacing_2)),
             )
             .child(breadcrumb_path)
-            .child(
-                Button::new("request-save")
-                    .accessibility_label("Save request")
-                    .debug_selector(|| "request-save".into())
-                    .disabled(!request_dirty)
-                    .ml(px(theme.metrics.spacing_2))
-                    .flex_none()
-                    .w(px(theme.metrics.control_height))
-                    .h(px(theme.metrics.control_height))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(theme.metrics.radius_small))
-                    .border_1()
-                    .border_color(theme.colors.borders.standard)
-                    .bg(theme.colors.surfaces.raised)
-                    .hover(move |button| button.bg(theme.colors.selection.inactive_background))
-                    .focus_visible(move |button| button.border_color(theme.colors.borders.focused))
-                    .styles(move |styles| {
-                        styles.disabled(move |button| {
-                            button
-                                .bg(theme.colors.selection.inactive_background)
-                                .border_color(theme.colors.selection.inactive_background)
-                                .text_color(theme.colors.actions.disabled_foreground)
-                        })
-                    })
-                    .child(components::save_icon(theme).when(!request_dirty, |icon| {
-                        icon.text_color(theme.colors.actions.disabled_foreground)
-                    }))
-                    .on_click(move |_, window, cx| {
-                        let _ = save_view.update(cx, |view, cx| {
-                            view.save_active_request(window, cx);
-                        });
-                    }),
-            );
+            .child(self.render_save_button(theme, "Save request", request_dirty, false, cx));
         let url_view = cx.weak_entity();
         let execution_view = cx.weak_entity();
         let request_running = self
@@ -173,7 +138,8 @@ impl ProbeApp {
                         EditorSection::Query => format!("  {}", request.query_parameters.len()),
                         EditorSection::Path => format!("  {}", request.path_parameters.len()),
                         EditorSection::Headers => format!("  {}", request.headers.len()),
-                        EditorSection::Body
+                        EditorSection::Docs
+                        | EditorSection::Body
                         | EditorSection::Authentication
                         | EditorSection::GraphqlQuery
                         | EditorSection::GraphqlVariables
@@ -194,7 +160,8 @@ impl ProbeApp {
         }
 
         let section_kind = self.request_editor.section(key);
-        let section_scrolls = section_kind != EditorSection::Body && !section_kind.is_graphql();
+        let section_scrolls = !matches!(section_kind, EditorSection::Body | EditorSection::Docs)
+            && !section_kind.is_graphql();
         if section_scrolls && self.request_section_scroll_owner.get() != Some((key, section_kind)) {
             self.request_section_scroll
                 .set_offset(point(px(0.0), px(0.0)));
@@ -381,6 +348,40 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         match self.request_editor.section(key) {
+            EditorSection::Docs => {
+                let view = cx.weak_entity();
+                documentation_sections(
+                    theme,
+                    "Description",
+                    [
+                        documentation_text(request.metadata.description.as_ref()),
+                        request.docs.as_deref(),
+                    ],
+                    [
+                        ("request-description", key.slot()).into(),
+                        ("request-docs", key.slot()).into(),
+                    ],
+                    move |docs, value, _, cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            view.edit_request(
+                                key,
+                                |request| {
+                                    if docs {
+                                        request.docs = Some(value.to_string());
+                                    } else {
+                                        crate::app::documentation::edit_documentation(
+                                            &mut request.metadata.description,
+                                            value.to_string(),
+                                        );
+                                    }
+                                },
+                                cx,
+                            )
+                        });
+                    },
+                )
+                .into_any_element()
+            }
             EditorSection::Query => self.render_parameter_editor(
                 key,
                 request,
@@ -417,5 +418,84 @@ impl ProbeApp {
                 self.render_graphql_extensions_editor(key, request, theme, cx)
             }
         }
+    }
+}
+
+struct SaveTooltip {
+    theme: Theme,
+    label: String,
+}
+
+impl Render for SaveTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui_base::Tooltip::new("editor-save-tooltip")
+            .px(px(self.theme.metrics.spacing_2))
+            .py(px(self.theme.metrics.spacing_1))
+            .rounded(px(self.theme.metrics.radius_small))
+            .border_1()
+            .border_color(self.theme.colors.borders.standard)
+            .bg(self.theme.colors.surfaces.overlay)
+            .text_size(px(self.theme.typography.caption_size))
+            .text_color(self.theme.colors.text.primary)
+            .child(self.label.clone())
+    }
+}
+
+impl ProbeApp {
+    pub(super) fn render_save_button(
+        &self,
+        theme: Theme,
+        label: &'static str,
+        dirty: bool,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Button {
+        let view = cx.weak_entity();
+        let enabled = dirty && !busy;
+        Button::new("request-save")
+            .accessibility_label(label)
+            .debug_selector(|| "request-save".into())
+            .disabled(!enabled)
+            .tooltip(move |_, cx| {
+                let shortcut = if cfg!(target_os = "macos") {
+                    "⌘S"
+                } else {
+                    "Ctrl+S"
+                };
+                cx.new(|_| SaveTooltip {
+                    theme,
+                    label: format!("{label} ({shortcut})"),
+                })
+                .into()
+            })
+            .ml(px(theme.metrics.spacing_2))
+            .flex_none()
+            .w(px(theme.metrics.control_height))
+            .h(px(theme.metrics.control_height))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(theme.metrics.radius_small))
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .bg(theme.colors.surfaces.raised)
+            .hover(move |button| button.bg(theme.colors.selection.inactive_background))
+            .focus_visible(move |button| button.border_color(theme.colors.borders.focused))
+            .styles(move |styles| {
+                styles.disabled(move |button| {
+                    button
+                        .bg(theme.colors.selection.inactive_background)
+                        .border_color(theme.colors.selection.inactive_background)
+                        .text_color(theme.colors.actions.disabled_foreground)
+                })
+            })
+            .child(components::save_icon(theme).text_color(if enabled {
+                theme.colors.actions.accent
+            } else {
+                theme.colors.actions.disabled_foreground
+            }))
+            .on_click(move |_, window, cx| {
+                let _ = view.update(cx, |view, cx| view.save_active_request(window, cx));
+            })
     }
 }

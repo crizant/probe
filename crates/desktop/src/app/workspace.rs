@@ -165,7 +165,8 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() {
+        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
+        {
             self.prompt_unsaved(
                 dirty,
                 PendingClose::Open {
@@ -195,7 +196,8 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() {
+        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
+        {
             self.prompt_unsaved(dirty, PendingClose::Create { path }, window, cx);
             return;
         }
@@ -264,6 +266,7 @@ impl ProbeApp {
     ) {
         if self.request_save_task.is_some()
             || self.environment_save_task.is_some()
+            || self.documentation_save_task.is_some()
             || self.persistence.has_outstanding_saves()
         {
             return;
@@ -272,9 +275,13 @@ impl ProbeApp {
             self.start_next_environment_save(window, cx);
             return;
         }
+        if !self.pending_documentation_saves.is_empty() {
+            self.start_next_documentation_save(window, cx);
+            return;
+        }
         if let Some(pending) = self.pending_close.take() {
             let dirty = self.pending_close_dirty_keys(&pending);
-            if dirty.is_empty() {
+            if dirty.is_empty() && self.pending_overview_targets(&pending).is_empty() {
                 self.finish_pending_close(pending, window, cx);
             } else {
                 self.prompt_unsaved(dirty, pending, window, cx);
@@ -289,6 +296,7 @@ impl ProbeApp {
                 .then_some(*key)
                 .into_iter()
                 .collect(),
+            PendingClose::Overview(_) => Vec::new(),
             PendingClose::OtherTabs { keep } => self.other_dirty_tab_keys(*keep),
             PendingClose::Workspace
             | PendingClose::Window
@@ -574,7 +582,10 @@ impl ProbeApp {
             return;
         };
         match (dialog, action) {
-            (ApplicationDialog::Unsaved { keys, pending }, ApplicationDialogAction::Save) => {
+            (ApplicationDialog::Unsaved { keys, pending, .. }, ApplicationDialogAction::Save) => {
+                for target in self.pending_overview_targets(&pending) {
+                    self.enqueue_documentation_save(target);
+                }
                 self.pending_close = Some(pending);
                 if let Some(key) = keys
                     .iter()
@@ -587,8 +598,14 @@ impl ProbeApp {
                     self.start_next_request_save(window, cx);
                 }
             }
-            (ApplicationDialog::Unsaved { keys, pending }, ApplicationDialogAction::Discard) => {
+            (
+                ApplicationDialog::Unsaved { keys, pending, .. },
+                ApplicationDialogAction::Discard,
+            ) => {
                 self.discard_dirty_requests(&keys);
+                for target in self.pending_overview_targets(&pending) {
+                    self.overview_drafts.remove(&target);
+                }
                 self.finish_pending_close(pending, window, cx);
             }
             (ApplicationDialog::UnsavedEnvironment, ApplicationDialogAction::Save) => {
@@ -782,6 +799,9 @@ impl ProbeApp {
     }
 
     pub(super) fn reset_collection_ui(&mut self) {
+        self.overview_drafts.clear();
+        self.pending_documentation_saves.clear();
+        self.documentation_save_task = None;
         self.selected_tree_item = None;
         self.structure_dialog = None;
         self.create_environment_dialog = None;
@@ -796,7 +816,21 @@ impl ProbeApp {
     }
 
     pub(super) fn snapshot_shell_selectors(&self, old: &LoadedWorkspace) -> ShellSelectors {
+        let overview_selector = |tab| match tab {
+            crate::shell::OverviewTab::Collection => Some(None),
+            crate::shell::OverviewTab::Folder(key) => old
+                .folder_selector(key)
+                .map(|selector| Some(selector.to_owned())),
+        };
         ShellSelectors {
+            overview_selectors: self
+                .shell
+                .overview_tabs()
+                .iter()
+                .copied()
+                .filter_map(overview_selector)
+                .collect(),
+            active_overview_selector: self.shell.active_overview().and_then(overview_selector),
             tab_selectors: self
                 .shell
                 .tabs()
@@ -970,6 +1004,24 @@ impl ProbeApp {
             .loaded_workspace
             .as_ref()
             .expect("workspace was replaced");
+        self.overview_drafts = std::mem::take(&mut self.overview_drafts)
+            .into_iter()
+            .map(|(target, draft)| {
+                let target =
+                    target.map(|selector| remaps.get(&selector).cloned().unwrap_or(selector));
+                (target, draft)
+            })
+            .collect();
+        for selector in self.pending_documentation_saves.iter_mut().flatten() {
+            if let Some(mapped) = remaps.get(selector) {
+                selector.clone_from(mapped);
+            }
+        }
+        if let Some(PendingClose::Overview(Some(selector))) = self.pending_close.as_mut()
+            && let Some(mapped) = remaps.get(selector)
+        {
+            selector.clone_from(mapped);
+        }
         for selector in selectors.tab_selectors {
             if let Some(key) = remaps
                 .get(&selector)
@@ -986,6 +1038,27 @@ impl ProbeApp {
         {
             self.shell.insert_tab(key);
             self.shell.activate_tab(key);
+        }
+        let overview_tab = |selector: &Option<String>| match selector {
+            None => Some(crate::shell::OverviewTab::Collection),
+            Some(selector) => remaps
+                .get(selector)
+                .and_then(|selector| loaded.folder_key(selector))
+                .map(crate::shell::OverviewTab::Folder),
+        };
+        let active_request = self.shell.active_tab();
+        for tab in selectors.overview_selectors.iter().filter_map(overview_tab) {
+            self.shell.open_overview(tab);
+        }
+        if let Some(active) = active_request.or_else(|| self.shell.tabs().last().copied()) {
+            self.shell.activate_tab(active);
+        }
+        if let Some(tab) = selectors
+            .active_overview_selector
+            .as_ref()
+            .and_then(overview_tab)
+        {
+            self.shell.open_overview(tab);
         }
         for selector in selectors.folder_selectors {
             let selector = remaps

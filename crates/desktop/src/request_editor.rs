@@ -13,6 +13,7 @@ pub(crate) enum EditorSection {
     Headers,
     Body,
     Authentication,
+    Docs,
     GraphqlQuery,
     GraphqlVariables,
     GraphqlOperationName,
@@ -20,15 +21,16 @@ pub(crate) enum EditorSection {
 }
 
 impl EditorSection {
-    pub(crate) const ALL_HTTP: [Self; 5] = [
+    pub(crate) const ALL_HTTP: [Self; 6] = [
         Self::Path,
         Self::Query,
         Self::Headers,
         Self::Body,
         Self::Authentication,
+        Self::Docs,
     ];
 
-    pub(crate) const ALL_GRAPHQL: [Self; 8] = [
+    pub(crate) const ALL_GRAPHQL: [Self; 9] = [
         Self::Path,
         Self::Query,
         Self::Headers,
@@ -37,6 +39,7 @@ impl EditorSection {
         Self::GraphqlOperationName,
         Self::GraphqlExtensions,
         Self::Authentication,
+        Self::Docs,
     ];
 
     pub(crate) const fn label(self) -> &'static str {
@@ -46,6 +49,7 @@ impl EditorSection {
             Self::Headers => "Headers",
             Self::Body => "Body",
             Self::Authentication => "Authentication",
+            Self::Docs => "Documentation",
             Self::GraphqlQuery => "Document",
             Self::GraphqlVariables => "Variables",
             Self::GraphqlOperationName => "Operation name",
@@ -647,6 +651,10 @@ mod tests {
         assert_eq!(editor.section(key), EditorSection::Headers);
         editor.ensure_available_section(key, false);
         assert_eq!(editor.section(key), EditorSection::Headers);
+        editor.set_section(key, EditorSection::Docs);
+        editor.ensure_available_section(key, true);
+        editor.ensure_available_section(key, false);
+        assert_eq!(editor.section(key), EditorSection::Docs);
     }
 
     #[test]

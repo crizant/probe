@@ -330,7 +330,10 @@ impl ProbeApp {
                 self.show_toast(ToastIntent::Warning, "This request was written, but the collection could not refresh. Reopen the collection before saving it again.", cx);
                 return;
             }
-            if self.request_save_task.is_some() || self.environment_save_task.is_some() {
+            if self.documentation_save_task.is_some()
+                || self.request_save_task.is_some()
+                || self.environment_save_task.is_some()
+            {
                 self.show_toast(
                     ToastIntent::Warning,
                     "Wait for the current save to finish.",
@@ -490,10 +493,21 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.has_dirty_overviews() {
+            self.show_toast(
+                ToastIntent::Warning,
+                "Save or discard documentation changes before changing collection structure.",
+                cx,
+            );
+            return;
+        }
         if self.structure_task.is_some() {
             return;
         }
-        if self.request_save_task.is_some() || self.environment_save_task.is_some() {
+        if self.documentation_save_task.is_some()
+            || self.request_save_task.is_some()
+            || self.environment_save_task.is_some()
+        {
             self.show_toast(
                 ToastIntent::Warning,
                 "Wait for the current save before changing collection structure.",
@@ -873,9 +887,9 @@ impl ProbeApp {
         match self.selected_tree_item {
             Some(WorkspaceItemRef::Request(key)) => self.select_request(key, cx),
             Some(WorkspaceItemRef::Folder(key)) => {
-                self.shell.toggle_folder(key);
-                self.rebuild_visible_tree_rows_after_visibility_change();
-                self.persist_session(cx);
+                self.shell
+                    .open_overview(crate::shell::OverviewTab::Folder(key));
+                self.reveal_active_tab();
                 cx.notify();
             }
             None => self.select_tree_offset(0, cx),

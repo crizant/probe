@@ -351,19 +351,21 @@ impl ProbeApp {
                 let view = cx.weak_entity();
                 let context_menu_view = cx.weak_entity();
                 let item = WorkspaceItemRef::Folder(key);
+                let disclosure_view = cx.weak_entity();
+                let disclosure_selector = format!(
+                    "folder-disclosure-{}",
+                    loaded.folder_selector(key).unwrap_or_default()
+                );
                 let button =
                     tree_row_button(theme, ("folder-tree-item", key.slot()), depth, selected)
                         .accessibility_label(format!("Folder {label}"))
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| {
-                                let was_selected = view.selected_tree_item == Some(item);
-                                view.select_tree_item(WorkspaceItemRef::Folder(key), cx);
-                                if !expanded || was_selected {
-                                    view.shell.toggle_folder(key);
-                                    view.rebuild_visible_tree_rows_after_visibility_change();
-                                    view.persist_session(cx);
-                                    cx.notify();
-                                }
+                                view.select_tree_item(item, cx);
+                                view.shell
+                                    .open_overview(crate::shell::OverviewTab::Folder(key));
+                                view.reveal_active_tab();
+                                cx.notify();
                             });
                         })
                         .when(can_edit, |row| {
@@ -377,6 +379,30 @@ impl ProbeApp {
                                 },
                             )
                         })
+                        .child(
+                            Button::new(("folder-disclosure", key.slot()))
+                                .debug_selector(move || disclosure_selector.clone())
+                                .accessibility_label(format!(
+                                    "{} {label}",
+                                    if expanded { "Collapse" } else { "Expand" }
+                                ))
+                                .w(px(theme.metrics.icon_standard))
+                                .h(px(theme.metrics.tree_row_height))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(components::tree_disclosure_icon(theme, expanded))
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    let _ = disclosure_view.update(cx, |view, cx| {
+                                        view.shell.toggle_folder(key);
+                                        view.rebuild_visible_tree_rows_after_visibility_change();
+                                        view.persist_session(cx);
+                                        cx.notify();
+                                    });
+                                }),
+                        )
                         .child(components::tree_folder_icon(theme, expanded, selected))
                         .child(
                             components::truncated_label(label.to_owned())
@@ -900,6 +926,53 @@ impl ProbeApp {
             .border_1()
             .border_color(theme.colors.borders.subtle)
             .bg(theme.colors.surfaces.sidebar)
+            .when_some(self.loaded_workspace.as_ref(), |sidebar, loaded| {
+                let view = cx.weak_entity();
+                let name = loaded
+                    .workspace()
+                    .metadata()
+                    .name
+                    .as_deref()
+                    .unwrap_or("Untitled collection")
+                    .to_owned();
+                sidebar.child(
+                    Button::new("collection-overview-header")
+                        .debug_selector(|| "collection-overview-header".into())
+                        .accessibility_label(format!("{name}, Collection overview"))
+                        .w_full()
+                        .flex_none()
+                        .px(px(theme.metrics.spacing_2))
+                        .py(px(theme.metrics.spacing_1))
+                        .flex()
+                        .flex_col()
+                        .text_size(px(theme.typography.caption_size))
+                        .items_start()
+                        .overflow_hidden()
+                        .border_b_1()
+                        .border_color(theme.colors.borders.subtle)
+                        .hover(move |header| header.bg(theme.colors.surfaces.window))
+                        .child(
+                            components::truncated_label(name)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.colors.text.secondary),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(theme.typography.caption_size))
+                                .text_color(theme.colors.text.muted)
+                                .child("Collection overview"),
+                        )
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |view, cx| {
+                                view.selected_tree_item = None;
+                                view.shell
+                                    .open_overview(crate::shell::OverviewTab::Collection);
+                                view.reveal_active_tab();
+                                cx.notify();
+                            });
+                        }),
+                )
+            })
             .child(
                 div()
                     .flex()

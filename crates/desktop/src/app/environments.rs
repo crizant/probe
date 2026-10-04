@@ -334,6 +334,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         if self.environment_save_task.is_some()
+            || self.documentation_save_task.is_some()
             || self.request_save_task.is_some()
             || self.structure_task.is_some()
             || !self.pending_environment_saves.is_empty()
@@ -531,6 +532,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         if self.environment_save_task.is_some()
+            || self.documentation_save_task.is_some()
             || self.request_save_task.is_some()
             || self.structure_task.is_some()
         {
@@ -688,6 +690,7 @@ impl ProbeApp {
         if self.loaded_workspace.is_none()
             || self.structure_task.is_some()
             || self.environment_save_task.is_some()
+            || self.documentation_save_task.is_some()
             || self.request_save_task.is_some()
         {
             return;
@@ -750,6 +753,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         if self.environment_save_task.is_some()
+            || self.documentation_save_task.is_some()
             || self.request_save_task.is_some()
             || self.structure_task.is_some()
         {

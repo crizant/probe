@@ -493,6 +493,7 @@ impl ProbeApp {
     ) {
         if self.loading
             || self.environment_save_task.is_some()
+            || self.documentation_save_task.is_some()
             || self.request_save_task.is_some()
             || self.structure_task.is_some()
         {

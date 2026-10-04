@@ -93,6 +93,7 @@ impl EnvironmentManagerDialog {
 
 pub(crate) enum PendingClose {
     Tab(RequestKey),
+    Overview(Option<String>),
     OtherTabs {
         keep: RequestKey,
     },
@@ -120,6 +121,7 @@ pub(crate) enum ApplicationDialog {
     About,
     Unsaved {
         keys: Vec<RequestKey>,
+        documentation: bool,
         pending: PendingClose,
     },
     Delete {
@@ -216,6 +218,14 @@ impl ApplicationDialog {
     pub(crate) fn title(&self) -> Cow<'_, str> {
         match self {
             Self::About => Cow::Borrowed("Probe"),
+            Self::Unsaved {
+                keys,
+                documentation: true,
+                ..
+            } if !keys.is_empty() => Cow::Borrowed("Save request and documentation changes?"),
+            Self::Unsaved { keys, .. } if keys.is_empty() => {
+                Cow::Borrowed("Save documentation changes?")
+            }
             Self::Unsaved { keys, .. } => {
                 let noun = if keys.len() == 1 {
                     "request"
