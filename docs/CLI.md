@@ -424,7 +424,7 @@ environment was selected. Usage locations are `method`, `url`, `header`,
 `graphql_operation_name`, `graphql_extensions`, `form_urlencoded`, `multipart`, `file`,
 or `authentication`. Named request fields also include `name`.
 
-`environment list` prints `NAME`, `EXTENDS`, and `DESCRIPTION` as tab-separated text.
+`environment list` prints `NAME` and `EXTENDS` as tab-separated text.
 `environment list --json` returns an `environments` array. Each entry has `name`,
 nullable `extends`, and `description` when the environment has one. `description` is
 a string, `null` for an explicit YAML null, or a `{"content","type"}` object. An

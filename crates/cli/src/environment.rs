@@ -78,12 +78,11 @@ pub(crate) fn list(
     stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
     let loaded = load(input, stdin)?;
-    let mut lines = vec!["NAME\tEXTENDS\tDESCRIPTION".to_owned()];
+    let mut lines = vec!["NAME\tEXTENDS".to_owned()];
     let mut environments = Vec::with_capacity(loaded.workspace().environments().len());
     for environment in loaded.workspace().environments() {
         let parent = environment.extends.as_deref().unwrap_or("");
-        let description = description_list_cell(environment.description.as_ref());
-        lines.push(format!("{}\t{parent}\t{description}", environment.name));
+        lines.push(format!("{}\t{parent}", environment.name));
         let mut entry = json!({
             "extends": environment.extends,
             "name": environment.name,
@@ -156,16 +155,6 @@ pub(crate) fn unset_description(
         .update_environment_description(environment, &FieldPatch::Clear)
         .map_err(CliError::persistence)?;
     Ok(description_output("unset", "Unset", environment, None))
-}
-
-fn description_list_cell(description: Option<&Documentation>) -> String {
-    match description {
-        None => String::new(),
-        Some(Documentation::Null) => "null".to_owned(),
-        Some(Documentation::Text(text)) | Some(Documentation::Content { content: text, .. }) => {
-            text.clone()
-        }
-    }
 }
 
 fn listed_description(description: Option<&Documentation>) -> Option<serde_json::Value> {

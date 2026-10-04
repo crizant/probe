@@ -275,11 +275,11 @@ fn lists_environment_descriptions_and_omits_the_field_when_absent() {
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "\
-NAME\tEXTENDS\tDESCRIPTION
-base\t\t
-development\tbase\tLocal development
-staging\t\tStaging notes
-production\t\tnull
+NAME\tEXTENDS
+base\t
+development\tbase
+staging\t
+production\t
 "
     );
 
