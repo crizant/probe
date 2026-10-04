@@ -1,6 +1,7 @@
 use probe_core::{
-    Documentation, FieldPatch, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, ItemMetadata,
-    Request, RequestDiffError, RequestKind, RequestUpdate,
+    Body, BodyVariant, Documentation, FieldPatch, GraphqlBody, GraphqlBodyVariant,
+    GraphqlOperation, GraphqlRequestError, ItemMetadata, RawBody, RawBodyKind, Request,
+    RequestBody, RequestDiffError, RequestKind, RequestUpdate,
 };
 
 #[test]
@@ -180,4 +181,201 @@ fn diff_rejects_graphql_variant_metadata_changes() {
             probe_core::GraphqlRequestError::InvalidBodySelection(_)
         ))
     ));
+}
+
+fn text_body(data: &str) -> Body {
+    Body::Raw(RawBody {
+        kind: RawBodyKind::Text,
+        data: data.to_owned(),
+    })
+}
+
+#[test]
+fn body_content_updates_only_the_selected_http_variant() {
+    let variants = || {
+        RequestBody::Variants(vec![
+            BodyVariant {
+                title: "JSON".to_owned(),
+                selected: true,
+                body: text_body("old"),
+            },
+            BodyVariant {
+                title: "Text".to_owned(),
+                selected: false,
+                body: text_body("kept"),
+            },
+        ])
+    };
+    let content_update = RequestUpdate {
+        body_content: FieldPatch::Set(text_body("replaced")),
+        ..RequestUpdate::default()
+    };
+    assert!(RequestUpdate::default().is_empty());
+    assert!(!content_update.is_empty());
+    assert!(
+        !RequestUpdate {
+            body: FieldPatch::Clear,
+            ..RequestUpdate::default()
+        }
+        .is_empty()
+    );
+    let mut request = Request {
+        kind: RequestKind::Http {
+            body: Some(variants()),
+        },
+        ..Request::default()
+    };
+    content_update.apply(&mut request).unwrap();
+    let RequestBody::Variants(variants) = request.http_body().unwrap() else {
+        panic!("variant list should remain");
+    };
+    assert_eq!(variants[0].title, "JSON");
+    assert!(variants[0].selected);
+    assert_eq!(variants[0].body, text_body("replaced"));
+    assert_eq!(variants[1].title, "Text");
+    assert!(!variants[1].selected);
+    assert_eq!(variants[1].body, text_body("kept"));
+
+    let mut unselected = Request {
+        kind: RequestKind::Http {
+            body: Some(variants_without_selection()),
+        },
+        method: Some("POST".to_owned()),
+        ..Request::default()
+    };
+    let original = unselected.clone();
+    let error = RequestUpdate {
+        name: Some("renamed".to_owned()),
+        body_content: FieldPatch::Set(text_body("nope")),
+        ..RequestUpdate::default()
+    }
+    .apply(&mut unselected)
+    .unwrap_err();
+    assert_eq!(
+        error,
+        GraphqlRequestError::InvalidBodySelection(
+            "request body variants have no selected value".to_owned()
+        )
+    );
+    assert_eq!(unselected, original);
+
+    let mut ambiguous = Request {
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Variants(vec![
+                BodyVariant {
+                    title: "One".to_owned(),
+                    selected: true,
+                    body: text_body("a"),
+                },
+                BodyVariant {
+                    title: "Two".to_owned(),
+                    selected: true,
+                    body: text_body("b"),
+                },
+            ])),
+        },
+        ..Request::default()
+    };
+    assert_eq!(
+        RequestUpdate {
+            body_content: FieldPatch::Set(text_body("nope")),
+            ..RequestUpdate::default()
+        }
+        .apply(&mut ambiguous)
+        .unwrap_err(),
+        GraphqlRequestError::InvalidBodySelection(
+            "request body variants have multiple selected values".to_owned()
+        )
+    );
+
+    let mut graphql = Request {
+        kind: RequestKind::Graphql { body: None },
+        ..Request::default()
+    };
+    assert_eq!(
+        RequestUpdate {
+            body_content: FieldPatch::Set(text_body("nope")),
+            ..RequestUpdate::default()
+        }
+        .apply(&mut graphql),
+        Err(GraphqlRequestError::NotHttp)
+    );
+}
+
+#[test]
+fn failed_http_body_apply_leaves_the_request_unchanged() {
+    let mut request = Request {
+        metadata: ItemMetadata {
+            name: Some("Original".to_owned()),
+            description: Some(Documentation::Text("keep description".to_owned())),
+            ..ItemMetadata::default()
+        },
+        docs: Some("keep docs".to_owned()),
+        method: Some("POST".to_owned()),
+        url: Some("https://example.test/pets".to_owned()),
+        kind: RequestKind::Http {
+            body: Some(RequestBody::Single(text_body("original"))),
+        },
+        ..Request::default()
+    };
+    let original = request.clone();
+    let cases = [
+        (
+            RequestBody::Variants(vec![
+                BodyVariant {
+                    title: "Only".to_owned(),
+                    selected: false,
+                    body: text_body("kept"),
+                },
+                BodyVariant {
+                    title: "Other".to_owned(),
+                    selected: false,
+                    body: text_body("also"),
+                },
+            ]),
+            "request body variants have no selected value",
+        ),
+        (
+            RequestBody::Variants(vec![
+                BodyVariant {
+                    title: "One".to_owned(),
+                    selected: true,
+                    body: text_body("a"),
+                },
+                BodyVariant {
+                    title: "Two".to_owned(),
+                    selected: true,
+                    body: text_body("b"),
+                },
+            ]),
+            "request body variants have multiple selected values",
+        ),
+    ];
+    for (variants, message) in cases {
+        let error = RequestUpdate {
+            name: Some("Renamed".to_owned()),
+            description: FieldPatch::Set(Documentation::Text("changed description".to_owned())),
+            docs: FieldPatch::Set("changed docs".to_owned()),
+            method: FieldPatch::Set("PUT".to_owned()),
+            url: FieldPatch::Set("https://changed.example".to_owned()),
+            body: FieldPatch::Set(variants),
+            body_content: FieldPatch::Set(text_body("nope")),
+            ..RequestUpdate::default()
+        }
+        .apply(&mut request)
+        .unwrap_err();
+        assert_eq!(
+            error,
+            GraphqlRequestError::InvalidBodySelection(message.to_owned())
+        );
+        assert_eq!(request, original);
+    }
+}
+
+fn variants_without_selection() -> RequestBody {
+    RequestBody::Variants(vec![BodyVariant {
+        title: "Only".to_owned(),
+        selected: false,
+        body: text_body("kept"),
+    }])
 }

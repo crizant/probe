@@ -12,6 +12,7 @@ mod environment;
 mod error;
 mod presentation;
 mod request;
+mod request_input;
 mod structure;
 mod workspace;
 
@@ -157,6 +158,11 @@ pub const fn help() -> &'static str {
         "      --method <method>      Set an HTTP method\n",
         "      --url <url>            Set a request URL\n",
         "      --type <http|graphql>  Request protocol for request create\n",
+        "      --headers <json>       Replace headers with a JSON array, or null to clear\n",
+        "      --query-parameters <json> Replace query parameters with a JSON array, or null to clear\n",
+        "      --path-parameters <json> Replace path parameters with a JSON array, or null to clear\n",
+        "      --body <json>          Set an HTTP body object, or null to clear\n",
+        "      --auth <json>          Set authentication as a JSON object or string, or null to clear\n",
         "      --graphql-query <text> Set a GraphQL query document\n",
         "      --graphql-variables <json> Set GraphQL variables as a JSON object or null\n",
         "      --graphql-operation-name <name> Set a GraphQL operation name, or null to clear\n",
@@ -207,9 +213,9 @@ const REQUEST_HELP: &str = concat!(
     "  get <path|-> <selector> [--environment <name>] [--strict-variables]  Inspect one request\n",
     "  variables <path|-> <selector> [--environment <name>]  Discover referenced variables\n",
     "  run <path|-> <selector> [--environment <name>] [--strict-variables] [--var <NAME=VALUE>]... [--secret-provider env] [--output <file>] [--dry-run] [--expect <expr>]...\n",
-    "  set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
+    "  set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
     "  unset <path> <selector> [--description] [--docs]  Remove description and/or docs from the file\n",
-    "  create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
+    "  create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
     "  rename <path> <selector> --name <name>\n",
     "  delete <path> <selector>\n",
     "  move <path> <selector> [--parent <folder>] [--index <index>]\n",

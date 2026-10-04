@@ -17,9 +17,9 @@ probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--strict-variables] [--json]
 probe request variables <path> <selector> [--environment <name>] [--json]
 probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--secret-provider env] [--output <file>] [--dry-run] [--expect <expr>]... [--json]
-probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
+probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request unset <path> <selector> [--description] [--docs] [--json]
-probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
+probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request rename <path> <selector> --name <name> [--json]
 probe request delete <path> <selector> [--json]
 probe request move <path> <selector> [--parent <folder>] [--index <index>] [--json]
@@ -125,6 +125,31 @@ protocols; recreate the request instead. OpenCollection 1.0.0
 formally defines `query` and JSON-string `variables` in the
 native GraphQL body. Probe also preserves `operationName` and `extensions` there as forward-compatible
 GraphQL-over-HTTP fields; strict OpenCollection 1.0.0 schema validators may reject those two fields.
+
+`request set` and `request create` also replace headers, query parameters, path
+parameters, the HTTP body, and authentication. Pass JSON `null` to clear any of
+those fields. An empty JSON array also clears a header or parameter list. Query
+and path parameters are replaced independently, so changing one leaves the other
+in place. Header and parameter objects require string `name` and `value`;
+`disabled` is an optional boolean and defaults to false.
+
+An HTTP body is a JSON object with `type` and `data`. The types are `json`,
+`text`, `xml`, `sparql`, `form-urlencoded`, `multipart-form`, and `file`. Raw
+types store `data` as a string. Form bodies store an array of `{name, value,
+disabled}` fields. Multipart parts use `type` `text` or `file`, a string or
+string-array `value`, and an optional `contentType`. Each file-body entry
+requires `filePath`, `contentType`, and boolean `selected`. When the saved body
+is already a variant list, `--body` updates only the selected variant's body and
+keeps every variant's title and selected flag. `--body null` removes the whole
+body, including a variant list. The CLI does not add, remove, rename, or
+reselect variants.
+
+Authentication writes accept the JSON string `"inherit"`, or a JSON object for
+`basic` (`username`, `password`), `bearer` (`token`), or `apikey` (`key`,
+`value`, and `placement` of `header` or `query`). Other schemes, including
+OAuth and AWS Signature, are rejected. Files that already store those schemes
+still load, and edits that do not set `--auth` leave them unchanged. HTTP body
+flags are rejected for a native GraphQL request.
 
 Repeatable `--var <name=value>` arguments provide invocation-only variables for `request run`.
 They override selected and inherited environment values before dependent variables are
