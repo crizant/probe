@@ -212,14 +212,12 @@ impl ProbeApp {
         };
         let item = context_menu.target;
         let position = context_menu.position;
-        let rename_id = match item {
-            WorkspaceItemRef::Request(key) => ("tree-context-rename", key.slot()),
-            WorkspaceItemRef::Folder(key) => ("tree-context-rename", key.slot()),
+        let slot = match item {
+            WorkspaceItemRef::Request(key) => key.slot(),
+            WorkspaceItemRef::Folder(key) => key.slot(),
         };
-        let delete_id = match item {
-            WorkspaceItemRef::Request(key) => ("tree-context-delete", key.slot()),
-            WorkspaceItemRef::Folder(key) => ("tree-context-delete", key.slot()),
-        };
+        let rename_id = ("tree-context-rename", slot);
+        let delete_id = ("tree-context-delete", slot);
         let duplicate_id = match item {
             WorkspaceItemRef::Request(key) => Some(("tree-context-duplicate", key.slot())),
             WorkspaceItemRef::Folder(_) => None,

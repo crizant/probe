@@ -1,10 +1,10 @@
 use std::{iter::Peekable, path::PathBuf, vec::IntoIter};
 
 use probe_core::{
-    CollectionUpdate, Documentation, FieldPatch, FolderUpdate, GraphqlUpdate, RequestUpdate,
-    StatusExpectation,
+    CollectionUpdate, Documentation, FieldPatch, FolderUpdate, GraphqlUpdate, ItemKind,
+    RequestUpdate, StatusExpectation,
 };
-use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
+use probe_opencollection::{CreatedRequestProtocol, ItemLocator, StructureOperation};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -168,8 +168,11 @@ pub(crate) fn parse(args: Vec<String>) -> Result<Command, CliError> {
         ("request", "set") => parse_request_set(parser),
         ("request", "create") => parse_request_create(parser),
         ("folder", "create") => parse_folder_create(parser),
-        ("request" | "folder", "rename" | "delete" | "move" | "reorder") => {
-            parse_item(parser, group == "request", &action)
+        ("request", "rename" | "delete" | "move" | "reorder") => {
+            parse_item(parser, ItemKind::Request, &action)
+        }
+        ("folder", "rename" | "delete" | "move" | "reorder") => {
+            parse_item(parser, ItemKind::Folder, &action)
         }
         ("environment", "create") => parse_environment_create(parser),
         ("environment", "set") => parse_environment_set(parser),
@@ -726,7 +729,7 @@ fn parse_folder_create(mut parser: Parser) -> Result<Command, CliError> {
     ))
 }
 
-fn parse_item(mut parser: Parser, request: bool, action: &str) -> Result<Command, CliError> {
+fn parse_item(mut parser: Parser, kind: ItemKind, action: &str) -> Result<Command, CliError> {
     let mut positionals = Vec::new();
     let mut name = None;
     let mut parent = None;
@@ -742,33 +745,20 @@ fn parse_item(mut parser: Parser, request: bool, action: &str) -> Result<Command
     let (path, selector) = two_paths(&positionals)?;
     let name = name.ok_or_else(invalid_command);
     let index = index.ok_or_else(invalid_command);
-    let operation = match (request, action) {
-        (true, "rename") => StructureOperation::RenameRequest {
-            selector,
+    let target = ItemLocator { kind, selector };
+    let operation = match action {
+        "rename" => StructureOperation::Rename {
+            target,
             name: name?,
         },
-        (false, "rename") => StructureOperation::RenameFolder {
-            selector,
-            name: name?,
-        },
-        (true, "delete") => StructureOperation::DeleteRequest { selector },
-        (false, "delete") => StructureOperation::DeleteFolder { selector },
-        (true, "move") => StructureOperation::MoveRequest {
-            selector,
+        "delete" => StructureOperation::Delete { target },
+        "move" => StructureOperation::Move {
+            target,
             parent,
             index: index.ok(),
         },
-        (false, "move") => StructureOperation::MoveFolder {
-            selector,
-            parent,
-            index: index.ok(),
-        },
-        (true, "reorder") => StructureOperation::ReorderRequest {
-            selector,
-            index: index?,
-        },
-        (false, "reorder") => StructureOperation::ReorderFolder {
-            selector,
+        "reorder" => StructureOperation::Reorder {
+            target,
             index: index?,
         },
         _ => return Err(invalid_command()),

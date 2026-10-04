@@ -232,10 +232,7 @@ impl ProbeApp {
             self.tree_drop_target = None;
             return;
         };
-        let source_selector = match source {
-            WorkspaceItemRef::Request(key) => loaded.request_selector(key).map(str::to_owned),
-            WorkspaceItemRef::Folder(key) => loaded.folder_selector(key).map(str::to_owned),
-        };
+        let source_selector = loaded.item_selector(source).map(str::to_owned);
         let Some(source_selector) = source_selector else {
             self.tree_drop_target = None;
             return;
@@ -295,11 +292,7 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return;
         };
-        let Some(selector) = (match drag.item {
-            WorkspaceItemRef::Request(key) => loaded.request_selector(key),
-            WorkspaceItemRef::Folder(key) => loaded.folder_selector(key),
-        })
-        .map(str::to_owned) else {
+        let Some(selector) = loaded.item_selector(drag.item).map(str::to_owned) else {
             return;
         };
         let Some((source_parent, source_index)) = item_position(loaded.workspace(), drag.item)

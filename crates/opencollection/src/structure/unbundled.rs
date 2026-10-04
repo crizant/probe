@@ -89,34 +89,20 @@ pub(super) fn mutate_unbundled(
             };
             Ok(unbundled_result(root, ItemKind::Folder, None, &path, index))
         }
-        StructureOperation::RenameRequest { selector, name } => {
-            rename_unbundled(root, selector, ItemKind::Request, name)
+        StructureOperation::Rename { target, name } => {
+            rename_unbundled(root, target.selector, target.kind, name)
         }
-        StructureOperation::RenameFolder { selector, name } => {
-            rename_unbundled(root, selector, ItemKind::Folder, name)
-        }
-        StructureOperation::DeleteRequest { selector } => {
-            delete_unbundled(root, selector, ItemKind::Request)
+        StructureOperation::Delete { target } => {
+            delete_unbundled(root, target.selector, target.kind)
         }
         StructureOperation::DuplicateRequest { selector } => duplicate_unbundled(root, selector),
-        StructureOperation::DeleteFolder { selector } => {
-            delete_unbundled(root, selector, ItemKind::Folder)
-        }
-        StructureOperation::MoveRequest {
-            selector,
+        StructureOperation::Move {
+            target,
             parent,
             index,
-        } => move_unbundled(root, selector, ItemKind::Request, parent, index),
-        StructureOperation::MoveFolder {
-            selector,
-            parent,
-            index,
-        } => move_unbundled(root, selector, ItemKind::Folder, parent, index),
-        StructureOperation::ReorderRequest { selector, index } => {
-            reorder_unbundled(root, selector, ItemKind::Request, index)
-        }
-        StructureOperation::ReorderFolder { selector, index } => {
-            reorder_unbundled(root, selector, ItemKind::Folder, index)
+        } => move_unbundled(root, target.selector, target.kind, parent, index),
+        StructureOperation::Reorder { target, index } => {
+            reorder_unbundled(root, target.selector, target.kind, index)
         }
     }
 }

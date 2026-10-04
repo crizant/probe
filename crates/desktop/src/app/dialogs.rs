@@ -1,8 +1,7 @@
 use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
 
 use gpui::Action;
-use probe_core::{Environment, ImportDiagnostic, ImportDiagnosticSeverity, RequestKey};
-use probe_opencollection::ItemKind;
+use probe_core::{Environment, ImportDiagnostic, ImportDiagnosticSeverity, ItemKind, RequestKey};
 use probe_postman::{ImportedPostmanCollection, PostmanImportPreview};
 use probe_yaak::{ImportedYaakWorkspace, YaakImportPreview, YaakWorkspaceSummary};
 

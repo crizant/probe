@@ -1,4 +1,5 @@
 use super::*;
+use probe_opencollection::ItemLocator;
 
 impl ProbeApp {
     pub(super) fn open_save_detached_request_dialog(
@@ -49,11 +50,11 @@ impl ProbeApp {
     }
 
     pub(super) fn select_request(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        if self
-            .loaded_workspace
-            .as_ref()
-            .is_some_and(|loaded| loaded.workspace().request(key).is_some())
-        {
+        if self.loaded_workspace.as_ref().is_some_and(|loaded| {
+            loaded
+                .workspace()
+                .contains_item(WorkspaceItemRef::Request(key))
+        }) {
             let is_graphql = self
                 .loaded_workspace
                 .as_ref()
@@ -148,30 +149,16 @@ impl ProbeApp {
 
     pub(super) fn selected_item_details(&self) -> Option<(ItemKind, String, String)> {
         let loaded = self.loaded_workspace.as_ref()?;
-        match self.selected_tree_item? {
-            WorkspaceItemRef::Request(key) => Some((
-                ItemKind::Request,
-                loaded.request_selector(key)?.to_owned(),
-                loaded
-                    .workspace()
-                    .request(key)?
-                    .metadata
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| "Untitled request".to_owned()),
-            )),
-            WorkspaceItemRef::Folder(key) => Some((
-                ItemKind::Folder,
-                loaded.folder_selector(key)?.to_owned(),
-                loaded
-                    .workspace()
-                    .folder(key)?
-                    .metadata
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| "Untitled folder".to_owned()),
-            )),
-        }
+        let item = self.selected_tree_item?;
+        let metadata = loaded.workspace().item_metadata(item)?;
+        Some((
+            item.kind(),
+            loaded.item_selector(item)?.to_owned(),
+            metadata
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Untitled {}", item.kind().as_str())),
+        ))
     }
 
     pub(super) fn open_rename_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -232,9 +219,9 @@ impl ProbeApp {
         let Some(index) = index.checked_add_signed(offset) else {
             return;
         };
-        let operation = match kind {
-            ItemKind::Request => StructureOperation::ReorderRequest { selector, index },
-            ItemKind::Folder => StructureOperation::ReorderFolder { selector, index },
+        let operation = StructureOperation::Reorder {
+            target: ItemLocator { kind, selector },
+            index,
         };
         self.apply_structure(operation, window, cx);
     }
@@ -595,8 +582,8 @@ impl ProbeApp {
                     .and_then(|selector| workspace.request_key(selector))?;
                 let renamed = matches!(
                     operation,
-                    StructureOperation::RenameRequest { selector, .. }
-                        if selector == located.selector()
+                    StructureOperation::Rename { target, .. }
+                        if target.kind == ItemKind::Request && target.selector == located.selector()
                 );
                 Some((located.key(), new_key, renamed))
             })
@@ -674,10 +661,7 @@ impl ProbeApp {
                 .loaded_workspace
                 .as_ref()
                 .expect("workspace was replaced after structural edit");
-            self.selected_tree_item = match result.kind {
-                ItemKind::Request => loaded.request_key(selector).map(WorkspaceItemRef::Request),
-                ItemKind::Folder => loaded.folder_key(selector).map(WorkspaceItemRef::Folder),
-            };
+            self.selected_tree_item = loaded.item_key(result.kind, selector);
             if matches!(operation, StructureOperation::DuplicateRequest { .. })
                 && self.structure_dialog.is_none()
             {
@@ -691,10 +675,7 @@ impl ProbeApp {
                 .loaded_workspace
                 .as_ref()
                 .expect("workspace was replaced after structural edit");
-            self.selected_tree_item = match result.kind {
-                ItemKind::Request => loaded.request_key(selector).map(WorkspaceItemRef::Request),
-                ItemKind::Folder => loaded.folder_key(selector).map(WorkspaceItemRef::Folder),
-            };
+            self.selected_tree_item = loaded.item_key(result.kind, selector);
         }
         if let Some(WorkspaceItemRef::Request(key)) = self.selected_tree_item
             && result.previous_selector.is_none()

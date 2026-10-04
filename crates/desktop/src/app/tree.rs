@@ -3,8 +3,7 @@ use gpui::{
     div, prelude::FluentBuilder as _, px,
 };
 use gpui_base::Button;
-use probe_core::{Workspace, WorkspaceItemRef};
-use probe_opencollection::ItemKind;
+use probe_core::{ItemKind, Workspace, WorkspaceItemRef};
 
 use crate::{components, shell::ShellState, theme::Theme, tree_search::TreeSearchMatches};
 

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use probe_core::{FolderKey, RequestKey, Workspace, WorkspaceItemRef};
-use probe_opencollection::{ItemKind, LoadedWorkspace, StructureOperation};
+use probe_core::{FolderKey, ItemKind, RequestKey, Workspace, WorkspaceItemRef};
+use probe_opencollection::{ItemLocator, LoadedWorkspace, StructureOperation};
 
 pub(crate) const ROOT_PARENT: &str = "";
 
@@ -195,28 +195,21 @@ impl StructureDialog {
                 if name.is_empty() {
                     return Err("Name is required.".to_owned());
                 }
-                Ok(match kind {
-                    ItemKind::Request => StructureOperation::RenameRequest {
+                Ok(StructureOperation::Rename {
+                    target: ItemLocator {
+                        kind: *kind,
                         selector: selector.clone(),
-                        name: name.to_owned(),
                     },
-                    ItemKind::Folder => StructureOperation::RenameFolder {
-                        selector: selector.clone(),
-                        name: name.to_owned(),
-                    },
+                    name: name.to_owned(),
                 })
             }
-            StructureDialogMode::Move { kind, selector } => Ok(match kind {
-                ItemKind::Request => StructureOperation::MoveRequest {
+            StructureDialogMode::Move { kind, selector } => Ok(StructureOperation::Move {
+                target: ItemLocator {
+                    kind: *kind,
                     selector: selector.clone(),
-                    parent,
-                    index,
                 },
-                ItemKind::Folder => StructureOperation::MoveFolder {
-                    selector: selector.clone(),
-                    parent,
-                    index,
-                },
+                parent,
+                index,
             }),
         }
     }
@@ -578,22 +571,15 @@ pub(crate) fn structure_operation_for_drop(
         if index == source_index {
             return None;
         }
-        return Some(match kind {
-            ItemKind::Request => StructureOperation::ReorderRequest { selector, index },
-            ItemKind::Folder => StructureOperation::ReorderFolder { selector, index },
+        return Some(StructureOperation::Reorder {
+            target: ItemLocator { kind, selector },
+            index,
         });
     }
-    Some(match kind {
-        ItemKind::Request => StructureOperation::MoveRequest {
-            selector,
-            parent: dest_parent_selector,
-            index: Some(index),
-        },
-        ItemKind::Folder => StructureOperation::MoveFolder {
-            selector,
-            parent: dest_parent_selector,
-            index: Some(index),
-        },
+    Some(StructureOperation::Move {
+        target: ItemLocator { kind, selector },
+        parent: dest_parent_selector,
+        index: Some(index),
     })
 }
 
@@ -613,9 +599,10 @@ fn adjusted_drop_index(
 #[cfg(test)]
 mod tests {
     use probe_core::{
-        Collection, CollectionItem, Folder, ItemMetadata, Request, Workspace, WorkspaceItemRef,
+        Collection, CollectionItem, Folder, ItemKind, ItemMetadata, Request, Workspace,
+        WorkspaceItemRef,
     };
-    use probe_opencollection::{ItemKind, StructureOperation};
+    use probe_opencollection::{ItemLocator, StructureOperation};
 
     use super::{
         DropReject, DropZone, StructureDialog, descendant_requests, drop_intent, drop_zone,
@@ -632,8 +619,8 @@ mod tests {
         );
         assert_eq!(
             dialog.operation().unwrap(),
-            StructureOperation::MoveRequest {
-                selector: "old.yml".to_owned(),
+            StructureOperation::Move {
+                target: ItemLocator::new(ItemKind::Request, "old.yml"),
                 parent: Some("folder".to_owned()),
                 index: None,
             },
@@ -642,8 +629,8 @@ mod tests {
         dialog.index = "2".to_owned();
         assert_eq!(
             dialog.operation().unwrap(),
-            StructureOperation::MoveRequest {
-                selector: "old.yml".to_owned(),
+            StructureOperation::Move {
+                target: ItemLocator::new(ItemKind::Request, "old.yml"),
                 parent: Some("folder".to_owned()),
                 index: Some(2),
             }
@@ -813,8 +800,8 @@ mod tests {
                 Some("items/1".to_owned()),
                 into.index,
             ),
-            Some(StructureOperation::MoveRequest {
-                selector: "items/0".to_owned(),
+            Some(StructureOperation::Move {
+                target: ItemLocator::new(ItemKind::Request, "items/0"),
                 parent: Some("items/1".to_owned()),
                 index: Some(1),
             })
@@ -829,8 +816,8 @@ mod tests {
                 None,
                 0,
             ),
-            Some(StructureOperation::ReorderFolder {
-                selector: "items/1".to_owned(),
+            Some(StructureOperation::Reorder {
+                target: ItemLocator::new(ItemKind::Folder, "items/1"),
                 index: 0,
             })
         );

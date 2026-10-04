@@ -26,7 +26,7 @@ use gpui_base::{
 };
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, Collection, Environment, EnvironmentVariable,
-    FileReference, FormField, Header, MultipartPart, MultipartPartKind, MultipartValue,
+    FileReference, FormField, Header, ItemKind, MultipartPart, MultipartPartKind, MultipartValue,
     QueryParameter, RawBodyKind, Request, RequestBody, RequestKey, SecretVariable, Variable,
     VariableValue, VariableValueSet, WorkspaceItemRef, add_path_parameter,
     ensure_path_parameters_from_url, remove_path_parameter_at, rename_path_parameter_at,
@@ -34,7 +34,7 @@ use probe_core::{
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
 use probe_opencollection::{
-    CompletedEnvironmentDelete, ItemKind, LoadedWorkspace, StructureOperation, StructureResult,
+    CompletedEnvironmentDelete, LoadedWorkspace, StructureOperation, StructureResult,
     create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
 };
 use probe_postman::{

@@ -25,7 +25,7 @@ pub use repository::{
     load_workspace_from_str,
 };
 pub use structure::{
-    CreatedRequestProtocol, ItemKind, PreparedStructureEdit, StructureError, StructureOperation,
+    CreatedRequestProtocol, ItemLocator, PreparedStructureEdit, StructureError, StructureOperation,
     StructureResult,
 };
 

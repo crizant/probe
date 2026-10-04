@@ -39,12 +39,15 @@ pub(super) fn mutate_bundled(
             items.insert(index, folder_value(&name));
             Ok(result(ItemKind::Folder, None, parent, index, &parent_path))
         }
-        StructureOperation::RenameRequest { selector, name } => {
+        StructureOperation::Rename {
+            target: ItemLocator { selector, kind },
+            name,
+        } => {
             validate_name(&name)?;
-            rename_bundled(document, &selector, ItemKind::Request, &name)?;
+            rename_bundled(document, &selector, kind, &name)?;
             let (parent, index) = selector_parent(&selector)?;
             Ok(StructureResult {
-                kind: ItemKind::Request,
+                kind,
                 previous_selector: Some(selector.clone()),
                 selector: Some(selector),
                 parent,
@@ -52,43 +55,18 @@ pub(super) fn mutate_bundled(
                 selector_remaps: BTreeMap::new(),
             })
         }
-        StructureOperation::RenameFolder { selector, name } => {
-            validate_name(&name)?;
-            rename_bundled(document, &selector, ItemKind::Folder, &name)?;
-            let (parent, index) = selector_parent(&selector)?;
-            Ok(StructureResult {
-                kind: ItemKind::Folder,
-                previous_selector: Some(selector.clone()),
-                selector: Some(selector),
-                parent,
-                index: Some(index),
-                selector_remaps: BTreeMap::new(),
-            })
-        }
-        StructureOperation::DeleteRequest { selector } => {
-            delete_bundled(document, &selector, ItemKind::Request)
+        StructureOperation::Delete { target } => {
+            delete_bundled(document, &target.selector, target.kind)
         }
         StructureOperation::DuplicateRequest { selector } => duplicate_bundled(document, selector),
-        StructureOperation::DeleteFolder { selector } => {
-            delete_bundled(document, &selector, ItemKind::Folder)
-        }
-        StructureOperation::MoveRequest {
-            selector,
+        StructureOperation::Move {
+            target,
             parent,
             index,
-        } => move_bundled(document, selector, ItemKind::Request, parent, index),
-        StructureOperation::MoveFolder {
-            selector,
-            parent,
-            index,
-        } => move_bundled(document, selector, ItemKind::Folder, parent, index),
-        StructureOperation::ReorderRequest { selector, index } => {
-            let (parent, _) = selector_parent(&selector)?;
-            move_bundled(document, selector, ItemKind::Request, parent, Some(index))
-        }
-        StructureOperation::ReorderFolder { selector, index } => {
-            let (parent, _) = selector_parent(&selector)?;
-            move_bundled(document, selector, ItemKind::Folder, parent, Some(index))
+        } => move_bundled(document, target.selector, target.kind, parent, index),
+        StructureOperation::Reorder { target, index } => {
+            let (parent, _) = selector_parent(&target.selector)?;
+            move_bundled(document, target.selector, target.kind, parent, Some(index))
         }
     }
 }

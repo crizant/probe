@@ -1,4 +1,6 @@
 use super::*;
+use probe_core::ItemKind;
+use probe_opencollection::ItemLocator;
 
 #[gpui::test]
 fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
@@ -488,6 +490,10 @@ fn unchanged_active_folder_survives_reconciliation_in_mixed_tab_order(cx: &mut T
                 .map(|tab| crate::session::TabLocator::capture(*tab, loaded).unwrap())
                 .collect();
             assert_eq!(actual, expected);
+            assert_eq!(
+                view.selected_tree_item,
+                loaded.item_key(ItemKind::Folder, "items/1")
+            );
             assert_eq!(
                 crate::session::TabLocator::capture(view.shell.active_open_tab().unwrap(), loaded),
                 Some(crate::session::TabLocator::Folder("items/1".into()))
@@ -1498,8 +1504,8 @@ fn structural_rename_keeps_open_tab_and_dirty_draft(cx: &mut TestAppContext) {
                 cx,
             );
             view.apply_structure(
-                probe_opencollection::StructureOperation::RenameRequest {
-                    selector: "items/0".to_owned(),
+                probe_opencollection::StructureOperation::Rename {
+                    target: ItemLocator::new(ItemKind::Request, "items/0"),
                     name: "Renamed Alpha".to_owned(),
                 },
                 window,
@@ -1552,8 +1558,8 @@ fn structural_move_remaps_tabs_and_preserves_dirty_drafts(cx: &mut TestAppContex
                 cx,
             );
             view.apply_structure(
-                probe_opencollection::StructureOperation::MoveRequest {
-                    selector: "items/0".to_owned(),
+                probe_opencollection::StructureOperation::Move {
+                    target: ItemLocator::new(ItemKind::Request, "items/0"),
                     parent: Some("items/1".to_owned()),
                     index: Some(1),
                 },
@@ -1940,14 +1946,14 @@ fn failed_structure_edit_keeps_the_previous_workspace(cx: &mut TestAppContext) {
 
     window
         .update(cx, |view, window, cx| {
-            view.apply_structure(
-                probe_opencollection::StructureOperation::ReorderFolder {
-                    selector: "items/1".to_owned(),
-                    index: 0,
-                },
-                window,
-                cx,
-            );
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+            view.reorder_selected(-1, window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -1961,6 +1967,7 @@ fn failed_structure_edit_keeps_the_previous_workspace(cx: &mut TestAppContext) {
                         && toast
                             .message
                             .contains("Could not edit collection structure")
+                        && toast.message.contains("externally modified")
                 }),
                 "{:?}",
                 toast_debug(view)
@@ -2459,7 +2466,7 @@ fn application_dialogs_queue_without_repeating_the_same_filesystem_conflict(
         .update(cx, |view, window, cx| {
             view.show_application_dialog(
                 ApplicationDialog::Delete {
-                    kind: probe_opencollection::ItemKind::Request,
+                    kind: ItemKind::Request,
                     selector: "products/list".to_owned(),
                     name: "List products".to_owned(),
                     detail: "This cannot be undone.".to_owned(),

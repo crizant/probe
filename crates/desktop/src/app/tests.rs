@@ -240,7 +240,7 @@ fn about_dialog_reports_the_packaged_version() {
 #[test]
 fn destructive_only_dialogs_do_not_take_enter_as_primary_action() {
     let dialog = ApplicationDialog::Delete {
-        kind: probe_opencollection::ItemKind::Request,
+        kind: probe_core::ItemKind::Request,
         selector: "products/list".to_owned(),
         name: "List products".to_owned(),
         detail: "This cannot be undone.".to_owned(),
@@ -747,15 +747,11 @@ fn visible_tree_names(view: &ProbeApp) -> Vec<String> {
     };
     view.visible_tree_rows
         .iter()
-        .filter_map(|row| match row.item {
-            WorkspaceItemRef::Request(key) => loaded
+        .filter_map(|row| {
+            loaded
                 .workspace()
-                .request(key)
-                .and_then(|request| request.metadata.name.clone()),
-            WorkspaceItemRef::Folder(key) => loaded
-                .workspace()
-                .folder(key)
-                .and_then(|folder| folder.metadata.name.clone()),
+                .item_metadata(row.item)
+                .and_then(|metadata| metadata.name.clone())
         })
         .collect()
 }

@@ -765,6 +765,26 @@ impl LoadedWorkspace {
             .map(|index| self.folders[*index].selector.as_str())
     }
 
+    /// Resolves a session item to its persistent selector.
+    #[must_use]
+    pub fn item_selector(&self, item: WorkspaceItemRef) -> Option<&str> {
+        match item {
+            WorkspaceItemRef::Request(key) => self.request_selector(key),
+            WorkspaceItemRef::Folder(key) => self.folder_selector(key),
+        }
+    }
+
+    /// Resolves a persistent selector with an expected kind to a session item.
+    #[must_use]
+    pub fn item_key(&self, kind: probe_core::ItemKind, selector: &str) -> Option<WorkspaceItemRef> {
+        match kind {
+            probe_core::ItemKind::Request => {
+                self.request_key(selector).map(WorkspaceItemRef::Request)
+            }
+            probe_core::ItemKind::Folder => self.folder_key(selector).map(WorkspaceItemRef::Folder),
+        }
+    }
+
     /// Applies an update in memory and atomically persists its OpenCollection document.
     ///
     /// The save is rejected if the source file no longer exactly matches the bytes
