@@ -66,6 +66,11 @@ fn folder_breadcrumbs_navigate_to_reusable_overviews_and_preserve_drafts(cx: &mu
     let segment = visual.debug_bounds("request-breadcrumb-folder-1").unwrap();
     visual.simulate_click(segment.center(), Modifiers::default());
     visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            view.selected_tree_item = None;
+        })
+        .unwrap();
     let segment = visual.debug_bounds("folder-breadcrumb-folder-1").unwrap();
     visual.simulate_click(segment.center(), Modifiers::default());
     visual.run_until_parked();
@@ -76,6 +81,10 @@ fn folder_breadcrumbs_navigate_to_reusable_overviews_and_preserve_drafts(cx: &mu
                 Some(crate::shell::OverviewTab::Folder(child))
             );
             assert_eq!(view.shell.overview_tabs().len(), 2);
+            assert_eq!(
+                view.selected_tree_item, None,
+                "the current breadcrumb must not navigate"
+            );
             let target = view
                 .overview_target(crate::shell::OverviewTab::Folder(child))
                 .unwrap();

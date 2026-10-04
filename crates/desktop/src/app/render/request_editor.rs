@@ -43,6 +43,17 @@ impl ProbeApp {
                 path = path.child(div().flex_none().child("›"));
             }
             let label = folder.metadata.name.as_deref().unwrap_or("Untitled folder");
+            if request_name.is_none() && index + 1 == folders.len() {
+                path = path.child(
+                    components::truncated_label(label.to_owned())
+                        .debug_selector(move || format!("{id}-folder-{index}"))
+                        .max_w(px(220.0))
+                        .flex_none()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.colors.text.primary),
+                );
+                continue;
+            }
             let select_view = cx.weak_entity();
             path = path.child(
                 Button::new((id, index))
@@ -51,16 +62,7 @@ impl ProbeApp {
                     .flex_none()
                     .max_w(px(220.0))
                     .cursor_pointer()
-                    .rounded(px(theme.metrics.radius_small))
-                    .hover(move |segment| segment.bg(theme.colors.actions.hover))
-                    .when(
-                        request_name.is_none() && index + 1 == folders.len(),
-                        |segment| {
-                            segment
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.colors.text.primary)
-                        },
-                    )
+                    .hover(move |segment| segment.text_color(theme.colors.text.primary))
                     .child(components::truncated_label(label.to_owned()))
                     .on_click(move |_, _, cx| {
                         let _ = select_view.update(cx, |view, cx| {
