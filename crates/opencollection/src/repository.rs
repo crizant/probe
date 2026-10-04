@@ -871,6 +871,80 @@ impl LoadedWorkspace {
         Ok(())
     }
 
+    /// Captures a collection documentation write for background execution.
+    pub fn prepare_collection_save(
+        &self,
+        update: CollectionUpdate,
+    ) -> Result<PreparedDocumentationSave, SaveError> {
+        if update.is_empty() {
+            return Err(SaveError::EmptyUpdate);
+        }
+        let document_path = self.collection_document_path()?;
+        Ok(PreparedDocumentationSave {
+            baseline: self.prepared_baseline(),
+            original_source: self.documents[&document_path].original_source.clone(),
+            document_path,
+            item_path: Vec::new(),
+            update: DocumentationUpdate::Collection(update),
+        })
+    }
+
+    /// Captures a folder documentation write for background execution.
+    pub fn prepare_folder_save(
+        &self,
+        selector: &str,
+        update: FolderUpdate,
+    ) -> Result<PreparedDocumentationSave, SaveError> {
+        if update.is_empty() {
+            return Err(SaveError::EmptyUpdate);
+        }
+        let located = self
+            .folders
+            .iter()
+            .find(|folder| folder.selector == selector)
+            .ok_or_else(|| SaveError::FolderNotFound(selector.to_owned()))?;
+        let persistence = located
+            .persistence
+            .as_ref()
+            .ok_or(SaveError::ReadOnlySource)?;
+        Ok(PreparedDocumentationSave {
+            baseline: self.prepared_baseline(),
+            document_path: persistence.document_path.clone(),
+            original_source: self.documents[&persistence.document_path]
+                .original_source
+                .clone(),
+            item_path: persistence.item_path.clone(),
+            update: DocumentationUpdate::Folder(located.key, update),
+        })
+    }
+
+    /// Integrates a successful documentation write without replacing request drafts.
+    pub fn complete_documentation_save(
+        &mut self,
+        saved: CompletedDocumentationSave,
+    ) -> Result<(), SaveError> {
+        self.check_baseline(saved.baseline)?;
+        match saved.update {
+            DocumentationUpdate::Collection(update) => update.apply(self.workspace.metadata_mut()),
+            DocumentationUpdate::Folder(key, update) => {
+                let folder = self
+                    .workspace
+                    .folder_mut(key)
+                    .expect("saved folder belongs to this baseline");
+                update.description.apply(&mut folder.metadata.description);
+                update.docs.apply(&mut folder.docs);
+            }
+        }
+        self.documents.insert(
+            saved.document_path,
+            SourceDocument {
+                original_source: saved.serialized_source,
+            },
+        );
+        self.advance_baseline();
+        Ok(())
+    }
+
     fn collection_document_path(&self) -> Result<PathBuf, SaveError> {
         match &self.source {
             WorkspaceSource::Bundled(path) => Ok(path.clone()),
@@ -962,6 +1036,56 @@ impl LoadedWorkspace {
             self.diagnostics = refreshed;
         }
     }
+}
+
+#[derive(Debug)]
+enum DocumentationUpdate {
+    Collection(CollectionUpdate),
+    Folder(FolderKey, FolderUpdate),
+}
+
+/// A documentation save captured for execution away from the UI thread.
+#[derive(Debug)]
+pub struct PreparedDocumentationSave {
+    baseline: PreparedBaseline,
+    document_path: PathBuf,
+    original_source: Arc<[u8]>,
+    item_path: Vec<usize>,
+    update: DocumentationUpdate,
+}
+
+impl PreparedDocumentationSave {
+    /// Checks the retained source and writes documentation atomically.
+    pub fn execute(self) -> Result<CompletedDocumentationSave, SaveError> {
+        self.baseline.check_live()?;
+        let serialized =
+            mutate_existing_document(&self.document_path, &self.original_source, |document| {
+                match &self.update {
+                    DocumentationUpdate::Collection(update) => {
+                        apply_collection_update(document, update)
+                    }
+                    DocumentationUpdate::Folder(_, update) => apply_folder_update(
+                        request_document_mut(document, &self.item_path)?,
+                        update,
+                    ),
+                }
+            })?;
+        Ok(CompletedDocumentationSave {
+            baseline: self.baseline.expected,
+            document_path: self.document_path,
+            serialized_source: serialized.into(),
+            update: self.update,
+        })
+    }
+}
+
+/// Repository state returned by a successful documentation write.
+#[derive(Debug)]
+pub struct CompletedDocumentationSave {
+    baseline: WorkspaceBaseline,
+    document_path: PathBuf,
+    serialized_source: Arc<[u8]>,
+    update: DocumentationUpdate,
 }
 
 /// A filesystem save captured from a loaded workspace for background execution.

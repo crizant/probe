@@ -197,7 +197,7 @@ impl ProbeApp {
                         },
                     ),
                     DesktopMenuItem::Separator,
-                    DesktopMenuItem::action("Save Request", SaveRequest),
+                    DesktopMenuItem::action("Save", SaveEditor),
                     DesktopMenuItem::Separator,
                     DesktopMenuItem::action("Close Tab", CloseActiveTab),
                     DesktopMenuItem::action("Close Window", CloseWindow),

@@ -34,37 +34,84 @@ impl ProbeApp {
             .into_any_element()
     }
 
-    pub(super) fn render_request_tab_tooltip(&self, theme: Theme) -> gpui::AnyElement {
-        let Some(tooltip) = self.transient.request_tab_tooltip else {
+    pub(super) fn render_tab_tooltip(&self, theme: Theme) -> gpui::AnyElement {
+        let Some(tooltip) = self.transient.tab_tooltip else {
             return div().into_any_element();
         };
         if !tooltip.open {
             return div().into_any_element();
         }
-        if !self.shell.tabs().contains(&tooltip.key) {
-            return div().into_any_element();
-        }
         let Some(loaded) = &self.loaded_workspace else {
             return div().into_any_element();
         };
-        let Some(request) = loaded.workspace().request(tooltip.key) else {
-            return div().into_any_element();
+        let (label, marker, popup_id) = match tooltip.target {
+            TabTooltipTarget::Request(key) => {
+                if !self.shell.tabs().contains(&key) {
+                    return div().into_any_element();
+                }
+                let Some(request) = loaded.workspace().request(key) else {
+                    return div().into_any_element();
+                };
+                let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
+                let navigation_label = request_navigation_label(&request.kind, &method);
+                let marker = div()
+                    .id("request-tab-tooltip-method")
+                    .debug_selector(|| "request-tab-tooltip-method".into())
+                    .flex_none()
+                    .font_family(theme.typography.monospace_family)
+                    .text_size(px(tree_method_font_size(theme, &navigation_label)))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(request_navigation_color(theme, &request.kind, &method))
+                    .child(navigation_label);
+                (
+                    request
+                        .metadata
+                        .name
+                        .as_deref()
+                        .unwrap_or("Untitled request"),
+                    marker.into_any_element(),
+                    "request-tab-tooltip-popup",
+                )
+            }
+            TabTooltipTarget::Overview(tab) => {
+                if !self.shell.overview_tabs().contains(&tab) {
+                    return div().into_any_element();
+                }
+                let (label, icon) = match tab {
+                    crate::shell::OverviewTab::Collection => (
+                        loaded
+                            .workspace()
+                            .metadata()
+                            .name
+                            .as_deref()
+                            .unwrap_or("Collection"),
+                        components::collection_icon(theme),
+                    ),
+                    crate::shell::OverviewTab::Folder(key) => {
+                        let Some(folder) = loaded.workspace().folder(key) else {
+                            return div().into_any_element();
+                        };
+                        (
+                            folder.metadata.name.as_deref().unwrap_or("Folder"),
+                            components::tree_folder_icon(theme, false, false),
+                        )
+                    }
+                };
+                (
+                    label,
+                    icon.text_color(theme.colors.text.secondary)
+                        .into_any_element(),
+                    "overview-tab-tooltip-popup",
+                )
+            }
         };
-        let label = request
-            .metadata
-            .name
-            .as_deref()
-            .unwrap_or("Untitled request")
-            .to_owned();
-        let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
-        let navigation_label = request_navigation_label(&request.kind, &method);
         let position = point(
             tooltip.position.x + px(theme.metrics.spacing_1),
             tooltip.position.y + px(theme.metrics.control_height * 0.5),
         );
         let popup = div()
-            .id("request-tab-tooltip-popup")
-            .debug_selector(|| "request-tab-tooltip-popup".into())
+            .id(popup_id)
+            .debug_selector(move || popup_id.into())
             .max_w(px(320.0))
             .px(px(theme.metrics.spacing_2))
             .py(px(theme.metrics.spacing_1))
@@ -78,18 +125,12 @@ impl ProbeApp {
             .flex()
             .items_center()
             .gap(px(theme.metrics.spacing_2))
+            .child(marker)
             .child(
-                div()
-                    .id("request-tab-tooltip-method")
-                    .debug_selector(|| "request-tab-tooltip-method".into())
-                    .flex_none()
-                    .font_family(theme.typography.monospace_family)
-                    .text_size(px(tree_method_font_size(theme, &navigation_label)))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(request_navigation_color(theme, &request.kind, &method))
-                    .child(navigation_label),
-            )
-            .child(components::truncated_label(label).min_w(px(0.0)).flex_1());
+                components::truncated_label(label.to_owned())
+                    .min_w(px(0.0))
+                    .flex_1(),
+            );
 
         deferred(
             Positioner::corner(Anchor::TopLeft, position)
@@ -305,11 +346,7 @@ impl ProbeApp {
                                 .font_family(theme.typography.monospace_family)
                                 .text_size(px(tree_method_font_size(theme, &navigation_label)))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(if selected {
-                                    theme.colors.selection.active_foreground
-                                } else {
-                                    navigation_color
-                                })
+                                .text_color(navigation_color)
                                 .when(is_graphql, |label| {
                                     label.debug_selector(|| "request-tree-protocol-label".into())
                                 })
@@ -318,9 +355,7 @@ impl ProbeApp {
                         .child(
                             components::truncated_label(label.to_owned())
                                 .flex_1()
-                                .when(selected, |label| {
-                                    label.text_color(theme.colors.selection.active_foreground)
-                                })
+                                .text_color(theme.colors.text.primary)
                                 .when(selected, |label| {
                                     label.debug_selector(|| "request-tree-label".into())
                                 }),
@@ -351,19 +386,21 @@ impl ProbeApp {
                 let view = cx.weak_entity();
                 let context_menu_view = cx.weak_entity();
                 let item = WorkspaceItemRef::Folder(key);
+                let disclosure_view = cx.weak_entity();
+                let disclosure_selector = format!(
+                    "folder-disclosure-{}",
+                    loaded.folder_selector(key).unwrap_or_default()
+                );
                 let button =
                     tree_row_button(theme, ("folder-tree-item", key.slot()), depth, selected)
                         .accessibility_label(format!("Folder {label}"))
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| {
-                                let was_selected = view.selected_tree_item == Some(item);
-                                view.select_tree_item(WorkspaceItemRef::Folder(key), cx);
-                                if !expanded || was_selected {
-                                    view.shell.toggle_folder(key);
-                                    view.rebuild_visible_tree_rows_after_visibility_change();
-                                    view.persist_session(cx);
-                                    cx.notify();
-                                }
+                                view.select_tree_item(item, cx);
+                                view.shell
+                                    .open_overview(crate::shell::OverviewTab::Folder(key));
+                                view.reveal_active_tab();
+                                cx.notify();
                             });
                         })
                         .when(can_edit, |row| {
@@ -377,13 +414,34 @@ impl ProbeApp {
                                 },
                             )
                         })
-                        .child(components::tree_folder_icon(theme, expanded, selected))
+                        .child(
+                            Button::new(("folder-disclosure", key.slot()))
+                                .debug_selector(move || disclosure_selector.clone())
+                                .accessibility_label(format!(
+                                    "{} {label}",
+                                    if expanded { "Collapse" } else { "Expand" }
+                                ))
+                                .w(px(theme.metrics.icon_standard))
+                                .h(px(theme.metrics.tree_row_height))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(components::tree_disclosure_icon(theme, expanded))
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    let _ = disclosure_view.update(cx, |view, cx| {
+                                        view.shell.toggle_folder(key);
+                                        view.rebuild_visible_tree_rows_after_visibility_change();
+                                        view.persist_session(cx);
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(components::tree_folder_icon(theme, expanded, false))
                         .child(
                             components::truncated_label(label.to_owned())
                                 .flex_1()
-                                .when(selected, |label| {
-                                    label.text_color(theme.colors.selection.active_foreground)
-                                })
                                 .font_weight(FontWeight::SEMIBOLD),
                         );
                 self.wrap_tree_row(
@@ -900,6 +958,54 @@ impl ProbeApp {
             .border_1()
             .border_color(theme.colors.borders.subtle)
             .bg(theme.colors.surfaces.sidebar)
+            .when_some(self.loaded_workspace.as_ref(), |sidebar, loaded| {
+                let view = cx.weak_entity();
+                let name = loaded
+                    .workspace()
+                    .metadata()
+                    .name
+                    .as_deref()
+                    .unwrap_or("Untitled collection")
+                    .to_owned();
+                sidebar.child(
+                    Button::new("collection-overview-header")
+                        .cursor_pointer()
+                        .debug_selector(|| "collection-overview-header".into())
+                        .accessibility_label(format!("{name}, Collection overview"))
+                        .w_full()
+                        .flex_none()
+                        .px(px(theme.metrics.spacing_3))
+                        .py(px(theme.metrics.spacing_1))
+                        .flex()
+                        .flex_col()
+                        .text_size(px(theme.typography.caption_size))
+                        .items_start()
+                        .overflow_hidden()
+                        .border_b_1()
+                        .border_color(theme.colors.borders.subtle)
+                        .hover(move |header| header.bg(theme.colors.surfaces.window))
+                        .child(
+                            components::truncated_label(name)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.colors.text.secondary),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(theme.typography.caption_size))
+                                .text_color(theme.colors.text.muted)
+                                .child("Collection overview"),
+                        )
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |view, cx| {
+                                view.selected_tree_item = None;
+                                view.shell
+                                    .open_overview(crate::shell::OverviewTab::Collection);
+                                view.reveal_active_tab();
+                                cx.notify();
+                            });
+                        }),
+                )
+            })
             .child(
                 div()
                     .flex()

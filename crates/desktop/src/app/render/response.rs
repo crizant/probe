@@ -1027,6 +1027,9 @@ impl ProbeApp {
         window_height: f32,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if let Some(tab) = self.shell.active_overview() {
+            return self.render_overview(tab, theme, cx);
+        }
         let response_view = cx.weak_entity();
         let horizontal = self.shell.pane_layout == PaneLayout::Horizontal;
         let splitter = components::pane_splitter(

@@ -942,7 +942,7 @@ fn save_dialog_stays_open_when_a_save_is_already_running(cx: &mut TestAppContext
                 |request| request.url = Some("https://example.test/busy".to_owned()),
                 cx,
             );
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
             assert!(view.request_save_task.is_some());
             view.new_detached_request(false, window, cx);
             let key = view.shell.active_tab().unwrap();
@@ -1415,6 +1415,10 @@ fn structural_move_remaps_tabs_and_preserves_dirty_drafts(cx: &mut TestAppContex
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Collection);
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(folder));
             view.select_request(request, cx);
             view.shell.collapse_folder(folder);
             view.edit_request(
@@ -1447,6 +1451,13 @@ fn structural_move_remaps_tabs_and_preserves_dirty_drafts(cx: &mut TestAppContex
             assert!(view.shell.tabs().contains(&moved));
             let remapped_folder = loaded.folder_key("items/0").unwrap();
             assert!(!view.shell.folder_is_expanded(remapped_folder));
+            assert_eq!(
+                view.shell.overview_tabs(),
+                &[
+                    crate::shell::OverviewTab::Collection,
+                    crate::shell::OverviewTab::Folder(remapped_folder),
+                ]
+            );
         })
         .unwrap();
 
@@ -1873,7 +1884,7 @@ fn request_save_runs_in_background_and_clears_dirty_state(cx: &mut TestAppContex
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let save = visual
-        .debug_bounds("request-save")
+        .debug_bounds("editor-save")
         .expect("dirty request should show its save icon");
     let breadcrumb = visual
         .debug_bounds("request-breadcrumb")
@@ -1889,7 +1900,7 @@ fn request_save_runs_in_background_and_clears_dirty_state(cx: &mut TestAppContex
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let clean_save = visual
-        .debug_bounds("request-save")
+        .debug_bounds("editor-save")
         .expect("save icon should remain visible when the request is clean");
     let breadcrumb = visual
         .debug_bounds("request-breadcrumb")
@@ -2032,7 +2043,7 @@ fn saving_after_removing_empty_query_parameter_during_in_flight_save_clears_dirt
                 },
                 cx,
             );
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
             view.edit_request(
                 key,
                 |request| {
@@ -2054,7 +2065,7 @@ fn saving_after_removing_empty_query_parameter_during_in_flight_save_clears_dirt
                 ),
                 "removing a saved empty parameter should make the request dirty before save"
             );
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -2455,7 +2466,7 @@ fn save_conflict_keeps_the_request_dirty_and_visible(cx: &mut TestAppContext) {
             let mut external = fs::read_to_string(&fixture).unwrap();
             external.push_str("external: true\n");
             fs::write(&fixture, external).unwrap();
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -2948,11 +2959,28 @@ fn sidebar_folder_selection_and_search_reveal_behavior(cx: &mut TestAppContext) 
                 Some(WorkspaceItemRef::Folder(folder))
             );
             assert!(
-                view.shell.folder_is_expanded(folder),
-                "selecting a collapsed folder must expand it"
+                !view.shell.folder_is_expanded(folder),
+                "opening an overview must preserve folder expansion"
             );
         })
         .expect("test window should remain open");
+
+    let disclosure = visual.debug_bounds("folder-disclosure-items/1").unwrap();
+    visual.simulate_click(disclosure.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.shell.folder_is_expanded(folder));
+            assert_eq!(
+                view.shell.active_overview(),
+                Some(crate::shell::OverviewTab::Folder(folder))
+            );
+            assert_eq!(
+                view.shell.overview_tabs(),
+                &[crate::shell::OverviewTab::Folder(folder)]
+            );
+        })
+        .unwrap();
 
     window
         .update(cx, |view, _, cx| view.select_request(root, cx))
@@ -2975,6 +3003,36 @@ fn sidebar_folder_selection_and_search_reveal_behavior(cx: &mut TestAppContext) 
             );
         })
         .expect("test window should remain open");
+
+    // Opening the same folder again focuses the existing overview tab.
+    visual.simulate_click(folder_row.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.shell.overview_tabs().len(), 1);
+            assert!(view.shell.folder_is_expanded(folder));
+        })
+        .unwrap();
+    let header = visual.debug_bounds("collection-overview-header").unwrap();
+    visual.simulate_click(header.center(), Modifiers::default());
+    visual.simulate_click(header.center(), Modifiers::default());
+    visual.run_until_parked();
+    visual
+        .debug_bounds("documentation-overview")
+        .expect("overview content must render");
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.shell.overview_tabs().len(), 2);
+            assert_eq!(
+                view.shell.active_overview(),
+                Some(crate::shell::OverviewTab::Collection)
+            );
+            assert!(view.active_request().is_none());
+            view.select_request(root, cx);
+            assert_eq!(view.shell.active_tab(), Some(root));
+            assert_eq!(view.shell.active_overview(), None);
+        })
+        .unwrap();
 
     window
         .update(cx, |view, _, cx| {
@@ -3168,4 +3226,369 @@ fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps
     }
 
     fs::remove_file(fixture).unwrap();
+}
+
+fn writable_documentation_fixture(name: &str) -> PathBuf {
+    let path = writable_structure_fixture(name);
+    fs::write(
+        &path,
+        include_str!("../../../../../tests/fixtures/opencollection/documentation.yml"),
+    )
+    .unwrap();
+    path
+}
+
+#[gpui::test]
+fn committed_documentation_save_keeps_drafts_until_recovery_integrates(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    for (folder, reload_fails, later_edit) in [
+        (false, true, false),
+        (false, false, false),
+        (false, false, true),
+        (true, false, false),
+    ] {
+        let path = writable_documentation_fixture(&format!(
+            "documentation-recovery-{folder}-{reload_fails}-{later_edit}"
+        ));
+        let workspace = probe_opencollection::load_workspace(&path).unwrap();
+        let replacement = probe_opencollection::load_workspace(&path).unwrap();
+        let target = folder.then(|| "items/0".to_owned());
+        let recovery_path = if reload_fails {
+            path.with_extension("missing.yml")
+        } else {
+            path.clone()
+        };
+        let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        let (previous, original) = window
+            .update(cx, |view, window, cx| {
+                view.session_store = None;
+                view.set_workspace(recovery_path, workspace);
+                let tab = if folder {
+                    crate::shell::OverviewTab::Folder(
+                        view.loaded_workspace
+                            .as_ref()
+                            .unwrap()
+                            .folder_key("items/0")
+                            .unwrap(),
+                    )
+                } else {
+                    crate::shell::OverviewTab::Collection
+                };
+                view.shell.open_overview(tab);
+                view.edit_overview(target.clone(), true, "Committed documentation".into(), cx);
+                let original = view.overview_drafts[&target].original.clone();
+                view.save_active_editor(window, cx);
+                assert!(view.documentation_save_task.is_some());
+                // Keep the prepared baseline alive so the write commits, but make
+                // completion encounter a different loaded repository baseline.
+                let previous = view.loaded_workspace.replace(replacement);
+                if later_edit {
+                    view.edit_overview(target.clone(), true, "Later documentation".into(), cx);
+                }
+                assert!(view.overview_drafts[&target].is_dirty());
+                (previous, original)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let disk = probe_opencollection::load_workspace(&path).unwrap();
+        let disk_docs = if folder {
+            disk.workspace()
+                .folder(disk.folder_key("items/0").unwrap())
+                .unwrap()
+                .docs
+                .as_ref()
+        } else {
+            disk.workspace().metadata().docs.as_ref()
+        };
+        assert_eq!(
+            crate::app::documentation::documentation_text(disk_docs),
+            Some("Committed documentation"),
+            "the save must have reached disk"
+        );
+        window
+            .update(cx, |view, window, cx| {
+                assert!(!view.loading);
+                assert!(view.documentation_save_task.is_none());
+                let draft = &view.overview_drafts[&target];
+                assert_eq!(
+                    crate::app::documentation::documentation_text(draft.current.docs.as_ref()),
+                    Some(if later_edit {
+                        "Later documentation"
+                    } else {
+                        "Committed documentation"
+                    })
+                );
+                if reload_fails {
+                    assert_eq!(
+                        draft.original, original,
+                        "failed recovery must retain the original baseline"
+                    );
+                    assert!(draft.is_dirty());
+                    assert!(
+                        toast_debug(view).iter().any(|message| message.contains(
+                            "Save reached disk, but the collection could not be reloaded"
+                        ))
+                    );
+                    assert!(
+                        !view.request_close_window(window, cx),
+                        "failed recovery must retain unsaved-change protection"
+                    );
+                } else {
+                    assert_eq!(draft.original, view.overview_content(&target).unwrap());
+                    assert_eq!(
+                        draft.is_dirty(),
+                        later_edit,
+                        "successful recovery may only clear the submitted edits"
+                    );
+                }
+            })
+            .unwrap();
+        drop(previous);
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[gpui::test]
+fn documentation_editors_save_preserve_media_types_and_keep_later_edits_dirty(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1000.0), px(1000.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    cx.update(bind_platform_hotkeys);
+    let path = writable_documentation_fixture("documentation-editors");
+    let workspace = probe_opencollection::load_workspace(&path).unwrap();
+    let folder = workspace.folder_key("items/0").unwrap();
+    let request = workspace.request_key("items/0/items/0").unwrap();
+    let original_source = fs::read_to_string(&path).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(path.clone(), workspace);
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Collection);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let save = visual
+        .debug_bounds("editor-save")
+        .expect("overview uses the editor save icon");
+    visual.simulate_click(save.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(!view.has_dirty_overviews());
+            assert!(
+                view.documentation_save_task.is_none(),
+                "clean save icons must be disabled"
+            );
+        })
+        .unwrap();
+    for (selector, text) in [
+        ("documentation-first-editor", "Edited summary"),
+        ("documentation-docs-editor", "Edited collection guide"),
+    ] {
+        let field = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(
+            field.origin + point(px(20.0), px(20.0)),
+            Modifiers::default(),
+        );
+        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        });
+        visual.simulate_input(text);
+        visual.run_until_parked();
+    }
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        original_source,
+        "typing must not write files"
+    );
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.has_dirty_overviews());
+            view.save_active_editor(window, cx);
+            assert!(view.documentation_save_task.is_some());
+            view.edit_overview(None, true, "Newer collection guide".into(), cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let saved = probe_opencollection::load_workspace(&path).unwrap();
+    assert_eq!(
+        saved.workspace().metadata().docs,
+        Some(probe_core::Documentation::Content {
+            content: "Edited collection guide".into(),
+            media_type: "text/markdown".into()
+        })
+    );
+    window
+        .update(cx, |view, window, cx| {
+            assert!(
+                view.has_dirty_overviews(),
+                "edits made during a save must remain dirty"
+            );
+            view.save_active_editor(window, cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(!view.has_dirty_overviews());
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(folder));
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    for (selector, text) in [
+        ("documentation-first-editor", "Edited folder description"),
+        ("documentation-docs-editor", "Edited folder docs"),
+    ] {
+        let field = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(
+            field.origin + point(px(20.0), px(20.0)),
+            Modifiers::default(),
+        );
+        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        });
+        visual.simulate_input(text);
+        visual.run_until_parked();
+    }
+    let save = visual.debug_bounds("editor-save").unwrap();
+    visual.simulate_click(save.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(!view.has_dirty_overviews(), "{:?}", toast_debug(view));
+            view.select_request(request, cx);
+            view.request_editor
+                .set_section(request, EditorSection::Docs);
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    for (selector, text) in [
+        ("documentation-first-editor", "Edited request description"),
+        ("documentation-docs-editor", "Edited request docs"),
+    ] {
+        let field = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(
+            field.origin + point(px(20.0), px(20.0)),
+            Modifiers::default(),
+        );
+        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        });
+        visual.simulate_input(text);
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |view, _, _| assert!(view.request_is_dirty(request)))
+        .unwrap();
+    visual.simulate_keystrokes(super::save_shortcut());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| assert!(!view.request_is_dirty(request)))
+        .unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui::test]
+fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let path = writable_documentation_fixture("documentation-close");
+    let workspace = probe_opencollection::load_workspace(&path).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(path.clone(), workspace);
+            let tab = crate::shell::OverviewTab::Collection;
+            view.shell.open_overview(tab);
+            view.edit_overview(None, false, "Local summary".into(), cx);
+            view.request_close_overview(tab, window, cx);
+            assert!(matches!(
+                view.application_dialog,
+                Some(ApplicationDialog::Unsaved { .. })
+            ));
+            view.handle_application_dialog_action(ApplicationDialogAction::Cancel, window, cx);
+            assert!(view.has_dirty_overviews());
+            assert_eq!(view.shell.active_overview(), Some(tab));
+            view.request_close_overview(tab, window, cx);
+            view.handle_application_dialog_action(ApplicationDialogAction::Save, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(!view.has_dirty_overviews(), "{:?}", toast_debug(view));
+            assert!(view.shell.overview_tabs().is_empty());
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Collection);
+            view.edit_overview(None, true, "Unsaved docs".into(), cx);
+            let external = format!("{}external: retained\n", fs::read_to_string(&path).unwrap());
+            fs::write(&path, external).unwrap();
+            view.save_active_editor(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.has_dirty_overviews());
+            assert!(view.documentation_save_task.is_none());
+            assert!(
+                toast_debug(view)
+                    .iter()
+                    .any(|message| message.contains("Could not save documentation"))
+            );
+            let external = fs::read_to_string(&path)
+                .unwrap()
+                .replace("content: Collection guide", "content: External guide");
+            fs::write(&path, &external).unwrap();
+            let fresh = probe_opencollection::load_workspace(&path).unwrap();
+            view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx);
+            view.save_active_editor(window, cx);
+            assert!(
+                view.documentation_save_task.is_none(),
+                "overlapping disk edits must be rejected before a write"
+            );
+            assert!(view.has_dirty_overviews());
+            assert!(
+                toast_debug(view)
+                    .iter()
+                    .any(|message| message.contains("Documentation changed on disk"))
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), external);
+            assert!(!view.request_close_window(window, cx));
+            assert!(matches!(
+                view.application_dialog,
+                Some(ApplicationDialog::Unsaved { .. })
+            ));
+            view.handle_application_dialog_action(ApplicationDialogAction::Cancel, window, cx);
+            view.request_close_workspace(window, cx);
+            view.handle_application_dialog_action(ApplicationDialogAction::Discard, window, cx);
+            assert!(view.loaded_workspace.is_none());
+            assert!(!view.has_dirty_overviews());
+        })
+        .unwrap();
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("external: retained")
+    );
+    fs::remove_file(path).unwrap();
 }

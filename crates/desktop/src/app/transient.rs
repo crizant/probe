@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::BTreeMap, path::PathBuf};
 use gpui::{Context, FocusHandle, Task};
 use probe_core::{RequestKey, WorkspaceItemRef};
 
-use super::{DesktopMenu, DesktopSubmenu, PositionedContextMenu, ProbeApp, RequestTabTooltip};
+use super::{DesktopMenu, DesktopSubmenu, PositionedContextMenu, ProbeApp, TabTooltip};
 
 /// Ephemeral menus, popovers, and their focus restoration targets.
 ///
@@ -26,9 +26,9 @@ pub(super) struct TransientSurfaces {
     pub(super) tree_context_menu: Option<PositionedContextMenu<WorkspaceItemRef>>,
     pub(super) tab_context_menu: Option<PositionedContextMenu<RequestKey>>,
     pub(super) environment_manager_context_menu: Option<PositionedContextMenu<String>>,
-    pub(super) request_tab_tooltip: Option<RequestTabTooltip>,
-    pub(super) request_tab_tooltip_epoch: usize,
-    pub(super) request_tab_tooltip_task: Option<Task<()>>,
+    pub(super) tab_tooltip: Option<TabTooltip>,
+    pub(super) tab_tooltip_epoch: usize,
+    pub(super) tab_tooltip_task: Option<Task<()>>,
 }
 
 impl TransientSurfaces {
@@ -50,9 +50,9 @@ impl TransientSurfaces {
             tree_context_menu: None,
             tab_context_menu: None,
             environment_manager_context_menu: None,
-            request_tab_tooltip: None,
-            request_tab_tooltip_epoch: 0,
-            request_tab_tooltip_task: None,
+            tab_tooltip: None,
+            tab_tooltip_epoch: 0,
+            tab_tooltip_task: None,
         }
     }
 }

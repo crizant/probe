@@ -28,9 +28,17 @@ pub(crate) enum ResizePane {
     Response,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OverviewTab {
+    Collection,
+    Folder(FolderKey),
+}
+
 #[derive(Debug)]
 pub(crate) struct ShellState {
     tabs: Vec<RequestKey>,
+    overview_tabs: Vec<OverviewTab>,
+    active_overview: Option<OverviewTab>,
     active_tab: Option<RequestKey>,
     collapsed_folders: HashSet<FolderKey>,
     selected_environment: Option<String>,
@@ -46,6 +54,8 @@ impl Default for ShellState {
     fn default() -> Self {
         Self {
             tabs: Vec::new(),
+            overview_tabs: Vec::new(),
+            active_overview: None,
             active_tab: None,
             collapsed_folders: HashSet::new(),
             selected_environment: None,
@@ -66,12 +76,45 @@ fn max_response_height(window_height: f32) -> f32 {
 }
 
 impl ShellState {
+    pub(crate) fn overview_tabs(&self) -> &[OverviewTab] {
+        &self.overview_tabs
+    }
+
+    pub(crate) fn active_overview(&self) -> Option<OverviewTab> {
+        self.active_overview
+    }
+
+    pub(crate) fn open_overview(&mut self, tab: OverviewTab) {
+        if !self.overview_tabs.contains(&tab) {
+            self.overview_tabs.push(tab);
+        }
+        self.active_overview = Some(tab);
+    }
+
+    pub(crate) fn close_overview(&mut self, tab: OverviewTab) {
+        let Some(index) = self.overview_tabs.iter().position(|open| *open == tab) else {
+            return;
+        };
+        self.overview_tabs.remove(index);
+        if self.active_overview == Some(tab) {
+            self.active_overview = self
+                .overview_tabs
+                .get(index)
+                .or_else(|| index.checked_sub(1).and_then(|i| self.overview_tabs.get(i)))
+                .copied();
+        }
+    }
+
     pub(crate) fn tabs(&self) -> &[RequestKey] {
         &self.tabs
     }
 
     pub(crate) const fn active_tab(&self) -> Option<RequestKey> {
-        self.active_tab
+        if self.active_overview.is_some() {
+            None
+        } else {
+            self.active_tab
+        }
     }
 
     pub(crate) fn open_request(&mut self, key: RequestKey) {
@@ -89,6 +132,7 @@ impl ShellState {
     /// Selects `key` when that tab is already open.
     pub(crate) fn activate_tab(&mut self, key: RequestKey) {
         if self.tabs.contains(&key) {
+            self.active_overview = None;
             self.active_tab = Some(key);
         }
     }
@@ -201,6 +245,8 @@ impl ShellState {
 
     pub(crate) fn reset_for_workspace(&mut self) {
         self.tabs.clear();
+        self.overview_tabs.clear();
+        self.active_overview = None;
         self.active_tab = None;
         self.collapsed_folders.clear();
         self.resizing = None;
@@ -247,6 +293,30 @@ mod tests {
 
         assert_eq!(state.tabs(), &[first, second]);
         assert_eq!(state.active_tab(), Some(first));
+    }
+
+    #[test]
+    fn overview_tabs_reuse_close_and_reset_without_selecting_requests() {
+        let (request, _, folder) = keys();
+        let mut state = ShellState::default();
+        state.open_request(request);
+        let collection = super::OverviewTab::Collection;
+        let folder = super::OverviewTab::Folder(folder);
+        state.open_overview(collection);
+        state.open_overview(folder);
+        state.open_overview(collection);
+        assert_eq!(state.overview_tabs(), &[collection, folder]);
+        assert_eq!(state.active_overview(), Some(collection));
+        assert_eq!(state.active_tab(), None);
+        state.close_overview(collection);
+        assert_eq!(state.active_overview(), Some(folder));
+        state.close_overview(folder);
+        assert_eq!(state.active_tab(), Some(request));
+        state.open_overview(collection);
+        state.open_request(request);
+        assert_eq!(state.active_overview(), None);
+        state.reset_for_workspace();
+        assert!(state.overview_tabs().is_empty());
     }
 
     #[test]

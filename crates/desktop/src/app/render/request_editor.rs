@@ -1,4 +1,6 @@
 use super::*;
+use gpui::SharedString;
+use probe_core::FolderKey;
 
 mod authentication;
 mod body;
@@ -10,6 +12,85 @@ mod multipart;
 mod parameters;
 
 impl ProbeApp {
+    pub(super) fn render_editor_breadcrumb(
+        &self,
+        folders: &[FolderKey],
+        request_name: Option<&str>,
+        id: &'static str,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let mut path = div()
+            .id(SharedString::from(format!("{id}-path")))
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1))
+            .overflow_x_scroll()
+            .text_size(px(theme.typography.caption_size))
+            .text_color(theme.colors.text.muted);
+        for (index, key) in folders.iter().copied().enumerate() {
+            let Some(folder) = self
+                .loaded_workspace
+                .as_ref()
+                .and_then(|loaded| loaded.workspace().folder(key))
+            else {
+                continue;
+            };
+            if index > 0 {
+                path = path.child(div().flex_none().child("›"));
+            }
+            let label = folder.metadata.name.as_deref().unwrap_or("Untitled folder");
+            if request_name.is_none() && index + 1 == folders.len() {
+                path = path.child(
+                    components::truncated_label(label.to_owned())
+                        .debug_selector(move || format!("{id}-folder-{index}"))
+                        .max_w(px(220.0))
+                        .flex_none()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.colors.text.primary),
+                );
+                continue;
+            }
+            let select_view = cx.weak_entity();
+            path = path.child(
+                Button::new((id, index))
+                    .debug_selector(move || format!("{id}-folder-{index}"))
+                    .accessibility_label(format!("Open {label} folder overview"))
+                    .flex_none()
+                    .max_w(px(220.0))
+                    .cursor_pointer()
+                    .hover(move |segment| segment.text_color(theme.colors.text.primary))
+                    .child(components::truncated_label(label.to_owned()))
+                    .on_click(move |_, _, cx| {
+                        let _ = select_view.update(cx, |view, cx| {
+                            view.shell
+                                .open_overview(crate::shell::OverviewTab::Folder(key));
+                            view.reveal_active_tab();
+                            view.selected_tree_item = Some(WorkspaceItemRef::Folder(key));
+                            cx.notify();
+                        });
+                    }),
+            );
+        }
+        if let Some(name) = request_name {
+            if !folders.is_empty() {
+                path = path.child(div().flex_none().child("›"));
+            }
+            path = path.child(
+                components::truncated_label(name.to_owned())
+                    .debug_selector(|| "request-breadcrumb-request".into())
+                    .max_w(px(220.0))
+                    .flex_none()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.colors.text.primary),
+            );
+        }
+        path
+    }
+
     pub(super) fn render_request_editor(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let Some(key) = self.shell.active_tab() else {
             return div()
@@ -29,67 +110,24 @@ impl ProbeApp {
         let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
         let url = url_bar_value(&request);
         let request_dirty = self.persistence.is_dirty(key, &request);
-        let mut breadcrumb_labels = self
+        let folders = self
             .loaded_workspace
             .as_ref()
-            .and_then(|loaded| {
-                loaded
-                    .workspace()
-                    .request_ancestor_folders(key)
-                    .map(|folders| {
-                        folders
-                            .iter()
-                            .filter_map(|folder_key| loaded.workspace().folder(*folder_key))
-                            .map(|folder| {
-                                folder
-                                    .metadata
-                                    .name
-                                    .as_deref()
-                                    .unwrap_or("Untitled folder")
-                                    .to_owned()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-            })
+            .and_then(|loaded| loaded.workspace().request_ancestor_folders(key))
             .unwrap_or_default();
-        let request_breadcrumb_index = breadcrumb_labels.len();
-        breadcrumb_labels.push(
-            request
-                .metadata
-                .name
-                .as_deref()
-                .unwrap_or("Untitled request")
-                .to_owned(),
+        let breadcrumb_path = self.render_editor_breadcrumb(
+            folders,
+            Some(
+                request
+                    .metadata
+                    .name
+                    .as_deref()
+                    .unwrap_or("Untitled request"),
+            ),
+            "request-breadcrumb",
+            theme,
+            cx,
         );
-        let save_view = cx.weak_entity();
-        let mut breadcrumb_path = div()
-            .id("request-breadcrumb-path")
-            .flex_1()
-            .min_w(px(0.0))
-            .h_full()
-            .flex()
-            .items_center()
-            .gap(px(theme.metrics.spacing_1))
-            .overflow_x_scroll()
-            .text_size(px(theme.typography.caption_size))
-            .text_color(theme.colors.text.muted);
-        for (index, label) in breadcrumb_labels.into_iter().enumerate() {
-            if index > 0 {
-                breadcrumb_path = breadcrumb_path.child(div().flex_none().child("›"));
-            }
-            let segment = components::truncated_label(label)
-                .max_w(px(220.0))
-                .flex_none();
-            let segment = if index == request_breadcrumb_index {
-                segment
-                    .debug_selector(|| "request-breadcrumb-request".into())
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.colors.text.primary)
-            } else {
-                segment.debug_selector(move || format!("request-breadcrumb-folder-{index}"))
-            };
-            breadcrumb_path = breadcrumb_path.child(segment);
-        }
         let breadcrumb = div()
             .id("request-breadcrumb")
             .debug_selector(|| "request-breadcrumb".into())
@@ -110,41 +148,7 @@ impl ProbeApp {
                 .mr(px(theme.metrics.spacing_2)),
             )
             .child(breadcrumb_path)
-            .child(
-                Button::new("request-save")
-                    .accessibility_label("Save request")
-                    .debug_selector(|| "request-save".into())
-                    .disabled(!request_dirty)
-                    .ml(px(theme.metrics.spacing_2))
-                    .flex_none()
-                    .w(px(theme.metrics.control_height))
-                    .h(px(theme.metrics.control_height))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(theme.metrics.radius_small))
-                    .border_1()
-                    .border_color(theme.colors.borders.standard)
-                    .bg(theme.colors.surfaces.raised)
-                    .hover(move |button| button.bg(theme.colors.selection.inactive_background))
-                    .focus_visible(move |button| button.border_color(theme.colors.borders.focused))
-                    .styles(move |styles| {
-                        styles.disabled(move |button| {
-                            button
-                                .bg(theme.colors.selection.inactive_background)
-                                .border_color(theme.colors.selection.inactive_background)
-                                .text_color(theme.colors.actions.disabled_foreground)
-                        })
-                    })
-                    .child(components::save_icon(theme).when(!request_dirty, |icon| {
-                        icon.text_color(theme.colors.actions.disabled_foreground)
-                    }))
-                    .on_click(move |_, window, cx| {
-                        let _ = save_view.update(cx, |view, cx| {
-                            view.save_active_request(window, cx);
-                        });
-                    }),
-            );
+            .child(self.render_save_button(theme, "Save request", request_dirty, false, cx));
         let url_view = cx.weak_entity();
         let execution_view = cx.weak_entity();
         let request_running = self
@@ -173,7 +177,8 @@ impl ProbeApp {
                         EditorSection::Query => format!("  {}", request.query_parameters.len()),
                         EditorSection::Path => format!("  {}", request.path_parameters.len()),
                         EditorSection::Headers => format!("  {}", request.headers.len()),
-                        EditorSection::Body
+                        EditorSection::Docs
+                        | EditorSection::Body
                         | EditorSection::Authentication
                         | EditorSection::GraphqlQuery
                         | EditorSection::GraphqlVariables
@@ -194,7 +199,8 @@ impl ProbeApp {
         }
 
         let section_kind = self.request_editor.section(key);
-        let section_scrolls = section_kind != EditorSection::Body && !section_kind.is_graphql();
+        let section_scrolls = !matches!(section_kind, EditorSection::Body | EditorSection::Docs)
+            && !section_kind.is_graphql();
         if section_scrolls && self.request_section_scroll_owner.get() != Some((key, section_kind)) {
             self.request_section_scroll
                 .set_offset(point(px(0.0), px(0.0)));
@@ -381,6 +387,40 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         match self.request_editor.section(key) {
+            EditorSection::Docs => {
+                let view = cx.weak_entity();
+                documentation_sections(
+                    theme,
+                    "Description",
+                    [
+                        documentation_text(request.metadata.description.as_ref()),
+                        request.docs.as_deref(),
+                    ],
+                    [
+                        ("request-description", key.slot()).into(),
+                        ("request-docs", key.slot()).into(),
+                    ],
+                    move |docs, value, _, cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            view.edit_request(
+                                key,
+                                |request| {
+                                    if docs {
+                                        request.docs = Some(value.to_string());
+                                    } else {
+                                        crate::app::documentation::edit_documentation(
+                                            &mut request.metadata.description,
+                                            value.to_string(),
+                                        );
+                                    }
+                                },
+                                cx,
+                            )
+                        });
+                    },
+                )
+                .into_any_element()
+            }
             EditorSection::Query => self.render_parameter_editor(
                 key,
                 request,
@@ -417,5 +457,84 @@ impl ProbeApp {
                 self.render_graphql_extensions_editor(key, request, theme, cx)
             }
         }
+    }
+}
+
+struct SaveTooltip {
+    theme: Theme,
+    label: String,
+}
+
+impl Render for SaveTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui_base::Tooltip::new("editor-save-tooltip")
+            .px(px(self.theme.metrics.spacing_2))
+            .py(px(self.theme.metrics.spacing_1))
+            .rounded(px(self.theme.metrics.radius_small))
+            .border_1()
+            .border_color(self.theme.colors.borders.standard)
+            .bg(self.theme.colors.surfaces.overlay)
+            .text_size(px(self.theme.typography.caption_size))
+            .text_color(self.theme.colors.text.primary)
+            .child(self.label.clone())
+    }
+}
+
+impl ProbeApp {
+    pub(super) fn render_save_button(
+        &self,
+        theme: Theme,
+        label: &'static str,
+        dirty: bool,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Button {
+        let view = cx.weak_entity();
+        let enabled = dirty && !busy;
+        Button::new("editor-save")
+            .accessibility_label(label)
+            .debug_selector(|| "editor-save".into())
+            .disabled(!enabled)
+            .tooltip(move |_, cx| {
+                let shortcut = if cfg!(target_os = "macos") {
+                    "⌘S"
+                } else {
+                    "Ctrl+S"
+                };
+                cx.new(|_| SaveTooltip {
+                    theme,
+                    label: format!("{label} ({shortcut})"),
+                })
+                .into()
+            })
+            .ml(px(theme.metrics.spacing_2))
+            .flex_none()
+            .w(px(theme.metrics.control_height))
+            .h(px(theme.metrics.control_height))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(theme.metrics.radius_small))
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .bg(theme.colors.surfaces.raised)
+            .hover(move |button| button.bg(theme.colors.selection.inactive_background))
+            .focus_visible(move |button| button.border_color(theme.colors.borders.focused))
+            .styles(move |styles| {
+                styles.disabled(move |button| {
+                    button
+                        .bg(theme.colors.selection.inactive_background)
+                        .border_color(theme.colors.selection.inactive_background)
+                        .text_color(theme.colors.actions.disabled_foreground)
+                })
+            })
+            .child(components::save_icon(theme).text_color(if enabled {
+                theme.colors.actions.accent
+            } else {
+                theme.colors.actions.disabled_foreground
+            }))
+            .on_click(move |_, window, cx| {
+                let _ = view.update(cx, |view, cx| view.save_active_editor(window, cx));
+            })
     }
 }

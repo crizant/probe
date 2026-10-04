@@ -85,8 +85,8 @@ pub(crate) fn tree_row_button(
         .overflow_hidden()
         .rounded(px(theme.metrics.radius_small))
         .when(selected, |row| {
-            row.bg(theme.colors.selection.active_background)
-                .text_color(theme.colors.selection.active_foreground)
+            row.bg(theme.colors.selection.inactive_background)
+                .text_color(theme.colors.text.primary)
         })
         .when(!selected, |row| {
             row.hover(move |row| row.bg(theme.colors.surfaces.window))
@@ -95,7 +95,7 @@ pub(crate) fn tree_row_button(
 }
 
 pub(crate) fn tree_level_indent(theme: Theme, depth: usize) -> f32 {
-    theme.metrics.spacing_2 + depth as f32 * theme.metrics.icon_standard
+    theme.metrics.spacing_1 + depth as f32 * theme.metrics.icon_standard
 }
 
 pub(crate) fn tree_method_font_size(theme: Theme, method: &str) -> f32 {
@@ -130,9 +130,9 @@ pub(crate) fn tree_hierarchy_guides(theme: Theme, depth: usize, selected: bool) 
                 .absolute()
                 .top(px(0.0))
                 .bottom(px(0.0))
-                .left(px(
-                    tree_level_indent(theme, level) + theme.metrics.icon_standard / 2.0
-                ))
+                .left(px(tree_level_indent(theme, level)
+                    + theme.metrics.icon_standard / 2.0
+                    - 0.5))
                 .w(px(1.0))
                 .bg(color),
         );

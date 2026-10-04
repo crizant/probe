@@ -45,6 +45,7 @@ use probe_yaak::{ImportedYaakWorkspace, YaakImportError, YaakImportPreview, insp
 mod chrome;
 mod detached_requests;
 mod dialogs;
+mod documentation;
 mod environments;
 mod imports;
 mod interactions;
@@ -143,7 +144,7 @@ gpui::actions!(
         NewCollection,
         ImportPostmanExport,
         ImportYaakExport,
-        SaveRequest,
+        SaveEditor,
         CloseActiveTab,
         AboutProbe,
         CloseWindow,
@@ -215,10 +216,28 @@ fn request_key_remaps(
 }
 
 #[derive(Clone, Copy)]
-struct RequestTabTooltip {
-    key: RequestKey,
+struct TabTooltip {
+    target: TabTooltipTarget,
     position: Point<Pixels>,
     open: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TabTooltipTarget {
+    Request(RequestKey),
+    Overview(crate::shell::OverviewTab),
+}
+
+impl From<RequestKey> for TabTooltipTarget {
+    fn from(key: RequestKey) -> Self {
+        Self::Request(key)
+    }
+}
+
+impl From<crate::shell::OverviewTab> for TabTooltipTarget {
+    fn from(tab: crate::shell::OverviewTab) -> Self {
+        Self::Overview(tab)
+    }
 }
 
 struct PositionedContextMenu<T> {
@@ -297,6 +316,9 @@ pub(crate) struct ProbeApp {
     session: SessionState,
     session_save_task: Option<Task<()>>,
     request_save_task: Option<Task<()>>,
+    documentation_save_task: Option<Task<()>>,
+    overview_drafts: BTreeMap<Option<String>, documentation::OverviewDraft>,
+    pending_documentation_saves: std::collections::VecDeque<Option<String>>,
     environment_save_task: Option<Task<()>>,
     environment_save_workspace_path: Option<PathBuf>,
     environment_manager_close_after_save: bool,
@@ -419,6 +441,9 @@ impl ProbeApp {
             session: SessionState::default(),
             session_save_task: None,
             request_save_task: None,
+            documentation_save_task: None,
+            overview_drafts: BTreeMap::new(),
+            pending_documentation_saves: std::collections::VecDeque::new(),
             environment_save_task: None,
             environment_save_workspace_path: None,
             environment_manager_close_after_save: false,
@@ -725,7 +750,7 @@ fn system_menus(pane_layout: PaneLayout) -> [Menu; 5] {
                 MenuItem::action("Yaak Export…", ImportYaakExport),
             ])),
             MenuItem::separator(),
-            MenuItem::action("Save Request", SaveRequest),
+            MenuItem::action("Save", SaveEditor),
             MenuItem::separator(),
             MenuItem::action("Close Tab", CloseActiveTab),
             MenuItem::action("Close Window", CloseWindow),
@@ -817,7 +842,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-o", OpenWorkspace, None),
         KeyBinding::new("cmd-n", NewCollection, None),
-        KeyBinding::new("cmd-s", SaveRequest, None),
+        KeyBinding::new("cmd-s", SaveEditor, None),
         KeyBinding::new(
             "cmd-s",
             SubmitEnvironmentManagerDialog,
@@ -883,7 +908,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-o", OpenWorkspace, None),
         KeyBinding::new("ctrl-n", NewCollection, None),
-        KeyBinding::new("ctrl-s", SaveRequest, None),
+        KeyBinding::new("ctrl-s", SaveEditor, None),
         KeyBinding::new(
             "ctrl-s",
             SubmitEnvironmentManagerDialog,

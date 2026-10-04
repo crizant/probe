@@ -1,6 +1,104 @@
 use super::*;
 
 #[gpui::test]
+fn folder_breadcrumbs_navigate_to_reusable_overviews_and_preserve_drafts(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/opencollection/breadcrumbs.yml")
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let parent = workspace.folder_key("items/0").unwrap();
+    let child = workspace.folder_key("items/0/items/0").unwrap();
+    let request = workspace.request_key("items/0/items/0/items/0").unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let segment = visual.debug_bounds("request-breadcrumb-folder-1").unwrap();
+    visual.simulate_click(segment.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                view.shell.active_overview(),
+                Some(crate::shell::OverviewTab::Folder(child))
+            );
+            assert_eq!(
+                view.selected_tree_item,
+                Some(WorkspaceItemRef::Folder(child))
+            );
+            let target = view
+                .overview_target(crate::shell::OverviewTab::Folder(child))
+                .unwrap();
+            view.edit_overview(target, true, "Unsaved child documentation".into(), cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("folder-breadcrumb-folder-1").is_some());
+    let segment = visual.debug_bounds("folder-breadcrumb-folder-0").unwrap();
+    visual.simulate_click(segment.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                view.shell.active_overview(),
+                Some(crate::shell::OverviewTab::Folder(parent))
+            );
+            assert_eq!(
+                view.selected_tree_item,
+                Some(WorkspaceItemRef::Folder(parent))
+            );
+            assert_eq!(view.shell.overview_tabs().len(), 2);
+            assert!(view.has_dirty_overviews());
+            view.select_request(request, cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let segment = visual.debug_bounds("request-breadcrumb-folder-1").unwrap();
+    visual.simulate_click(segment.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            view.selected_tree_item = None;
+        })
+        .unwrap();
+    let segment = visual.debug_bounds("folder-breadcrumb-folder-1").unwrap();
+    visual.simulate_click(segment.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.shell.active_overview(),
+                Some(crate::shell::OverviewTab::Folder(child))
+            );
+            assert_eq!(view.shell.overview_tabs().len(), 2);
+            assert_eq!(
+                view.selected_tree_item, None,
+                "the current breadcrumb must not navigate"
+            );
+            let target = view
+                .overview_target(crate::shell::OverviewTab::Folder(child))
+                .unwrap();
+            assert_eq!(
+                view.overview_drafts[&target].current.docs,
+                Some(probe_core::Documentation::Text(
+                    "Unsaved child documentation".into()
+                ))
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {

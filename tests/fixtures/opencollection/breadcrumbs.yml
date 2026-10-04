@@ -1,0 +1,20 @@
+opencollection: 1.0.0
+info:
+  name: Breadcrumbs
+bundled: true
+items:
+  - info:
+      name: Parent
+      type: folder
+    items:
+      - info:
+          name: Child
+          type: folder
+        docs: Child documentation
+        items:
+          - info:
+              name: Nested request
+              type: http
+            http:
+              method: GET
+              url: https://example.com/nested

@@ -108,7 +108,7 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
     // Save
     window
         .update(cx, |view, window, cx| {
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -204,7 +204,7 @@ fn graphql_variables_extensions_and_operation_name_persist(cx: &mut TestAppConte
 
     window
         .update(cx, |view, window, cx| {
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
         })
         .unwrap();
     cx.run_until_parked();

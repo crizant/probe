@@ -1,0 +1,28 @@
+opencollection: 1.0.0
+info:
+  name: Docs
+  summary: short
+  description: collection has no description field
+bundled: true
+docs:
+  content: Collection guide
+  type: text/markdown
+items:
+  - info:
+      name: Pets
+      type: folder
+      description:
+        content: Pet folder
+        type: text/plain
+    docs: folder docs text
+    items:
+      - info:
+          name: Create pet
+          type: http
+          description:
+            content: Creates a pet
+            type: text/markdown
+        docs: request docs stay a string
+        http:
+          method: POST
+          url: https://example.com/pets

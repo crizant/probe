@@ -17,6 +17,37 @@ pub(crate) enum BodySyntax {
     Xml,
 }
 
+pub(crate) fn documentation_text_input(
+    theme: Theme,
+    id: ElementId,
+    value: String,
+    placeholder: &'static str,
+    on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+) -> gpui::AnyElement {
+    ProbeEditor {
+        theme,
+        id,
+        value: value.into(),
+        placeholder: placeholder.into(),
+        decorations: Vec::new(),
+        language: SharedString::default(),
+        readonly: false,
+        min_height: None,
+        padding: EditorInsets::standard(theme),
+        soft_wrap: true,
+        text_color: theme.colors.text.primary,
+        scroll_to_range: None,
+        search_matches: Vec::new(),
+        on_change: Some(Rc::new(on_value_change)),
+        on_mouse_down: None,
+        on_visible_range: None,
+        extra_context_menu_actions: Vec::new(),
+        debug_selector: None,
+        variables: None,
+    }
+    .into_any_element()
+}
+
 pub(crate) fn body_text_input(
     theme: Theme,
     id: impl Into<ElementId>,

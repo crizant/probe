@@ -360,7 +360,7 @@ impl ProbeApp {
             target: key,
             position,
         });
-        self.transient.request_tab_tooltip = None;
+        self.transient.tab_tooltip = None;
         cx.notify();
     }
 
@@ -396,30 +396,34 @@ impl ProbeApp {
         cx.notify();
     }
 
-    pub(super) fn open_request_tab_tooltip(
+    pub(super) fn open_tab_tooltip(
         &mut self,
-        key: RequestKey,
+        target: impl Into<TabTooltipTarget>,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        if !self.shell.tabs().contains(&key) {
+        let target = target.into();
+        let is_open = match target {
+            TabTooltipTarget::Request(key) => self.shell.tabs().contains(&key),
+            TabTooltipTarget::Overview(tab) => self.shell.overview_tabs().contains(&tab),
+        };
+        if !is_open {
             return;
         }
-        self.transient.request_tab_tooltip_epoch =
-            self.transient.request_tab_tooltip_epoch.wrapping_add(1);
-        let epoch = self.transient.request_tab_tooltip_epoch;
-        self.transient.request_tab_tooltip = Some(RequestTabTooltip {
-            key,
+        self.transient.tab_tooltip_epoch = self.transient.tab_tooltip_epoch.wrapping_add(1);
+        let epoch = self.transient.tab_tooltip_epoch;
+        self.transient.tab_tooltip = Some(TabTooltip {
+            target,
             position,
             open: false,
         });
-        self.transient.request_tab_tooltip_task = Some(cx.spawn(async move |this, cx| {
+        self.transient.tab_tooltip_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(REQUEST_TAB_TOOLTIP_DELAY)
                 .await;
             let _ = this.update(cx, |view, cx| {
-                if view.transient.request_tab_tooltip_epoch == epoch
-                    && let Some(tooltip) = view.transient.request_tab_tooltip.as_mut()
+                if view.transient.tab_tooltip_epoch == epoch
+                    && let Some(tooltip) = view.transient.tab_tooltip.as_mut()
                 {
                     tooltip.open = true;
                     cx.notify();
@@ -429,16 +433,16 @@ impl ProbeApp {
         cx.notify();
     }
 
-    pub(super) fn update_request_tab_tooltip_position(
+    pub(super) fn update_tab_tooltip_position(
         &mut self,
-        key: RequestKey,
+        target: impl Into<TabTooltipTarget>,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let Some(tooltip) = self.transient.request_tab_tooltip.as_mut() else {
+        let Some(tooltip) = self.transient.tab_tooltip.as_mut() else {
             return;
         };
-        if tooltip.key != key {
+        if tooltip.target != target.into() {
             return;
         }
         tooltip.position = position;
@@ -447,18 +451,22 @@ impl ProbeApp {
         }
     }
 
-    pub(super) fn close_request_tab_tooltip(&mut self, key: RequestKey, cx: &mut Context<Self>) {
+    pub(super) fn close_tab_tooltip(
+        &mut self,
+        target: impl Into<TabTooltipTarget>,
+        cx: &mut Context<Self>,
+    ) {
+        let target = target.into();
         if self
             .transient
-            .request_tab_tooltip
-            .is_none_or(|tooltip| tooltip.key != key)
+            .tab_tooltip
+            .is_none_or(|tooltip| tooltip.target != target)
         {
             return;
         }
-        self.transient.request_tab_tooltip_epoch =
-            self.transient.request_tab_tooltip_epoch.wrapping_add(1);
-        self.transient.request_tab_tooltip_task = None;
-        self.transient.request_tab_tooltip = None;
+        self.transient.tab_tooltip_epoch = self.transient.tab_tooltip_epoch.wrapping_add(1);
+        self.transient.tab_tooltip_task = None;
+        self.transient.tab_tooltip = None;
         cx.notify();
     }
 
@@ -491,11 +499,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.loading
-            || self.environment_save_task.is_some()
-            || self.request_save_task.is_some()
-            || self.structure_task.is_some()
-        {
+        if self.loading || self.has_active_workspace_write() {
             return;
         }
         let Some((environment, name)) = self.pending_environment_saves.pop_first() else {
@@ -546,7 +550,7 @@ impl ProbeApp {
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         view.environment_save_workspace_path = None;
                         view.pending_close = None;
-                        view.recover_committed_save(save_workspace_path, window, cx);
+                        view.recover_committed_save(save_workspace_path, None, window, cx);
                     }
                     Err(error) => {
                         view.environment_save_workspace_path = None;

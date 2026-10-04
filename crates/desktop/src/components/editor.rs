@@ -14,8 +14,8 @@ pub(crate) use core::editor_paint_style;
 #[cfg(test)]
 pub(super) use core::{ProbeEditor, editor_value_needs_refresh};
 pub(crate) use response::{
-    BodySyntax, body_text_input, response_body_input, response_headers_input,
-    response_inspector_input,
+    BodySyntax, body_text_input, documentation_text_input, response_body_input,
+    response_headers_input, response_inspector_input,
 };
 #[cfg(not(test))]
 use search::body_text_highlights;

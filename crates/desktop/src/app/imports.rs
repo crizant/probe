@@ -135,7 +135,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() {
+        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
             self.prompt_unsaved(dirty, PendingClose::Import(source), window, cx);
             return;
         }

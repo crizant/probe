@@ -605,7 +605,7 @@ fn assert_save_shortcut_after_clicking_remove_row_persists_removal(
     visual.run_until_parked();
     cx.run_until_parked();
     window
-        .update(cx, |view, window, cx| view.save_active_request(window, cx))
+        .update(cx, |view, window, cx| view.save_active_editor(window, cx))
         .unwrap();
     cx.run_until_parked();
 
