@@ -6,24 +6,23 @@ use nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{Atom, AtomKind, CaseMatching, Normalization},
 };
-use probe_core::{FolderKey, RequestKey, Workspace, WorkspaceItemRef};
+use probe_core::{FolderKey, Workspace, WorkspaceItemRef};
 
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct TreeSearchMatches {
-    requests: HashSet<RequestKey>,
-    folders: HashSet<FolderKey>,
+    items: HashSet<WorkspaceItemRef>,
 }
 
 impl TreeSearchMatches {
     pub(crate) fn contains(&self, item: WorkspaceItemRef) -> bool {
-        match item {
-            WorkspaceItemRef::Request(key) => self.requests.contains(&key),
-            WorkspaceItemRef::Folder(key) => self.folders.contains(&key),
-        }
+        self.items.contains(&item)
     }
 
     pub(crate) fn folders(&self) -> impl Iterator<Item = FolderKey> + '_ {
-        self.folders.iter().copied()
+        self.items.iter().filter_map(|item| match item {
+            WorkspaceItemRef::Folder(key) => Some(*key),
+            WorkspaceItemRef::Request(_) => None,
+        })
     }
 }
 
@@ -80,30 +79,19 @@ impl SearchContext<'_> {
         for item in items {
             let path_len = search_path.len();
             let matched = !include_descendants && self.item_matches(*item, search_path);
-            match *item {
-                WorkspaceItemRef::Request(key) => {
-                    if matched || include_descendants {
-                        self.hits.requests.insert(key);
-                        self.hits.folders.extend(ancestors.iter().copied());
-                    }
-                }
-                WorkspaceItemRef::Folder(key) => {
-                    let include_folder = matched || include_descendants;
-                    if include_folder {
-                        self.hits.folders.insert(key);
-                        self.hits.folders.extend(ancestors.iter().copied());
-                    }
-                    if let Some(folder) = self.workspace.folder(key) {
-                        ancestors.push(key);
-                        self.collect_matches(
-                            &folder.children,
-                            ancestors,
-                            search_path,
-                            include_folder,
-                        );
-                        ancestors.pop();
-                    }
-                }
+            let include_item = matched || include_descendants;
+            if include_item {
+                self.hits.items.insert(*item);
+                self.hits
+                    .items
+                    .extend(ancestors.iter().copied().map(WorkspaceItemRef::Folder));
+            }
+            if let WorkspaceItemRef::Folder(key) = *item
+                && let Some(folder) = self.workspace.folder(key)
+            {
+                ancestors.push(key);
+                self.collect_matches(&folder.children, ancestors, search_path, include_item);
+                ancestors.pop();
             }
             search_path.truncate(path_len);
         }
@@ -121,16 +109,13 @@ impl SearchContext<'_> {
 }
 
 fn item_name(workspace: &Workspace, item: WorkspaceItemRef) -> &str {
-    match item {
-        WorkspaceItemRef::Request(key) => workspace
-            .request(key)
-            .and_then(|request| request.metadata.name.as_deref())
-            .unwrap_or("Untitled request"),
-        WorkspaceItemRef::Folder(key) => workspace
-            .folder(key)
-            .and_then(|folder| folder.metadata.name.as_deref())
-            .unwrap_or("Untitled folder"),
-    }
+    workspace
+        .item_metadata(item)
+        .and_then(|metadata| metadata.name.as_deref())
+        .unwrap_or(match item.kind() {
+            probe_core::ItemKind::Request => "Untitled request",
+            probe_core::ItemKind::Folder => "Untitled folder",
+        })
 }
 
 #[cfg(test)]

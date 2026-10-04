@@ -59,6 +59,6 @@ pub use request_resolution::{
 };
 pub use secret::{SecretContext, SecretError, SecretProvider, SecretValue};
 pub use workspace::{
-    FolderKey, RequestKey, Workspace, WorkspaceEditError, WorkspaceFolder, WorkspaceItemRef,
-    WorkspaceParent,
+    FolderKey, ItemKind, RequestKey, Workspace, WorkspaceEditError, WorkspaceFolder,
+    WorkspaceItemRef, WorkspaceParent,
 };

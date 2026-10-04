@@ -92,13 +92,44 @@ impl FolderKey {
     }
 }
 
-/// A request or folder reference used to retain collection ordering.
+/// The kind of item in a collection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ItemKind {
+    /// An HTTP or GraphQL request.
+    Request,
+    /// A folder.
+    Folder,
+}
+
+impl ItemKind {
+    /// Returns the stable lowercase representation used by CLI JSON.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Folder => "folder",
+        }
+    }
+}
+
+/// A request or folder reference used to retain collection ordering.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum WorkspaceItemRef {
     /// A folder reference.
     Folder(FolderKey),
     /// An HTTP request reference.
     Request(RequestKey),
+}
+
+impl WorkspaceItemRef {
+    /// Returns the item's domain kind.
+    #[must_use]
+    pub const fn kind(self) -> ItemKind {
+        match self {
+            Self::Request(_) => ItemKind::Request,
+            Self::Folder(_) => ItemKind::Folder,
+        }
+    }
 }
 
 /// Indexed folder metadata and ordered children.
@@ -201,6 +232,21 @@ impl Workspace {
     /// Returns mutable collection metadata.
     pub const fn metadata_mut(&mut self) -> &mut CollectionMetadata {
         &mut self.metadata
+    }
+
+    /// Returns whether a session item still exists in this workspace.
+    #[must_use]
+    pub fn contains_item(&self, item: WorkspaceItemRef) -> bool {
+        self.item_metadata(item).is_some()
+    }
+
+    /// Resolves shared metadata without exposing different item storage types.
+    #[must_use]
+    pub fn item_metadata(&self, item: WorkspaceItemRef) -> Option<&ItemMetadata> {
+        match item {
+            WorkspaceItemRef::Request(key) => self.request(key).map(|request| &request.metadata),
+            WorkspaceItemRef::Folder(key) => self.folder(key).map(|folder| &folder.metadata),
+        }
     }
 
     /// Returns the ordered items at the workspace root.
@@ -787,6 +833,20 @@ mod tests {
             unreachable!()
         };
         assert!(second.folder(key).is_none());
+        assert!(!second.contains_item(WorkspaceItemRef::Folder(key)));
+        assert!(
+            second
+                .item_metadata(WorkspaceItemRef::Folder(key))
+                .is_none()
+        );
+        assert!(first.contains_item(WorkspaceItemRef::Folder(key)));
+        assert_eq!(
+            (
+                WorkspaceItemRef::Folder(key).kind(),
+                WorkspaceItemRef::Folder(key).kind().as_str()
+            ),
+            (super::ItemKind::Folder, "folder")
+        );
         assert!(second.folder_mut(key).is_none());
         let WorkspaceItemRef::Folder(local) = second.root_items()[0] else {
             unreachable!()
@@ -881,6 +941,17 @@ mod tests {
         assert_eq!(request_x_key.slot(), request_y_key.slot());
         assert_ne!(request_x_key.generation(), request_y_key.generation());
         assert!(workspace.request(request_x_key).is_none());
+        assert!(!workspace.contains_item(WorkspaceItemRef::Request(request_x_key)));
+        let item = WorkspaceItemRef::Request(request_y_key);
+        assert!(workspace.contains_item(item));
+        assert_eq!(
+            (item.kind(), item.kind().as_str()),
+            (super::ItemKind::Request, "request")
+        );
+        assert_eq!(
+            workspace.item_metadata(item).unwrap().name.as_deref(),
+            Some("Request Y")
+        );
         assert_eq!(
             workspace
                 .request(request_y_key)

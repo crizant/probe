@@ -1,4 +1,5 @@
 use super::*;
+use probe_opencollection::ItemLocator;
 
 impl ProbeApp {
     pub(super) fn recover_committed_save(
@@ -639,9 +640,8 @@ impl ProbeApp {
                 self.close_environment_manager_dialog(window, cx);
             }
             (ApplicationDialog::Delete { kind, selector, .. }, ApplicationDialogAction::Delete) => {
-                let operation = match kind {
-                    ItemKind::Request => StructureOperation::DeleteRequest { selector },
-                    ItemKind::Folder => StructureOperation::DeleteFolder { selector },
+                let operation = StructureOperation::Delete {
+                    target: ItemLocator { kind, selector },
                 };
                 self.apply_structure(operation, window, cx);
             }
@@ -847,13 +847,9 @@ impl ProbeApp {
                 .collapsed_folders()
                 .filter_map(|key| old.folder_selector(key).map(str::to_owned))
                 .collect(),
-            selected: self.selected_tree_item.and_then(|item| match item {
-                WorkspaceItemRef::Request(key) => old
-                    .request_selector(key)
-                    .map(|selector| (ItemKind::Request, selector.to_owned())),
-                WorkspaceItemRef::Folder(key) => old
-                    .folder_selector(key)
-                    .map(|selector| (ItemKind::Folder, selector.to_owned())),
+            selected: self.selected_tree_item.and_then(|item| {
+                old.item_selector(item)
+                    .map(|selector| (item.kind(), selector.to_owned()))
             }),
         }
     }
@@ -950,10 +946,7 @@ impl ProbeApp {
                 if let Some(mapped) = remaps.get(selector) {
                     selector.clone_from(mapped);
                 }
-                target_exists = match kind {
-                    ItemKind::Request => loaded.request_key(selector).is_some(),
-                    ItemKind::Folder => loaded.folder_key(selector).is_some(),
-                };
+                target_exists = loaded.item_key(*kind, selector).is_some();
             }
         }
 
@@ -1059,17 +1052,15 @@ impl ProbeApp {
                 self.shell.collapse_folder(key);
             }
         }
-        self.selected_tree_item = selectors.selected.and_then(|(kind, selector)| match kind {
-            ItemKind::Request => remaps
-                .get(&selector)
-                .and_then(|selector| loaded.request_key(selector))
-                .map(WorkspaceItemRef::Request),
-            ItemKind::Folder => {
-                let selector = remaps
+        self.selected_tree_item = selectors.selected.and_then(|(kind, selector)| {
+            let selector = if kind == ItemKind::Request {
+                remaps.get(&selector)?.as_str()
+            } else {
+                remaps
                     .get(&selector)
-                    .map_or(selector.as_str(), String::as_str);
-                loaded.folder_key(selector).map(WorkspaceItemRef::Folder)
-            }
+                    .map_or(selector.as_str(), String::as_str)
+            };
+            loaded.item_key(kind, selector)
         });
     }
 

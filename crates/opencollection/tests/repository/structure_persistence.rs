@@ -1,4 +1,6 @@
 use super::*;
+use probe_core::ItemKind;
+use probe_opencollection::ItemLocator;
 
 #[test]
 fn bundled_create_writes_complete_request_in_one_operation() {
@@ -114,8 +116,8 @@ fn bundled_structure_edits_save_reload_and_preserve_unknown_fields() {
         .unwrap();
     assert_eq!(created.selector.as_deref(), Some("items/1/items/0"));
     let renamed = loaded
-        .apply_structure(StructureOperation::RenameRequest {
-            selector: "items/1/items/0".to_owned(),
+        .apply_structure(StructureOperation::Rename {
+            target: ItemLocator::new(ItemKind::Request, "items/1/items/0"),
             name: "Renamed".to_owned(),
         })
         .unwrap();
@@ -143,8 +145,8 @@ fn bundled_structure_edits_save_reload_and_preserve_unknown_fields() {
         .collect::<Vec<_>>();
     assert_eq!(renamed_in_memory, ["items/1/items/0"]);
     let moved = loaded
-        .apply_structure(StructureOperation::MoveRequest {
-            selector: "items/1/items/0".to_owned(),
+        .apply_structure(StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Request, "items/1/items/0"),
             parent: None,
             index: Some(0),
         })
@@ -158,8 +160,8 @@ fn bundled_structure_edits_save_reload_and_preserve_unknown_fields() {
         })
         .unwrap();
     loaded
-        .apply_structure(StructureOperation::DeleteRequest {
-            selector: "items/1".to_owned(),
+        .apply_structure(StructureOperation::Delete {
+            target: ItemLocator::new(ItemKind::Request, "items/1"),
         })
         .unwrap();
 
@@ -185,8 +187,8 @@ fn bundled_move_handles_reordering_and_destination_index_shifts() {
     let mut loaded = load_workspace(&path).unwrap();
 
     let moved = loaded
-        .apply_structure(StructureOperation::MoveRequest {
-            selector: "items/0".to_owned(),
+        .apply_structure(StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Request, "items/0"),
             parent: Some("items/1".to_owned()),
             index: Some(1),
         })
@@ -210,8 +212,8 @@ fn bundled_move_handles_reordering_and_destination_index_shifts() {
     let moved_key = loaded.request_key("items/0/items/1").unwrap();
     loaded.request_mut(moved_key).unwrap().url = Some("https://example.com/unsaved".to_owned());
     let reordered = loaded
-        .apply_structure(StructureOperation::ReorderRequest {
-            selector: "items/0/items/1".to_owned(),
+        .apply_structure(StructureOperation::Reorder {
+            target: ItemLocator::new(ItemKind::Request, "items/0/items/1"),
             index: 0,
         })
         .unwrap();
@@ -321,8 +323,8 @@ fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
         Some("group/created-request.yml")
     );
     let renamed = loaded
-        .apply_structure(StructureOperation::RenameRequest {
-            selector: "group/created-request.yml".to_owned(),
+        .apply_structure(StructureOperation::Rename {
+            target: ItemLocator::new(ItemKind::Request, "group/created-request.yml"),
             name: "Renamed Request".to_owned(),
         })
         .unwrap();
@@ -339,8 +341,8 @@ fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
         .unwrap();
     assert_eq!(folder.selector.as_deref(), Some("destination"));
     let moved = loaded
-        .apply_structure(StructureOperation::MoveRequest {
-            selector: "group/renamed-request.yml".to_owned(),
+        .apply_structure(StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Request, "group/renamed-request.yml"),
             parent: Some("destination".to_owned()),
             index: Some(0),
         })
@@ -350,8 +352,8 @@ fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
         Some("destination/renamed-request.yml")
     );
     loaded
-        .apply_structure(StructureOperation::DeleteRequest {
-            selector: "alpha.yml".to_owned(),
+        .apply_structure(StructureOperation::Delete {
+            target: ItemLocator::new(ItemKind::Request, "alpha.yml"),
         })
         .unwrap();
 
@@ -392,15 +394,15 @@ fn unbundled_folder_edits_and_explicit_reordering_survive_reload() {
         })
         .unwrap();
     let renamed = loaded
-        .apply_structure(StructureOperation::RenameFolder {
-            selector: "group".to_owned(),
+        .apply_structure(StructureOperation::Rename {
+            target: ItemLocator::new(ItemKind::Folder, "group"),
             name: "Renamed Group".to_owned(),
         })
         .unwrap();
     assert_eq!(renamed.selector.as_deref(), Some("renamed-group"));
     let moved = loaded
-        .apply_structure(StructureOperation::MoveFolder {
-            selector: "renamed-group".to_owned(),
+        .apply_structure(StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Folder, "renamed-group"),
             parent: Some("destination".to_owned()),
             index: Some(0),
         })
@@ -412,15 +414,15 @@ fn unbundled_folder_edits_and_explicit_reordering_survive_reload() {
             .is_some()
     );
     let reordered = loaded
-        .apply_structure(StructureOperation::ReorderFolder {
-            selector: "destination".to_owned(),
+        .apply_structure(StructureOperation::Reorder {
+            target: ItemLocator::new(ItemKind::Folder, "destination"),
             index: 0,
         })
         .unwrap();
     assert_eq!(reordered.index, Some(0));
     loaded
-        .apply_structure(StructureOperation::DeleteFolder {
-            selector: "destination/renamed-group".to_owned(),
+        .apply_structure(StructureOperation::Delete {
+            target: ItemLocator::new(ItemKind::Folder, "destination/renamed-group"),
         })
         .unwrap();
 
@@ -473,18 +475,23 @@ fn prepared_structure_edit_returns_disk_state_and_checks_the_prepared_baseline()
     fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
     let mut loaded = load_workspace(&path).unwrap();
     let key = loaded.request_key("items/0").unwrap();
+    let item = probe_core::WorkspaceItemRef::Request(key);
+    assert_eq!(loaded.item_selector(item), Some("items/0"));
+    assert_eq!(loaded.item_key(item.kind(), "items/0"), Some(item));
+    assert!(loaded.item_key(ItemKind::Folder, "items/0").is_none());
     let persisted_url = loaded.workspace().request(key).unwrap().url.clone();
     loaded.request_mut(key).unwrap().url = Some("https://example.com/unsaved".to_owned());
 
     let (result, disk) = loaded
-        .prepare_structure(StructureOperation::RenameRequest {
-            selector: "items/0".to_owned(),
+        .prepare_structure(StructureOperation::Rename {
+            target: ItemLocator::new(ItemKind::Request, "items/0"),
             name: "Renamed".to_owned(),
         })
         .unwrap()
         .execute()
         .unwrap();
 
+    assert!(disk.item_selector(item).is_none());
     let renamed = disk
         .workspace()
         .request(
@@ -499,8 +506,8 @@ fn prepared_structure_edit_returns_disk_state_and_checks_the_prepared_baseline()
     assert_eq!(source.url.as_deref(), Some("https://example.com/unsaved"));
 
     let prepared = disk
-        .prepare_structure(StructureOperation::DeleteRequest {
-            selector: "items/0".to_owned(),
+        .prepare_structure(StructureOperation::Delete {
+            target: ItemLocator::new(ItemKind::Request, "items/0"),
         })
         .unwrap();
     let external = fs::read_to_string(&path).unwrap() + "\nx-external: true\n";
@@ -515,6 +522,43 @@ fn prepared_structure_edit_returns_disk_state_and_checks_the_prepared_baseline()
 }
 
 #[test]
+fn structural_targets_reject_the_wrong_kind_for_both_storage_formats() {
+    for (fixture_name, request, folder) in [
+        ("phase16-bundled.yml", "items/0", "items/1"),
+        ("phase16-unbundled", "alpha.yml", "group"),
+    ] {
+        let loaded = load_workspace(fixture(fixture_name)).unwrap();
+        let item = loaded.item_key(ItemKind::Folder, folder).unwrap();
+        assert_eq!(loaded.item_selector(item), Some(folder));
+        for (kind, selector) in [(ItemKind::Request, folder), (ItemKind::Folder, request)] {
+            let target = ItemLocator::new(kind, selector);
+            for operation in [
+                StructureOperation::Rename {
+                    target: target.clone(),
+                    name: "Wrong".into(),
+                },
+                StructureOperation::Delete {
+                    target: target.clone(),
+                },
+                StructureOperation::Move {
+                    target: target.clone(),
+                    parent: None,
+                    index: None,
+                },
+                StructureOperation::Reorder {
+                    target: target.clone(),
+                    index: 0,
+                },
+            ] {
+                assert!(matches!(loaded.prepare_structure(operation),
+                    Err(StructureError::ItemNotFound { kind: actual, selector: actual_selector })
+                        if actual == kind && actual_selector == selector));
+            }
+        }
+    }
+}
+
+#[test]
 fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
     let root = temporary_path("phase16-errors");
     copy_directory(&fixture("phase16-unbundled"), &root);
@@ -522,14 +566,14 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
 
     let reserved = "opencollection.yml";
     let rejected = loaded
-        .apply_structure(StructureOperation::DeleteRequest {
-            selector: reserved.to_owned(),
+        .apply_structure(StructureOperation::Delete {
+            target: ItemLocator::new(ItemKind::Request, reserved.to_owned()),
         })
         .unwrap_err();
     assert!(matches!(
         rejected,
         StructureError::ItemNotFound {
-            kind: probe_opencollection::ItemKind::Request,
+            kind: ItemKind::Request,
             ..
         }
     ));
@@ -573,8 +617,8 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
         .unwrap_err();
     assert!(matches!(duplicate, StructureError::DuplicateDestination(_)));
     let descendant = loaded
-        .apply_structure(StructureOperation::MoveFolder {
-            selector: "group".to_owned(),
+        .apply_structure(StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Folder, "group"),
             parent: Some("group".to_owned()),
             index: None,
         })
@@ -605,8 +649,8 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
     )
     .unwrap();
     let conflict = loaded
-        .apply_structure(StructureOperation::DeleteRequest {
-            selector: "alpha.yml".to_owned(),
+        .apply_structure(StructureOperation::Delete {
+            target: ItemLocator::new(ItemKind::Request, "alpha.yml"),
         })
         .unwrap_err();
     assert!(matches!(

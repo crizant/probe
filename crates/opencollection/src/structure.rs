@@ -9,7 +9,7 @@ use std::{
 use atomic_write_file::AtomicWriteFile;
 use serde_yaml_ng::{Mapping, Value};
 
-use probe_core::{FieldPatch, GraphqlUpdate, RequestUpdate};
+use probe_core::{FieldPatch, GraphqlUpdate, ItemKind, RequestUpdate};
 
 use crate::repository::{
     LoadedWorkspace, SaveError, SaveLock, WorkspaceSource, apply_request_update, atomic_write,
@@ -26,22 +26,22 @@ pub use errors::StructureError;
 use filesystem::*;
 use unbundled::*;
 
-/// The kind of collection item affected by a structural operation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ItemKind {
-    /// An HTTP request.
-    Request,
-    /// A folder.
-    Folder,
+/// Persistent identity of a request or folder.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ItemLocator {
+    /// Expected item kind.
+    pub kind: ItemKind,
+    /// Repository selector.
+    pub selector: String,
 }
 
-impl ItemKind {
-    /// Returns the stable lowercase representation used by CLI JSON.
+impl ItemLocator {
+    /// Creates a persistent locator with an expected item kind.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Request => "request",
-            Self::Folder => "folder",
+    pub fn new(kind: ItemKind, selector: impl Into<String>) -> Self {
+        Self {
+            kind,
+            selector: selector.into(),
         }
     }
 }
@@ -99,32 +99,20 @@ pub enum StructureOperation {
         /// Folder name.
         name: String,
     },
-    /// Renames a request, including its path in an unbundled workspace.
-    RenameRequest { selector: String, name: String },
-    /// Renames a folder, including its path in an unbundled workspace.
-    RenameFolder { selector: String, name: String },
-    /// Deletes a request.
-    DeleteRequest { selector: String },
+    /// Renames an item, including its path in an unbundled workspace.
+    Rename { target: ItemLocator, name: String },
+    /// Deletes an item, including a folder's descendants.
+    Delete { target: ItemLocator },
     /// Duplicates a request after the original sibling.
     DuplicateRequest { selector: String },
-    /// Deletes a folder and its descendants.
-    DeleteFolder { selector: String },
-    /// Moves or reorders a request.
-    MoveRequest {
-        selector: String,
+    /// Moves or reorders an item.
+    Move {
+        target: ItemLocator,
         parent: Option<String>,
         index: Option<usize>,
     },
-    /// Moves or reorders a folder.
-    MoveFolder {
-        selector: String,
-        parent: Option<String>,
-        index: Option<usize>,
-    },
-    /// Reorders a request within its current parent.
-    ReorderRequest { selector: String, index: usize },
-    /// Reorders a folder within its current parent.
-    ReorderFolder { selector: String, index: usize },
+    /// Reorders an item within its current parent.
+    Reorder { target: ItemLocator, index: usize },
 }
 
 impl StructureOperation {
@@ -137,17 +125,11 @@ impl StructureOperation {
 
     fn source(&self) -> Option<(&str, ItemKind)> {
         match self {
-            Self::RenameRequest { selector, .. }
-            | Self::DeleteRequest { selector }
-            | Self::MoveRequest { selector, .. }
-            | Self::ReorderRequest { selector, .. } => Some((selector, ItemKind::Request)),
-            Self::RenameFolder { selector, .. }
-            | Self::DeleteFolder { selector }
-            | Self::MoveFolder { selector, .. }
-            | Self::ReorderFolder { selector, .. } => Some((selector, ItemKind::Folder)),
-            Self::CreateRequest { .. }
-            | Self::CreateFolder { .. }
-            | Self::DuplicateRequest { .. } => None,
+            Self::Rename { target, .. }
+            | Self::Delete { target }
+            | Self::Move { target, .. }
+            | Self::Reorder { target, .. } => Some((&target.selector, target.kind)),
+            _ => None,
         }
     }
 
@@ -155,8 +137,7 @@ impl StructureOperation {
         match self {
             Self::CreateRequest { parent, .. }
             | Self::CreateFolder { parent, .. }
-            | Self::MoveRequest { parent, .. }
-            | Self::MoveFolder { parent, .. } => parent.as_deref(),
+            | Self::Move { parent, .. } => parent.as_deref(),
             _ => None,
         }
     }
@@ -164,12 +145,7 @@ impl StructureOperation {
     fn removes_source(&self) -> bool {
         matches!(
             self,
-            Self::DeleteRequest { .. }
-                | Self::DeleteFolder { .. }
-                | Self::MoveRequest { .. }
-                | Self::MoveFolder { .. }
-                | Self::ReorderRequest { .. }
-                | Self::ReorderFolder { .. }
+            Self::Delete { .. } | Self::Move { .. } | Self::Reorder { .. }
         )
     }
 
@@ -179,10 +155,8 @@ impl StructureOperation {
             Self::CreateRequest { .. }
                 | Self::CreateFolder { .. }
                 | Self::DuplicateRequest { .. }
-                | Self::MoveRequest { .. }
-                | Self::MoveFolder { .. }
-                | Self::ReorderRequest { .. }
-                | Self::ReorderFolder { .. }
+                | Self::Move { .. }
+                | Self::Reorder { .. }
         )
     }
 }
@@ -213,8 +187,8 @@ impl LoadedWorkspace {
         operation: StructureOperation,
     ) -> Result<StructureResult, StructureError> {
         let renamed = match &operation {
-            StructureOperation::RenameRequest { selector, name } => {
-                Some((selector.clone(), name.clone()))
+            StructureOperation::Rename { target, name } if target.kind == ItemKind::Request => {
+                Some((target.selector.clone(), name.clone()))
             }
             _ => None,
         };
@@ -390,10 +364,7 @@ fn validate_operation_selectors(
     operation: &StructureOperation,
 ) -> Result<(), StructureError> {
     if let Some((selector, kind)) = operation.selected_item() {
-        let exists = match kind {
-            ItemKind::Request => workspace.request_key(selector).is_some(),
-            ItemKind::Folder => workspace.folder_key(selector).is_some(),
-        };
+        let exists = workspace.item_key(kind, selector).is_some();
         if !exists {
             return Err(StructureError::ItemNotFound {
                 kind,
@@ -430,10 +401,7 @@ fn unbundled_selector_remaps(
     old_selectors: &[String],
 ) -> BTreeMap<String, String> {
     let source = operation.source();
-    let deleted = matches!(
-        operation,
-        StructureOperation::DeleteRequest { .. } | StructureOperation::DeleteFolder { .. }
-    );
+    let deleted = matches!(operation, StructureOperation::Delete { .. });
     old_selectors
         .iter()
         .filter_map(|selector| {
