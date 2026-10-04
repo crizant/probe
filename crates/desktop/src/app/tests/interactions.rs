@@ -1,145 +1,57 @@
 use super::*;
 
-#[gpui::test]
-fn dragging_request_tabs_reorders_without_selecting_them(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = bundled_fixture()
-        .canonicalize()
-        .expect("fixture should exist");
-    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
-    let first = workspace.requests()[0].key();
-    let second = workspace.requests()[1].key();
-    window
-        .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
-            view.select_request(first, cx);
-            view.select_request(second, cx);
-        })
-        .expect("test window should be open");
-    cx.run_until_parked();
-
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let source = visual
-        .debug_bounds("request-tab-0")
-        .expect("first tab should render");
-    let target = visual
-        .debug_bounds("request-tab-1")
-        .expect("second tab should render");
-    let drop_point = point(target.right() - px(4.0), target.center().y);
-    visual.simulate_mouse_down(source.center(), MouseButton::Left, Modifiers::default());
+fn drag_tab(
+    visual: &mut VisualTestContext,
+    source: &'static str,
+    target: &'static str,
+    before: bool,
+) {
+    let source = visual.debug_bounds(source).expect("source tab must render");
+    let target = visual.debug_bounds(target).expect("target tab must render");
+    let start = point(source.left() + px(12.0), source.center().y);
+    let end = point(
+        if before {
+            target.left() + px(12.0)
+        } else {
+            target.right() - px(4.0)
+        },
+        target.center().y,
+    );
+    visual.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    let direction = if end.x < start.x { -8.0 } else { 8.0 };
     visual.simulate_mouse_move(
-        point(source.center().x + px(8.0), source.center().y),
+        point(start.x + px(direction), start.y),
         Some(MouseButton::Left),
         Modifiers::default(),
     );
-    visual.simulate_mouse_move(drop_point, Some(MouseButton::Left), Modifiers::default());
-    visual.simulate_mouse_up(drop_point, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    visual.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
     visual.run_until_parked();
-    cx.run_until_parked();
-
-    window
-        .update(cx, |view, _, _| {
-            assert_eq!(view.shell.tabs(), &[second, first]);
-            assert_eq!(view.shell.active_tab(), Some(second));
-            assert_eq!(
-                view.selected_tree_item,
-                Some(WorkspaceItemRef::Request(second))
-            );
-        })
-        .expect("test window should remain open");
-
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let source = visual
-        .debug_bounds("request-tab-1")
-        .expect("moved tab should render");
-    let target = visual
-        .debug_bounds("request-tab-0")
-        .expect("leading tab should render");
-    let drop_point = point(target.left() + px(4.0), target.center().y);
-    visual.simulate_mouse_down(source.center(), MouseButton::Left, Modifiers::default());
-    visual.simulate_mouse_move(
-        point(source.center().x - px(8.0), source.center().y),
-        Some(MouseButton::Left),
-        Modifiers::default(),
-    );
-    visual.simulate_mouse_move(drop_point, Some(MouseButton::Left), Modifiers::default());
-    visual.simulate_mouse_up(drop_point, MouseButton::Left, Modifiers::default());
-    visual.run_until_parked();
-    cx.run_until_parked();
-
-    window
-        .update(cx, |view, _, _| {
-            assert_eq!(view.shell.tabs(), &[first, second]);
-            assert_eq!(view.shell.active_tab(), Some(second));
-        })
-        .expect("test window should remain open");
 }
 
 #[gpui::test]
-fn mixed_tabs_share_drag_hover_and_close_interactions(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(1200.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = nested_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let request = workspace.requests()[0].key();
-    let folder = crate::shell::OverviewTab::Folder(workspace.folder_key("items/1").unwrap());
-    let collection = crate::shell::OverviewTab::Collection;
+fn dragging_mixed_tabs_reorders_in_both_directions_without_selecting_them(cx: &mut TestAppContext) {
+    let (window, [request, collection, folder]) = mixed_tab_window(cx);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    drag_tab(&mut visual, "overview-tab-1", "request-tab-0", true);
     window
-        .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
-            view.select_request(request, cx);
-            view.select_open_tab(collection.into(), cx);
-            view.select_open_tab(folder.into(), cx);
+        .update(&mut visual, |view, _, _| {
+            assert_eq!(view.shell.open_tabs(), &[folder, request, collection]);
+            assert_eq!(view.shell.active_open_tab(), Some(folder));
         })
         .unwrap();
-    cx.run_until_parked();
-
-    for (source_selector, target_selector, source_tab) in [
-        ("overview-tab-1", "request-tab-0", folder),
-        ("overview-tab-1", "request-tab-0", collection),
-    ] {
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        let source = visual.debug_bounds(source_selector).unwrap();
-        let target = visual.debug_bounds(target_selector).unwrap();
-        let source_point = point(source.left() + px(12.0), source.center().y);
-        let drop_point = point(target.left() + px(12.0), target.center().y);
-        visual.simulate_mouse_move(source_point, None, Modifiers::default());
-        window
-            .update(&mut visual, |view, _, _| {
-                assert_eq!(
-                    view.transient.tab_tooltip.as_ref().map(|t| t.target),
-                    Some(source_tab.into())
-                );
-            })
-            .unwrap();
-        visual.simulate_mouse_down(source_point, MouseButton::Left, Modifiers::default());
-        visual.simulate_mouse_move(
-            point(source_point.x - px(8.0), source_point.y),
-            Some(MouseButton::Left),
-            Modifiers::default(),
-        );
-        visual.simulate_mouse_move(drop_point, Some(MouseButton::Left), Modifiers::default());
-        visual.simulate_mouse_up(drop_point, MouseButton::Left, Modifiers::default());
-        visual.run_until_parked();
-        cx.run_until_parked();
-    }
+    drag_tab(&mut visual, "request-tab-0", "overview-tab-1", false);
     window
-        .update(cx, |view, _, _| {
-            assert_eq!(
-                view.shell.open_tabs(),
-                &[folder.into(), collection.into(), request.into()]
-            );
-            assert_eq!(view.shell.active_overview(), Some(folder));
+        .update(&mut visual, |view, _, _| {
+            assert_eq!(view.shell.open_tabs(), &[folder, collection, request]);
+            assert_eq!(view.shell.active_open_tab(), Some(folder));
         })
         .unwrap();
+}
 
+#[gpui::test]
+fn overview_context_menu_keeps_its_target_and_middle_click_closes_it(cx: &mut TestAppContext) {
+    let (window, [_, collection, _]) = mixed_tab_window(cx);
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let source = visual.debug_bounds("overview-tab-0").unwrap();
     visual.simulate_mouse_down(source.center(), MouseButton::Right, Modifiers::default());
@@ -150,8 +62,8 @@ fn mixed_tabs_share_drag_hover_and_close_interactions(cx: &mut TestAppContext) {
     visual.run_until_parked();
     window
         .update(&mut visual, |view, _, _| {
-            assert_eq!(view.shell.open_tabs(), &[folder.into()]);
-            assert_eq!(view.shell.active_overview(), Some(folder));
+            assert_eq!(view.shell.open_tabs(), &[collection]);
+            assert_eq!(view.shell.active_open_tab(), Some(collection));
         })
         .unwrap();
     let tab = visual.debug_bounds("overview-tab-0").unwrap();
@@ -199,7 +111,7 @@ fn middle_clicking_a_request_tab_closes_it(cx: &mut TestAppContext) {
     let (tabs, active, selected) = window
         .update(cx, |view, _, _| {
             (
-                view.shell.tabs().to_vec(),
+                view.shell.tabs().collect::<Vec<_>>(),
                 view.shell.active_tab(),
                 view.selected_tree_item,
             )
@@ -262,7 +174,7 @@ fn request_tab_context_menu_closes_other_tabs_and_selects_its_target(cx: &mut Te
     let (tabs, active, selected) = window
         .update(cx, |view, _, _| {
             (
-                view.shell.tabs().to_vec(),
+                view.shell.tabs().collect::<Vec<_>>(),
                 view.shell.active_tab(),
                 view.selected_tree_item,
             )
@@ -456,7 +368,10 @@ fn platform_close_tab_hotkey_closes_the_active_request(cx: &mut TestAppContext) 
 
     let (tabs, active) = window
         .update(cx, |view, _, _| {
-            (view.shell.tabs().to_vec(), view.shell.active_tab())
+            (
+                view.shell.tabs().collect::<Vec<_>>(),
+                view.shell.active_tab(),
+            )
         })
         .expect("test window should remain open");
     assert_eq!(tabs, vec![first]);
@@ -598,24 +513,14 @@ fn opening_many_request_tabs_scrolls_to_the_active_tab(cx: &mut TestAppContext) 
 
     // Exercise the same pointer wiring after horizontal scrolling.
     let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let source = visual.debug_bounds("request-tab-11").unwrap();
-    let target = visual.debug_bounds("request-tab-10").unwrap();
-    let source_point = point(source.left() + px(12.0), source.center().y);
-    let drop_point = point(target.left() + px(12.0), target.center().y);
-    visual.simulate_mouse_move(source_point, None, Modifiers::default());
-    visual.simulate_mouse_down(source_point, MouseButton::Left, Modifiers::default());
-    visual.simulate_mouse_move(
-        point(source_point.x - px(8.0), source_point.y),
-        Some(MouseButton::Left),
-        Modifiers::default(),
-    );
-    visual.simulate_mouse_move(drop_point, Some(MouseButton::Left), Modifiers::default());
-    visual.simulate_mouse_up(drop_point, MouseButton::Left, Modifiers::default());
-    visual.run_until_parked();
+    drag_tab(&mut visual, "request-tab-11", "request-tab-10", true);
     cx.run_until_parked();
     window
         .update(cx, |view, _, _| {
-            assert_eq!(view.shell.tabs()[10..], [keys[11], keys[10]]);
+            assert_eq!(
+                view.shell.tabs().collect::<Vec<_>>()[10..],
+                [keys[11], keys[10]]
+            );
             assert_eq!(view.shell.active_tab(), Some(keys[11]));
         })
         .unwrap();
@@ -685,61 +590,24 @@ fn hovering_a_request_tab_shows_the_full_label_tooltip(cx: &mut TestAppContext) 
             .is_some(),
         "the generic HTTP icon must be accompanied by the custom method"
     );
+}
 
-    let fixture = nested_fixture()
-        .canonicalize()
-        .expect("fixture should exist");
-    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
-    let folder = workspace
-        .folder_key("items/1")
-        .expect("folder should exist");
+#[gpui::test]
+fn overview_tab_tooltip_shows_its_name_and_icon_without_a_request_method(cx: &mut TestAppContext) {
+    let (window, [_, _, folder]) = mixed_tab_window(cx);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let bounds = visual.debug_bounds("overview-tab-1").unwrap();
+    hover_and_wait(cx, window, bounds.center());
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(visual.debug_bounds("overview-tab-tooltip-popup").is_some());
+    assert!(visual.debug_bounds("request-tab-tooltip-method").is_none());
     window
-        .update(cx, |view, _, cx| {
-            view.set_workspace(fixture, workspace);
-            cx.notify();
+        .update(&mut visual, |view, _, _| {
+            assert!(
+                view.transient
+                    .tab_tooltip
+                    .is_some_and(|tooltip| tooltip.open && tooltip.target == folder)
+            );
         })
-        .expect("test window should remain open");
-    for (index, tab) in [
-        crate::shell::OverviewTab::Collection,
-        crate::shell::OverviewTab::Folder(folder),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        window
-            .update(cx, |view, _, cx| {
-                view.shell.open_overview(tab);
-                cx.notify();
-            })
-            .expect("test window should remain open");
-        cx.run_until_parked();
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        let bounds = visual
-            .debug_bounds(if index == 0 {
-                "overview-tab-0"
-            } else {
-                "overview-tab-1"
-            })
-            .expect("overview tab should render");
-        hover_and_wait(cx, window, bounds.center());
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        assert!(
-            visual.debug_bounds("overview-tab-tooltip-popup").is_some(),
-            "collection and folder tabs should show their name tooltip"
-        );
-        assert!(
-            visual.debug_bounds("request-tab-tooltip-method").is_none(),
-            "overview tooltips should use their icon instead of a request method"
-        );
-        window
-            .update(cx, |view, _, _| {
-                assert!(
-                    view.transient
-                        .tab_tooltip
-                        .is_some_and(|tooltip| tooltip.open
-                            && tooltip.target == crate::app::TabTooltipTarget::Overview(tab))
-                );
-            })
-            .expect("test window should remain open");
-    }
+        .unwrap();
 }

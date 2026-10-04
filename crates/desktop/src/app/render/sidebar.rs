@@ -46,7 +46,7 @@ impl ProbeApp {
         };
         let (label, marker, popup_id) = match tooltip.target {
             TabTooltipTarget::Request(key) => {
-                if !self.shell.tabs().contains(&key) {
+                if !self.shell.open_tabs().contains(&key.into()) {
                     return div().into_any_element();
                 }
                 let Some(request) = loaded.workspace().request(key) else {
@@ -80,7 +80,7 @@ impl ProbeApp {
                 )
             }
             TabTooltipTarget::Overview(tab) => {
-                if !self.shell.overview_tabs().contains(&tab) {
+                if !self.shell.open_tabs().contains(&tab.into()) {
                     return div().into_any_element();
                 }
                 let (label, icon) = match tab {

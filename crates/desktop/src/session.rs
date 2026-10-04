@@ -72,8 +72,8 @@ impl TabLocator {
 #[serde(default)]
 pub(crate) struct WorkspaceSessionState {
     pub(crate) open_tabs: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) ordered_tabs: Vec<TabLocator>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ordered_tabs: Option<Vec<TabLocator>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) active_open_tab: Option<TabLocator>,
     pub(crate) active_tab: Option<String>,
@@ -304,11 +304,11 @@ mod tests {
         state.workspaces.insert(
             "/tmp/example".into(),
             WorkspaceSessionState {
-                ordered_tabs: vec![
+                ordered_tabs: Some(vec![
                     super::TabLocator::Request("users/list.yml".into()),
                     super::TabLocator::Collection,
                     super::TabLocator::Folder("users".into()),
-                ],
+                ]),
                 active_open_tab: Some(super::TabLocator::Collection),
                 open_tabs: vec!["users/list.yml".to_owned()],
                 active_tab: Some("users/list.yml".to_owned()),
@@ -336,7 +336,7 @@ mod tests {
         state.workspaces.insert(
             a.clone(),
             WorkspaceSessionState {
-                ordered_tabs: Vec::new(),
+                ordered_tabs: None,
                 active_open_tab: None,
                 open_tabs: vec!["first".into(), "second".into()],
                 active_tab: Some("first".into()),
@@ -347,7 +347,7 @@ mod tests {
         state.workspaces.insert(
             b.clone(),
             WorkspaceSessionState {
-                ordered_tabs: Vec::new(),
+                ordered_tabs: None,
                 active_open_tab: None,
                 open_tabs: vec!["other".into()],
                 active_tab: Some("other".into()),

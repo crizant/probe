@@ -61,12 +61,7 @@ impl ProbeApp {
                             .as_deref()
                             .unwrap_or("Untitled request")
                     };
-                    let request_index = self
-                        .shell
-                        .tabs()
-                        .iter()
-                        .position(|open| *open == key)
-                        .unwrap_or(0);
+                    let request_index = self.shell.tabs().position(|open| open == key).unwrap_or(0);
                     (
                         gpui::ElementId::from(("request-tab", key.slot())),
                         format!("request-tab-{request_index}"),
@@ -93,8 +88,7 @@ impl ProbeApp {
                     let overview_index = self
                         .shell
                         .overview_tabs()
-                        .iter()
-                        .position(|open| *open == overview)
+                        .position(|open| open == overview)
                         .unwrap_or(0);
                     (
                         match overview {

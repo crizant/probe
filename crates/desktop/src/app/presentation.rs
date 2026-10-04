@@ -122,12 +122,8 @@ pub(crate) fn request_method_options(
 
 pub(crate) struct ShellSelectors {
     pub(crate) ordered_tabs: Vec<(crate::shell::OpenTab, Option<crate::session::TabLocator>)>,
-    pub(crate) pending_keep: Option<crate::session::TabLocator>,
-    pub(crate) tab_selectors: Vec<String>,
-    // None identifies the collection; Some identifies a folder.
-    pub(crate) overview_selectors: Vec<Option<String>>,
-    pub(crate) active_overview_selector: Option<Option<String>>,
-    pub(crate) active_selector: Option<String>,
+    pub(crate) active_tab: Option<crate::shell::OpenTab>,
+    pub(crate) pending_keep: Option<crate::shell::OpenTab>,
     pub(crate) folder_selectors: Vec<String>,
     pub(crate) selected: Option<(probe_opencollection::ItemKind, String)>,
 }

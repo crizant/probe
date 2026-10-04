@@ -214,9 +214,11 @@ impl ProbeApp {
         cx.notify();
     }
 
-    pub(super) fn close_tab_now(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let previous_active = self.shell.active_open_tab();
-        self.shell.close_tab(key);
+    fn remove_open_tab(&mut self, tab: crate::shell::OpenTab) {
+        self.shell.close(tab);
+        let crate::shell::OpenTab::Request(key) = tab else {
+            return;
+        };
         self.request_editor.remove(key);
         self.response_viewer.remove_selection(key);
         if self.detached_requests.remove(&key) {
@@ -226,6 +228,11 @@ impl ProbeApp {
             self.execution.remove(key);
             self.response_viewer.remove(key);
         }
+    }
+
+    pub(super) fn close_tab_now(&mut self, key: RequestKey, cx: &mut Context<Self>) {
+        let previous_active = self.shell.active_open_tab();
+        self.remove_open_tab(key.into());
         if self.shell.active_open_tab() != previous_active {
             self.select_and_reveal_active_request_in_sidebar();
         }
@@ -247,13 +254,9 @@ impl ProbeApp {
             if tab == keep {
                 continue;
             }
-            match tab {
-                crate::shell::OpenTab::Request(key) => self.close_tab_now(key, cx),
-                crate::shell::OpenTab::Overview(tab) => self.shell.close_overview(tab),
-            }
+            self.remove_open_tab(tab);
         }
         self.select_open_tab(keep, cx);
-        self.persist_session(cx);
     }
 
     pub(super) fn dirty_keys(&self) -> Vec<RequestKey> {
@@ -303,8 +306,6 @@ impl ProbeApp {
         let keep = keep.into();
         self.shell
             .tabs()
-            .iter()
-            .copied()
             .filter(|key| crate::shell::OpenTab::Request(*key) != keep)
             .filter(|key| self.request_is_dirty(*key))
             .collect()

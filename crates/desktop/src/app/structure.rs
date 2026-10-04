@@ -578,7 +578,6 @@ impl ProbeApp {
         let Some(old) = self.loaded_workspace.as_ref() else {
             return BTreeMap::new();
         };
-        let selectors = self.snapshot_shell_selectors(old);
         let mut key_remaps = request_key_remaps(old, &workspace, &result.selector_remaps);
         if let Some(old_key) = detached_key
             && let Some(selector) = result.selector.as_deref()
@@ -636,8 +635,12 @@ impl ProbeApp {
                 Some((located.key(), baseline))
             })
             .collect::<Vec<_>>();
-        let key_remaps = self.install_reloaded_workspace(workspace, baselines, &key_remaps);
-        self.restore_shell_selectors(&result.selector_remaps, &key_remaps, selectors);
+        let key_remaps = self.install_reloaded_workspace(
+            workspace,
+            baselines,
+            &key_remaps,
+            &result.selector_remaps,
+        );
         self.sync_save_dialog_after_structure(operation, &result);
         if matches!(operation, StructureOperation::CreateFolder { .. })
             && matches!(

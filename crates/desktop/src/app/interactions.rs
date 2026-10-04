@@ -404,10 +404,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         let target = target.into();
-        let is_open = match target {
-            TabTooltipTarget::Request(key) => self.shell.tabs().contains(&key),
-            TabTooltipTarget::Overview(tab) => self.shell.overview_tabs().contains(&tab),
-        };
+        let is_open = self.shell.open_tabs().contains(&target);
         if !is_open {
             return;
         }

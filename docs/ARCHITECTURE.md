@@ -292,7 +292,8 @@ directory. It contains presentation metadata such as recent collection paths,
 repository selectors, selected environments, pane state, and orientation. It is never
 stored in OpenCollection YAML. Request, collection, and folder tabs share one ordered
 strip. Sessions retain their mixed order and active tab using typed repository locators;
-legacy request-only session fields remain readable. Detached requests have no saved
+legacy request-only session fields are used only when unified tab state is absent.
+An explicitly empty unified tab list remains empty. Detached requests have no saved
 locator and are not restored.
 
 Session I/O is atomic and runs off the UI thread. Restoration reloads the collection,

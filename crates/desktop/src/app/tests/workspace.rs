@@ -237,8 +237,6 @@ fn saving_detached_request_keeps_the_persisted_sequence(cx: &mut TestAppContext)
             let saved_key = view
                 .shell
                 .tabs()
-                .iter()
-                .copied()
                 .find(|key| {
                     view.loaded_workspace
                         .as_ref()
@@ -457,6 +455,48 @@ fn editing_detached_request_during_save_keeps_the_edit_dirty(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn unchanged_active_folder_survives_reconciliation_in_mixed_tab_order(cx: &mut TestAppContext) {
+    let (window, [request, _, folder]) = mixed_tab_window(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.shell.move_tab(folder, request, true);
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let expected: Vec<_> = view
+                .shell
+                .open_tabs()
+                .iter()
+                .map(|tab| crate::session::TabLocator::capture(*tab, loaded).unwrap())
+                .collect();
+            let fresh = probe_opencollection::load_workspace(view.workspace_path.as_ref().unwrap())
+                .unwrap();
+            let crate::synchronization::ReconcileResult::Applied(reconciled) =
+                crate::synchronization::reconcile(
+                    &view.local_request_states(),
+                    fresh,
+                    &BTreeMap::new(),
+                )
+            else {
+                panic!("unchanged workspace must reconcile");
+            };
+            assert!(!reconciled.selector_remaps.contains_key("items/1"));
+            view.apply_reconciled_workspace(*reconciled, cx);
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let actual: Vec<_> = view
+                .shell
+                .open_tabs()
+                .iter()
+                .map(|tab| crate::session::TabLocator::capture(*tab, loaded).unwrap())
+                .collect();
+            assert_eq!(actual, expected);
+            assert_eq!(
+                crate::session::TabLocator::capture(view.shell.active_open_tab().unwrap(), loaded),
+                Some(crate::session::TabLocator::Folder("items/1".into()))
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn close_other_tabs_keeps_a_detached_tab_after_key_remap(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -480,7 +520,7 @@ fn close_other_tabs_keeps_a_detached_tab_after_key_remap(cx: &mut TestAppContext
     window
         .update(cx, |view, _, _| {
             assert!(view.pending_close.is_none());
-            assert_eq!(view.shell.tabs().len(), 1);
+            assert_eq!(view.shell.tabs().count(), 1);
             assert!(
                 view.detached_requests
                     .contains(&view.shell.active_tab().unwrap())
@@ -528,7 +568,7 @@ fn save_dialog_survives_workspace_reload(cx: &mut TestAppContext) {
                         .map(|request| (located.key(), request))
                 })
                 .collect();
-            view.install_reloaded_workspace(fresh, baselines, &BTreeMap::new());
+            view.install_reloaded_workspace(fresh, baselines, &BTreeMap::new(), &BTreeMap::new());
             let dialog = view.structure_dialog.as_mut().unwrap();
             let StructureDialogMode::SaveDetachedRequest { key } = dialog.mode else {
                 panic!("expected save dialog")
@@ -655,7 +695,7 @@ fn creating_a_folder_from_the_save_dialog_keeps_the_draft_and_saves_into_it(
             };
             assert_eq!(dialog.name, "Placed");
             assert!(view.detached_requests.contains(&key));
-            assert!(view.shell.tabs().contains(&key));
+            assert!(view.shell.open_tabs().contains(&key.into()));
             assert_eq!(
                 view.loaded_workspace
                     .as_ref()
@@ -743,7 +783,7 @@ fn enter_in_the_save_folder_field_creates_the_folder_without_saving(cx: &mut Tes
             };
             assert_eq!(dialog.name, "Placed");
             assert!(view.detached_requests.contains(&key));
-            assert!(view.shell.tabs().contains(&key));
+            assert!(view.shell.open_tabs().contains(&key.into()));
             let inbox = folder_selector_named(view, "Inbox").expect("folder should be created");
             assert_eq!(dialog.parent, inbox);
             assert!(dialog.new_folder_name.is_none());
@@ -857,7 +897,7 @@ fn enter_on_a_save_destination_selects_that_folder(cx: &mut TestAppContext) {
             assert_eq!(dialog.name, "Placed");
             assert_eq!(dialog.parent, "items/1");
             assert!(view.detached_requests.contains(&key));
-            assert!(view.shell.tabs().contains(&key));
+            assert!(view.shell.open_tabs().contains(&key.into()));
         })
         .unwrap();
 }
@@ -877,15 +917,18 @@ fn creating_a_folder_keeps_open_tab_order(cx: &mut TestAppContext) {
             view.set_workspace(fixture, workspace);
             view.select_request(persisted, cx);
             view.new_detached_request(false, window, cx);
-            assert_eq!(view.shell.tabs().len(), 2);
-            assert_eq!(view.shell.tabs()[0], persisted);
-            assert_eq!(view.shell.active_tab(), Some(view.shell.tabs()[1]));
-            let detached = view.shell.tabs()[1];
+            assert_eq!(view.shell.tabs().count(), 2);
+            assert_eq!(view.shell.tabs().next().unwrap(), persisted);
+            assert_eq!(
+                view.shell.active_tab(),
+                Some(view.shell.tabs().nth(1).unwrap())
+            );
+            let detached = view.shell.tabs().nth(1).unwrap();
             view.open_save_detached_request_dialog(detached, window, cx);
             let dialog = view.structure_dialog.as_mut().unwrap();
             dialog.name = "Placed".to_owned();
             dialog.new_folder_name = Some("Inbox".to_owned());
-            view.shell.activate_tab(persisted);
+            view.shell.activate(persisted.into());
             assert_eq!(view.shell.active_tab(), Some(persisted));
             view.create_folder_from_save_dialog(window, cx);
         })
@@ -903,16 +946,23 @@ fn creating_a_folder_keeps_open_tab_order(cx: &mut TestAppContext) {
                 panic!("save dialog should stay open");
             };
             assert_eq!(dialog.name, "Placed");
-            assert_eq!(view.shell.tabs().len(), 2);
-            assert_eq!(view.shell.tabs()[1], key);
-            assert_eq!(view.shell.active_tab(), Some(view.shell.tabs()[0]));
+            assert_eq!(view.shell.tabs().count(), 2);
+            assert_eq!(view.shell.tabs().nth(1).unwrap(), key);
+            assert_eq!(
+                view.shell.active_tab(),
+                Some(view.shell.tabs().next().unwrap())
+            );
             assert!(view.detached_requests.contains(&key));
-            assert!(!view.detached_requests.contains(&view.shell.tabs()[0]));
+            assert!(
+                !view
+                    .detached_requests
+                    .contains(&view.shell.tabs().next().unwrap())
+            );
             let loaded = view.loaded_workspace.as_ref().unwrap();
             assert_eq!(
                 loaded
                     .workspace()
-                    .request(view.shell.tabs()[0])
+                    .request(view.shell.tabs().next().unwrap())
                     .unwrap()
                     .metadata
                     .name
@@ -1133,108 +1183,103 @@ fn folder_selector_named(view: &ProbeApp, name: &str) -> Option<String> {
 }
 
 #[gpui::test]
-fn reordered_tabs_are_captured_and_restored_in_session_order(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = bundled_fixture()
-        .canonicalize()
-        .expect("fixture should exist");
-    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
-    let keys: Vec<_> = workspace
-        .requests()
-        .iter()
-        .take(2)
-        .map(|request| request.key())
-        .collect();
-    assert_eq!(keys.len(), 2);
+fn unified_session_tabs_take_precedence_over_legacy_fields(cx: &mut TestAppContext) {
+    let (window, [request, _, folder]) = mixed_tab_window(cx);
     window
-        .update(cx, |view, window, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
-            view.shell.open_request(keys[0]);
-            view.shell.open_request(keys[1]);
-            view.tab_drag_source = Some(keys[0].into());
-            view.update_tab_drop_target(keys[0], keys[1], false, cx);
-            view.drop_tab(keys[0], cx);
-            assert_eq!(view.shell.tabs(), &[keys[1], keys[0]]);
-            assert_eq!(view.shell.active_tab(), Some(keys[1]));
-            let saved_order = view.session.workspaces[view.workspace_path.as_ref().unwrap()]
-                .open_tabs
-                .clone();
-            view.shell.reset_for_workspace();
-            view.restore_shell_state(cx);
-            assert_eq!(view.shell.tabs(), &[keys[1], keys[0]]);
-            assert_eq!(
-                view.session.workspaces[view.workspace_path.as_ref().unwrap()].open_tabs,
-                saved_order
-            );
-            let collection = crate::shell::OverviewTab::Collection;
-            view.select_open_tab(collection.into(), cx);
-            view.shell.move_tab(collection, keys[1], true);
+        .update(cx, |view, _, cx| {
+            view.shell.move_tab(folder, request, true);
             view.capture_session();
             let order = view.shell.open_tabs().to_vec();
-            let saved = view.session.workspaces[view.workspace_path.as_ref().unwrap()].clone();
-            let json = serde_json::to_string(&saved).unwrap();
-            assert!(json.contains("collection"));
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let crate::session::TabLocator::Request(selector) =
+                crate::session::TabLocator::capture(request, loaded).unwrap()
+            else {
+                unreachable!()
+            };
+            let saved = view
+                .session
+                .workspaces
+                .get_mut(view.workspace_path.as_ref().unwrap())
+                .unwrap();
+            // Stale compatibility fields must not change current unified state.
+            saved.open_tabs = vec![selector.clone()];
+            saved.active_tab = Some(selector);
             view.shell.reset_for_workspace();
             view.restore_shell_state(cx);
             assert_eq!(view.shell.open_tabs(), order);
-            assert_eq!(view.shell.active_overview(), Some(collection));
-            view.new_detached_request(false, window, cx);
-            let detached = view.shell.active_tab().unwrap();
-            view.shell.move_tab(detached, collection, false);
-            view.select_open_tab(collection.into(), cx);
-            let fresh = probe_opencollection::load_workspace(view.workspace_path.as_ref().unwrap())
+            assert_eq!(view.shell.active_open_tab(), Some(folder));
+            let saved = view
+                .session
+                .workspaces
+                .get_mut(view.workspace_path.as_ref().unwrap())
                 .unwrap();
-            view.apply_reconciled_workspace(reconciled_workspace(fresh), cx);
-            let restored: Vec<_> = view
-                .shell
-                .open_tabs()
-                .iter()
-                .filter_map(|tab| {
-                    crate::session::TabLocator::capture(
-                        *tab,
-                        view.loaded_workspace.as_ref().unwrap(),
-                    )
-                })
-                .collect();
-            assert_eq!(restored, saved.ordered_tabs);
-            assert_eq!(view.shell.active_overview(), Some(collection));
-            assert!(matches!(view.shell.open_tabs()[1], crate::shell::OpenTab::Request(key) if view.detached_requests.contains(&key)));
+            saved.ordered_tabs = Some(Vec::new());
+            saved.active_open_tab = None;
+            view.restore_shell_state(cx);
+            assert!(view.shell.open_tabs().is_empty());
+            assert_eq!(view.shell.active_open_tab(), None);
         })
-        .expect("test window should remain open");
+        .unwrap();
 }
 
 #[gpui::test]
-fn close_other_tabs_keeps_overview_drafts_and_protects_other_dirty_tabs(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = nested_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let request = workspace.requests()[0].key();
-    let folder = crate::shell::OverviewTab::Folder(workspace.folder_key("items/1").unwrap());
-    let collection = crate::shell::OverviewTab::Collection;
+fn reconciliation_preserves_interleaved_detached_tab_and_its_selection(cx: &mut TestAppContext) {
+    let (window, [request, _, _]) = mixed_tab_window(cx);
     window
         .update(cx, |view, window, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
-            view.select_request(request, cx);
-            view.select_open_tab(folder.into(), cx);
-            view.select_open_tab(collection.into(), cx);
-            view.edit_overview(None, true, "Unsaved collection docs".into(), cx);
-            let keep_collection = PendingClose::OtherTabs {
-                keep: collection.into(),
+            view.new_detached_request(false, window, cx);
+            let old_detached = view.shell.active_open_tab().unwrap();
+            view.shell.move_tab(old_detached, request, false);
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let expected: Vec<_> = view
+                .shell
+                .open_tabs()
+                .iter()
+                .map(|tab| crate::session::TabLocator::capture(*tab, loaded))
+                .collect();
+            let fresh = probe_opencollection::load_workspace(view.workspace_path.as_ref().unwrap())
+                .unwrap();
+            view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx);
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let actual: Vec<_> = view
+                .shell
+                .open_tabs()
+                .iter()
+                .map(|tab| crate::session::TabLocator::capture(*tab, loaded))
+                .collect();
+            assert_eq!(actual, expected);
+            let crate::shell::OpenTab::Request(active) = view.shell.active_open_tab().unwrap()
+            else {
+                panic!("detached request must stay selected");
             };
-            assert!(view.pending_overview_targets(&keep_collection).is_empty());
+            assert!(view.detached_requests.contains(&active));
+            assert_eq!(view.shell.open_tabs()[1], active.into());
+            assert_ne!(view.shell.active_open_tab(), Some(old_detached));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn close_other_tabs_preserves_the_kept_overview_draft(cx: &mut TestAppContext) {
+    let (window, [_, collection, _]) = mixed_tab_window(cx);
+    window
+        .update(cx, |view, window, cx| {
+            view.edit_overview(None, true, "Unsaved collection docs".into(), cx);
             view.request_close_other_tabs(collection, window, cx);
             assert!(view.application_dialog.is_none());
-            assert_eq!(view.shell.open_tabs(), &[collection.into()]);
+            assert_eq!(view.shell.open_tabs(), &[collection]);
+            assert_eq!(view.shell.active_open_tab(), Some(collection));
             assert!(view.has_dirty_overviews());
-            view.select_open_tab(folder.into(), cx);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn close_other_tabs_prompts_for_a_draft_on_another_overview(cx: &mut TestAppContext) {
+    let (window, tabs @ [_, _, folder]) = mixed_tab_window(cx);
+    window
+        .update(cx, |view, window, cx| {
+            view.edit_overview(None, true, "Unsaved collection docs".into(), cx);
             view.request_close_other_tabs(folder, window, cx);
             let Some(ApplicationDialog::Unsaved {
                 pending,
@@ -1246,7 +1291,7 @@ fn close_other_tabs_keeps_overview_drafts_and_protects_other_dirty_tabs(cx: &mut
             };
             assert!(*documentation);
             assert_eq!(view.pending_overview_targets(pending), vec![None]);
-            assert_eq!(view.shell.open_tabs(), &[collection.into(), folder.into()]);
+            assert_eq!(view.shell.open_tabs(), tabs);
         })
         .unwrap();
 }
@@ -1274,12 +1319,12 @@ fn switching_workspaces_restores_each_tabs_active_tab_and_folders(cx: &mut TestA
             let a_folder = loaded.folders()[0].key();
             view.shell.open_request(a_tabs[0]);
             view.shell.open_request(a_tabs[1]);
-            view.shell.activate_tab(a_tabs[1]);
+            view.shell.activate(a_tabs[1].into());
             view.shell.collapse_folder(a_folder);
 
             view.set_workspace(b.clone(), load(&b));
             view.restore_shell_state(cx);
-            assert!(view.shell.tabs().is_empty());
+            assert!(view.shell.tabs().next().is_none());
             let loaded = view.loaded_workspace.as_ref().unwrap();
             let b_tab = loaded.requests()[0].key();
             let b_folder = loaded.folders()[0].key();
@@ -1295,14 +1340,17 @@ fn switching_workspaces_restores_each_tabs_active_tab_and_folders(cx: &mut TestA
                 .take(2)
                 .map(|item| item.key())
                 .collect();
-            assert_eq!(view.shell.tabs(), restored_a);
+            assert_eq!(view.shell.tabs().collect::<Vec<_>>(), restored_a);
             assert_eq!(view.shell.active_tab(), Some(restored_a[1]));
             assert!(!view.shell.folder_is_expanded(loaded.folders()[0].key()));
 
             view.set_workspace(b.clone(), load(&b));
             view.restore_shell_state(cx);
             let loaded = view.loaded_workspace.as_ref().unwrap();
-            assert_eq!(view.shell.tabs(), &[loaded.requests()[0].key()]);
+            assert_eq!(
+                view.shell.tabs().collect::<Vec<_>>(),
+                &[loaded.requests()[0].key()]
+            );
             assert_eq!(view.shell.active_tab(), Some(loaded.requests()[0].key()));
             assert!(!view.shell.folder_is_expanded(loaded.folders()[0].key()));
             view.capture_session();
@@ -1343,7 +1391,7 @@ fn loading_existing_workspaces_restores_tabs_after_switching(cx: &mut TestAppCon
     window
         .update(cx, |view, window, cx| {
             assert_eq!(view.workspace_path.as_ref(), Some(&b));
-            assert!(view.shell.tabs().is_empty());
+            assert!(view.shell.tabs().next().is_none());
             let requests = view.loaded_workspace.as_ref().unwrap().requests();
             let (first, second) = (requests[0].key(), requests[1].key());
             view.select_request(first, cx);
@@ -1358,7 +1406,7 @@ fn loading_existing_workspaces_restores_tabs_after_switching(cx: &mut TestAppCon
             assert_eq!(view.workspace_path.as_ref(), Some(&a));
             let requests = view.loaded_workspace.as_ref().unwrap().requests();
             let (first, second) = (requests[0].key(), requests[1].key());
-            assert_eq!(view.shell.tabs(), &[first, second]);
+            assert_eq!(view.shell.tabs().collect::<Vec<_>>(), &[first, second]);
             assert_eq!(view.shell.active_tab(), Some(first));
             view.load_workspace_path(b.clone(), None, window, cx);
         })
@@ -1370,7 +1418,7 @@ fn loading_existing_workspaces_restores_tabs_after_switching(cx: &mut TestAppCon
             assert_eq!(view.workspace_path.as_ref(), Some(&b));
             let requests = view.loaded_workspace.as_ref().unwrap().requests();
             let (first, second) = (requests[0].key(), requests[1].key());
-            assert_eq!(view.shell.tabs(), &[first, second]);
+            assert_eq!(view.shell.tabs().collect::<Vec<_>>(), &[first, second]);
             assert_eq!(view.shell.active_tab(), Some(second));
         })
         .unwrap();
@@ -1471,7 +1519,7 @@ fn structural_rename_keeps_open_tab_and_dirty_draft(cx: &mut TestAppContext) {
             assert_eq!(request.url.as_deref(), Some("https://local.example/dirty"));
             assert!(view.persistence.is_dirty(renamed, request));
             assert_eq!(view.shell.active_tab(), Some(renamed));
-            assert_eq!(view.shell.tabs(), &[renamed]);
+            assert_eq!(view.shell.tabs().collect::<Vec<_>>(), &[renamed]);
         })
         .unwrap();
 
@@ -1525,11 +1573,11 @@ fn structural_move_remaps_tabs_and_preserves_dirty_drafts(cx: &mut TestAppContex
             assert_eq!(request.url.as_deref(), Some("https://local.example/dirty"));
             assert!(view.persistence.is_dirty(moved, request));
             assert_eq!(view.shell.active_tab(), Some(moved));
-            assert!(view.shell.tabs().contains(&moved));
+            assert!(view.shell.open_tabs().contains(&moved.into()));
             let remapped_folder = loaded.folder_key("items/0").unwrap();
             assert!(!view.shell.folder_is_expanded(remapped_folder));
             assert_eq!(
-                view.shell.overview_tabs(),
+                view.shell.overview_tabs().collect::<Vec<_>>(),
                 &[
                     crate::shell::OverviewTab::Collection,
                     crate::shell::OverviewTab::Folder(remapped_folder),
@@ -2079,7 +2127,7 @@ fn workspace_reload_preserves_running_request_execution(cx: &mut TestAppContext)
                 .collect::<Vec<_>>();
             let new_key = key_remaps[&old_key];
 
-            view.install_reloaded_workspace(fresh, baselines, &key_remaps);
+            view.install_reloaded_workspace(fresh, baselines, &key_remaps, &BTreeMap::new());
 
             assert!(receiver.try_recv().is_err());
             assert!(matches!(
@@ -2278,7 +2326,7 @@ fn unsaved_changes_use_the_custom_dialog_and_cancel_preserves_the_tab(cx: &mut T
     window
         .update(cx, |view, _, _| {
             assert!(view.application_dialog.is_none());
-            assert!(view.shell.tabs().contains(&key));
+            assert!(view.shell.open_tabs().contains(&key.into()));
             assert!(view.request_is_dirty(key));
         })
         .unwrap();
@@ -2391,7 +2439,7 @@ fn destructive_shortcut_triggers_application_dialog_destructive_action(cx: &mut 
     window
         .update(cx, |view, _, _| {
             assert!(view.application_dialog.is_none());
-            assert!(!view.shell.tabs().contains(&key));
+            assert!(!view.shell.open_tabs().contains(&key.into()));
             assert!(!view.request_is_dirty(key));
         })
         .unwrap();
@@ -2752,7 +2800,7 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
             view.session.workspaces.insert(
                 canonical_destination.clone(),
                 crate::session::WorkspaceSessionState {
-                    ordered_tabs: Vec::new(),
+                    ordered_tabs: None,
                     active_open_tab: None,
                     open_tabs: vec!["items/0".to_owned()],
                     active_tab: Some("items/0".to_owned()),
@@ -2789,7 +2837,7 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
                 view.loaded_workspace
                     .as_ref()
                     .map(|loaded| loaded.workspace().request_count()),
-                view.shell.tabs().len(),
+                view.shell.tabs().count(),
                 view.session.workspaces.get(&canonical_destination).cloned(),
                 toast_debug(view),
             )
@@ -2805,7 +2853,10 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
     assert_eq!(tabs, 0);
     assert_eq!(
         remembered,
-        Some(crate::session::WorkspaceSessionState::default())
+        Some(crate::session::WorkspaceSessionState {
+            ordered_tabs: Some(Vec::new()),
+            ..Default::default()
+        })
     );
     fs::remove_dir_all(destination_dir).unwrap();
 }
@@ -3055,7 +3106,7 @@ fn sidebar_folder_selection_and_search_reveal_behavior(cx: &mut TestAppContext) 
                 Some(crate::shell::OverviewTab::Folder(folder))
             );
             assert_eq!(
-                view.shell.overview_tabs(),
+                view.shell.overview_tabs().collect::<Vec<_>>(),
                 &[crate::shell::OverviewTab::Folder(folder)]
             );
         })
@@ -3088,7 +3139,7 @@ fn sidebar_folder_selection_and_search_reveal_behavior(cx: &mut TestAppContext) 
     visual.run_until_parked();
     window
         .update(cx, |view, _, _| {
-            assert_eq!(view.shell.overview_tabs().len(), 1);
+            assert_eq!(view.shell.overview_tabs().count(), 1);
             assert!(view.shell.folder_is_expanded(folder));
         })
         .unwrap();
@@ -3101,7 +3152,7 @@ fn sidebar_folder_selection_and_search_reveal_behavior(cx: &mut TestAppContext) 
         .expect("overview content must render");
     window
         .update(cx, |view, _, cx| {
-            assert_eq!(view.shell.overview_tabs().len(), 2);
+            assert_eq!(view.shell.overview_tabs().count(), 2);
             assert_eq!(
                 view.shell.active_overview(),
                 Some(crate::shell::OverviewTab::Collection)
@@ -3292,7 +3343,7 @@ fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps
                     .collect::<Vec<_>>();
                 let new_key = key_remaps[&old_key];
 
-                view.install_reloaded_workspace(fresh, baselines, &key_remaps);
+                view.install_reloaded_workspace(fresh, baselines, &key_remaps, &BTreeMap::new());
 
                 let scroll_owner = view.request_section_scroll_owner.get();
                 assert_eq!(
@@ -3615,7 +3666,7 @@ fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAp
     window
         .update(cx, |view, window, cx| {
             assert!(!view.has_dirty_overviews(), "{:?}", toast_debug(view));
-            assert!(view.shell.overview_tabs().is_empty());
+            assert!(view.shell.overview_tabs().next().is_none());
             view.shell
                 .open_overview(crate::shell::OverviewTab::Collection);
             view.edit_overview(None, true, "Unsaved docs".into(), cx);
