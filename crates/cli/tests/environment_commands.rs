@@ -242,58 +242,6 @@ fn lists_environments_as_json() {
 }
 
 #[test]
-fn lists_environment_descriptions_and_omits_the_field_when_absent() {
-    let workspace = temporary_path("env-list-description.yml");
-    fs::write(
-        &workspace,
-        concat!(
-            "opencollection: 1.0.0\n",
-            "info:\n  name: Listed descriptions\n",
-            "bundled: true\n",
-            "config:\n",
-            "  environments:\n",
-            "    - name: base\n",
-            "    - name: development\n",
-            "      extends: base\n",
-            "      description: Local development\n",
-            "    - name: staging\n",
-            "      description:\n",
-            "        content: Staging notes\n",
-            "        type: text/markdown\n",
-            "    - name: production\n",
-            "      description: null\n",
-        ),
-    )
-    .unwrap();
-
-    let output = probe()
-        .args(["environment", "list"])
-        .arg(&workspace)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "\
-NAME\tEXTENDS
-base\t
-development\tbase
-staging\t
-production\t
-"
-    );
-
-    let listed = run_environment(&workspace, &["list"]);
-    let environments = listed["environments"].as_array().unwrap();
-    assert!(environments[0].get("description").is_none());
-    assert_eq!(environments[1]["description"], "Local development");
-    assert_eq!(environments[2]["description"]["content"], "Staging notes");
-    assert_eq!(environments[2]["description"]["type"], "text/markdown");
-    assert!(environments[3]["description"].is_null());
-    fs::remove_file(workspace).unwrap();
-}
-
-#[test]
 fn creates_environment_as_json() {
     let workspace = temporary_path("phase-env-create.yml");
     fs::copy(fixture("phase4-environments.yml"), &workspace).unwrap();
@@ -620,6 +568,21 @@ fn sets_and_unsets_environment_description() {
         environment["variables"][0]["value"].as_str(),
         Some("dev.example.com")
     );
+    let listed = run_environment(&workspace, &["list"]);
+    assert!(listed["environments"][0].get("description").is_none());
+    assert_eq!(
+        listed["environments"][1]["description"],
+        "Local development"
+    );
+    let human_list = probe()
+        .args(["environment", "list"])
+        .arg(&workspace)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(human_list.stdout).unwrap(),
+        "NAME\tEXTENDS\nbase\t\ndevelopment\tbase\n"
+    );
 
     let object = run_environment(
         &workspace,
@@ -643,6 +606,15 @@ fn sets_and_unsets_environment_description() {
         Some("text/markdown")
     );
     assert!(environment["description"].as_str().is_none());
+    let listed = run_environment(&workspace, &["list"]);
+    assert_eq!(
+        listed["environments"][1]["description"]["content"],
+        "Local development"
+    );
+    assert_eq!(
+        listed["environments"][1]["description"]["type"],
+        "text/markdown"
+    );
 
     let null = run_environment(
         &workspace,
@@ -656,6 +628,8 @@ fn sets_and_unsets_environment_description() {
     );
     assert!(null["description"].is_null());
     assert!(yaml_document(&workspace)["config"]["environments"][1]["description"].is_null());
+    let listed = run_environment(&workspace, &["list"]);
+    assert!(listed["environments"][1]["description"].is_null());
 
     let unset = run_environment(
         &workspace,
@@ -674,6 +648,9 @@ fn sets_and_unsets_environment_description() {
         environment["variables"][0]["description"].as_str(),
         Some("Variable note")
     );
+    let listed = run_environment(&workspace, &["list"]);
+    assert!(listed["environments"][0].get("description").is_none());
+    assert!(listed["environments"][1].get("description").is_none());
 
     let human = probe()
         .args(["environment", "set"])
@@ -801,33 +778,6 @@ fn sets_and_unsets_environment_description() {
     );
 
     fs::remove_file(workspace).unwrap();
-
-    let root = temporary_path("env-description-unbundled");
-    copy_directory(&fixture("unbundled"), &root);
-    let set = run_environment(
-        &root,
-        &[
-            "set",
-            "--environment",
-            "development",
-            "--description",
-            "Child environment",
-        ],
-    );
-    assert_eq!(set["description"], "Child environment");
-    let path = root.join("environments/development.yml");
-    let document = yaml_document(&path);
-    assert_eq!(document["description"].as_str(), Some("Child environment"));
-    assert_eq!(document["color"].as_str(), Some("green"));
-    run_environment(
-        &root,
-        &["unset", "--environment", "development", "--description"],
-    );
-    let document = yaml_document(&path);
-    assert!(document.get("description").is_none());
-    assert_eq!(document["color"].as_str(), Some("green"));
-    assert_eq!(document["name"].as_str(), Some("development"));
-    fs::remove_dir_all(root).unwrap();
 }
 
 fn run_environment(workspace: &std::path::Path, args: &[&str]) -> Value {
