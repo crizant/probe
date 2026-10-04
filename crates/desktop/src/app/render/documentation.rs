@@ -121,6 +121,25 @@ impl ProbeApp {
             }
         }
         .text_color(theme.colors.text.secondary);
+        let title = match tab {
+            crate::shell::OverviewTab::Collection => components::truncated_label(name.to_owned())
+                .flex_1()
+                .min_w(px(0.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(theme.typography.caption_size))
+                .into_any_element(),
+            crate::shell::OverviewTab::Folder(key) => {
+                let folders = loaded
+                    .folder_selector(key)
+                    .map(|selector| folder_ancestor_selectors(loaded, selector))
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|selector| loaded.folder_key(selector))
+                    .collect::<Vec<_>>();
+                self.render_editor_breadcrumb(&folders, None, "folder-breadcrumb", theme, cx)
+                    .into_any_element()
+            }
+        };
         let dirty = self
             .overview_drafts
             .get(&target)
@@ -162,13 +181,7 @@ impl ProbeApp {
                 .items_center()
                 .gap(px(theme.metrics.spacing_1))
                 .child(icon)
-                .child(
-                    components::truncated_label(name.to_owned())
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(px(theme.typography.caption_size)),
-                )
+                .child(title)
                 .child(self.render_save_button(theme, "Save documentation", dirty, busy, cx)),
         );
         div()

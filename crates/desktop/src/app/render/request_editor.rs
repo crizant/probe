@@ -1,4 +1,6 @@
 use super::*;
+use gpui::SharedString;
+use probe_core::FolderKey;
 
 mod authentication;
 mod body;
@@ -10,6 +12,83 @@ mod multipart;
 mod parameters;
 
 impl ProbeApp {
+    pub(super) fn render_editor_breadcrumb(
+        &self,
+        folders: &[FolderKey],
+        request_name: Option<&str>,
+        id: &'static str,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let mut path = div()
+            .id(SharedString::from(format!("{id}-path")))
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1))
+            .overflow_x_scroll()
+            .text_size(px(theme.typography.caption_size))
+            .text_color(theme.colors.text.muted);
+        for (index, key) in folders.iter().copied().enumerate() {
+            let Some(folder) = self
+                .loaded_workspace
+                .as_ref()
+                .and_then(|loaded| loaded.workspace().folder(key))
+            else {
+                continue;
+            };
+            if index > 0 {
+                path = path.child(div().flex_none().child("›"));
+            }
+            let label = folder.metadata.name.as_deref().unwrap_or("Untitled folder");
+            let select_view = cx.weak_entity();
+            path = path.child(
+                Button::new((id, index))
+                    .debug_selector(move || format!("{id}-folder-{index}"))
+                    .accessibility_label(format!("Open {label} folder overview"))
+                    .flex_none()
+                    .max_w(px(220.0))
+                    .cursor_pointer()
+                    .rounded(px(theme.metrics.radius_small))
+                    .hover(move |segment| segment.bg(theme.colors.actions.hover))
+                    .when(
+                        request_name.is_none() && index + 1 == folders.len(),
+                        |segment| {
+                            segment
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.colors.text.primary)
+                        },
+                    )
+                    .child(components::truncated_label(label.to_owned()))
+                    .on_click(move |_, _, cx| {
+                        let _ = select_view.update(cx, |view, cx| {
+                            view.shell
+                                .open_overview(crate::shell::OverviewTab::Folder(key));
+                            view.reveal_active_tab();
+                            view.selected_tree_item = Some(WorkspaceItemRef::Folder(key));
+                            cx.notify();
+                        });
+                    }),
+            );
+        }
+        if let Some(name) = request_name {
+            if !folders.is_empty() {
+                path = path.child(div().flex_none().child("›"));
+            }
+            path = path.child(
+                components::truncated_label(name.to_owned())
+                    .debug_selector(|| "request-breadcrumb-request".into())
+                    .max_w(px(220.0))
+                    .flex_none()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.colors.text.primary),
+            );
+        }
+        path
+    }
+
     pub(super) fn render_request_editor(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let Some(key) = self.shell.active_tab() else {
             return div()
@@ -29,66 +108,24 @@ impl ProbeApp {
         let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
         let url = url_bar_value(&request);
         let request_dirty = self.persistence.is_dirty(key, &request);
-        let mut breadcrumb_labels = self
+        let folders = self
             .loaded_workspace
             .as_ref()
-            .and_then(|loaded| {
-                loaded
-                    .workspace()
-                    .request_ancestor_folders(key)
-                    .map(|folders| {
-                        folders
-                            .iter()
-                            .filter_map(|folder_key| loaded.workspace().folder(*folder_key))
-                            .map(|folder| {
-                                folder
-                                    .metadata
-                                    .name
-                                    .as_deref()
-                                    .unwrap_or("Untitled folder")
-                                    .to_owned()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-            })
+            .and_then(|loaded| loaded.workspace().request_ancestor_folders(key))
             .unwrap_or_default();
-        let request_breadcrumb_index = breadcrumb_labels.len();
-        breadcrumb_labels.push(
-            request
-                .metadata
-                .name
-                .as_deref()
-                .unwrap_or("Untitled request")
-                .to_owned(),
+        let breadcrumb_path = self.render_editor_breadcrumb(
+            folders,
+            Some(
+                request
+                    .metadata
+                    .name
+                    .as_deref()
+                    .unwrap_or("Untitled request"),
+            ),
+            "request-breadcrumb",
+            theme,
+            cx,
         );
-        let mut breadcrumb_path = div()
-            .id("request-breadcrumb-path")
-            .flex_1()
-            .min_w(px(0.0))
-            .h_full()
-            .flex()
-            .items_center()
-            .gap(px(theme.metrics.spacing_1))
-            .overflow_x_scroll()
-            .text_size(px(theme.typography.caption_size))
-            .text_color(theme.colors.text.muted);
-        for (index, label) in breadcrumb_labels.into_iter().enumerate() {
-            if index > 0 {
-                breadcrumb_path = breadcrumb_path.child(div().flex_none().child("›"));
-            }
-            let segment = components::truncated_label(label)
-                .max_w(px(220.0))
-                .flex_none();
-            let segment = if index == request_breadcrumb_index {
-                segment
-                    .debug_selector(|| "request-breadcrumb-request".into())
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.colors.text.primary)
-            } else {
-                segment.debug_selector(move || format!("request-breadcrumb-folder-{index}"))
-            };
-            breadcrumb_path = breadcrumb_path.child(segment);
-        }
         let breadcrumb = div()
             .id("request-breadcrumb")
             .debug_selector(|| "request-breadcrumb".into())
