@@ -1,12 +1,5 @@
 use super::*;
 
-struct EnvironmentManagerSave {
-    description: probe_core::FieldPatch<probe_core::Documentation>,
-    original_name: String,
-    saved_name: String,
-    workspace_path: Option<std::path::PathBuf>,
-}
-
 impl ProbeApp {
     pub(super) fn close_workspace_now(&mut self, cx: &mut Context<Self>) {
         self.capture_session();
@@ -386,43 +379,29 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return;
         };
-        let original = loaded
+        let description = loaded
             .workspace()
             .environments()
             .iter()
             .find(|environment| environment.name == original_name)
-            .cloned();
-        let description = original
-            .as_ref()
             .map_or(probe_core::FieldPatch::Unchanged, |original| {
                 super::documentation::patch(&original.description, &replacement.description)
             });
-        // Environment replacement keeps the stored description. A description-only edit
-        // uses the description save; any other edit still goes through replacement, including
-        // a clean save, which the manager already persists.
-        let replace_structure = match &original {
-            Some(original) => {
-                let mut structural = replacement.clone();
-                structural.description = original.description.clone();
-                structural != *original || description.is_unchanged()
+        let prepared = match loaded.prepare_environment_replace_with_description(
+            &original_name,
+            replacement,
+            &description,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.show_environment_dialog_error(
+                    format!("Could not save environment: {error}"),
+                    EnvironmentDialogErrorResolution::Manual,
+                    cx,
+                );
+                cx.notify();
+                return;
             }
-            None => true,
-        };
-        let replace = if replace_structure {
-            match loaded.prepare_environment_replace(&original_name, replacement) {
-                Ok(prepared) => Some(prepared),
-                Err(error) => {
-                    self.show_environment_dialog_error(
-                        format!("Could not save environment: {error}"),
-                        EnvironmentDialogErrorResolution::Manual,
-                        cx,
-                    );
-                    cx.notify();
-                    return;
-                }
-            }
-        } else {
-            None
         };
         let rename_warning = if acknowledged {
             None
@@ -449,195 +428,72 @@ impl ProbeApp {
             return;
         }
         self.environment_save_workspace_path = self.workspace_path.clone();
-        let save = EnvironmentManagerSave {
-            description,
-            original_name,
-            saved_name,
-            workspace_path: self.workspace_path.clone(),
-        };
+        let save_workspace_path = self.workspace_path.clone();
         self.environment_save_task = Some(cx.spawn_in(window, async move |view, window| {
-            let replace_result = match replace {
-                Some(prepared) => Some(
-                    window
-                        .background_spawn(async move { prepared.execute() })
-                        .await,
-                ),
-                None => None,
-            };
-            // Clearing the task drops this future, so a follow-up description write has to
-            // be returned before that happens.
-            let description_save = view.update_in(window, |view, window, cx| {
-                view.continue_environment_manager_save(replace_result, &save, window, cx)
-            });
-            let Ok(Some(prepared)) = description_save else {
-                return;
-            };
             let result = window
                 .background_spawn(async move { prepared.execute() })
                 .await;
             let _ = view.update_in(window, |view, window, cx| {
-                view.finish_environment_description_save(result, &save, window, cx);
+                view.environment_save_task = None;
+                let result = result.and_then(|saved| {
+                    if view.environment_save_workspace_path != view.workspace_path {
+                        return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
+                    }
+                    view.loaded_workspace
+                        .as_mut()
+                        .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
+                        .complete_environment_replace(saved)
+                });
+                match result {
+                    Ok(()) => {
+                        if let Some(loaded) = view.loaded_workspace.as_ref() {
+                            let environment = loaded
+                                .workspace()
+                                .environments()
+                                .iter()
+                                .find(|environment| environment.name == saved_name)
+                                .cloned();
+                            if let Some(environment) = environment {
+                                if view.shell.selected_environment() == Some(original_name.as_str())
+                                {
+                                    view.select_environment(Some(environment.name.clone()), cx);
+                                }
+                                if view.environment_manager_close_after_save {
+                                    view.close_environment_manager_dialog(window, cx);
+                                } else {
+                                    view.environment_manager_dialog =
+                                        Some(EnvironmentManagerDialog::new(&environment));
+                                    view.sync_secret_statuses_from_presence();
+                                }
+                            }
+                        }
+                        view.environment_manager_close_after_save = false;
+                        view.clear_environment_dialog_error(cx);
+                        view.show_toast(ToastIntent::Success, "Environment saved.", cx);
+                    }
+                    Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
+                        view.environment_manager_close_after_save = false;
+                        view.environment_save_workspace_path = None;
+                        view.pending_close = None;
+                        view.recover_committed_save(save_workspace_path, None, window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    Err(error) => {
+                        view.environment_manager_close_after_save = false;
+                        view.show_environment_dialog_error(
+                            format!("Could not save environment: {error}"),
+                            EnvironmentDialogErrorResolution::Manual,
+                            cx,
+                        );
+                    }
+                }
+                view.environment_save_workspace_path = None;
+                view.start_next_request_save(window, cx);
+                view.start_next_environment_save(window, cx);
+                cx.notify();
             });
         }));
-        cx.notify();
-    }
-
-    fn continue_environment_manager_save(
-        &mut self,
-        replace_result: Option<
-            Result<
-                probe_opencollection::CompletedEnvironmentReplace,
-                probe_opencollection::SaveError,
-            >,
-        >,
-        save: &EnvironmentManagerSave,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<probe_opencollection::PreparedEnvironmentSave> {
-        if let Some(result) = replace_result {
-            let result = result.and_then(|saved| {
-                if self.environment_save_workspace_path != self.workspace_path {
-                    return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
-                }
-                self.loaded_workspace
-                    .as_mut()
-                    .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
-                    .complete_environment_replace(saved)
-            });
-            if let Err(error) = result {
-                self.abort_environment_manager_save(error, save, window, cx);
-                return None;
-            }
-        }
-        if save.description.is_unchanged() {
-            self.finish_environment_manager_save_success(
-                &save.original_name,
-                &save.saved_name,
-                window,
-                cx,
-            );
-            return None;
-        }
-        if save.original_name != save.saved_name {
-            if let Some(dialog) = self.environment_manager_dialog.as_mut() {
-                dialog.original_name = save.saved_name.clone();
-            }
-            if self.shell.selected_environment() == Some(save.original_name.as_str()) {
-                self.select_environment(Some(save.saved_name.clone()), cx);
-            }
-        }
-        let prepared = self.loaded_workspace.as_ref().map_or_else(
-            || Err(probe_opencollection::SaveError::CommittedButNotIntegrated),
-            |loaded| loaded.prepare_environment_description(&save.saved_name, &save.description),
-        );
-        match prepared {
-            Ok(prepared) => Some(prepared),
-            Err(error) => {
-                self.abort_environment_manager_save(error, save, window, cx);
-                None
-            }
-        }
-    }
-
-    fn finish_environment_description_save(
-        &mut self,
-        result: Result<
-            probe_opencollection::CompletedEnvironmentSave,
-            probe_opencollection::SaveError,
-        >,
-        save: &EnvironmentManagerSave,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let result = result.and_then(|saved| {
-            if self.environment_save_workspace_path != self.workspace_path {
-                return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
-            }
-            self.loaded_workspace
-                .as_mut()
-                .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
-                .complete_environment_description(&save.saved_name, &save.description, saved)
-        });
-        match result {
-            Ok(()) => {
-                self.finish_environment_manager_save_success(
-                    &save.original_name,
-                    &save.saved_name,
-                    window,
-                    cx,
-                );
-            }
-            Err(error) => {
-                self.abort_environment_manager_save(error, save, window, cx);
-            }
-        }
-    }
-
-    fn finish_environment_manager_save_success(
-        &mut self,
-        original_name: &str,
-        saved_name: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.environment_save_task = None;
-        if let Some(loaded) = self.loaded_workspace.as_ref() {
-            let environment = loaded
-                .workspace()
-                .environments()
-                .iter()
-                .find(|environment| environment.name == saved_name)
-                .cloned();
-            if let Some(environment) = environment {
-                if self.shell.selected_environment() == Some(original_name) {
-                    self.select_environment(Some(environment.name.clone()), cx);
-                }
-                if self.environment_manager_close_after_save {
-                    self.close_environment_manager_dialog(window, cx);
-                } else {
-                    self.environment_manager_dialog =
-                        Some(EnvironmentManagerDialog::new(&environment));
-                    self.sync_secret_statuses_from_presence();
-                }
-            }
-        }
-        self.environment_manager_close_after_save = false;
-        self.clear_environment_dialog_error(cx);
-        self.show_toast(ToastIntent::Success, "Environment saved.", cx);
-        self.conclude_environment_manager_save(window, cx);
-    }
-
-    fn abort_environment_manager_save(
-        &mut self,
-        error: probe_opencollection::SaveError,
-        save: &EnvironmentManagerSave,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.environment_save_task = None;
-        self.environment_manager_close_after_save = false;
-        if matches!(
-            error,
-            probe_opencollection::SaveError::CommittedButNotIntegrated
-        ) {
-            self.environment_save_workspace_path = None;
-            self.pending_close = None;
-            self.recover_committed_save(save.workspace_path.clone(), None, window, cx);
-            cx.notify();
-            return;
-        }
-        self.show_environment_dialog_error(
-            format!("Could not save environment: {error}"),
-            EnvironmentDialogErrorResolution::Manual,
-            cx,
-        );
-        self.conclude_environment_manager_save(window, cx);
-    }
-
-    fn conclude_environment_manager_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.environment_save_workspace_path = None;
-        self.start_next_request_save(window, cx);
-        self.start_next_environment_save(window, cx);
         cx.notify();
     }
 

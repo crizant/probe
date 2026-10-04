@@ -24,7 +24,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 ### Fixed
 
 - Request tab tooltips show custom HTTP method names alongside the generic HTTP icon.
-
+- Saving an environment description together with other environment changes writes both in one update. A failed save does not leave the structural edit without the description, or the description without the structural edit.
 - `collection unset --description-json` reports that collections have summary and docs, not a description.
 - An empty collection, folder, or request update reports that the update has no changed fields.
 - Vertical trackpad scrolling keeps moving the list when the pointer is over a single-line field, instead of stuttering on sideways drift.

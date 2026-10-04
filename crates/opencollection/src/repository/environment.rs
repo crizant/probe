@@ -11,6 +11,32 @@ pub(super) fn persist_environment_yaml(
     })
 }
 
+pub(super) fn persist_environment_replacement(
+    persistence: &EnvironmentPersistence,
+    original_source: &[u8],
+    replacement: &Environment,
+    description: &FieldPatch<Documentation>,
+) -> Result<Vec<u8>, SaveError> {
+    mutate_existing_document(&persistence.document_path, original_source, |document| {
+        let environment = environment_document_mut(document, persistence)?;
+        apply_environment_mutation(
+            environment,
+            &EnvironmentYamlMutation::Replace {
+                environment: replacement.clone(),
+            },
+        )?;
+        if !description.is_unchanged() {
+            apply_environment_mutation(
+                environment,
+                &EnvironmentYamlMutation::Description {
+                    description: description.clone(),
+                },
+            )?;
+        }
+        Ok(())
+    })
+}
+
 pub(super) fn persist_bundled_environment_create(
     document_path: &Path,
     original_source: &[u8],
@@ -108,6 +134,7 @@ pub(super) fn persist_unbundled_environment_rename(
     new_path: &Path,
     original_source: &[u8],
     replacement: &Environment,
+    description: &FieldPatch<Documentation>,
 ) -> Result<(Vec<u8>, PathBuf), SaveError> {
     let _old_lock = SaveLock::acquire(old_path)?;
     let _new_lock = SaveLock::acquire(new_path)?;
@@ -125,6 +152,14 @@ pub(super) fn persist_unbundled_environment_rename(
         SaveError::InvalidDocument(format!("retained source cannot be parsed: {error}"))
     })?;
     apply_environment_replace(&mut document, replacement)?;
+    if !description.is_unchanged() {
+        apply_environment_mutation(
+            &mut document,
+            &EnvironmentYamlMutation::Description {
+                description: description.clone(),
+            },
+        )?;
+    }
     let serialized = serde_yaml_ng::to_string(&document)
         .map_err(SaveError::Serialize)?
         .into_bytes();
