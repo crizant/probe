@@ -323,11 +323,7 @@ impl ProbeApp {
                 let view = cx.weak_entity();
                 let context_menu_view = cx.weak_entity();
                 let item = WorkspaceItemRef::Request(key);
-                // Offset the artwork inside its slot to add breathing room while
-                // keeping request names aligned with the parent folder heading.
                 let marker = components::request_icon(theme, &icon)
-                    .relative()
-                    .left(px(-theme.metrics.spacing_1 / 4.0))
                     .debug_selector(|| "request-tree-icon".into())
                     .when(matches!(icon, components::RequestIcon::Graphql), |icon| {
                         icon.debug_selector(|| "request-tree-protocol-label".into())

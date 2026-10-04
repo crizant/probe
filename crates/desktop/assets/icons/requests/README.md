@@ -28,7 +28,7 @@ All assets use `currentColor` for tinting and contain no external dependencies.
 and 30×20; protocol icons at 40×40 and 20×20. The desktop uses a shared 20×20 icon slot. Folders have a 24px disclosure gutter,
 matching one nesting level; requests omit that gutter to align with their parent
 folder heading.
-Method artwork is centered at 30×20 inside the slot; protocol icons use 20×20. Avoid squeezing the method artwork into a
+Method artwork is centered at 24×16 inside the slot; protocol icons use 16×16. Avoid squeezing the method artwork into a
 16×16 square: its lettering needs a wider slot. Confirm readability in GPUI before
 integrating. The preview uses existing method/protocol palette values; WebSocket
 borrows the HTTP color for illustration because no WebSocket token exists yet.

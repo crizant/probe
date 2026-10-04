@@ -180,7 +180,7 @@ impl RequestIcon {
 
 pub(crate) fn request_icon(theme: Theme, icon: &RequestIcon) -> gpui::Div {
     let (cache_key, data, is_method) = icon.asset();
-    let height = theme.metrics.icon_standard * 1.25;
+    let height = theme.metrics.icon_standard;
     let width = height * 1.5;
     let color = match icon {
         RequestIcon::Graphql => theme.colors.protocols.graphql,
