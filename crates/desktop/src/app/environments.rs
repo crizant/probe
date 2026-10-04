@@ -1,5 +1,12 @@
 use super::*;
 
+struct EnvironmentManagerSave {
+    description: probe_core::FieldPatch<probe_core::Documentation>,
+    original_name: String,
+    saved_name: String,
+    workspace_path: Option<std::path::PathBuf>,
+}
+
 impl ProbeApp {
     pub(super) fn close_workspace_now(&mut self, cx: &mut Context<Self>) {
         self.capture_session();
@@ -442,7 +449,12 @@ impl ProbeApp {
             return;
         }
         self.environment_save_workspace_path = self.workspace_path.clone();
-        let save_workspace_path = self.workspace_path.clone();
+        let save = EnvironmentManagerSave {
+            description,
+            original_name,
+            saved_name,
+            workspace_path: self.workspace_path.clone(),
+        };
         self.environment_save_task = Some(cx.spawn_in(window, async move |view, window| {
             let replace_result = match replace {
                 Some(prepared) => Some(
@@ -455,15 +467,7 @@ impl ProbeApp {
             // Clearing the task drops this future, so a follow-up description write has to
             // be returned before that happens.
             let description_save = view.update_in(window, |view, window, cx| {
-                view.continue_environment_manager_save(
-                    replace_result,
-                    &description,
-                    &original_name,
-                    &saved_name,
-                    &save_workspace_path,
-                    window,
-                    cx,
-                )
+                view.continue_environment_manager_save(replace_result, &save, window, cx)
             });
             let Ok(Some(prepared)) = description_save else {
                 return;
@@ -472,15 +476,7 @@ impl ProbeApp {
                 .background_spawn(async move { prepared.execute() })
                 .await;
             let _ = view.update_in(window, |view, window, cx| {
-                view.finish_environment_description_save(
-                    result,
-                    &description,
-                    &original_name,
-                    &saved_name,
-                    &save_workspace_path,
-                    window,
-                    cx,
-                );
+                view.finish_environment_description_save(result, &save, window, cx);
             });
         }));
         cx.notify();
@@ -494,10 +490,7 @@ impl ProbeApp {
                 probe_opencollection::SaveError,
             >,
         >,
-        description: &probe_core::FieldPatch<probe_core::Documentation>,
-        original_name: &str,
-        saved_name: &str,
-        save_workspace_path: &Option<std::path::PathBuf>,
+        save: &EnvironmentManagerSave,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<probe_opencollection::PreparedEnvironmentSave> {
@@ -512,30 +505,35 @@ impl ProbeApp {
                     .complete_environment_replace(saved)
             });
             if let Err(error) = result {
-                self.abort_environment_manager_save(error, save_workspace_path, window, cx);
+                self.abort_environment_manager_save(error, save, window, cx);
                 return None;
             }
         }
-        if description.is_unchanged() {
-            self.finish_environment_manager_save_success(original_name, saved_name, window, cx);
+        if save.description.is_unchanged() {
+            self.finish_environment_manager_save_success(
+                &save.original_name,
+                &save.saved_name,
+                window,
+                cx,
+            );
             return None;
         }
-        if original_name != saved_name {
+        if save.original_name != save.saved_name {
             if let Some(dialog) = self.environment_manager_dialog.as_mut() {
-                dialog.original_name = saved_name.to_owned();
+                dialog.original_name = save.saved_name.clone();
             }
-            if self.shell.selected_environment() == Some(original_name) {
-                self.select_environment(Some(saved_name.to_owned()), cx);
+            if self.shell.selected_environment() == Some(save.original_name.as_str()) {
+                self.select_environment(Some(save.saved_name.clone()), cx);
             }
         }
         let prepared = self.loaded_workspace.as_ref().map_or_else(
             || Err(probe_opencollection::SaveError::CommittedButNotIntegrated),
-            |loaded| loaded.prepare_environment_description(saved_name, description),
+            |loaded| loaded.prepare_environment_description(&save.saved_name, &save.description),
         );
         match prepared {
             Ok(prepared) => Some(prepared),
             Err(error) => {
-                self.abort_environment_manager_save(error, save_workspace_path, window, cx);
+                self.abort_environment_manager_save(error, save, window, cx);
                 None
             }
         }
@@ -547,10 +545,7 @@ impl ProbeApp {
             probe_opencollection::CompletedEnvironmentSave,
             probe_opencollection::SaveError,
         >,
-        description: &probe_core::FieldPatch<probe_core::Documentation>,
-        original_name: &str,
-        saved_name: &str,
-        save_workspace_path: &Option<std::path::PathBuf>,
+        save: &EnvironmentManagerSave,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -561,14 +556,19 @@ impl ProbeApp {
             self.loaded_workspace
                 .as_mut()
                 .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
-                .complete_environment_description(saved_name, description, saved)
+                .complete_environment_description(&save.saved_name, &save.description, saved)
         });
         match result {
             Ok(()) => {
-                self.finish_environment_manager_save_success(original_name, saved_name, window, cx);
+                self.finish_environment_manager_save_success(
+                    &save.original_name,
+                    &save.saved_name,
+                    window,
+                    cx,
+                );
             }
             Err(error) => {
-                self.abort_environment_manager_save(error, save_workspace_path, window, cx);
+                self.abort_environment_manager_save(error, save, window, cx);
             }
         }
     }
@@ -610,7 +610,7 @@ impl ProbeApp {
     fn abort_environment_manager_save(
         &mut self,
         error: probe_opencollection::SaveError,
-        save_workspace_path: &Option<std::path::PathBuf>,
+        save: &EnvironmentManagerSave,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -622,7 +622,7 @@ impl ProbeApp {
         ) {
             self.environment_save_workspace_path = None;
             self.pending_close = None;
-            self.recover_committed_save(save_workspace_path.clone(), None, window, cx);
+            self.recover_committed_save(save.workspace_path.clone(), None, window, cx);
             cx.notify();
             return;
         }
