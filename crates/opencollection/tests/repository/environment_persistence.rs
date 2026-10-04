@@ -66,6 +66,10 @@ fn environment_description_set_and_unset_round_trip() {
             &FieldPatch::Set(Documentation::Text("Local development".to_owned())),
         )
         .unwrap();
+    assert_eq!(
+        loaded.workspace().environments()[1].description,
+        Some(Documentation::Text("Local development".to_owned()))
+    );
     loaded
         .update_environment_variable("development", "host", "local.example.com".to_owned())
         .unwrap();
@@ -369,7 +373,7 @@ fn environment_update_refuses_externally_modified_document() {
 fn environment_replace_preserves_unknown_fields_and_edits_secret_declarations() {
     let path = temporary_path("env-replace.yml");
     fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
-    let source = fs::read_to_string(&path).unwrap();
+    let source = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
     let with_description = source.replacen(
         "    - name: development\n      extends: base\n",
         "    - name: development\n      extends: base\n      description:\n        content: Staging notes\n        type: text/markdown\n",
