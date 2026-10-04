@@ -240,7 +240,7 @@ pub(super) fn apply_environment_mutation(
 
 pub(super) fn validate_environment_replacement(
     original: &Environment,
-    replacement: Environment,
+    mut replacement: Environment,
 ) -> Result<Environment, SaveError> {
     validate_unique_variable_names(&replacement).map_err(SaveError::Environment)?;
     for variable in &original.variables {
@@ -262,6 +262,7 @@ pub(super) fn validate_environment_replacement(
             ));
         }
     }
+    replacement.description = original.description.clone();
     Ok(replacement)
 }
 

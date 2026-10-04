@@ -485,8 +485,9 @@ impl LoadedWorkspace {
     /// Captures a validated replacement of one environment for background persistence.
     ///
     /// Secret variables are retained from the source document. The replacement may edit
-    /// the environment name, parent, and plain variables. Renaming a parent environment
-    /// is rejected because it would require a multi-document transaction.
+    /// the environment name, parent, and plain variables. The existing description is
+    /// kept; description edits use [`Self::update_environment_description`]. Renaming a
+    /// parent environment is rejected because it would require a multi-document transaction.
     pub fn prepare_environment_replace(
         &self,
         original_name: &str,

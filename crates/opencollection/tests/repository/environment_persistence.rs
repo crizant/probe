@@ -1,6 +1,18 @@
 use super::*;
 use probe_core::Documentation;
 
+fn stored_description(
+    loaded: &probe_opencollection::LoadedWorkspace,
+    name: &str,
+) -> Option<Documentation> {
+    loaded
+        .workspace()
+        .environments()
+        .iter()
+        .find(|environment| environment.name == name)
+        .and_then(|environment| environment.description.clone())
+}
+
 fn environment_description(root: &std::path::Path, name: &str) -> Option<Documentation> {
     load_workspace(root)
         .unwrap()
@@ -362,6 +374,115 @@ fn environment_update_refuses_externally_modified_document() {
         resolved_variable(&loaded, "development", "token").as_deref(),
         Some("rotated")
     );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn environment_replace_keeps_string_object_and_null_descriptions() {
+    let path = temporary_path("env-replace-description.yml");
+    fs::write(
+        &path,
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n  name: Replace description\n",
+            "bundled: true\n",
+            "config:\n",
+            "  environments:\n",
+            "    - name: plain\n",
+            "      description: Local development\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: plain.example\n",
+            "    - name: documented\n",
+            "      description:\n",
+            "        content: Staging notes\n",
+            "        type: text/markdown\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: documented.example\n",
+            "    - name: nullable\n",
+            "      description: null\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: nullable.example\n",
+        ),
+    )
+    .unwrap();
+
+    let mut loaded = load_workspace(&path).unwrap();
+    let expected = [
+        (
+            "plain",
+            Some(Documentation::Text("Local development".to_owned())),
+            Some(Documentation::Text("replaced".to_owned())),
+        ),
+        (
+            "documented",
+            Some(Documentation::Content {
+                content: "Staging notes".to_owned(),
+                media_type: "text/markdown".to_owned(),
+            }),
+            None,
+        ),
+        (
+            "nullable",
+            Some(Documentation::Null),
+            Some(Documentation::Text("no longer null".to_owned())),
+        ),
+    ];
+    for (name, expected_description, attempted) in &expected {
+        let mut replacement = loaded
+            .workspace()
+            .environments()
+            .iter()
+            .find(|environment| environment.name == *name)
+            .cloned()
+            .unwrap();
+        replacement.description = attempted.clone();
+        let probe_core::EnvironmentVariable::Plain(variable) = &mut replacement.variables[0] else {
+            panic!("host should be a plain variable");
+        };
+        variable.value = Some(probe_core::VariableValueSet::Single(
+            probe_core::VariableValue::String(format!("{name}-replaced")),
+        ));
+        loaded.replace_environment(name, replacement).unwrap();
+        assert_eq!(
+            stored_description(&loaded, name),
+            expected_description.clone()
+        );
+    }
+
+    let reloaded = load_workspace(&path).unwrap();
+    let document = yaml(&path);
+    let environments = document["config"]["environments"].as_sequence().unwrap();
+    for (index, (name, expected_description, _)) in expected.iter().enumerate() {
+        let replaced = format!("{name}-replaced");
+        assert_eq!(
+            stored_description(&reloaded, name),
+            expected_description.clone()
+        );
+        assert_eq!(
+            stored_description(&loaded, name),
+            stored_description(&reloaded, name)
+        );
+        assert_eq!(
+            environments[index]["variables"][0]["value"].as_str(),
+            Some(replaced.as_str())
+        );
+    }
+    assert_eq!(
+        environments[0]["description"].as_str(),
+        Some("Local development")
+    );
+    assert_eq!(
+        environments[1]["description"]["content"].as_str(),
+        Some("Staging notes")
+    );
+    assert_eq!(
+        environments[1]["description"]["type"].as_str(),
+        Some("text/markdown")
+    );
+    assert!(environments[2]["description"].is_null());
     fs::remove_file(path).unwrap();
 }
 
