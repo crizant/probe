@@ -985,9 +985,17 @@ impl ProbeApp {
                         .border_color(theme.colors.borders.subtle)
                         .hover(move |header| header.bg(theme.colors.surfaces.window))
                         .child(
-                            components::truncated_label(name)
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.colors.text.secondary),
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap(px(theme.metrics.spacing_1))
+                                .text_color(theme.colors.text.secondary)
+                                .child(components::collection_icon(theme))
+                                .child(
+                                    components::truncated_label(name)
+                                        .font_weight(FontWeight::MEDIUM),
+                                ),
                         )
                         .child(
                             div()
