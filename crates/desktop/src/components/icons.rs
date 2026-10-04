@@ -8,7 +8,7 @@ pub(super) static CHEVRON_RIGHT_SVG: LazyLock<Vec<u8>> =
 pub(super) static CHECK_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuCheck));
 static FOLDER_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuFolder));
-static LAYERS_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLayers));
+static LIBRARY_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLibrary));
 static FOLDER_OPEN_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuFolderOpen));
 static PLUS_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuPlus));
@@ -128,7 +128,7 @@ pub(crate) fn tree_folder_icon(theme: Theme, expanded: bool, selected: bool) -> 
 }
 
 pub(crate) fn collection_icon(theme: Theme) -> gpui::Div {
-    library_icon("lucide-layers", &LAYERS_SVG, theme.metrics.icon_standard)
+    library_icon("lucide-library", &LIBRARY_SVG, theme.metrics.icon_standard)
 }
 
 pub(crate) fn menu_folder_icon(theme: Theme) -> gpui::Div {
