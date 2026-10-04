@@ -114,6 +114,13 @@ impl ProbeApp {
                 )
             }
         };
+        let icon = match tab {
+            crate::shell::OverviewTab::Collection => components::collection_icon(theme),
+            crate::shell::OverviewTab::Folder(_) => {
+                components::tree_folder_icon(theme, false, false)
+            }
+        }
+        .text_color(theme.colors.text.secondary);
         let dirty = self
             .overview_drafts
             .get(&target)
@@ -153,6 +160,8 @@ impl ProbeApp {
                 .mb(px(theme.metrics.spacing_2))
                 .flex()
                 .items_center()
+                .gap(px(theme.metrics.spacing_1))
+                .child(icon)
                 .child(
                     components::truncated_label(name.to_owned())
                         .flex_1()

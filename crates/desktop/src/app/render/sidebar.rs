@@ -34,37 +34,84 @@ impl ProbeApp {
             .into_any_element()
     }
 
-    pub(super) fn render_request_tab_tooltip(&self, theme: Theme) -> gpui::AnyElement {
-        let Some(tooltip) = self.transient.request_tab_tooltip else {
+    pub(super) fn render_tab_tooltip(&self, theme: Theme) -> gpui::AnyElement {
+        let Some(tooltip) = self.transient.tab_tooltip else {
             return div().into_any_element();
         };
         if !tooltip.open {
             return div().into_any_element();
         }
-        if !self.shell.tabs().contains(&tooltip.key) {
-            return div().into_any_element();
-        }
         let Some(loaded) = &self.loaded_workspace else {
             return div().into_any_element();
         };
-        let Some(request) = loaded.workspace().request(tooltip.key) else {
-            return div().into_any_element();
+        let (label, marker, popup_id) = match tooltip.target {
+            TabTooltipTarget::Request(key) => {
+                if !self.shell.tabs().contains(&key) {
+                    return div().into_any_element();
+                }
+                let Some(request) = loaded.workspace().request(key) else {
+                    return div().into_any_element();
+                };
+                let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
+                let navigation_label = request_navigation_label(&request.kind, &method);
+                let marker = div()
+                    .id("request-tab-tooltip-method")
+                    .debug_selector(|| "request-tab-tooltip-method".into())
+                    .flex_none()
+                    .font_family(theme.typography.monospace_family)
+                    .text_size(px(tree_method_font_size(theme, &navigation_label)))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(request_navigation_color(theme, &request.kind, &method))
+                    .child(navigation_label);
+                (
+                    request
+                        .metadata
+                        .name
+                        .as_deref()
+                        .unwrap_or("Untitled request"),
+                    marker.into_any_element(),
+                    "request-tab-tooltip-popup",
+                )
+            }
+            TabTooltipTarget::Overview(tab) => {
+                if !self.shell.overview_tabs().contains(&tab) {
+                    return div().into_any_element();
+                }
+                let (label, icon) = match tab {
+                    crate::shell::OverviewTab::Collection => (
+                        loaded
+                            .workspace()
+                            .metadata()
+                            .name
+                            .as_deref()
+                            .unwrap_or("Collection"),
+                        components::collection_icon(theme),
+                    ),
+                    crate::shell::OverviewTab::Folder(key) => {
+                        let Some(folder) = loaded.workspace().folder(key) else {
+                            return div().into_any_element();
+                        };
+                        (
+                            folder.metadata.name.as_deref().unwrap_or("Folder"),
+                            components::tree_folder_icon(theme, false, false),
+                        )
+                    }
+                };
+                (
+                    label,
+                    icon.text_color(theme.colors.text.secondary)
+                        .into_any_element(),
+                    "overview-tab-tooltip-popup",
+                )
+            }
         };
-        let label = request
-            .metadata
-            .name
-            .as_deref()
-            .unwrap_or("Untitled request")
-            .to_owned();
-        let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
-        let navigation_label = request_navigation_label(&request.kind, &method);
         let position = point(
             tooltip.position.x + px(theme.metrics.spacing_1),
             tooltip.position.y + px(theme.metrics.control_height * 0.5),
         );
         let popup = div()
-            .id("request-tab-tooltip-popup")
-            .debug_selector(|| "request-tab-tooltip-popup".into())
+            .id(popup_id)
+            .debug_selector(move || popup_id.into())
             .max_w(px(320.0))
             .px(px(theme.metrics.spacing_2))
             .py(px(theme.metrics.spacing_1))
@@ -78,18 +125,12 @@ impl ProbeApp {
             .flex()
             .items_center()
             .gap(px(theme.metrics.spacing_2))
+            .child(marker)
             .child(
-                div()
-                    .id("request-tab-tooltip-method")
-                    .debug_selector(|| "request-tab-tooltip-method".into())
-                    .flex_none()
-                    .font_family(theme.typography.monospace_family)
-                    .text_size(px(tree_method_font_size(theme, &navigation_label)))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(request_navigation_color(theme, &request.kind, &method))
-                    .child(navigation_label),
-            )
-            .child(components::truncated_label(label).min_w(px(0.0)).flex_1());
+                components::truncated_label(label.to_owned())
+                    .min_w(px(0.0))
+                    .flex_1(),
+            );
 
         deferred(
             Positioner::corner(Anchor::TopLeft, position)

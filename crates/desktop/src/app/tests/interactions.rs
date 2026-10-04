@@ -567,4 +567,61 @@ fn hovering_a_request_tab_shows_the_full_label_tooltip(cx: &mut TestAppContext) 
         visual.debug_bounds("request-tab-tooltip-method").is_some(),
         "the request tab tooltip should include the request method"
     );
+
+    let fixture = nested_fixture()
+        .canonicalize()
+        .expect("fixture should exist");
+    let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
+    let folder = workspace
+        .folder_key("items/1")
+        .expect("folder should exist");
+    window
+        .update(cx, |view, _, cx| {
+            view.set_workspace(fixture, workspace);
+            cx.notify();
+        })
+        .expect("test window should remain open");
+    for (index, tab) in [
+        crate::shell::OverviewTab::Collection,
+        crate::shell::OverviewTab::Folder(folder),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        window
+            .update(cx, |view, _, cx| {
+                view.shell.open_overview(tab);
+                cx.notify();
+            })
+            .expect("test window should remain open");
+        cx.run_until_parked();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let bounds = visual
+            .debug_bounds(if index == 0 {
+                "overview-tab-0"
+            } else {
+                "overview-tab-1"
+            })
+            .expect("overview tab should render");
+        hover_and_wait(cx, window, bounds.center());
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            visual.debug_bounds("overview-tab-tooltip-popup").is_some(),
+            "collection and folder tabs should show their name tooltip"
+        );
+        assert!(
+            visual.debug_bounds("request-tab-tooltip-method").is_none(),
+            "overview tooltips should use their icon instead of a request method"
+        );
+        window
+            .update(cx, |view, _, _| {
+                assert!(
+                    view.transient
+                        .tab_tooltip
+                        .is_some_and(|tooltip| tooltip.open
+                            && tooltip.target == crate::app::TabTooltipTarget::Overview(tab))
+                );
+            })
+            .expect("test window should remain open");
+    }
 }

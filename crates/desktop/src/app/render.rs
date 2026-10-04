@@ -495,7 +495,7 @@ impl Render for ProbeApp {
             .child(self.render_environment_manager_context_menu(theme, window, cx))
             .child(self.render_create_environment_dialog(theme, window, cx))
             .child(self.render_application_dialog(theme, window, cx))
-            .child(self.render_request_tab_tooltip(theme))
+            .child(self.render_tab_tooltip(theme))
             .child(self.render_tab_context_menu(theme, window, cx))
             .child(self.render_tree_context_menu(theme, window, cx))
             .child(self.render_toasts(theme, cx));

@@ -131,24 +131,24 @@ impl ProbeApp {
                             let preview = drag.clone();
                             let _ = drag_view.update(cx, |view, cx| {
                                 view.tab_drag_source = Some(drag.key);
-                                view.close_request_tab_tooltip(drag.key, cx);
+                                view.close_tab_tooltip(drag.key, cx);
                             });
                             cx.new(|_| preview)
                         },
                     )
                     .on_mouse_move(move |event, _, cx| {
                         let _ = tooltip_move_view.update(cx, |view, cx| {
-                            view.update_request_tab_tooltip_position(tab_key, event.position, cx);
+                            view.update_tab_tooltip_position(tab_key, event.position, cx);
                         });
                     })
                     .on_hover(move |hovered, window, cx| {
                         let _ = if *hovered {
                             tooltip_hover_view.update(cx, |view, cx| {
-                                view.open_request_tab_tooltip(tab_key, window.mouse_position(), cx);
+                                view.open_tab_tooltip(tab_key, window.mouse_position(), cx);
                             })
                         } else {
                             tooltip_leave_view.update(cx, |view, cx| {
-                                view.close_request_tab_tooltip(tab_key, cx);
+                                view.close_tab_tooltip(tab_key, cx);
                             })
                         };
                     })
@@ -232,6 +232,9 @@ impl ProbeApp {
                 .is_some_and(|draft| draft.is_dirty());
             let select_view = cx.weak_entity();
             let close_view = cx.weak_entity();
+            let tooltip_hover_view = cx.weak_entity();
+            let tooltip_move_view = cx.weak_entity();
+            let tooltip_leave_view = cx.weak_entity();
             tab_strip = tab_strip.child(
                 Tab::new(("overview-tab", index))
                     .debug_selector(move || format!("overview-tab-{index}"))
@@ -261,6 +264,22 @@ impl ProbeApp {
                     .when(!active, |tab| {
                         tab.text_color(theme.colors.text.secondary)
                             .hover(move |tab| tab.bg(theme.colors.surfaces.sidebar))
+                    })
+                    .on_mouse_move(move |event, _, cx| {
+                        let _ = tooltip_move_view.update(cx, |view, cx| {
+                            view.update_tab_tooltip_position(tab, event.position, cx);
+                        });
+                    })
+                    .on_hover(move |hovered, window, cx| {
+                        let _ = if *hovered {
+                            tooltip_hover_view.update(cx, |view, cx| {
+                                view.open_tab_tooltip(tab, window.mouse_position(), cx);
+                            })
+                        } else {
+                            tooltip_leave_view.update(cx, |view, cx| {
+                                view.close_tab_tooltip(tab, cx);
+                            })
+                        };
                     })
                     .on_click(move |_, _, cx| {
                         let _ = select_view.update(cx, |view, cx| {

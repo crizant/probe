@@ -216,10 +216,28 @@ fn request_key_remaps(
 }
 
 #[derive(Clone, Copy)]
-struct RequestTabTooltip {
-    key: RequestKey,
+struct TabTooltip {
+    target: TabTooltipTarget,
     position: Point<Pixels>,
     open: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TabTooltipTarget {
+    Request(RequestKey),
+    Overview(crate::shell::OverviewTab),
+}
+
+impl From<RequestKey> for TabTooltipTarget {
+    fn from(key: RequestKey) -> Self {
+        Self::Request(key)
+    }
+}
+
+impl From<crate::shell::OverviewTab> for TabTooltipTarget {
+    fn from(tab: crate::shell::OverviewTab) -> Self {
+        Self::Overview(tab)
+    }
 }
 
 struct PositionedContextMenu<T> {
