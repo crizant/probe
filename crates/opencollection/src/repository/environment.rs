@@ -230,7 +230,7 @@ pub(super) fn environment_document_mut<'a>(
 /// Applies one atomic environment write: the replacement, then a description change.
 ///
 /// An unchanged description leaves the stored description key untouched.
-pub(super) fn apply_environment_replacement(
+fn apply_environment_replacement(
     environment: &mut Value,
     replacement: &Environment,
     description: &FieldPatch<Documentation>,
