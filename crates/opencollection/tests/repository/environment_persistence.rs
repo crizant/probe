@@ -268,37 +268,6 @@ fn environment_replace_with_description_keeps_an_unchanged_description() {
     let path = temporary_path("env-edit-unchanged-description.yml");
     fs::write(&path, atomic_environment_source()).unwrap();
     let mut loaded = load_workspace(&path).unwrap();
-    let replacement = development_with_region(&loaded);
-    let prepared = loaded
-        .prepare_environment_replace_with_description(
-            "development",
-            replacement,
-            &FieldPatch::Unchanged,
-        )
-        .unwrap();
-    let saved = prepared.execute().unwrap();
-    loaded.complete_environment_replace(saved).unwrap();
-    let source = fs::read_to_string(&path).unwrap();
-    assert!(source.contains("name: region"));
-    assert!(!source.contains("extends: base"));
-    assert!(source.contains("content: Staging notes"));
-    assert!(source.contains("type: text/markdown"));
-    assert!(source.contains("description: Variable note"));
-    assert_eq!(
-        environment_description(&path, "development"),
-        Some(Documentation::Content {
-            content: "Staging notes".to_owned(),
-            media_type: "text/markdown".to_owned(),
-        })
-    );
-    fs::remove_file(path).unwrap();
-}
-
-#[test]
-fn unchanged_description_patch_keeps_the_stored_description_in_memory() {
-    let path = temporary_path("env-edit-ignore-replacement-description.yml");
-    fs::write(&path, atomic_environment_source()).unwrap();
-    let mut loaded = load_workspace(&path).unwrap();
     let mut replacement = development_with_region(&loaded);
     replacement.description = Some(Documentation::Text(
         "caller description that must not be stored".to_owned(),
@@ -317,13 +286,20 @@ fn unchanged_description_patch_keeps_the_stored_description_in_memory() {
     let saved = prepared.execute().unwrap();
     loaded.complete_environment_replace(saved).unwrap();
 
+    let source = fs::read_to_string(&path).unwrap();
+    assert!(source.contains("name: region"));
+    assert!(!source.contains("extends: base"));
+    assert!(source.contains("content: Staging notes"));
+    assert!(source.contains("type: text/markdown"));
+    assert!(source.contains("vendor.example: retained"));
+    assert!(source.contains("description: Variable note"));
     let reloaded = load_workspace(&path).unwrap();
     assert_eq!(
         loaded.workspace().environments(),
         reloaded.workspace().environments()
     );
     assert_eq!(
-        loaded.workspace().environments()[1].description,
+        reloaded.workspace().environments()[1].description,
         Some(Documentation::Content {
             content: "Staging notes".to_owned(),
             media_type: "text/markdown".to_owned(),
