@@ -289,6 +289,22 @@ fn merge_request(
         &mut conflicts,
     );
     merge_field(
+        &baseline.metadata.description,
+        &local.metadata.description,
+        &disk.metadata.description,
+        &mut merged.metadata.description,
+        "description",
+        &mut conflicts,
+    );
+    merge_field(
+        &baseline.docs,
+        &local.docs,
+        &disk.docs,
+        &mut merged.docs,
+        "docs",
+        &mut conflicts,
+    );
+    merge_field(
         &baseline.method,
         &local.method,
         &disk.method,
@@ -444,13 +460,17 @@ mod tests {
 
     #[test]
     fn merges_non_overlapping_local_and_disk_changes() {
-        let path = fixture_copy();
+        let path = named_fixture_copy("documentation.yml");
         let original = probe_opencollection::load_workspace(&path).unwrap();
         let mut state = request_state(&original, 0);
         state.local.url = Some("https://local.example".to_owned());
+        state.local.metadata.description = Some(probe_core::Documentation::Text(
+            "Local description".to_owned(),
+        ));
+        state.local.docs = Some("Local docs".to_owned());
 
         let mut source = fs::read_to_string(&path).unwrap();
-        source = source.replacen("method: GET", "method: PATCH", 1);
+        source = source.replacen("method: POST", "method: PATCH", 1);
         fs::write(&path, source).unwrap();
         let fresh = probe_opencollection::load_workspace(&path).unwrap();
         let ReconcileResult::Applied(result) = reconcile(&[state.state()], fresh, &BTreeMap::new())
@@ -464,7 +484,47 @@ mod tests {
             .unwrap();
         assert_eq!(request.url.as_deref(), Some("https://local.example"));
         assert_eq!(request.method.as_deref(), Some("PATCH"));
+        assert_eq!(
+            request.metadata.description,
+            state.local.metadata.description
+        );
+        assert_eq!(request.docs, state.local.docs);
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reports_overlapping_field_changes() {
+        for field in ["method", "description", "docs"] {
+            let path = named_fixture_copy("documentation.yml");
+            let original = probe_opencollection::load_workspace(&path).unwrap();
+            let mut state = request_state(&original, 0);
+            let source = fs::read_to_string(&path).unwrap();
+            let source = if field == "method" {
+                state.local.method = Some("GET".to_owned());
+                source.replacen("method: POST", "method: PATCH", 1)
+            } else if field == "description" {
+                state.local.metadata.description = Some(probe_core::Documentation::Text(
+                    "Local description".to_owned(),
+                ));
+                source.replacen("content: Creates a pet", "content: Disk description", 1)
+            } else {
+                state.local.docs = Some("Local docs".to_owned());
+                source.replacen("docs: request docs stay a string", "docs: Disk docs", 1)
+            };
+            fs::write(&path, source).unwrap();
+            let fresh = probe_opencollection::load_workspace(&path).unwrap();
+            let ReconcileResult::Conflicted(conflicts) =
+                reconcile(&[state.state()], fresh, &BTreeMap::new())
+            else {
+                panic!("overlapping {field} changes should conflict")
+            };
+            assert!(matches!(
+                conflicts.as_slice(),
+                [SynchronizationConflict::Modified { selector, fields }]
+                    if selector == &state.selector && fields == &[field]
+            ));
+            fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]
@@ -532,29 +592,6 @@ mod tests {
             .unwrap();
         assert_eq!(request.path_parameters[0].value, "99");
         assert_eq!(request.query_parameters[0].value, "50");
-        fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn reports_overlapping_field_changes() {
-        let path = fixture_copy();
-        let original = probe_opencollection::load_workspace(&path).unwrap();
-        let mut state = request_state(&original, 0);
-        state.local.method = Some("POST".to_owned());
-        let mut source = fs::read_to_string(&path).unwrap();
-        source = source.replacen("method: GET", "method: PATCH", 1);
-        fs::write(&path, source).unwrap();
-        let fresh = probe_opencollection::load_workspace(&path).unwrap();
-
-        let ReconcileResult::Conflicted(conflicts) =
-            reconcile(&[state.state()], fresh, &BTreeMap::new())
-        else {
-            panic!("overlapping changes should conflict")
-        };
-        assert!(matches!(
-            conflicts.as_slice(),
-            [SynchronizationConflict::Modified { fields, .. }] if fields == &["method"]
-        ));
         fs::remove_file(path).unwrap();
     }
 
