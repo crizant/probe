@@ -237,6 +237,60 @@ fn lists_environments_as_json() {
     assert_eq!(value["environments"][0]["name"], "base");
     assert_eq!(value["environments"][1]["name"], "development");
     assert_eq!(value["environments"][1]["extends"], "base");
+    assert!(value["environments"][0].get("description").is_none());
+    assert!(value["environments"][1].get("description").is_none());
+}
+
+#[test]
+fn lists_environment_descriptions_and_omits_the_field_when_absent() {
+    let workspace = temporary_path("env-list-description.yml");
+    fs::write(
+        &workspace,
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n  name: Listed descriptions\n",
+            "bundled: true\n",
+            "config:\n",
+            "  environments:\n",
+            "    - name: base\n",
+            "    - name: development\n",
+            "      extends: base\n",
+            "      description: Local development\n",
+            "    - name: staging\n",
+            "      description:\n",
+            "        content: Staging notes\n",
+            "        type: text/markdown\n",
+            "    - name: production\n",
+            "      description: null\n",
+        ),
+    )
+    .unwrap();
+
+    let output = probe()
+        .args(["environment", "list"])
+        .arg(&workspace)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "\
+NAME\tEXTENDS\tDESCRIPTION
+base\t\t
+development\tbase\tLocal development
+staging\t\tStaging notes
+production\t\tnull
+"
+    );
+
+    let listed = run_environment(&workspace, &["list"]);
+    let environments = listed["environments"].as_array().unwrap();
+    assert!(environments[0].get("description").is_none());
+    assert_eq!(environments[1]["description"], "Local development");
+    assert_eq!(environments[2]["description"]["content"], "Staging notes");
+    assert_eq!(environments[2]["description"]["type"], "text/markdown");
+    assert!(environments[3]["description"].is_null());
+    fs::remove_file(workspace).unwrap();
 }
 
 #[test]
