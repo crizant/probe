@@ -461,6 +461,15 @@ impl Workspace {
         crate::delete_environment(&mut self.environments, name)
     }
 
+    /// Sets or removes the named environment's description.
+    pub fn set_environment_description(
+        &mut self,
+        environment_name: &str,
+        description: &crate::FieldPatch<crate::Documentation>,
+    ) -> Result<(), crate::EnvironmentResolutionError> {
+        crate::set_environment_description(&mut self.environments, environment_name, description)
+    }
+
     /// Updates a plain variable on the named environment, or adds an override.
     pub fn set_environment_variable(
         &mut self,

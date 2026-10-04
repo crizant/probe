@@ -308,7 +308,13 @@ fn read_environments(
                 original_source: source.into_bytes().into(),
             },
         );
-        environments.push((environment.into_domain(), path));
+        let environment = environment
+            .into_domain()
+            .map_err(|source| LoadError::Parse {
+                path: path.clone(),
+                source: ParseError::new(source),
+            })?;
+        environments.push((environment, path));
     }
     Ok(environments)
 }

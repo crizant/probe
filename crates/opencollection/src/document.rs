@@ -298,17 +298,27 @@ impl ParameterDocument {
 pub(crate) struct EnvironmentDocument {
     pub(crate) name: String,
     pub(crate) color: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present_value")]
+    pub(crate) description: Option<Value>,
     pub(crate) extends: Option<String>,
     pub(crate) dot_env_file_path: Option<String>,
     #[serde(default)]
     pub(crate) variables: Vec<EnvironmentVariableDocument>,
 }
 
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
 impl EnvironmentDocument {
-    pub(crate) fn into_domain(self) -> Environment {
-        Environment {
+    pub(crate) fn into_domain(self) -> Result<Environment, serde_yaml_ng::Error> {
+        Ok(Environment {
             name: self.name,
             color: self.color,
+            description: optional_documentation(self.description.as_ref())?,
             extends: self.extends,
             dot_env_file_path: self.dot_env_file_path,
             variables: self
@@ -316,7 +326,7 @@ impl EnvironmentDocument {
                 .into_iter()
                 .map(EnvironmentVariableDocument::into_domain)
                 .collect(),
-        }
+        })
     }
 }
 

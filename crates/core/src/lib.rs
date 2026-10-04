@@ -31,8 +31,8 @@ pub use environment::{
 };
 pub use environment_edit::{
     create_environment, delete_environment, effective_environment_variables, replace_environment,
-    revert_created_environment, set_environment_variable, unset_environment_variable,
-    validate_unique_variable_names,
+    revert_created_environment, set_environment_description, set_environment_variable,
+    unset_environment_variable, validate_unique_variable_names,
 };
 pub use environment_model::{
     Environment, EnvironmentVariable, SecretVariable, Variable, VariableValue, VariableValueSet,

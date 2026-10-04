@@ -1,9 +1,12 @@
 use std::io::Read;
 
-use probe_core::EnvironmentResolutionError;
+use probe_core::{Documentation, EnvironmentResolutionError, FieldPatch};
 use serde_json::json;
 
-use crate::{CliError, CommandOutput, WorkspaceInput, load};
+use crate::{
+    CliError, CommandOutput, WorkspaceInput, load,
+    presentation::{append_documentation, documentation_json},
+};
 
 pub(crate) fn create(
     input: &WorkspaceInput,
@@ -119,6 +122,37 @@ pub(crate) fn unset_variable(
     Ok(variable_output("unset", "Unset", environment, name, None))
 }
 
+pub(crate) fn set_description(
+    input: &WorkspaceInput,
+    environment: &str,
+    description: &FieldPatch<Documentation>,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let FieldPatch::Set(description) = description else {
+        return Err(CliError::invalid_arguments(
+            "invalid command; run 'probe --help' for usage",
+        ));
+    };
+    let output = description_output("set", "Set", environment, Some(description));
+    let mut loaded = load(input, stdin)?;
+    loaded
+        .update_environment_description(environment, &FieldPatch::Set(description.clone()))
+        .map_err(CliError::persistence)?;
+    Ok(output)
+}
+
+pub(crate) fn unset_description(
+    input: &WorkspaceInput,
+    environment: &str,
+    stdin: &mut impl Read,
+) -> Result<CommandOutput, CliError> {
+    let mut loaded = load(input, stdin)?;
+    loaded
+        .update_environment_description(environment, &FieldPatch::Clear)
+        .map_err(CliError::persistence)?;
+    Ok(description_output("unset", "Unset", environment, None))
+}
+
 fn create_output(name: &str, extends: Option<&str>) -> CommandOutput {
     let mut json = json!({
         "environment": name,
@@ -152,4 +186,24 @@ fn variable_output(
         human: format!("{verb} environment variable {environment}.{name}\n"),
         json,
     }
+}
+
+fn description_output(
+    operation: &str,
+    verb: &str,
+    environment: &str,
+    description: Option<&Documentation>,
+) -> CommandOutput {
+    let mut human = format!("{verb} environment {environment} description\n");
+    let mut value = json!({
+        "environment": environment,
+        "operation": operation,
+    });
+    if operation == "set" {
+        append_documentation(&mut human, "Description", description);
+        value["description"] = documentation_json(description);
+    } else {
+        value["fields"] = json!(["description"]);
+    }
+    CommandOutput { human, json: value }
 }

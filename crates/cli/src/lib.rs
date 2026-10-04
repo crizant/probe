@@ -135,8 +135,8 @@ pub const fn help() -> &'static str {
         "  folder create|rename|delete|move|reorder    Edit folder structure\n",
         "  environment create <path>           Create a new environment\n",
         "  environment list <path>             List environments\n",
-        "  environment set <path>              Set and persist an environment variable\n",
-        "  environment unset <path>            Remove an environment variable override\n",
+        "  environment set <path>              Set an environment variable or description\n",
+        "  environment unset <path>            Remove an environment variable or description\n",
         "  environment delete <path>           Delete an environment\n",
         "  environment rename <path>           Rename an environment\n",
         "\n",
@@ -151,7 +151,7 @@ pub const fn help() -> &'static str {
         "      --expect <expr>         Assert a completed response; may be repeated\n",
         "      --name <name>          Set a request, folder, collection, environment, or variable name\n",
         "      --summary <text>       Set a collection summary\n",
-        "      --description <text>   Set a folder or request description string\n",
+        "      --description <text>   Set a folder, request, or environment description string\n",
         "      --description-json <json>  Set description as a JSON string, null, or {content,type} object\n",
         "      --docs <text>          Set documentation as a string\n",
         "      --docs-json <json>     Set collection or folder docs as JSON; invalid for request docs\n",
@@ -250,16 +250,17 @@ const ENVIRONMENT_HELP: &str = concat!(
     "Commands:\n",
     "  list <path|->                 List environments\n",
     "  create <path> --name <name> [--extends <parent>]\n",
-    "  set <path> --environment <name> --name <var> --value <value>\n",
-    "  unset <path> --environment <name> --name <var>\n",
+    "  set <path> --environment <name> (--name <var> --value <value> | --description <text> | --description-json <json>)\n",
+    "  unset <path> --environment <name> (--name <var> | --description)\n",
     "  delete <path> --environment <name>\n",
     "  rename <path> --environment <name> --name <new>\n",
     "\n",
     "Create adds a new environment with an optional parent. Delete removes a leaf environment.\n",
     "Rename changes a leaf environment's name. Set writes a plain variable on the named\n",
-    "environment. A parent-only variable is overridden on the selected environment.\n",
-    "Unset removes that environment's entry so a parent value can show through. Stdin\n",
-    "workspaces cannot be persisted.\n",
+    "environment, or sets its description. A parent-only variable is overridden on the\n",
+    "selected environment. Unset removes that environment's variable entry so a parent\n",
+    "value can show through, or removes the description key. Description unset does not\n",
+    "write null. Stdin workspaces cannot be persisted.\n",
 );
 
 /// Runs the CLI adapter for arguments that exclude the executable name.
@@ -441,14 +442,33 @@ fn execute(command: Command, stdin: &mut impl Read) -> Result<CommandOutput, Cli
         Command::EnvironmentSet {
             input,
             environment,
-            name,
-            value,
-        } => environment::set_variable(&input, &environment, &name, value, stdin),
+            variable,
+            description,
+        } => match variable {
+            Some((name, value)) => {
+                environment::set_variable(&input, &environment, &name, value, stdin)
+            }
+            None => environment::set_description(&input, &environment, &description, stdin),
+        },
         Command::EnvironmentUnset {
             input,
             environment,
             name,
-        } => environment::unset_variable(&input, &environment, &name, stdin),
+            clear_description,
+        } => {
+            if clear_description {
+                environment::unset_description(&input, &environment, stdin)
+            } else {
+                environment::unset_variable(
+                    &input,
+                    &environment,
+                    name.as_deref().ok_or_else(|| {
+                        CliError::invalid_arguments("invalid command; run 'probe --help' for usage")
+                    })?,
+                    stdin,
+                )
+            }
+        }
         Command::EnvironmentCreate {
             input,
             name,

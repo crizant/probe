@@ -9,6 +9,7 @@ fn environment_manager_row_ids_follow_insertions_and_removals() {
         name: "empty".to_owned(),
         color: None,
         extends: None,
+        description: None,
         dot_env_file_path: None,
         variables: Vec::new(),
     };

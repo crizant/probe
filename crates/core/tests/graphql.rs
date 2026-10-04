@@ -18,6 +18,7 @@ fn environment() -> Environment {
         name: "local".to_owned(),
         color: None,
         extends: None,
+        description: None,
         dot_env_file_path: None,
         variables: vec![EnvironmentVariable::Plain(Variable {
             name: Some("login".to_owned()),

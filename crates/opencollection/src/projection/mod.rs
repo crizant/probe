@@ -1,9 +1,6 @@
 use probe_core::Collection;
 
-use crate::{
-    ProjectionDiagnostic, ProjectionDiagnosticKind,
-    document::{CollectionDocument, EnvironmentDocument},
-};
+use crate::{ProjectionDiagnostic, ProjectionDiagnosticKind, document::CollectionDocument};
 
 mod authentication;
 mod body;
@@ -15,15 +12,14 @@ pub(crate) fn project_collection(
     document: CollectionDocument,
     diagnostics: &mut Vec<ProjectionDiagnostic>,
 ) -> Result<Collection, serde_yaml_ng::Error> {
+    let mut environments = Vec::with_capacity(document.config.environments.len());
+    for environment in document.config.environments {
+        environments.push(environment.into_domain()?);
+    }
     Ok(Collection {
         metadata: document.info.into_domain(),
         items: project_items(document.items, "items", diagnostics)?,
-        environments: document
-            .config
-            .environments
-            .into_iter()
-            .map(EnvironmentDocument::into_domain)
-            .collect(),
+        environments,
     })
 }
 

@@ -510,3 +510,289 @@ fn environment_delete_and_rename_have_stable_errors() {
 
     fs::remove_file(workspace).unwrap();
 }
+
+#[test]
+fn sets_and_unsets_environment_description() {
+    let workspace = temporary_path("env-description.yml");
+    fs::write(
+        &workspace,
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n  name: Description\n",
+            "bundled: true\n",
+            "config:\n",
+            "  environments:\n",
+            "    - name: base\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: api.example.com\n",
+            "    - name: development\n",
+            "      extends: base\n",
+            "      vendor.example: retained\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: dev.example.com\n",
+            "          description: Variable note\n",
+        ),
+    )
+    .unwrap();
+
+    let set = run_environment(
+        &workspace,
+        &[
+            "set",
+            "--environment",
+            "development",
+            "--description",
+            "Local development",
+        ],
+    );
+    assert_eq!(set["operation"], "set");
+    assert_eq!(set["environment"], "development");
+    assert_eq!(set["description"], "Local development");
+    assert!(set.get("name").is_none());
+    assert!(set.get("value").is_none());
+    let environment = &yaml_document(&workspace)["config"]["environments"][1];
+    assert_eq!(
+        environment["description"].as_str(),
+        Some("Local development")
+    );
+    assert_eq!(environment["vendor.example"].as_str(), Some("retained"));
+    assert_eq!(
+        environment["variables"][0]["description"].as_str(),
+        Some("Variable note")
+    );
+    assert_eq!(
+        environment["variables"][0]["value"].as_str(),
+        Some("dev.example.com")
+    );
+
+    let object = run_environment(
+        &workspace,
+        &[
+            "set",
+            "--environment",
+            "development",
+            "--description-json",
+            r#"{"content":"Local development","type":"text/markdown"}"#,
+        ],
+    );
+    assert_eq!(object["description"]["content"], "Local development");
+    assert_eq!(object["description"]["type"], "text/markdown");
+    let environment = &yaml_document(&workspace)["config"]["environments"][1];
+    assert_eq!(
+        environment["description"]["content"].as_str(),
+        Some("Local development")
+    );
+    assert_eq!(
+        environment["description"]["type"].as_str(),
+        Some("text/markdown")
+    );
+    assert!(environment["description"].as_str().is_none());
+
+    let null = run_environment(
+        &workspace,
+        &[
+            "set",
+            "--environment",
+            "development",
+            "--description-json",
+            "null",
+        ],
+    );
+    assert!(null["description"].is_null());
+    assert!(yaml_document(&workspace)["config"]["environments"][1]["description"].is_null());
+
+    let unset = run_environment(
+        &workspace,
+        &["unset", "--environment", "development", "--description"],
+    );
+    assert_eq!(unset["operation"], "unset");
+    assert_eq!(unset["environment"], "development");
+    assert_eq!(unset["fields"], serde_json::json!(["description"]));
+    assert!(unset.get("description").is_none());
+    let environment = &yaml_document(&workspace)["config"]["environments"][1];
+    assert!(environment.get("description").is_none());
+    assert_eq!(environment["name"].as_str(), Some("development"));
+    assert_eq!(environment["extends"].as_str(), Some("base"));
+    assert_eq!(environment["vendor.example"].as_str(), Some("retained"));
+    assert_eq!(
+        environment["variables"][0]["description"].as_str(),
+        Some("Variable note")
+    );
+
+    let human = probe()
+        .args(["environment", "set"])
+        .arg(&workspace)
+        .args([
+            "--environment",
+            "development",
+            "--description",
+            "Local development",
+        ])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let stdout = String::from_utf8(human.stdout).unwrap();
+    assert!(stdout.contains("Set environment development description"));
+    assert!(stdout.contains("Description: Local development"));
+    let removed = probe()
+        .args(["environment", "unset"])
+        .arg(&workspace)
+        .args(["--environment", "development", "--description"])
+        .output()
+        .unwrap();
+    assert!(removed.status.success());
+    let stdout = String::from_utf8(removed.stdout).unwrap();
+    assert_eq!(stdout, "Unset environment development description\n");
+    assert!(
+        yaml_document(&workspace)["config"]["environments"][1]
+            .get("description")
+            .is_none()
+    );
+
+    let missing = probe()
+        .args(["environment", "set"])
+        .arg(&workspace)
+        .args([
+            "--environment",
+            "production",
+            "--description",
+            "nope",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "environment_not_found");
+
+    for args in [
+        vec![
+            "--environment",
+            "development",
+            "--name",
+            "host",
+            "--value",
+            "x",
+            "--description",
+            "both",
+        ],
+        vec!["--environment", "development"],
+        vec!["--environment", "development", "--description", ""],
+    ] {
+        let rejected = probe()
+            .args(["environment", "set"])
+            .arg(&workspace)
+            .args(&args)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert_eq!(rejected.status.code(), Some(2), "{args:?}");
+        assert!(
+            yaml_document(&workspace)["config"]["environments"][1]
+                .get("description")
+                .is_none(),
+            "{args:?}"
+        );
+    }
+
+    let mixed = probe()
+        .args(["environment", "unset"])
+        .arg(&workspace)
+        .args([
+            "--environment",
+            "development",
+            "--name",
+            "host",
+            "--description",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(mixed.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&mixed.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "invalid_arguments");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("either --name or --description")
+    );
+
+    let json_null = probe()
+        .args(["environment", "unset"])
+        .arg(&workspace)
+        .args([
+            "--environment",
+            "development",
+            "--description-json",
+            "null",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(json_null.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&json_null.stdout).unwrap();
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("write YAML null")
+    );
+    assert!(
+        yaml_document(&workspace)["config"]["environments"][1]
+            .get("description")
+            .is_none()
+    );
+
+    fs::remove_file(workspace).unwrap();
+
+    let root = temporary_path("env-description-unbundled");
+    copy_directory(&fixture("unbundled"), &root);
+    let set = run_environment(
+        &root,
+        &[
+            "set",
+            "--environment",
+            "development",
+            "--description",
+            "Child environment",
+        ],
+    );
+    assert_eq!(set["description"], "Child environment");
+    let path = root.join("environments/development.yml");
+    let document = yaml_document(&path);
+    assert_eq!(document["description"].as_str(), Some("Child environment"));
+    assert_eq!(document["color"].as_str(), Some("green"));
+    run_environment(
+        &root,
+        &["unset", "--environment", "development", "--description"],
+    );
+    let document = yaml_document(&path);
+    assert!(document.get("description").is_none());
+    assert_eq!(document["color"].as_str(), Some("green"));
+    assert_eq!(document["name"].as_str(), Some("development"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn run_environment(workspace: &std::path::Path, args: &[&str]) -> Value {
+    let output = probe()
+        .args(["environment"])
+        .args(args)
+        .arg(workspace)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{args:?}\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn yaml_document(path: &std::path::Path) -> serde_yaml_ng::Value {
+    serde_yaml_ng::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}

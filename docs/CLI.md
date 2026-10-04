@@ -35,8 +35,8 @@ probe folder move <path> <selector> [--parent <folder>] [--index <index>] [--jso
 probe folder reorder <path> <selector> --index <index> [--json]
 probe environment create <path> --name <name> [--extends <parent>] [--json]
 probe environment list <path> [--json]
-probe environment set <path> --environment <name> --name <var> --value <value> [--json]
-probe environment unset <path> --environment <name> --name <var> [--json]
+probe environment set <path> --environment <name> (--name <var> --value <value> | --description <text> | --description-json <json>) [--json]
+probe environment unset <path> --environment <name> (--name <var> | --description) [--json]
 probe environment delete <path> --environment <name> [--json]
 probe environment rename <path> --environment <name> --name <new> [--json]
 ```
@@ -202,11 +202,11 @@ string, `null`, or `{"content","type"}` object via `--description-json` or
 its content string. Explicit JSON `null` is stored as YAML null. `null` does not
 remove the field.
 
-`collection unset`, `folder unset`, and `request unset` remove fields from the
-file, following `environment unset`. At least one field flag is required.
-`--summary` and `--docs` on collection unset, and `--description` and `--docs` on
-folder and request unset, take no value and omit that key. They do not write
-YAML null. `set` remains set-only.
+`collection unset`, `folder unset`, `request unset`, and `environment unset --description`
+remove fields from the file. At least one field flag is required.
+`--summary` and `--docs` on collection unset, `--description` and `--docs` on
+folder and request unset, and `--description` on environment unset, take no value
+and omit that key. They do not write YAML null. `set` remains set-only.
 
 Request `info.description` uses the same documentation value. Request `docs` is a
 plain string: `--docs <text>` writes that string, and `--docs-json` is rejected
@@ -217,12 +217,22 @@ move, create, or other field updates unless that command is given the
 documentation flag.
 
 `environment set` and `environment unset` persist OpenCollection environment variables
-through the same repository path. `--environment` names the environment to mutate; it
-does not resolve a request. `set` writes a plain variable on that environment, updating
-it when present or adding an override when the value currently comes from a parent.
-`--name` is the variable and `--value` is required. `unset` removes the variable entry
-from that environment only, so a parent value can show through. Both commands reject
-secrets, empty names, and stdin workspaces.
+and the environment `description` through the same repository path. `--environment`
+names the environment to mutate; it does not resolve a request. One command writes
+either a variable or a description. `set --name <var> --value <value>` writes a plain
+variable on that environment, updating it when present or adding an override when the
+value currently comes from a parent. `unset --name <var>` removes the variable entry
+from that environment only, so a parent value can show through. Both variable commands
+reject secrets, empty names, and stdin workspaces.
+
+`set --description <text>` writes a plain string at that environment's `description`.
+`set --description-json <json>` writes a JSON string, YAML null, or a `{content, type}`
+object, using the same documentation value as folder and request descriptions. An
+object is stored as `{content, type}` and is not flattened to its content string.
+Explicit JSON `null` is stored as YAML null and does not remove the field.
+`unset --description` takes no value and deletes the `description` key. It does not
+write YAML null. `--description` and `--description-json` cannot be combined with
+`--name` or `--value`. `unset --description-json` is rejected.
 
 `environment delete` and `environment rename` use the same `--environment` flag for the
 existing environment. `--name` on rename is the new identity, matching `environment create`.
@@ -414,8 +424,10 @@ environment was selected. Usage locations are `method`, `url`, `header`,
 `graphql_operation_name`, `graphql_extensions`, `form_urlencoded`, `multipart`, `file`,
 or `authentication`. Named request fields also include `name`.
 
-`environment set --json` and `environment unset --json` return `environment`, `name`,
-and `operation`. `set` also returns `value`.
+`environment set --json` and `environment unset --json` for a variable return
+`environment`, `name`, and `operation`. `set` also returns `value`. A description
+`set` returns `environment`, `operation`, and `description`. `unset --description`
+returns `environment`, `operation`, and `fields` containing `description`.
 
 `environment create --json` returns `environment` and `operation`, plus `extends` when a
 parent was supplied. `environment delete --json` returns `environment` and `operation`.

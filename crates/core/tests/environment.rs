@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use probe_core::{
-    Authentication, AuthenticationKind, AuthenticationValue, Body, Environment,
-    EnvironmentResolutionError, EnvironmentVariable, FormField, Header, MultipartPart,
+    Authentication, AuthenticationKind, AuthenticationValue, Body, Documentation, Environment,
+    EnvironmentResolutionError, EnvironmentVariable, FieldPatch, FormField, Header, MultipartPart,
     MultipartPartKind, MultipartValue, QueryParameter, RawBody, RawBodyKind, Request, RequestBody,
     RequestKind, ResolvedEnvironment, SecretVariable, Variable, VariableStatus, VariableValue,
     VariableValueSet, VariableValueVariant, resolve_environment,
@@ -419,6 +419,7 @@ fn environment(
         name: name.to_owned(),
         color: None,
         extends: extends.map(str::to_owned),
+        description: None,
         dot_env_file_path: None,
         variables,
     }
@@ -946,6 +947,43 @@ fn set_environment_variable_updates_overrides_and_rejects_secrets() {
 }
 
 #[test]
+fn set_environment_description_updates_and_clears_only_the_named_environment() {
+    let mut environments = vec![
+        environment("base", None, vec![]),
+        environment("development", Some("base"), vec![]),
+    ];
+
+    probe_core::set_environment_description(
+        &mut environments,
+        "development",
+        &FieldPatch::Set(Documentation::Text("Local development".to_owned())),
+    )
+    .unwrap();
+    assert_eq!(environments[0].description, None);
+    assert_eq!(
+        environments[1].description,
+        Some(Documentation::Text("Local development".to_owned()))
+    );
+
+    probe_core::set_environment_description(
+        &mut environments,
+        "development",
+        &FieldPatch::Set(Documentation::Null),
+    )
+    .unwrap();
+    assert_eq!(environments[1].description, Some(Documentation::Null));
+
+    probe_core::set_environment_description(&mut environments, "development", &FieldPatch::Clear)
+        .unwrap();
+    assert_eq!(environments[1].description, None);
+    assert_eq!(
+        probe_core::set_environment_description(&mut environments, "missing", &FieldPatch::Clear)
+            .unwrap_err(),
+        EnvironmentResolutionError::EnvironmentNotFound("missing".to_owned())
+    );
+}
+
+#[test]
 fn setting_a_variant_variable_preserves_its_type_and_other_choices() {
     let variants = |selected: bool| {
         EnvironmentVariable::Plain(Variable {
@@ -1147,6 +1185,7 @@ fn create_environment_rejects_inheritance_cycles() {
         name: "a".to_owned(),
         color: None,
         extends: Some("b".to_owned()),
+        description: None,
         dot_env_file_path: None,
         variables: Vec::new(),
     }];

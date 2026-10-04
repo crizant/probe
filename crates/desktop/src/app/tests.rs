@@ -496,6 +496,7 @@ fn sample_environment(
         name: name.to_owned(),
         color: None,
         extends: extends.map(str::to_owned),
+        description: None,
         dot_env_file_path: None,
         variables,
     }
