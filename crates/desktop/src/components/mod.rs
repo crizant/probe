@@ -68,8 +68,9 @@ use surfaces::{
     temporary_surface_shadow, text_context_menu_id, variable_tooltip_popup, with_text_context_menu,
 };
 pub(crate) use surfaces::{
-    VariableContext, context_menu_surface, dialog_actions, dialog_description, dialog_field,
-    dialog_field_label, dialog_layer, dialog_surface, dialog_title, popup_surface, truncated_label,
+    VariableContext, breadcrumb_header, context_menu_surface, dialog_actions, dialog_description,
+    dialog_field, dialog_field_label, dialog_layer, dialog_surface, dialog_title, popup_surface,
+    truncated_label,
 };
 
 pub(crate) use buttons::{

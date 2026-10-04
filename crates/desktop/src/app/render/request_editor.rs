@@ -128,29 +128,19 @@ impl ProbeApp {
             theme,
             cx,
         );
-        let breadcrumb = div()
-            .id("request-breadcrumb")
-            .debug_selector(|| "request-breadcrumb".into())
-            .h(px(theme.metrics.control_height))
-            .w_full()
-            .flex()
-            .items_center()
-            .child(
-                components::request_icon(
-                    theme,
-                    &components::RequestIcon::from_request(
-                        &request.kind,
-                        request.method.as_deref(),
-                    ),
-                )
-                .id("request-protocol-label")
-                .debug_selector(|| "request-protocol-label".into())
-                .flex_none()
-                .ml(px(theme.metrics.spacing_1))
-                .mr(px(theme.metrics.spacing_2)),
+        let breadcrumb = components::breadcrumb_header(
+            theme,
+            components::request_icon(
+                theme,
+                &components::RequestIcon::from_request(&request.kind, request.method.as_deref()),
             )
-            .child(breadcrumb_path)
-            .child(self.render_save_button(theme, "Save request", request_dirty, false, cx));
+            .id("request-protocol-label")
+            .debug_selector(|| "request-protocol-label".into()),
+            breadcrumb_path,
+            self.render_save_button(theme, "Save request", request_dirty, false, cx),
+        )
+        .id("request-breadcrumb")
+        .debug_selector(|| "request-breadcrumb".into());
         let url_view = cx.weak_entity();
         let execution_view = cx.weak_entity();
         let request_running = self

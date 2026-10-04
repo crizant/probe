@@ -172,20 +172,14 @@ impl ProbeApp {
             },
         );
         overview = overview.child(
-            div()
-                .flex_none()
-                .h(px(theme.metrics.control_height))
-                .w_full()
-                .mb(px(theme.metrics.spacing_2))
-                .flex()
-                .items_center()
-                .child(
-                    components::tree_icon_slot(theme, icon)
-                        .ml(px(theme.metrics.spacing_1))
-                        .mr(px(theme.metrics.spacing_2)),
-                )
-                .child(title)
-                .child(self.render_save_button(theme, "Save documentation", dirty, busy, cx)),
+            components::breadcrumb_header(
+                theme,
+                components::tree_icon_slot(theme, icon),
+                title,
+                self.render_save_button(theme, "Save documentation", dirty, busy, cx),
+            )
+            .flex_none()
+            .mb(px(theme.metrics.spacing_2)),
         );
         div()
             .flex_1()

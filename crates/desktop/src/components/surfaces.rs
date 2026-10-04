@@ -5,6 +5,26 @@ pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
     div().min_w(px(0.0)).truncate().child(text.into())
 }
 
+pub(crate) fn breadcrumb_header(
+    theme: Theme,
+    icon: impl IntoElement + gpui::Styled,
+    title: impl IntoElement,
+    save_button: impl IntoElement,
+) -> gpui::Div {
+    div()
+        .h(px(theme.metrics.control_height))
+        .w_full()
+        .flex()
+        .items_center()
+        .child(
+            icon.flex_none()
+                .ml(px(theme.metrics.spacing_1))
+                .mr(px(theme.metrics.spacing_1)),
+        )
+        .child(title)
+        .child(save_button)
+}
+
 pub(crate) fn popup_surface(
     theme: Theme,
     id: impl Into<ElementId>,
