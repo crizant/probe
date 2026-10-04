@@ -6,66 +6,117 @@ use serde_json::{Map, Value};
 
 use crate::{Documentation, ItemMetadata};
 
-// Declare request fields and their conflict labels together. Reconciliation is
-// generated here so a field added to Request cannot be omitted from merging.
-macro_rules! define_request {
-    ($( $(#[$doc:meta])* $field:ident: $ty:ty => $label:literal, )*) => {
-        /// A native API request definition.
-        ///
-        /// Common fields are stored once; protocol-specific state belongs to [`RequestKind`].
-        #[derive(Clone, Debug, Default, PartialEq)]
-        pub struct Request {
-            /// Request metadata.
-            pub metadata: ItemMetadata,
-            $( $(#[$doc])* pub $field: $ty, )*
-        }
-
-        impl Request {
-            /// Reconciles local and incoming edits against a common baseline.
-            ///
-            /// Equal edits and changes on only one side merge. Differing edits to
-            /// the same field conflict, leaving that field at its baseline value.
-            /// Metadata fields merge separately; lists, settings, and protocol/body
-            /// state each remain one conflict unit.
-            #[must_use]
-            pub fn reconcile(baseline: &Self, local: &Self, incoming: &Self)
-                -> (Self, Vec<&'static str>)
-            {
-                let mut conflicts = Vec::new();
-                let merged = Self {
-                    metadata: reconcile_metadata(
-                        &baseline.metadata, &local.metadata, &incoming.metadata, &mut conflicts,
-                    ),
-                    $( $field: reconcile_field(
-                        &baseline.$field, &local.$field, &incoming.$field,
-                        $label, &mut conflicts,
-                    ), )*
-                };
-                (merged, conflicts)
-            }
-        }
-    };
+/// A native API request definition.
+///
+/// Common fields are stored once; protocol-specific state belongs to [`RequestKind`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Request {
+    /// Request metadata.
+    pub metadata: ItemMetadata,
+    /// Request documentation. OpenCollection request `docs` is a plain string.
+    pub docs: Option<String>,
+    /// HTTP method as written in the collection.
+    pub method: Option<String>,
+    /// Request URL, which may contain variables.
+    pub url: Option<String>,
+    /// HTTP request headers.
+    pub headers: Vec<Header>,
+    /// Query parameters.
+    pub query_parameters: Vec<QueryParameter>,
+    /// Path parameters.
+    pub path_parameters: Vec<QueryParameter>,
+    /// Protocol identity and protocol-specific body.
+    pub kind: RequestKind,
+    /// Request authentication configuration.
+    pub authentication: Option<Authentication>,
+    /// Execution settings.
+    pub settings: RequestSettings,
 }
 
-define_request! {
-    /// Request documentation. OpenCollection request `docs` is a plain string.
-    docs: Option<String> => "docs",
-    /// HTTP method as written in the collection.
-    method: Option<String> => "method",
-    /// Request URL, which may contain variables.
-    url: Option<String> => "URL",
-    /// HTTP request headers.
-    headers: Vec<Header> => "headers",
-    /// Query parameters.
-    query_parameters: Vec<QueryParameter> => "query parameters",
-    /// Path parameters.
-    path_parameters: Vec<QueryParameter> => "path parameters",
-    /// Protocol identity and protocol-specific body.
-    kind: RequestKind => "body",
-    /// Request authentication configuration.
-    authentication: Option<Authentication> => "authentication",
-    /// Execution settings.
-    settings: RequestSettings => "settings",
+impl Request {
+    /// Reconciles local and incoming edits against a common baseline.
+    ///
+    /// Equal edits and changes on only one side merge. Differing edits to
+    /// the same field conflict, leaving that field at its baseline value.
+    /// Metadata fields merge separately; lists, settings, and protocol/body
+    /// state each remain one conflict unit.
+    #[must_use]
+    pub fn reconcile(baseline: &Self, local: &Self, incoming: &Self) -> (Self, Vec<&'static str>) {
+        let mut conflicts = Vec::new();
+        // Exhaustive construction requires new request fields to have a merge rule.
+        let merged = Self {
+            metadata: reconcile_metadata(
+                &baseline.metadata,
+                &local.metadata,
+                &incoming.metadata,
+                &mut conflicts,
+            ),
+            docs: reconcile_field(
+                &baseline.docs,
+                &local.docs,
+                &incoming.docs,
+                "docs",
+                &mut conflicts,
+            ),
+            method: reconcile_field(
+                &baseline.method,
+                &local.method,
+                &incoming.method,
+                "method",
+                &mut conflicts,
+            ),
+            url: reconcile_field(
+                &baseline.url,
+                &local.url,
+                &incoming.url,
+                "URL",
+                &mut conflicts,
+            ),
+            headers: reconcile_field(
+                &baseline.headers,
+                &local.headers,
+                &incoming.headers,
+                "headers",
+                &mut conflicts,
+            ),
+            query_parameters: reconcile_field(
+                &baseline.query_parameters,
+                &local.query_parameters,
+                &incoming.query_parameters,
+                "query parameters",
+                &mut conflicts,
+            ),
+            path_parameters: reconcile_field(
+                &baseline.path_parameters,
+                &local.path_parameters,
+                &incoming.path_parameters,
+                "path parameters",
+                &mut conflicts,
+            ),
+            kind: reconcile_field(
+                &baseline.kind,
+                &local.kind,
+                &incoming.kind,
+                "body",
+                &mut conflicts,
+            ),
+            authentication: reconcile_field(
+                &baseline.authentication,
+                &local.authentication,
+                &incoming.authentication,
+                "authentication",
+                &mut conflicts,
+            ),
+            settings: reconcile_field(
+                &baseline.settings,
+                &local.settings,
+                &incoming.settings,
+                "settings",
+                &mut conflicts,
+            ),
+        };
+        (merged, conflicts)
+    }
 }
 
 fn reconcile_metadata(
