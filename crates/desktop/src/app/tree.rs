@@ -1,6 +1,6 @@
 use gpui::{
-    Context, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window,
+    div, prelude::FluentBuilder as _, px,
 };
 use gpui_base::Button;
 use probe_core::{Workspace, WorkspaceItemRef};
@@ -19,7 +19,7 @@ pub(crate) struct TreeDrag {
     pub(crate) item: WorkspaceItemRef,
     pub(crate) kind: ItemKind,
     pub(crate) label: String,
-    pub(crate) method: Option<String>,
+    pub(crate) icon: Option<components::RequestIcon>,
 }
 
 pub(crate) struct TreeRowSpec {
@@ -27,7 +27,7 @@ pub(crate) struct TreeRowSpec {
     pub(crate) kind: ItemKind,
     pub(crate) selector: String,
     pub(crate) label: String,
-    pub(crate) method: Option<String>,
+    pub(crate) icon: Option<components::RequestIcon>,
     pub(crate) depth: usize,
     pub(crate) selected: bool,
 }
@@ -46,18 +46,8 @@ impl Render for TreeDrag {
             .border_1()
             .border_color(theme.colors.borders.standard)
             .text_size(px(theme.typography.caption_size));
-        if let Some(method) = &self.method {
-            let is_graphql = method == "GQL";
-            preview = preview.child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(if is_graphql {
-                        theme.colors.protocols.graphql
-                    } else {
-                        theme.method_color(method)
-                    })
-                    .child(method.clone()),
-            );
+        if let Some(icon) = &self.icon {
+            preview = preview.child(components::request_icon(theme, icon));
         } else if self.kind == ItemKind::Folder {
             preview = preview.child(components::tree_folder_icon(theme, false, false));
         }
@@ -94,27 +84,12 @@ pub(crate) fn tree_row_button(
         .cursor_pointer()
 }
 
+pub(crate) fn tree_disclosure_width(theme: Theme) -> f32 {
+    theme.metrics.icon_standard * 1.5
+}
+
 pub(crate) fn tree_level_indent(theme: Theme, depth: usize) -> f32 {
-    theme.metrics.spacing_1 + depth as f32 * theme.metrics.icon_standard
-}
-
-pub(crate) fn tree_method_font_size(theme: Theme, method: &str) -> f32 {
-    if method.len() > 3 {
-        theme.typography.caption_size - 2.0
-    } else {
-        theme.typography.caption_size - 1.0
-    }
-}
-
-pub(crate) fn tree_method_label(method: &str) -> &str {
-    match method {
-        "DELETE" => "DEL",
-        "OPTION" | "OPTIONS" => "OPT",
-        "PATCH" => "PAT",
-        "CONNECT" => "CON",
-        method if method.len() <= 4 => method,
-        _ => "HTTP",
-    }
+    theme.metrics.spacing_1 + depth as f32 * tree_disclosure_width(theme)
 }
 
 pub(crate) fn tree_hierarchy_guides(theme: Theme, depth: usize, selected: bool) -> gpui::Div {
@@ -131,7 +106,8 @@ pub(crate) fn tree_hierarchy_guides(theme: Theme, depth: usize, selected: bool) 
                 .top(px(0.0))
                 .bottom(px(0.0))
                 .left(px(tree_level_indent(theme, level)
-                    + theme.metrics.icon_standard / 2.0
+                    + tree_disclosure_width(theme) / 2.0
+                    - theme.metrics.spacing_1 / 2.0
                     - 0.5))
                 .w(px(1.0))
                 .bg(color),

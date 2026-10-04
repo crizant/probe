@@ -136,10 +136,12 @@ impl ProbeApp {
             .flex()
             .items_center()
             .child(
-                components::protocol_marker(
+                components::request_icon(
                     theme,
-                    request_protocol_label(&request.kind),
-                    request_protocol_color(theme, &request.kind),
+                    &components::RequestIcon::from_request(
+                        &request.kind,
+                        request.method.as_deref(),
+                    ),
                 )
                 .id("request-protocol-label")
                 .debug_selector(|| "request-protocol-label".into())

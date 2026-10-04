@@ -179,8 +179,11 @@ impl ProbeApp {
                 .mb(px(theme.metrics.spacing_2))
                 .flex()
                 .items_center()
-                .gap(px(theme.metrics.spacing_1))
-                .child(icon)
+                .child(
+                    components::tree_icon_slot(theme, icon)
+                        .ml(px(theme.metrics.spacing_1))
+                        .mr(px(theme.metrics.spacing_2)),
+                )
                 .child(title)
                 .child(self.render_save_button(theme, "Save documentation", dirty, busy, cx)),
         );
