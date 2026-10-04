@@ -21,13 +21,14 @@ pub(crate) fn documentation_text_input(
     theme: Theme,
     id: ElementId,
     value: String,
+    placeholder: &'static str,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui::AnyElement {
     ProbeEditor {
         theme,
         id,
         value: value.into(),
-        placeholder: "Documentation".into(),
+        placeholder: placeholder.into(),
         decorations: Vec::new(),
         language: SharedString::default(),
         readonly: false,

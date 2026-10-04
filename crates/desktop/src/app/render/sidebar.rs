@@ -937,11 +937,12 @@ impl ProbeApp {
                     .to_owned();
                 sidebar.child(
                     Button::new("collection-overview-header")
+                        .cursor_pointer()
                         .debug_selector(|| "collection-overview-header".into())
                         .accessibility_label(format!("{name}, Collection overview"))
                         .w_full()
                         .flex_none()
-                        .px(px(theme.metrics.spacing_2))
+                        .px(px(theme.metrics.spacing_3))
                         .py(px(theme.metrics.spacing_1))
                         .flex()
                         .flex_col()

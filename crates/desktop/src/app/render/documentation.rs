@@ -33,12 +33,8 @@ pub(super) fn documentation_sections(
                 .child(
                     div()
                         .text_size(px(theme.typography.caption_size))
-                        .text_color(if index == 0 {
-                            theme.colors.text.secondary
-                        } else {
-                            theme.colors.text.primary
-                        })
-                        .when(index == 1, |label| label.font_weight(FontWeight::SEMIBOLD))
+                        .text_color(theme.colors.text.primary)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .child(label),
                 )
                 .child(
@@ -64,6 +60,7 @@ pub(super) fn documentation_sections(
                             theme,
                             id,
                             text.unwrap_or_default().to_owned(),
+                            label,
                             move |value, window, cx| on_change(index == 1, value, window, cx),
                         )),
                 ),
