@@ -555,7 +555,7 @@ impl ProbeApp {
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         view.environment_save_workspace_path = None;
                         view.pending_close = None;
-                        view.recover_committed_save(save_workspace_path, window, cx);
+                        view.recover_committed_save(save_workspace_path, None, window, cx);
                     }
                     Err(error) => {
                         view.environment_save_workspace_path = None;

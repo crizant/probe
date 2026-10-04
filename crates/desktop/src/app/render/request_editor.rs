@@ -491,9 +491,9 @@ impl ProbeApp {
     ) -> Button {
         let view = cx.weak_entity();
         let enabled = dirty && !busy;
-        Button::new("request-save")
+        Button::new("editor-save")
             .accessibility_label(label)
-            .debug_selector(|| "request-save".into())
+            .debug_selector(|| "editor-save".into())
             .disabled(!enabled)
             .tooltip(move |_, cx| {
                 let shortcut = if cfg!(target_os = "macos") {
@@ -534,7 +534,7 @@ impl ProbeApp {
                 theme.colors.actions.disabled_foreground
             }))
             .on_click(move |_, window, cx| {
-                let _ = view.update(cx, |view, cx| view.save_active_request(window, cx));
+                let _ = view.update(cx, |view, cx| view.save_active_editor(window, cx));
             })
     }
 }

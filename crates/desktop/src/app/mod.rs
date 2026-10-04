@@ -144,7 +144,7 @@ gpui::actions!(
         NewCollection,
         ImportPostmanExport,
         ImportYaakExport,
-        SaveRequest,
+        SaveEditor,
         CloseActiveTab,
         AboutProbe,
         CloseWindow,
@@ -750,7 +750,7 @@ fn system_menus(pane_layout: PaneLayout) -> [Menu; 5] {
                 MenuItem::action("Yaak Export…", ImportYaakExport),
             ])),
             MenuItem::separator(),
-            MenuItem::action("Save Request", SaveRequest),
+            MenuItem::action("Save", SaveEditor),
             MenuItem::separator(),
             MenuItem::action("Close Tab", CloseActiveTab),
             MenuItem::action("Close Window", CloseWindow),
@@ -842,7 +842,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-o", OpenWorkspace, None),
         KeyBinding::new("cmd-n", NewCollection, None),
-        KeyBinding::new("cmd-s", SaveRequest, None),
+        KeyBinding::new("cmd-s", SaveEditor, None),
         KeyBinding::new(
             "cmd-s",
             SubmitEnvironmentManagerDialog,
@@ -908,7 +908,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-o", OpenWorkspace, None),
         KeyBinding::new("ctrl-n", NewCollection, None),
-        KeyBinding::new("ctrl-s", SaveRequest, None),
+        KeyBinding::new("ctrl-s", SaveEditor, None),
         KeyBinding::new(
             "ctrl-s",
             SubmitEnvironmentManagerDialog,

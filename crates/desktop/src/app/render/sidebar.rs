@@ -399,6 +399,10 @@ impl ProbeApp {
                 );
                 let button =
                     tree_row_button(theme, ("folder-tree-item", key.slot()), depth, selected)
+                        .when(selected, |row| {
+                            row.bg(theme.colors.selection.inactive_background)
+                                .text_color(theme.colors.text.primary)
+                        })
                         .accessibility_label(format!("Folder {label}"))
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| {
@@ -444,13 +448,10 @@ impl ProbeApp {
                                     });
                                 }),
                         )
-                        .child(components::tree_folder_icon(theme, expanded, selected))
+                        .child(components::tree_folder_icon(theme, expanded, false))
                         .child(
                             components::truncated_label(label.to_owned())
                                 .flex_1()
-                                .when(selected, |label| {
-                                    label.text_color(theme.colors.selection.active_foreground)
-                                })
                                 .font_weight(FontWeight::SEMIBOLD),
                         );
                 self.wrap_tree_row(

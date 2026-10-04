@@ -406,7 +406,7 @@ impl ProbeApp {
         }
     }
 
-    pub(super) fn save_active_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn save_active_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tab) = self.shell.active_overview() {
             if let Some(target) = self.overview_target(tab) {
                 self.enqueue_documentation_save(target);
@@ -669,7 +669,7 @@ impl ProbeApp {
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         view.persistence.fail(key);
                         view.pending_close = None;
-                        view.recover_committed_save(save_workspace_path, window, cx);
+                        view.recover_committed_save(save_workspace_path, None, window, cx);
                     }
                     Err(error) => {
                         view.persistence.fail(key);

@@ -4,6 +4,7 @@ impl ProbeApp {
     pub(super) fn recover_committed_save(
         &mut self,
         saved_path: Option<PathBuf>,
+        documentation: Option<(Option<String>, super::documentation::OverviewContent)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -41,17 +42,21 @@ impl ProbeApp {
                     view.loading = false;
                     match result {
                         Ok(fresh) => {
-                            if view.loaded_workspace.is_some() {
+                            let integrated = if view.loaded_workspace.is_some() {
                                 view.reconcile_filesystem_workspace(
                                     fresh,
                                     BTreeMap::new(),
                                     window,
                                     cx,
-                                );
+                                )
                             } else {
                                 view.set_workspace(path.clone(), fresh);
                                 view.restore_shell_state(cx);
                                 view.start_workspace_watcher(window, cx);
+                                true
+                            };
+                            if integrated && let Some((target, submitted)) = documentation {
+                                view.complete_overview_draft_save(&target, &submitted);
                             }
                         }
                         Err(error) => {
@@ -440,7 +445,9 @@ impl ProbeApp {
                         return;
                     }
                     match result {
-                        Ok(fresh) => view.reconcile_filesystem_workspace(fresh, hints, window, cx),
+                        Ok(fresh) => {
+                            view.reconcile_filesystem_workspace(fresh, hints, window, cx);
+                        }
                         Err(error) => {
                             view.show_toast(
                                 ToastIntent::Warning,
@@ -482,13 +489,15 @@ impl ProbeApp {
         rename_hints: BTreeMap<String, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         match reconcile(&self.local_request_states(), fresh, &rename_hints) {
             ReconcileResult::Applied(reconciled) => {
                 self.apply_reconciled_workspace(*reconciled, cx);
+                true
             }
             ReconcileResult::Conflicted(conflicts) => {
                 self.prompt_filesystem_conflict(conflicts, window, cx);
+                false
             }
         }
     }

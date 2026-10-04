@@ -193,7 +193,7 @@ impl Render for ProbeApp {
             .line_height(relative(theme.typography.body_line_height))
             .flex()
             .flex_col()
-            .on_action(cx.listener(|view, _: &SaveRequest, window, cx| {
+            .on_action(cx.listener(|view, _: &SaveEditor, window, cx| {
                 if view.application_dialog.is_some()
                     || view
                         .structure_dialog
@@ -208,7 +208,7 @@ impl Render for ProbeApp {
                     }
                     return;
                 }
-                view.save_active_request(window, cx);
+                view.save_active_editor(window, cx);
             }))
             .on_action(cx.listener(|view, _: &OpenFileMenu, _, cx| {
                 view.open_desktop_menu(DesktopMenu::File, cx);

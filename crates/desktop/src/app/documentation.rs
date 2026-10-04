@@ -119,6 +119,24 @@ impl ProbeApp {
         self.overview_drafts.values().any(OverviewDraft::is_dirty)
     }
 
+    pub(super) fn complete_overview_draft_save(
+        &mut self,
+        target: &Option<String>,
+        submitted: &OverviewContent,
+    ) {
+        if let Some(saved) = self.overview_content(target)
+            && let Some(current) = self.overview_drafts.get_mut(target)
+        {
+            if current.current.first == submitted.first {
+                current.current.first = saved.first.clone();
+            }
+            if current.current.docs == submitted.docs {
+                current.current.docs = saved.docs.clone();
+            }
+            current.original = saved;
+        }
+    }
+
     pub(super) fn pending_overview_targets(&self, pending: &PendingClose) -> Vec<Option<String>> {
         self.overview_drafts
             .iter()
@@ -240,29 +258,21 @@ impl ProbeApp {
                 });
                 match result {
                     Ok(()) => {
-                        if let Some(saved) = view.overview_content(&target)
-                            && let Some(current) = view.overview_drafts.get_mut(&target)
-                        {
-                            if current.current.first == draft.current.first {
-                                current.current.first = saved.first.clone();
-                            }
-                            if current.current.docs == draft.current.docs {
-                                current.current.docs = saved.docs.clone();
-                            }
-                            current.original = saved;
-                        }
+                        view.complete_overview_draft_save(&target, &draft.current);
                         view.show_toast(ToastIntent::Success, "Documentation saved.", cx);
                         view.start_next_documentation_save(window, cx);
                         view.start_next_request_save(window, cx);
                         view.start_next_environment_save(window, cx);
                     }
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
-                        if let Some(current) = view.overview_drafts.get_mut(&target) {
-                            current.original = draft.current;
-                        }
                         view.pending_documentation_saves.clear();
                         view.pending_close = None;
-                        view.recover_committed_save(path, window, cx);
+                        view.recover_committed_save(
+                            path,
+                            Some((target, draft.current)),
+                            window,
+                            cx,
+                        );
                     }
                     Err(error) => view.fail_documentation_save(
                         format!("Could not save documentation: {error}"),

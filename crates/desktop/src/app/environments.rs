@@ -468,7 +468,7 @@ impl ProbeApp {
                         view.environment_manager_close_after_save = false;
                         view.environment_save_workspace_path = None;
                         view.pending_close = None;
-                        view.recover_committed_save(save_workspace_path, window, cx);
+                        view.recover_committed_save(save_workspace_path, None, window, cx);
                         cx.notify();
                         return;
                     }
@@ -579,7 +579,7 @@ impl ProbeApp {
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         view.environment_save_workspace_path = None;
                         view.pending_close = None;
-                        view.recover_committed_save(save_workspace_path, window, cx);
+                        view.recover_committed_save(save_workspace_path, None, window, cx);
                         cx.notify();
                         return;
                     }
@@ -829,7 +829,7 @@ impl ProbeApp {
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         view.environment_save_workspace_path = None;
                         view.pending_close = None;
-                        view.recover_committed_save(save_workspace_path, window, cx);
+                        view.recover_committed_save(save_workspace_path, None, window, cx);
                     }
                     Err(error) => {
                         if view.environment_save_workspace_path == view.workspace_path

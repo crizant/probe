@@ -942,7 +942,7 @@ fn save_dialog_stays_open_when_a_save_is_already_running(cx: &mut TestAppContext
                 |request| request.url = Some("https://example.test/busy".to_owned()),
                 cx,
             );
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
             assert!(view.request_save_task.is_some());
             view.new_detached_request(false, window, cx);
             let key = view.shell.active_tab().unwrap();
@@ -1884,7 +1884,7 @@ fn request_save_runs_in_background_and_clears_dirty_state(cx: &mut TestAppContex
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let save = visual
-        .debug_bounds("request-save")
+        .debug_bounds("editor-save")
         .expect("dirty request should show its save icon");
     let breadcrumb = visual
         .debug_bounds("request-breadcrumb")
@@ -1900,7 +1900,7 @@ fn request_save_runs_in_background_and_clears_dirty_state(cx: &mut TestAppContex
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let clean_save = visual
-        .debug_bounds("request-save")
+        .debug_bounds("editor-save")
         .expect("save icon should remain visible when the request is clean");
     let breadcrumb = visual
         .debug_bounds("request-breadcrumb")
@@ -2043,7 +2043,7 @@ fn saving_after_removing_empty_query_parameter_during_in_flight_save_clears_dirt
                 },
                 cx,
             );
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
             view.edit_request(
                 key,
                 |request| {
@@ -2065,7 +2065,7 @@ fn saving_after_removing_empty_query_parameter_during_in_flight_save_clears_dirt
                 ),
                 "removing a saved empty parameter should make the request dirty before save"
             );
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -2466,7 +2466,7 @@ fn save_conflict_keeps_the_request_dirty_and_visible(cx: &mut TestAppContext) {
             let mut external = fs::read_to_string(&fixture).unwrap();
             external.push_str("external: true\n");
             fs::write(&fixture, external).unwrap();
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -3239,6 +3239,113 @@ fn writable_documentation_fixture(name: &str) -> PathBuf {
 }
 
 #[gpui::test]
+fn committed_documentation_save_keeps_drafts_until_recovery_integrates(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    for folder in [false, true] {
+        for (reload_fails, later_edit) in [(true, false), (false, false), (false, true)] {
+            let path = writable_documentation_fixture(&format!(
+                "documentation-recovery-{folder}-{reload_fails}-{later_edit}"
+            ));
+            let workspace = probe_opencollection::load_workspace(&path).unwrap();
+            let replacement = probe_opencollection::load_workspace(&path).unwrap();
+            let target = folder.then(|| "items/0".to_owned());
+            let recovery_path = if reload_fails {
+                path.with_extension("missing.yml")
+            } else {
+                path.clone()
+            };
+            let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+                ProbeApp::new(window, cx)
+            });
+            let (previous, original) = window
+                .update(cx, |view, window, cx| {
+                    view.session_store = None;
+                    view.set_workspace(recovery_path, workspace);
+                    let tab = if folder {
+                        crate::shell::OverviewTab::Folder(
+                            view.loaded_workspace
+                                .as_ref()
+                                .unwrap()
+                                .folder_key("items/0")
+                                .unwrap(),
+                        )
+                    } else {
+                        crate::shell::OverviewTab::Collection
+                    };
+                    view.shell.open_overview(tab);
+                    view.edit_overview(target.clone(), true, "Committed documentation".into(), cx);
+                    let original = view.overview_drafts[&target].original.clone();
+                    view.save_active_editor(window, cx);
+                    assert!(view.documentation_save_task.is_some());
+                    // Keep the prepared baseline alive so the write commits, but make
+                    // completion encounter a different loaded repository baseline.
+                    let previous = view.loaded_workspace.replace(replacement);
+                    if later_edit {
+                        view.edit_overview(target.clone(), true, "Later documentation".into(), cx);
+                    }
+                    assert!(view.overview_drafts[&target].is_dirty());
+                    (previous, original)
+                })
+                .unwrap();
+            cx.run_until_parked();
+            let disk = probe_opencollection::load_workspace(&path).unwrap();
+            let disk_docs = if folder {
+                disk.workspace()
+                    .folder(disk.folder_key("items/0").unwrap())
+                    .unwrap()
+                    .docs
+                    .as_ref()
+            } else {
+                disk.workspace().metadata().docs.as_ref()
+            };
+            assert_eq!(
+                crate::app::documentation::documentation_text(disk_docs),
+                Some("Committed documentation"),
+                "the save must have reached disk"
+            );
+            window
+                .update(cx, |view, window, cx| {
+                    assert!(!view.loading);
+                    assert!(view.documentation_save_task.is_none());
+                    let draft = &view.overview_drafts[&target];
+                    assert_eq!(
+                        crate::app::documentation::documentation_text(draft.current.docs.as_ref()),
+                        Some(if later_edit {
+                            "Later documentation"
+                        } else {
+                            "Committed documentation"
+                        })
+                    );
+                    if reload_fails {
+                        assert_eq!(
+                            draft.original, original,
+                            "failed recovery must retain the original baseline"
+                        );
+                        assert!(draft.is_dirty());
+                        assert!(toast_debug(view).iter().any(|message| message.contains(
+                            "Save reached disk, but the collection could not be reloaded"
+                        )));
+                        assert!(
+                            !view.request_close_window(window, cx),
+                            "failed recovery must retain unsaved-change protection"
+                        );
+                    } else {
+                        assert_eq!(draft.original, view.overview_content(&target).unwrap());
+                        assert_eq!(
+                            draft.is_dirty(),
+                            later_edit,
+                            "successful recovery may only clear the submitted edits"
+                        );
+                    }
+                })
+                .unwrap();
+            drop(previous);
+            fs::remove_file(path).unwrap();
+        }
+    }
+}
+
+#[gpui::test]
 fn documentation_editors_save_preserve_media_types_and_keep_later_edits_dirty(
     cx: &mut TestAppContext,
 ) {
@@ -3264,7 +3371,7 @@ fn documentation_editors_save_preserve_media_types_and_keep_later_edits_dirty(
     cx.run_until_parked();
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let save = visual
-        .debug_bounds("request-save")
+        .debug_bounds("editor-save")
         .expect("overview uses the editor save icon");
     visual.simulate_click(save.center(), Modifiers::default());
     visual.run_until_parked();
@@ -3302,7 +3409,7 @@ fn documentation_editors_save_preserve_media_types_and_keep_later_edits_dirty(
     window
         .update(cx, |view, window, cx| {
             assert!(view.has_dirty_overviews());
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
             assert!(view.documentation_save_task.is_some());
             view.edit_overview(None, true, "Newer collection guide".into(), cx);
         })
@@ -3326,7 +3433,7 @@ fn documentation_editors_save_preserve_media_types_and_keep_later_edits_dirty(
                 view.has_dirty_overviews(),
                 "edits made during a save must remain dirty"
             );
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
         })
         .unwrap();
     visual.run_until_parked();
@@ -3356,7 +3463,7 @@ fn documentation_editors_save_preserve_media_types_and_keep_later_edits_dirty(
         visual.simulate_input(text);
         visual.run_until_parked();
     }
-    let save = visual.debug_bounds("request-save").unwrap();
+    let save = visual.debug_bounds("editor-save").unwrap();
     visual.simulate_click(save.center(), Modifiers::default());
     visual.run_until_parked();
     window
@@ -3459,7 +3566,7 @@ fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAp
             view.edit_overview(None, true, "Unsaved docs".into(), cx);
             let external = format!("{}external: retained\n", fs::read_to_string(&path).unwrap());
             fs::write(&path, external).unwrap();
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -3478,7 +3585,7 @@ fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAp
             fs::write(&path, &external).unwrap();
             let fresh = probe_opencollection::load_workspace(&path).unwrap();
             view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx);
-            view.save_active_request(window, cx);
+            view.save_active_editor(window, cx);
             assert!(
                 view.documentation_save_task.is_none(),
                 "overlapping disk edits must be rejected before a write"
