@@ -295,6 +295,44 @@ fn environment_replace_with_description_keeps_an_unchanged_description() {
 }
 
 #[test]
+fn unchanged_description_patch_keeps_the_stored_description_in_memory() {
+    let path = temporary_path("env-edit-ignore-replacement-description.yml");
+    fs::write(&path, atomic_environment_source()).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let mut replacement = development_with_region(&loaded);
+    replacement.description = Some(Documentation::Text(
+        "caller description that must not be stored".to_owned(),
+    ));
+    assert_ne!(
+        replacement.description,
+        loaded.workspace().environments()[1].description
+    );
+    let prepared = loaded
+        .prepare_environment_replace_with_description(
+            "development",
+            replacement,
+            &FieldPatch::Unchanged,
+        )
+        .unwrap();
+    let saved = prepared.execute().unwrap();
+    loaded.complete_environment_replace(saved).unwrap();
+
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(
+        loaded.workspace().environments(),
+        reloaded.workspace().environments()
+    );
+    assert_eq!(
+        loaded.workspace().environments()[1].description,
+        Some(Documentation::Content {
+            content: "Staging notes".to_owned(),
+            media_type: "text/markdown".to_owned(),
+        })
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn environment_replace_with_description_conflict_leaves_the_previous_document() {
     let path = temporary_path("env-edit-conflict.yml");
     fs::write(&path, atomic_environment_source()).unwrap();

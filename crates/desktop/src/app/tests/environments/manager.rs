@@ -1912,6 +1912,47 @@ fn environment_manager_reads_writes_and_clears_description(cx: &mut TestAppConte
     );
 }
 
+#[gpui::test]
+fn environment_manager_shows_an_environment_without_a_description_key(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable_source(
+        cx,
+        "manager-no-description",
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n  name: No description\n",
+            "bundled: true\n",
+            "config:\n",
+            "  environments:\n",
+            "    - name: local\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: dev.example.com\n",
+        ),
+    );
+    workspace.open_manager(cx, "local");
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft
+                .description,
+            None
+        );
+        assert!(view.environment_manager_save_disabled());
+    });
+    {
+        let mut visual = workspace.visual(cx);
+        visual
+            .debug_bounds("environment-manager-description")
+            .expect("an omitted description should still show the description field");
+    }
+    assert!(
+        !workspace.yaml().contains("description:"),
+        "opening the manager must not create a description key"
+    );
+}
+
 fn edit_environment_description(
     workspace: &EnvironmentWorkspace,
     cx: &mut TestAppContext,
