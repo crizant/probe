@@ -1,6 +1,6 @@
 use super::*;
 
-mod documentation;
+pub(in crate::app) mod documentation;
 use super::documentation::documentation_text;
 use documentation::documentation_sections;
 mod request_editor;

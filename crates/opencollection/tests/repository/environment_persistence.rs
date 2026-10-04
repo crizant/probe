@@ -162,6 +162,84 @@ fn environment_description_set_and_unset_round_trip() {
 }
 
 #[test]
+fn prepared_environment_description_updates_memory_only_after_completion() {
+    let path = temporary_path("env-description-prepared.yml");
+    fs::write(
+        &path,
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n  name: Prepared description\n",
+            "bundled: true\n",
+            "config:\n",
+            "  environments:\n",
+            "    - name: development\n",
+            "      vendor.example: retained\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: dev.example.com\n",
+            "          description: Variable note\n",
+        ),
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let unchanged = loaded
+        .prepare_environment_description("development", &FieldPatch::Unchanged)
+        .unwrap_err();
+    assert!(matches!(unchanged, SaveError::EmptyUpdate));
+    let missing = loaded
+        .prepare_environment_description(
+            "missing",
+            &FieldPatch::Set(Documentation::Text("Local development".to_owned())),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        missing,
+        SaveError::Environment(EnvironmentResolutionError::EnvironmentNotFound(_))
+    ));
+
+    let text = FieldPatch::Set(Documentation::Text("Local development".to_owned()));
+    let prepared = loaded
+        .prepare_environment_description("development", &text)
+        .unwrap();
+    assert!(loaded.workspace().environments()[0].description.is_none());
+    let saved = prepared.execute().unwrap();
+    loaded
+        .complete_environment_description("development", &text, saved)
+        .unwrap();
+    assert_eq!(
+        loaded.workspace().environments()[0].description,
+        Some(Documentation::Text("Local development".to_owned()))
+    );
+    assert_eq!(
+        environment_description(&path, "development"),
+        Some(Documentation::Text("Local development".to_owned()))
+    );
+    let source = fs::read_to_string(&path).unwrap();
+    assert!(source.contains("vendor.example: retained"));
+    assert!(source.contains("description: Variable note"));
+
+    let cleared = FieldPatch::Set(Documentation::Content {
+        content: String::new(),
+        media_type: "text/markdown".to_owned(),
+    });
+    let prepared = loaded
+        .prepare_environment_description("development", &cleared)
+        .unwrap();
+    let saved = prepared.execute().unwrap();
+    loaded
+        .complete_environment_description("development", &cleared, saved)
+        .unwrap();
+    assert_eq!(
+        environment_description(&path, "development"),
+        Some(Documentation::Content {
+            content: String::new(),
+            media_type: "text/markdown".to_owned(),
+        })
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn unbundled_environment_description_set_and_unset_round_trip() {
     let root = temporary_path("unbundled-env-description");
     copy_directory(&fixture("unbundled"), &root);

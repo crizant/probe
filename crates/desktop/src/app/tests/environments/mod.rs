@@ -108,6 +108,12 @@ impl EnvironmentWorkspace {
         Self::load(cx, path, true)
     }
 
+    fn writable_source(cx: &mut TestAppContext, suffix: &str, source: &str) -> Self {
+        let path = writable_environment_fixture(suffix);
+        fs::write(&path, source).unwrap();
+        Self::load(cx, path.canonicalize().unwrap(), true)
+    }
+
     fn load(cx: &mut TestAppContext, path: PathBuf, temporary: bool) -> Self {
         cx.update(Theme::init);
         let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {

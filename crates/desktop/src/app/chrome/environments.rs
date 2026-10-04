@@ -897,6 +897,33 @@ impl ProbeApp {
                             ),
                     ),
             )
+            .child({
+                let description_view = cx.weak_entity();
+                let description_id = gpui::ElementId::Name(
+                    format!("environment-description-{}", dialog.original_name).into(),
+                );
+                super::super::render::documentation::documentation_text_field(
+                    theme,
+                    "Description",
+                    crate::app::documentation::documentation_text(
+                        dialog.draft.description.as_ref(),
+                    ),
+                    description_id,
+                    "environment-manager-description",
+                    false,
+                    move |value, _, cx| {
+                        let _ = description_view.update(cx, |view, cx| {
+                            view.apply_environment_manager_draft(cx, |dialog| {
+                                crate::app::documentation::edit_documentation(
+                                    &mut dialog.draft.description,
+                                    value.to_string(),
+                                );
+                            });
+                        });
+                    },
+                )
+                .mt(px(theme.metrics.spacing_2))
+            })
             .child(table);
 
         let close_view = cx.weak_entity();

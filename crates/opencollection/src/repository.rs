@@ -311,6 +311,51 @@ impl LoadedWorkspace {
         )
     }
 
+    /// Captures an environment-description save that can run away from the UI thread.
+    ///
+    /// The in-memory description is unchanged until [`Self::complete_environment_description`].
+    /// `Set` writes the documentation value, including explicit null and an empty string.
+    /// `Clear` removes the YAML key. An unchanged patch is rejected.
+    pub fn prepare_environment_description(
+        &self,
+        environment_name: &str,
+        description: &FieldPatch<Documentation>,
+    ) -> Result<PreparedEnvironmentSave, SaveError> {
+        if description.is_unchanged() {
+            return Err(SaveError::EmptyUpdate);
+        }
+        if !self
+            .workspace
+            .environments()
+            .iter()
+            .any(|environment| environment.name == environment_name)
+        {
+            return Err(SaveError::Environment(
+                EnvironmentResolutionError::EnvironmentNotFound(environment_name.to_owned()),
+            ));
+        }
+        self.prepare_environment_mutation(
+            environment_name,
+            EnvironmentYamlMutation::Description {
+                description: description.clone(),
+            },
+        )
+    }
+
+    /// Applies a persisted environment description to the in-memory workspace.
+    pub fn complete_environment_description(
+        &mut self,
+        environment_name: &str,
+        description: &FieldPatch<Documentation>,
+        saved: CompletedEnvironmentSave,
+    ) -> Result<(), SaveError> {
+        self.complete_environment_save(saved)?;
+        self.workspace
+            .set_environment_description(environment_name, description)
+            .expect("prepared environment description must remain valid");
+        Ok(())
+    }
+
     /// Removes a variable from the named environment and atomically persists the document.
     pub fn unset_environment_variable(
         &mut self,
