@@ -346,11 +346,7 @@ impl ProbeApp {
                                 .font_family(theme.typography.monospace_family)
                                 .text_size(px(tree_method_font_size(theme, &navigation_label)))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(if selected {
-                                    theme.colors.selection.active_foreground
-                                } else {
-                                    navigation_color
-                                })
+                                .text_color(navigation_color)
                                 .when(is_graphql, |label| {
                                     label.debug_selector(|| "request-tree-protocol-label".into())
                                 })
@@ -359,9 +355,7 @@ impl ProbeApp {
                         .child(
                             components::truncated_label(label.to_owned())
                                 .flex_1()
-                                .when(selected, |label| {
-                                    label.text_color(theme.colors.selection.active_foreground)
-                                })
+                                .text_color(theme.colors.text.primary)
                                 .when(selected, |label| {
                                     label.debug_selector(|| "request-tree-label".into())
                                 }),
@@ -399,10 +393,6 @@ impl ProbeApp {
                 );
                 let button =
                     tree_row_button(theme, ("folder-tree-item", key.slot()), depth, selected)
-                        .when(selected, |row| {
-                            row.bg(theme.colors.selection.inactive_background)
-                                .text_color(theme.colors.text.primary)
-                        })
                         .accessibility_label(format!("Folder {label}"))
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| {

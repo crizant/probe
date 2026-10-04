@@ -85,8 +85,8 @@ pub(crate) fn tree_row_button(
         .overflow_hidden()
         .rounded(px(theme.metrics.radius_small))
         .when(selected, |row| {
-            row.bg(theme.colors.selection.active_background)
-                .text_color(theme.colors.selection.active_foreground)
+            row.bg(theme.colors.selection.inactive_background)
+                .text_color(theme.colors.text.primary)
         })
         .when(!selected, |row| {
             row.hover(move |row| row.bg(theme.colors.surfaces.window))
