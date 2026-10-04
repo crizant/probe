@@ -1747,6 +1747,260 @@ fn environment_selection_is_remembered_per_workspace(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn environment_manager_reads_writes_and_clears_description(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable_source(
+        cx,
+        "manager-description",
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n  name: Environment descriptions\n",
+            "bundled: true\n",
+            "config:\n",
+            "  environments:\n",
+            "    - name: plain\n",
+            "      description: Local development\n",
+            "      vendor.example: retained\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: dev.example.com\n",
+            "          description: Variable note\n",
+            "    - name: markdown\n",
+            "      description:\n",
+            "        content: Staging notes\n",
+            "        type: text/markdown\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: staging.example.com\n",
+            "    - name: blank\n",
+            "      description: null\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: blank.example.com\n",
+            "items:\n",
+            "  - info:\n",
+            "      name: Users\n",
+            "      type: http\n",
+            "    http:\n",
+            "      method: GET\n",
+            "      url: \"{{host}}/users\"\n",
+        ),
+    );
+    workspace.open_manager(cx, "plain");
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft
+                .description,
+            Some(probe_core::Documentation::Text(
+                "Local development".to_owned()
+            ))
+        );
+        assert!(view.environment_manager_save_disabled());
+    });
+
+    edit_environment_description(&workspace, cx, "Edited description");
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(
+            crate::app::documentation::documentation_text(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .description
+                    .as_ref(),
+            ),
+            Some("Edited description")
+        );
+        assert!(!view.environment_manager_save_disabled());
+    });
+    assert!(
+        workspace.yaml().contains("description: Local development"),
+        "typing must not write the collection"
+    );
+    save_open_environment(&workspace, cx);
+    assert_eq!(
+        saved_environment(&workspace, "plain").unwrap().description,
+        Some(probe_core::Documentation::Text(
+            "Edited description".to_owned()
+        ))
+    );
+    let plain_source = workspace.yaml();
+    assert!(plain_source.contains("vendor.example: retained"));
+    assert!(plain_source.contains("description: Variable note"));
+
+    edit_environment_description(&workspace, cx, "");
+    save_open_environment(&workspace, cx);
+    assert_eq!(
+        saved_environment(&workspace, "plain").unwrap().description,
+        Some(probe_core::Documentation::Text(String::new()))
+    );
+    assert!(workspace.yaml().contains("description: Variable note"));
+
+    workspace.open_manager(cx, "markdown");
+    workspace.update(cx, |view, _, cx| {
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft
+                .description,
+            Some(probe_core::Documentation::Content {
+                content: "Staging notes".to_owned(),
+                media_type: "text/markdown".to_owned(),
+            })
+        );
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                name: Some("region".to_owned()),
+                value: Some(VariableValueSet::Single(VariableValue::String(
+                    "ap-southeast-2".to_owned(),
+                ))),
+                disabled: false,
+            }));
+        });
+    });
+    edit_environment_description(&workspace, cx, "Edited notes");
+    save_open_environment(&workspace, cx);
+    let markdown = saved_environment(&workspace, "markdown").unwrap();
+    assert_eq!(
+        markdown.description,
+        Some(probe_core::Documentation::Content {
+            content: "Edited notes".to_owned(),
+            media_type: "text/markdown".to_owned(),
+        })
+    );
+    assert!(markdown.variables.iter().any(|variable| matches!(
+        variable,
+        EnvironmentVariable::Plain(variable) if variable.name.as_deref() == Some("region")
+    )));
+
+    edit_environment_description(&workspace, cx, "");
+    save_open_environment(&workspace, cx);
+    assert_eq!(
+        saved_environment(&workspace, "markdown")
+            .unwrap()
+            .description,
+        Some(probe_core::Documentation::Content {
+            content: String::new(),
+            media_type: "text/markdown".to_owned(),
+        })
+    );
+
+    workspace.open_manager(cx, "blank");
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft
+                .description,
+            Some(probe_core::Documentation::Null)
+        );
+        assert!(view.environment_manager_save_disabled());
+    });
+    {
+        let mut visual = workspace.visual(cx);
+        visual
+            .debug_bounds("environment-manager-description")
+            .expect("explicit null should still show the description field");
+    }
+    assert_eq!(
+        saved_environment(&workspace, "blank").unwrap().description,
+        Some(probe_core::Documentation::Null)
+    );
+}
+
+#[gpui::test]
+fn environment_manager_shows_an_environment_without_a_description_key(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable_source(
+        cx,
+        "manager-no-description",
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n  name: No description\n",
+            "bundled: true\n",
+            "config:\n",
+            "  environments:\n",
+            "    - name: local\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: dev.example.com\n",
+        ),
+    );
+    workspace.open_manager(cx, "local");
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft
+                .description,
+            None
+        );
+        assert!(view.environment_manager_save_disabled());
+    });
+    {
+        let mut visual = workspace.visual(cx);
+        visual
+            .debug_bounds("environment-manager-description")
+            .expect("an omitted description should still show the description field");
+    }
+    assert!(
+        !workspace.yaml().contains("description:"),
+        "opening the manager must not create a description key"
+    );
+}
+
+fn edit_environment_description(
+    workspace: &EnvironmentWorkspace,
+    cx: &mut TestAppContext,
+    text: &str,
+) {
+    cx.run_until_parked();
+    let mut visual = workspace.visual(cx);
+    let field = visual
+        .debug_bounds("environment-manager-description")
+        .expect("environment description field");
+    visual.simulate_click(
+        field.origin + point(px(20.0), px(20.0)),
+        Modifiers::default(),
+    );
+    visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    if text.is_empty() {
+        visual.simulate_keystrokes("backspace");
+    } else {
+        visual.simulate_input(text);
+    }
+    visual.run_until_parked();
+}
+
+fn save_open_environment(workspace: &EnvironmentWorkspace, cx: &mut TestAppContext) {
+    workspace.update(cx, |view, window, cx| {
+        view.save_environment_manager_dialog(window, cx);
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(
+            view.environment_save_task.is_none(),
+            "{:?}",
+            toast_debug(view)
+        );
+        assert!(
+            has_active_toast(view, ToastIntent::Success, "Environment saved."),
+            "{:?}",
+            toast_debug(view)
+        );
+        assert!(view.environment_manager_save_disabled());
+    });
+}
+
+#[gpui::test]
 fn missing_environment_is_not_restored(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {

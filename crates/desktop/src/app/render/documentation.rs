@@ -22,51 +22,67 @@ pub(super) fn documentation_sections(
         .enumerate()
     {
         let on_change = on_change.clone();
-        sections = sections.child(
-            div()
-                .min_h(px(0.0))
-                .when(index == 0, |section| section.flex_none())
-                .when(index == 1, |section| section.flex_1())
-                .flex()
-                .flex_col()
-                .gap(px(theme.metrics.spacing_1))
-                .child(
-                    div()
-                        .text_size(px(theme.typography.caption_size))
-                        .text_color(theme.colors.text.primary)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .id(if index == 0 {
-                            "documentation-first-editor"
-                        } else {
-                            "documentation-docs-editor"
-                        })
-                        .debug_selector(move || {
-                            if index == 0 {
-                                "documentation-first-editor".into()
-                            } else {
-                                "documentation-docs-editor".into()
-                            }
-                        })
-                        .when(index == 0, |editor| {
-                            editor.h(px(theme.metrics.control_height * 2.0)).flex_none()
-                        })
-                        .when(index == 1, |editor| editor.flex_1().min_h(px(120.0)))
-                        .w_full()
-                        .child(components::documentation_text_input(
-                            theme,
-                            id,
-                            text.unwrap_or_default().to_owned(),
-                            label,
-                            move |value, window, cx| on_change(index == 1, value, window, cx),
-                        )),
-                ),
-        );
+        let grow = index == 1;
+        sections = sections.child(documentation_text_field(
+            theme,
+            label,
+            text,
+            id,
+            if grow {
+                "documentation-docs-editor"
+            } else {
+                "documentation-first-editor"
+            },
+            grow,
+            move |value, window, cx| on_change(grow, value, window, cx),
+        ));
     }
     sections
+}
+
+/// The request description editor: a caption label and a two-line documentation input.
+///
+/// `grow` is the taller Documentation editor beneath that description field.
+pub(in crate::app) fn documentation_text_field(
+    theme: Theme,
+    label: &'static str,
+    text: Option<&str>,
+    id: gpui::ElementId,
+    container_id: &'static str,
+    grow: bool,
+    on_change: impl Fn(gpui::SharedString, &mut Window, &mut gpui::App) + 'static,
+) -> gpui::Div {
+    div()
+        .min_h(px(0.0))
+        .when(!grow, |section| section.flex_none())
+        .when(grow, |section| section.flex_1())
+        .flex()
+        .flex_col()
+        .gap(px(theme.metrics.spacing_1))
+        .child(
+            div()
+                .text_size(px(theme.typography.caption_size))
+                .text_color(theme.colors.text.primary)
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(label),
+        )
+        .child(
+            div()
+                .id(container_id)
+                .debug_selector(move || container_id.into())
+                .when(!grow, |editor| {
+                    editor.h(px(theme.metrics.control_height * 2.0)).flex_none()
+                })
+                .when(grow, |editor| editor.flex_1().min_h(px(120.0)))
+                .w_full()
+                .child(components::documentation_text_input(
+                    theme,
+                    id,
+                    text.unwrap_or_default().to_owned(),
+                    label,
+                    on_change,
+                )),
+        )
 }
 
 impl ProbeApp {

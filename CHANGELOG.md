@@ -8,6 +8,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- Show and edit an environment description in the desktop Environment manager. The field matches the request description field: a plain string and a `{content, type}` object show their text, explicit null shows an empty field, and saving writes that same documentation value. Clearing the field writes an empty string, or an empty `content` while keeping the object's type.
 - Set and unset an OpenCollection environment description from the CLI. `probe environment set --environment <name> --description <text>` writes a string, and `--description-json` writes a JSON string, null, or `{content, type}` object. `probe environment unset --environment <name> --description` removes the key and does not write null.
 - `environment list --json` includes each environment's description. An environment with no description omits that field. The text table remains name and parent.
 - View and edit request documentation in a Documentation tab and collection or folder documentation in reusable overview tabs, with the editor save icon and unsaved-change protection. The sidebar collection header opens its overview; folder names open overviews and disclosure chevrons expand or collapse folders.
@@ -23,7 +24,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 ### Fixed
 
 - Request tab tooltips show custom HTTP method names alongside the generic HTTP icon.
-
+- Saving an environment description together with other environment changes writes both in one update. A failed save does not leave the structural edit without the description, or the description without the structural edit.
 - `collection unset --description-json` reports that collections have summary and docs, not a description.
 - An empty collection, folder, or request update reports that the update has no changed fields.
 - Vertical trackpad scrolling keeps moving the list when the pointer is over a single-line field, instead of stuttering on sideways drift.

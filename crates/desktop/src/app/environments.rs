@@ -379,7 +379,19 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return;
         };
-        let prepared = match loaded.prepare_environment_replace(&original_name, replacement) {
+        let description = loaded
+            .workspace()
+            .environments()
+            .iter()
+            .find(|environment| environment.name == original_name)
+            .map_or(probe_core::FieldPatch::Unchanged, |original| {
+                super::documentation::patch(&original.description, &replacement.description)
+            });
+        let prepared = match loaded.prepare_environment_replace_with_description(
+            &original_name,
+            replacement,
+            &description,
+        ) {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.show_environment_dialog_error(

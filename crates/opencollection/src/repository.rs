@@ -291,7 +291,9 @@ impl LoadedWorkspace {
     /// Sets or removes an environment description and atomically persists the document.
     ///
     /// `Set` writes the documentation value, including explicit null. `Clear` removes
-    /// the YAML key. An unchanged patch is rejected.
+    /// the YAML key. An unchanged patch is rejected. A description change that must
+    /// be written together with other environment edits uses
+    /// [`Self::prepare_environment_replace_with_description`].
     pub fn update_environment_description(
         &mut self,
         environment_name: &str,
@@ -486,8 +488,10 @@ impl LoadedWorkspace {
     ///
     /// Secret variables are retained from the source document. The replacement may edit
     /// the environment name, parent, and plain variables. The existing description is
-    /// kept; description edits use [`Self::update_environment_description`]. Renaming a
-    /// parent environment is rejected because it would require a multi-document transaction.
+    /// kept. Description-only edits use [`Self::update_environment_description`]. A
+    /// replacement and a description change in one write use
+    /// [`Self::prepare_environment_replace_with_description`]. Renaming a parent
+    /// environment is rejected because it would require a multi-document transaction.
     pub fn prepare_environment_replace(
         &self,
         original_name: &str,
@@ -536,7 +540,25 @@ impl LoadedWorkspace {
             original_source,
             original_name: original_name.to_owned(),
             replacement,
+            description: FieldPatch::Unchanged,
         })
+    }
+
+    /// Captures an environment replacement and an optional description change for one write.
+    ///
+    /// `Unchanged` keeps the stored description, as [`Self::prepare_environment_replace`] does.
+    /// `Set` writes the documentation value, including explicit null and an empty string.
+    /// `Clear` removes the YAML key. Structural edits and the description are persisted
+    /// together; a conflict leaves the previous document unchanged.
+    pub fn prepare_environment_replace_with_description(
+        &self,
+        original_name: &str,
+        replacement: Environment,
+        description: &FieldPatch<Documentation>,
+    ) -> Result<PreparedEnvironmentReplace, SaveError> {
+        let mut prepared = self.prepare_environment_replace(original_name, replacement)?;
+        prepared.description = description.clone();
+        Ok(prepared)
     }
 
     /// Applies a successfully persisted environment replacement to the in-memory workspace.
@@ -548,6 +570,11 @@ impl LoadedWorkspace {
         self.workspace
             .replace_environment(&saved.original_name, saved.replacement.clone())
             .expect("prepared environment replacement must remain valid");
+        if !saved.description.is_unchanged() {
+            self.workspace
+                .set_environment_description(&saved.replacement.name, &saved.description)
+                .expect("prepared environment description must remain valid");
+        }
         let mut persistence = self
             .environment_persistence
             .remove(&saved.original_name)
@@ -1175,6 +1202,7 @@ pub struct PreparedEnvironmentReplace {
     original_source: Arc<[u8]>,
     original_name: String,
     replacement: Environment,
+    description: FieldPatch<Documentation>,
 }
 
 impl PreparedEnvironmentReplace {
@@ -1192,14 +1220,14 @@ impl PreparedEnvironmentReplace {
                 &new_path,
                 &self.original_source,
                 &self.replacement,
+                &self.description,
             )?,
             None => {
-                let serialized = persist_environment_yaml(
+                let serialized = persist_environment_replacement(
                     &self.persistence,
                     &self.original_source,
-                    &EnvironmentYamlMutation::Replace {
-                        environment: self.replacement.clone(),
-                    },
+                    &self.replacement,
+                    &self.description,
                 )?;
                 (serialized, self.persistence.document_path)
             }
@@ -1208,6 +1236,7 @@ impl PreparedEnvironmentReplace {
             baseline: self.baseline.expected,
             original_name: self.original_name,
             replacement: self.replacement,
+            description: self.description,
             document_path,
             serialized_source: serialized.into(),
         })
@@ -1220,6 +1249,7 @@ pub struct CompletedEnvironmentReplace {
     baseline: WorkspaceBaseline,
     original_name: String,
     replacement: Environment,
+    description: FieldPatch<Documentation>,
     document_path: PathBuf,
     serialized_source: Arc<[u8]>,
 }

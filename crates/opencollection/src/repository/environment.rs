@@ -11,6 +11,18 @@ pub(super) fn persist_environment_yaml(
     })
 }
 
+pub(super) fn persist_environment_replacement(
+    persistence: &EnvironmentPersistence,
+    original_source: &[u8],
+    replacement: &Environment,
+    description: &FieldPatch<Documentation>,
+) -> Result<Vec<u8>, SaveError> {
+    mutate_existing_document(&persistence.document_path, original_source, |document| {
+        let environment = environment_document_mut(document, persistence)?;
+        apply_environment_replacement(environment, replacement, description)
+    })
+}
+
 pub(super) fn persist_bundled_environment_create(
     document_path: &Path,
     original_source: &[u8],
@@ -108,6 +120,7 @@ pub(super) fn persist_unbundled_environment_rename(
     new_path: &Path,
     original_source: &[u8],
     replacement: &Environment,
+    description: &FieldPatch<Documentation>,
 ) -> Result<(Vec<u8>, PathBuf), SaveError> {
     let _old_lock = SaveLock::acquire(old_path)?;
     let _new_lock = SaveLock::acquire(new_path)?;
@@ -124,7 +137,7 @@ pub(super) fn persist_unbundled_environment_rename(
     let mut document: Value = serde_yaml_ng::from_slice(original_source).map_err(|error| {
         SaveError::InvalidDocument(format!("retained source cannot be parsed: {error}"))
     })?;
-    apply_environment_replace(&mut document, replacement)?;
+    apply_environment_replacement(&mut document, replacement, description)?;
     let serialized = serde_yaml_ng::to_string(&document)
         .map_err(SaveError::Serialize)?
         .into_bytes();
@@ -212,6 +225,31 @@ pub(super) fn environment_document_mut<'a>(
     environments.get_mut(index).ok_or_else(|| {
         SaveError::InvalidDocument(format!("environment index {index} is out of bounds"))
     })
+}
+
+/// Applies one atomic environment write: the replacement, then a description change.
+///
+/// An unchanged description leaves the stored description key untouched.
+fn apply_environment_replacement(
+    environment: &mut Value,
+    replacement: &Environment,
+    description: &FieldPatch<Documentation>,
+) -> Result<(), SaveError> {
+    apply_environment_mutation(
+        environment,
+        &EnvironmentYamlMutation::Replace {
+            environment: replacement.clone(),
+        },
+    )?;
+    if !description.is_unchanged() {
+        apply_environment_mutation(
+            environment,
+            &EnvironmentYamlMutation::Description {
+                description: description.clone(),
+            },
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn apply_environment_mutation(

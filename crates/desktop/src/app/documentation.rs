@@ -40,7 +40,7 @@ pub(super) fn documentation_text(value: Option<&Documentation>) -> Option<&str> 
     }
 }
 
-fn patch<T: Clone + PartialEq>(old: &Option<T>, new: &Option<T>) -> FieldPatch<T> {
+pub(super) fn patch<T: Clone + PartialEq>(old: &Option<T>, new: &Option<T>) -> FieldPatch<T> {
     if old == new {
         FieldPatch::Unchanged
     } else {

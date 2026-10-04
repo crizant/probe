@@ -161,6 +161,224 @@ fn environment_description_set_and_unset_round_trip() {
     fs::remove_file(path).unwrap();
 }
 
+fn atomic_environment_source() -> String {
+    concat!(
+        "opencollection: 1.0.0\n",
+        "info:\n  name: Atomic environment\n",
+        "bundled: true\n",
+        "config:\n",
+        "  environments:\n",
+        "    - name: base\n",
+        "      variables:\n",
+        "        - name: host\n",
+        "          value: api.example.com\n",
+        "    - name: development\n",
+        "      extends: base\n",
+        "      description:\n",
+        "        content: Staging notes\n",
+        "        type: text/markdown\n",
+        "      vendor.example: retained\n",
+        "      variables:\n",
+        "        - name: host\n",
+        "          value: dev.example.com\n",
+        "          description: Variable note\n",
+    )
+    .to_owned()
+}
+
+fn development_with_region(
+    loaded: &probe_opencollection::LoadedWorkspace,
+) -> probe_core::Environment {
+    let mut replacement = loaded.workspace().environments()[1].clone();
+    replacement.extends = None;
+    replacement
+        .variables
+        .push(probe_core::EnvironmentVariable::Plain(
+            probe_core::Variable {
+                name: Some("region".to_owned()),
+                value: Some(probe_core::VariableValueSet::Single(
+                    probe_core::VariableValue::String("ap-southeast-2".to_owned()),
+                )),
+                disabled: false,
+            },
+        ));
+    replacement
+}
+
+#[test]
+fn environment_replace_with_description_writes_structure_and_description_together() {
+    let path = temporary_path("env-edit-atomic.yml");
+    fs::write(&path, atomic_environment_source()).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let before = fs::read(&path).unwrap();
+    let replacement = development_with_region(&loaded);
+    let description = FieldPatch::Set(Documentation::Content {
+        content: "Edited notes".to_owned(),
+        media_type: "text/markdown".to_owned(),
+    });
+    let prepared = loaded
+        .prepare_environment_replace_with_description("development", replacement, &description)
+        .unwrap();
+    assert_eq!(
+        loaded.workspace().environments()[1].description,
+        Some(Documentation::Content {
+            content: "Staging notes".to_owned(),
+            media_type: "text/markdown".to_owned(),
+        }),
+        "preparing must not change the in-memory environment"
+    );
+    assert!(loaded.workspace().environments()[1].extends.is_some());
+    let saved = prepared.execute().unwrap();
+    let written = fs::read(&path).unwrap();
+    assert_ne!(written, before);
+    let source = String::from_utf8(written.clone()).unwrap();
+    assert!(source.contains("name: region"));
+    assert!(!source.contains("extends: base"));
+    assert!(source.contains("content: Edited notes"));
+    assert!(source.contains("type: text/markdown"));
+    assert!(source.contains("vendor.example: retained"));
+    assert!(source.contains("description: Variable note"));
+    assert!(
+        !source.contains("Staging notes"),
+        "the description change must be in the same document as the structural edit"
+    );
+    assert_eq!(
+        loaded.workspace().environments()[1].extends.as_deref(),
+        Some("base"),
+        "the write must not update memory before completion"
+    );
+    loaded.complete_environment_replace(saved).unwrap();
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(
+        loaded.workspace().environments()[1],
+        reloaded.workspace().environments()[1]
+    );
+    assert_eq!(
+        reloaded.workspace().environments()[1].description,
+        Some(Documentation::Content {
+            content: "Edited notes".to_owned(),
+            media_type: "text/markdown".to_owned(),
+        })
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn environment_replace_with_description_keeps_an_unchanged_description() {
+    let path = temporary_path("env-edit-unchanged-description.yml");
+    fs::write(&path, atomic_environment_source()).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let mut replacement = development_with_region(&loaded);
+    replacement.description = Some(Documentation::Text(
+        "caller description that must not be stored".to_owned(),
+    ));
+    assert_ne!(
+        replacement.description,
+        loaded.workspace().environments()[1].description
+    );
+    let prepared = loaded
+        .prepare_environment_replace_with_description(
+            "development",
+            replacement,
+            &FieldPatch::Unchanged,
+        )
+        .unwrap();
+    let saved = prepared.execute().unwrap();
+    loaded.complete_environment_replace(saved).unwrap();
+
+    let source = fs::read_to_string(&path).unwrap();
+    assert!(source.contains("name: region"));
+    assert!(!source.contains("extends: base"));
+    assert!(source.contains("content: Staging notes"));
+    assert!(source.contains("type: text/markdown"));
+    assert!(source.contains("vendor.example: retained"));
+    assert!(source.contains("description: Variable note"));
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(
+        loaded.workspace().environments(),
+        reloaded.workspace().environments()
+    );
+    assert_eq!(
+        reloaded.workspace().environments()[1].description,
+        Some(Documentation::Content {
+            content: "Staging notes".to_owned(),
+            media_type: "text/markdown".to_owned(),
+        })
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn environment_replace_with_description_conflict_leaves_the_previous_document() {
+    let path = temporary_path("env-edit-conflict.yml");
+    fs::write(&path, atomic_environment_source()).unwrap();
+    let loaded = load_workspace(&path).unwrap();
+    let replacement = development_with_region(&loaded);
+    let prepared = loaded
+        .prepare_environment_replace_with_description(
+            "development",
+            replacement,
+            &FieldPatch::Set(Documentation::Text("Edited description".to_owned())),
+        )
+        .unwrap();
+    let mut external = fs::read_to_string(&path).unwrap();
+    external.push_str("external: true\n");
+    fs::write(&path, &external).unwrap();
+
+    let error = prepared.execute().unwrap_err();
+    assert!(matches!(error, SaveError::ConcurrentModification(_)));
+    assert_eq!(fs::read_to_string(&path).unwrap(), external);
+    assert!(!external.contains("name: region"));
+    assert!(!external.contains("Edited description"));
+    assert_eq!(
+        loaded.workspace().environments()[1].description,
+        Some(Documentation::Content {
+            content: "Staging notes".to_owned(),
+            media_type: "text/markdown".to_owned(),
+        })
+    );
+    assert_eq!(
+        loaded.workspace().environments()[1].extends.as_deref(),
+        Some("base")
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn unbundled_environment_rename_and_description_share_one_write() {
+    let root = temporary_path("unbundled-env-rename-description");
+    copy_directory(&fixture("unbundled"), &root);
+    let mut loaded = load_workspace(&root).unwrap();
+    let mut replacement = loaded
+        .workspace()
+        .environments()
+        .iter()
+        .find(|environment| environment.name == "development")
+        .cloned()
+        .unwrap();
+    replacement.name = "staging".to_owned();
+    let prepared = loaded
+        .prepare_environment_replace_with_description(
+            "development",
+            replacement,
+            &FieldPatch::Set(Documentation::Text("Renamed environment".to_owned())),
+        )
+        .unwrap();
+    let saved = prepared.execute().unwrap();
+    loaded.complete_environment_replace(saved).unwrap();
+
+    assert!(!root.join("environments/development.yml").exists());
+    let saved = fs::read_to_string(root.join("environments/staging.yml")).unwrap();
+    assert!(saved.contains("name: staging"));
+    assert!(saved.contains("description: Renamed environment"));
+    assert!(saved.contains("color: green"));
+    assert_eq!(
+        environment_description(&root, "staging"),
+        Some(Documentation::Text("Renamed environment".to_owned()))
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn unbundled_environment_description_set_and_unset_round_trip() {
     let root = temporary_path("unbundled-env-description");
