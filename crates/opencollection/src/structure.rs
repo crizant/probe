@@ -187,7 +187,7 @@ impl LoadedWorkspace {
         operation: StructureOperation,
     ) -> Result<StructureResult, StructureError> {
         let renamed = match &operation {
-            StructureOperation::Rename { target, name } if target.kind == ItemKind::Request => {
+            StructureOperation::Rename { target, name } => {
                 Some((target.selector.clone(), name.clone()))
             }
             _ => None,
