@@ -105,9 +105,7 @@ impl RequestIcon {
             Self::Graphql => "GraphQL",
         }
     }
-}
 
-impl RequestIcon {
     pub(crate) fn custom_method(&self) -> Option<&str> {
         match self {
             Self::Http {
