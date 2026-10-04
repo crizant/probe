@@ -51,6 +51,7 @@ pub(super) fn convert_collection_variables(
         name: COLLECTION_VARIABLES_ENVIRONMENT.to_owned(),
         color: None,
         extends: None,
+        description: None,
         dot_env_file_path: None,
         variables,
     }])

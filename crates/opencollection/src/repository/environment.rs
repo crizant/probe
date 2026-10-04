@@ -225,6 +225,13 @@ pub(super) fn apply_environment_mutation(
         EnvironmentYamlMutation::Unset { name } => {
             apply_environment_variable_unset(environment, name)
         }
+        EnvironmentYamlMutation::Description { description } => {
+            let mapping = environment.as_mapping_mut().ok_or_else(|| {
+                SaveError::InvalidDocument("the environment document is not a mapping".to_owned())
+            })?;
+            set_documentation(mapping, "description", description);
+            Ok(())
+        }
         EnvironmentYamlMutation::Replace {
             environment: replacement,
         } => apply_environment_replace(environment, replacement),
@@ -233,7 +240,7 @@ pub(super) fn apply_environment_mutation(
 
 pub(super) fn validate_environment_replacement(
     original: &Environment,
-    replacement: Environment,
+    mut replacement: Environment,
 ) -> Result<Environment, SaveError> {
     validate_unique_variable_names(&replacement).map_err(SaveError::Environment)?;
     for variable in &original.variables {
@@ -255,6 +262,7 @@ pub(super) fn validate_environment_replacement(
             ));
         }
     }
+    replacement.description = original.description.clone();
     Ok(replacement)
 }
 

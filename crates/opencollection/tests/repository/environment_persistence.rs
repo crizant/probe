@@ -1,4 +1,19 @@
 use super::*;
+use probe_core::Documentation;
+
+fn environment_description(root: &std::path::Path, name: &str) -> Option<Documentation> {
+    load_workspace(root)
+        .unwrap()
+        .workspace()
+        .environments()
+        .iter()
+        .find(|environment| environment.name == name)
+        .and_then(|environment| environment.description.clone())
+}
+
+fn yaml(path: &std::path::Path) -> serde_yaml_ng::Value {
+    serde_yaml_ng::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
 
 pub(super) fn resolved_variable(
     loaded: &probe_opencollection::LoadedWorkspace,
@@ -8,6 +23,192 @@ pub(super) fn resolved_variable(
     resolve_environment(loaded.workspace().environments(), environment)
         .ok()
         .and_then(|resolved| resolved.variable(name).map(str::to_owned))
+}
+
+#[test]
+fn environment_description_set_and_unset_round_trip() {
+    let path = temporary_path("env-description.yml");
+    fs::write(
+        &path,
+        concat!(
+            "opencollection: 1.0.0\n",
+            "info:\n  name: Env description\n",
+            "bundled: true\n",
+            "config:\n",
+            "  environments:\n",
+            "    - name: base\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: api.example.com\n",
+            "    - name: development\n",
+            "      extends: base\n",
+            "      vendor.example: retained\n",
+            "      variables:\n",
+            "        - name: host\n",
+            "          value: dev.example.com\n",
+            "          description: Variable note\n",
+        ),
+    )
+    .unwrap();
+
+    let mut loaded = load_workspace(&path).unwrap();
+    assert!(loaded.workspace().environments()[1].description.is_none());
+    assert!(matches!(
+        loaded
+            .update_environment_description("development", &FieldPatch::Unchanged)
+            .unwrap_err(),
+        SaveError::EmptyUpdate
+    ));
+
+    loaded
+        .update_environment_description(
+            "development",
+            &FieldPatch::Set(Documentation::Text("Local development".to_owned())),
+        )
+        .unwrap();
+    assert_eq!(
+        loaded.workspace().environments()[1].description,
+        Some(Documentation::Text("Local development".to_owned()))
+    );
+    loaded
+        .update_environment_variable("development", "host", "local.example.com".to_owned())
+        .unwrap();
+
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(
+        reloaded.workspace().environments()[1].description,
+        Some(Documentation::Text("Local development".to_owned()))
+    );
+    assert_eq!(
+        resolved_variable(&reloaded, "development", "host").as_deref(),
+        Some("local.example.com")
+    );
+    let document = yaml(&path);
+    let environment = &document["config"]["environments"][1];
+    assert_eq!(
+        environment["description"].as_str(),
+        Some("Local development")
+    );
+    assert_eq!(environment["vendor.example"].as_str(), Some("retained"));
+    assert_eq!(
+        environment["variables"][0]["description"].as_str(),
+        Some("Variable note")
+    );
+
+    let mut loaded = load_workspace(&path).unwrap();
+    loaded
+        .update_environment_description(
+            "development",
+            &FieldPatch::Set(Documentation::Content {
+                content: "Local development".to_owned(),
+                media_type: "text/markdown".to_owned(),
+            }),
+        )
+        .unwrap();
+    let environment = &yaml(&path)["config"]["environments"][1];
+    assert_eq!(
+        environment["description"]["content"].as_str(),
+        Some("Local development")
+    );
+    assert_eq!(
+        environment["description"]["type"].as_str(),
+        Some("text/markdown")
+    );
+    assert_eq!(
+        load_workspace(&path).unwrap().workspace().environments()[1].description,
+        Some(Documentation::Content {
+            content: "Local development".to_owned(),
+            media_type: "text/markdown".to_owned(),
+        })
+    );
+
+    let mut loaded = load_workspace(&path).unwrap();
+    loaded
+        .update_environment_description("development", &FieldPatch::Set(Documentation::Null))
+        .unwrap();
+    assert!(yaml(&path)["config"]["environments"][1]["description"].is_null());
+    assert_eq!(
+        load_workspace(&path).unwrap().workspace().environments()[1].description,
+        Some(Documentation::Null)
+    );
+
+    let mut loaded = load_workspace(&path).unwrap();
+    loaded
+        .update_environment_description("development", &FieldPatch::Clear)
+        .unwrap();
+    let environment = &yaml(&path)["config"]["environments"][1];
+    assert!(environment.get("description").is_none());
+    assert_eq!(environment["vendor.example"].as_str(), Some("retained"));
+    assert_eq!(
+        environment["variables"][0]["description"].as_str(),
+        Some("Variable note")
+    );
+    assert_eq!(
+        environment["variables"][0]["value"].as_str(),
+        Some("local.example.com")
+    );
+    assert!(
+        load_workspace(&path).unwrap().workspace().environments()[1]
+            .description
+            .is_none()
+    );
+    assert!(matches!(
+        loaded
+            .update_environment_description("missing", &FieldPatch::Clear)
+            .unwrap_err(),
+        SaveError::Environment(EnvironmentResolutionError::EnvironmentNotFound(_))
+    ));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn unbundled_environment_description_set_and_unset_round_trip() {
+    let root = temporary_path("unbundled-env-description");
+    copy_directory(&fixture("unbundled"), &root);
+    let mut loaded = load_workspace(&root).unwrap();
+    loaded
+        .update_environment_description(
+            "development",
+            &FieldPatch::Set(Documentation::Text("Child environment".to_owned())),
+        )
+        .unwrap();
+    let path = root.join("environments/development.yml");
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("description: Child environment"));
+    assert!(saved.contains("color: green"));
+    assert_eq!(
+        environment_description(&root, "development"),
+        Some(Documentation::Text("Child environment".to_owned()))
+    );
+
+    loaded
+        .update_environment_description("development", &FieldPatch::Clear)
+        .unwrap();
+    let document = yaml(&path);
+    assert!(document.get("description").is_none());
+    assert_eq!(document["color"].as_str(), Some("green"));
+    assert_eq!(document["name"].as_str(), Some("development"));
+    assert_eq!(environment_description(&root, "development"), None);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn invalid_environment_description_fails_to_load() {
+    let error = load_workspace_from_str(concat!(
+        "opencollection: 1.0.0\n",
+        "info:\n  name: Bad description\n",
+        "bundled: true\n",
+        "config:\n",
+        "  environments:\n",
+        "    - name: development\n",
+        "      description: 1\n",
+    ))
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("documentation must be a string"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -172,8 +373,17 @@ fn environment_update_refuses_externally_modified_document() {
 fn environment_replace_preserves_unknown_fields_and_edits_secret_declarations() {
     let path = temporary_path("env-replace.yml");
     fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+    let source = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    let with_description = source.replacen(
+        "    - name: development\n      extends: base\n",
+        "    - name: development\n      extends: base\n      description:\n        content: Staging notes\n        type: text/markdown\n",
+        1,
+    );
+    assert_ne!(with_description, source);
+    fs::write(&path, with_description).unwrap();
     let mut loaded = load_workspace(&path).unwrap();
     let mut replacement = loaded.workspace().environments()[1].clone();
+    replacement.description = None;
     replacement.extends = None;
     replacement.variables.retain(|variable| match variable {
         probe_core::EnvironmentVariable::Plain(variable) => {
@@ -201,6 +411,8 @@ fn environment_replace_preserves_unknown_fields_and_edits_secret_declarations() 
 
     let source = fs::read_to_string(&path).unwrap();
     assert!(!source.contains("extends: base"));
+    assert!(source.contains("content: Staging notes"));
+    assert!(source.contains("type: text/markdown"));
     assert!(source.contains("name: region"));
     assert!(source.contains("disabled: true"));
     assert!(source.contains("secret: true"));
@@ -210,6 +422,13 @@ fn environment_replace_preserves_unknown_fields_and_edits_secret_declarations() 
         reloaded.workspace().environments()[1]
     );
     assert_eq!(reloaded.workspace().environments()[1].extends, None);
+    assert_eq!(
+        reloaded.workspace().environments()[1].description,
+        Some(Documentation::Content {
+            content: "Staging notes".to_owned(),
+            media_type: "text/markdown".to_owned(),
+        })
+    );
     assert!(reloaded.workspace().environments()[1].variables.iter().all(
         |variable| match variable {
             probe_core::EnvironmentVariable::Plain(variable) => {

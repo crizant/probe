@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    EffectiveEnvironmentVariable, Environment, EnvironmentResolutionError, EnvironmentVariable,
-    Variable, VariableValue, VariableValueSet,
+    Documentation, EffectiveEnvironmentVariable, Environment, EnvironmentResolutionError,
+    EnvironmentVariable, FieldPatch, Variable, VariableValue, VariableValueSet,
     environment::{RawVariable, raw_variables},
     validate_environments,
 };
@@ -41,6 +41,7 @@ pub fn create_environment(
     candidate.push(Environment {
         name,
         color: None,
+        description: None,
         extends,
         dot_env_file_path: None,
         variables: Vec::new(),
@@ -204,6 +205,20 @@ pub fn unset_environment_variable(
         ));
     }
     environment.variables.remove(index);
+    Ok(())
+}
+
+/// Applies a description patch to the named environment.
+///
+/// `Set` stores the documentation value, including explicit null. `Clear` leaves
+/// the description absent.
+pub fn set_environment_description(
+    environments: &mut [Environment],
+    environment_name: &str,
+    description: &FieldPatch<Documentation>,
+) -> Result<(), EnvironmentResolutionError> {
+    let environment = named_environment_mut(environments, environment_name)?;
+    description.apply(&mut environment.description);
     Ok(())
 }
 

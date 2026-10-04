@@ -356,6 +356,9 @@ pub(super) fn environment_value(environment: &Environment) -> Value {
     if let Some(color) = &environment.color {
         value.insert(string_key("color"), Value::String(color.clone()));
     }
+    if let Some(description) = &environment.description {
+        value.insert(string_key("description"), documentation_value(description));
+    }
     if let Some(extends) = &environment.extends {
         value.insert(string_key("extends"), Value::String(extends.clone()));
     }

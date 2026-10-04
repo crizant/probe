@@ -11,7 +11,7 @@ use std::{
 
 use atomic_write_file::AtomicWriteFile;
 use probe_core::{
-    Body, CollectionItem, CollectionUpdate, Environment, EnvironmentResolutionError,
+    Body, CollectionItem, CollectionUpdate, Documentation, Environment, EnvironmentResolutionError,
     EnvironmentVariable, FieldPatch, FolderKey, FolderUpdate, RequestKey, RequestUpdate, Variable,
     VariableValue, VariableValueSet, VariableValueVariant, Workspace, WorkspaceItemRef,
     validate_environments, validate_unique_variable_names,
@@ -288,6 +288,29 @@ impl LoadedWorkspace {
         )
     }
 
+    /// Sets or removes an environment description and atomically persists the document.
+    ///
+    /// `Set` writes the documentation value, including explicit null. `Clear` removes
+    /// the YAML key. An unchanged patch is rejected.
+    pub fn update_environment_description(
+        &mut self,
+        environment_name: &str,
+        description: &FieldPatch<Documentation>,
+    ) -> Result<(), SaveError> {
+        if description.is_unchanged() {
+            return Err(SaveError::EmptyUpdate);
+        }
+        self.workspace
+            .set_environment_description(environment_name, description)
+            .map_err(SaveError::Environment)?;
+        self.persist_environment_mutation(
+            environment_name,
+            EnvironmentYamlMutation::Description {
+                description: description.clone(),
+            },
+        )
+    }
+
     /// Removes a variable from the named environment and atomically persists the document.
     pub fn unset_environment_variable(
         &mut self,
@@ -462,8 +485,9 @@ impl LoadedWorkspace {
     /// Captures a validated replacement of one environment for background persistence.
     ///
     /// Secret variables are retained from the source document. The replacement may edit
-    /// the environment name, parent, and plain variables. Renaming a parent environment
-    /// is rejected because it would require a multi-document transaction.
+    /// the environment name, parent, and plain variables. The existing description is
+    /// kept; description edits use [`Self::update_environment_description`]. Renaming a
+    /// parent environment is rejected because it would require a multi-document transaction.
     pub fn prepare_environment_replace(
         &self,
         original_name: &str,
@@ -1203,9 +1227,18 @@ struct EnvironmentPersistence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum EnvironmentYamlMutation {
-    Set { variable: Variable },
-    Unset { name: String },
-    Replace { environment: Environment },
+    Set {
+        variable: Variable,
+    },
+    Unset {
+        name: String,
+    },
+    Description {
+        description: FieldPatch<Documentation>,
+    },
+    Replace {
+        environment: Environment,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

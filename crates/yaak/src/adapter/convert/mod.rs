@@ -372,6 +372,7 @@ fn convert_environments(
             name: environment.name.clone(),
             color: environment.color.clone(),
             extends,
+            description: None,
             dot_env_file_path: None,
             variables,
         });

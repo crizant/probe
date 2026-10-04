@@ -7,6 +7,8 @@ pub struct Environment {
     pub name: String,
     /// Optional display color.
     pub color: Option<String>,
+    /// Environment description. Absent when the source omits `description`.
+    pub description: Option<crate::Documentation>,
     /// Parent environment name.
     pub extends: Option<String>,
     /// Optional dotenv file path.

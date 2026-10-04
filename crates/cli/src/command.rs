@@ -109,13 +109,14 @@ pub(crate) enum Command {
     EnvironmentSet {
         input: WorkspaceInput,
         environment: String,
-        name: String,
-        value: String,
+        variable: Option<(String, String)>,
+        description: FieldPatch<Documentation>,
     },
     EnvironmentUnset {
         input: WorkspaceInput,
         environment: String,
-        name: String,
+        name: Option<String>,
+        clear_description: bool,
     },
     EnvironmentCreate {
         input: WorkspaceInput,
@@ -804,6 +805,8 @@ struct EnvironmentSetOptions {
     environment: Option<String>,
     name: Option<String>,
     value: Option<String>,
+    description: Option<String>,
+    description_json: Option<String>,
 }
 
 fn parse_environment_set(mut parser: Parser) -> Result<Command, CliError> {
@@ -812,20 +815,41 @@ fn parse_environment_set(mut parser: Parser) -> Result<Command, CliError> {
         environment: None,
         name: None,
         value: None,
+        description: None,
+        description_json: None,
     };
     while let Some(argument) = parser.bump() {
         match argument.as_str() {
             "--environment" => parser.once(&mut options.environment, "--environment")?,
             "--name" => parser.once(&mut options.name, "--name")?,
             "--value" => parser.once(&mut options.value, "--value")?,
+            "--description" => parser.once(&mut options.description, "--description")?,
+            "--description-json" => {
+                parser.once(&mut options.description_json, "--description-json")?;
+            }
             other => push_positional(&mut path, other, 1)?,
         }
+    }
+    let description =
+        documentation_patch(options.description, options.description_json, "description")?;
+    let variable = match (options.name, options.value) {
+        (Some(name), Some(value)) => Some((name, value)),
+        (None, None) => None,
+        _ => return Err(invalid_command()),
+    };
+    if variable.is_some() && !description.is_unchanged() {
+        return Err(CliError::invalid_arguments(
+            "environment set accepts either a variable (--name and --value) or a description",
+        ));
+    }
+    if variable.is_none() && description.is_unchanged() {
+        return Err(invalid_command());
     }
     Ok(Command::EnvironmentSet {
         input: input(&one_path(&path)?),
         environment: options.environment.ok_or_else(invalid_command)?,
-        name: options.name.ok_or_else(invalid_command)?,
-        value: options.value.ok_or_else(invalid_command)?,
+        variable,
+        description,
     })
 }
 
@@ -833,17 +857,29 @@ fn parse_environment_unset(mut parser: Parser) -> Result<Command, CliError> {
     let mut path = Vec::new();
     let mut environment = None;
     let mut name = None;
+    let mut description = false;
     while let Some(argument) = parser.bump() {
         match argument.as_str() {
             "--environment" => parser.once(&mut environment, "--environment")?,
             "--name" => parser.once(&mut name, "--name")?,
+            "--description" => parser.flag(&mut description, "--description")?,
+            "--description-json" => return Err(unset_rejects_json_null()),
             other => push_positional(&mut path, other, 1)?,
         }
+    }
+    if name.is_some() && description {
+        return Err(CliError::invalid_arguments(
+            "environment unset accepts either --name or --description",
+        ));
+    }
+    if name.is_none() && !description {
+        return Err(invalid_command());
     }
     Ok(Command::EnvironmentUnset {
         input: input(&one_path(&path)?),
         environment: environment.ok_or_else(invalid_command)?,
-        name: name.ok_or_else(invalid_command)?,
+        name,
+        clear_description: description,
     })
 }
 

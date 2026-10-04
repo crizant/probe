@@ -65,6 +65,7 @@ fn environments() -> Vec<Environment> {
         name: "local".to_owned(),
         color: None,
         extends: None,
+        description: None,
         dot_env_file_path: None,
         variables: vec![
             secret("token"),

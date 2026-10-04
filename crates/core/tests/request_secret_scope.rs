@@ -35,6 +35,7 @@ fn environment() -> Vec<Environment> {
         name: "production".into(),
         color: None,
         extends: None,
+        description: None,
         dot_env_file_path: None,
         variables: vec![
             EnvironmentVariable::Secret(SecretVariable {
