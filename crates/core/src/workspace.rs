@@ -751,7 +751,10 @@ fn index_item(
 
 #[cfg(test)]
 mod tests {
-    use crate::{Collection, CollectionItem, CollectionMetadata, Folder, ItemMetadata, Request};
+    use crate::{
+        Collection, CollectionItem, CollectionMetadata, Documentation, Environment,
+        EnvironmentResolutionError, FieldPatch, Folder, ItemMetadata, Request,
+    };
 
     use super::{Workspace, WorkspaceEditError, WorkspaceItemRef, WorkspaceParent};
 
@@ -1007,6 +1010,41 @@ mod tests {
         assert_eq!(
             workspace.root_items(),
             [WorkspaceItemRef::Request(request_key)]
+        );
+    }
+
+    #[test]
+    fn set_environment_description_writes_text_and_rejects_a_missing_environment() {
+        let mut workspace = Workspace::from_collection(Collection {
+            environments: vec![Environment {
+                name: "development".to_owned(),
+                color: None,
+                description: None,
+                extends: None,
+                dot_env_file_path: None,
+                variables: Vec::new(),
+            }],
+            ..Collection::default()
+        });
+
+        workspace
+            .set_environment_description(
+                "development",
+                &FieldPatch::Set(Documentation::Text("Local development".to_owned())),
+            )
+            .unwrap();
+        assert_eq!(
+            workspace.environments()[0].description,
+            Some(Documentation::Text("Local development".to_owned()))
+        );
+        assert_eq!(
+            workspace
+                .set_environment_description(
+                    "missing",
+                    &FieldPatch::Set(Documentation::Text("Local development".to_owned())),
+                )
+                .unwrap_err(),
+            EnvironmentResolutionError::EnvironmentNotFound("missing".to_owned())
         );
     }
 }
