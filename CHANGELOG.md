@@ -23,6 +23,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Request, collection, and folder tabs share drag reordering, pointer and tooltip behavior, middle-click closing, and Close Other Tabs. Mixed tab order and the active overview are restored when reopening a collection.
+
 - Request tab tooltips show custom HTTP method names alongside the generic HTTP icon.
 - Saving an environment description together with other environment changes writes both in one update. A failed save does not leave the structural edit without the description, or the description without the structural edit.
 - `collection unset --description-json` reports that collections have summary and docs, not a description.

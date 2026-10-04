@@ -637,7 +637,7 @@ impl ProbeApp {
             })
             .collect::<Vec<_>>();
         let key_remaps = self.install_reloaded_workspace(workspace, baselines, &key_remaps);
-        self.restore_shell_selectors(&result.selector_remaps, selectors);
+        self.restore_shell_selectors(&result.selector_remaps, &key_remaps, selectors);
         self.sync_save_dialog_after_structure(operation, &result);
         if matches!(operation, StructureOperation::CreateFolder { .. })
             && matches!(
@@ -887,10 +887,7 @@ impl ProbeApp {
         match self.selected_tree_item {
             Some(WorkspaceItemRef::Request(key)) => self.select_request(key, cx),
             Some(WorkspaceItemRef::Folder(key)) => {
-                self.shell
-                    .open_overview(crate::shell::OverviewTab::Folder(key));
-                self.reveal_active_tab();
-                cx.notify();
+                self.select_open_tab(crate::shell::OverviewTab::Folder(key).into(), cx);
             }
             None => self.select_tree_offset(0, cx),
         }

@@ -28,18 +28,37 @@ pub(crate) enum ResizePane {
     Response,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum OverviewTab {
     Collection,
     Folder(FolderKey),
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum OpenTab {
+    Request(RequestKey),
+    Overview(OverviewTab),
+}
+
+impl From<RequestKey> for OpenTab {
+    fn from(key: RequestKey) -> Self {
+        Self::Request(key)
+    }
+}
+
+impl From<OverviewTab> for OpenTab {
+    fn from(tab: OverviewTab) -> Self {
+        Self::Overview(tab)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ShellState {
+    open_tabs: Vec<OpenTab>,
+    // Cached projections for request and overview-specific adapters.
     tabs: Vec<RequestKey>,
     overview_tabs: Vec<OverviewTab>,
-    active_overview: Option<OverviewTab>,
-    active_tab: Option<RequestKey>,
+    active: Option<OpenTab>,
     collapsed_folders: HashSet<FolderKey>,
     selected_environment: Option<String>,
     pub(crate) sidebar_width: f32,
@@ -53,10 +72,10 @@ pub(crate) struct ShellState {
 impl Default for ShellState {
     fn default() -> Self {
         Self {
+            open_tabs: Vec::new(),
             tabs: Vec::new(),
             overview_tabs: Vec::new(),
-            active_overview: None,
-            active_tab: None,
+            active: None,
             collapsed_folders: HashSet::new(),
             selected_environment: None,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -76,32 +95,43 @@ fn max_response_height(window_height: f32) -> f32 {
 }
 
 impl ShellState {
+    pub(crate) fn open_tabs(&self) -> &[OpenTab] {
+        &self.open_tabs
+    }
+
     pub(crate) fn overview_tabs(&self) -> &[OverviewTab] {
         &self.overview_tabs
     }
 
     pub(crate) fn active_overview(&self) -> Option<OverviewTab> {
-        self.active_overview
+        match self.active {
+            Some(OpenTab::Overview(tab)) => Some(tab),
+            _ => None,
+        }
     }
 
     pub(crate) fn open_overview(&mut self, tab: OverviewTab) {
         if !self.overview_tabs.contains(&tab) {
             self.overview_tabs.push(tab);
+            self.open_tabs.push(tab.into());
         }
-        self.active_overview = Some(tab);
+        self.active = Some(tab.into());
     }
 
     pub(crate) fn close_overview(&mut self, tab: OverviewTab) {
         let Some(index) = self.overview_tabs.iter().position(|open| *open == tab) else {
             return;
         };
+        let open_index = self
+            .open_tabs
+            .iter()
+            .position(|open| *open == OpenTab::Overview(tab))
+            .unwrap_or(index);
         self.overview_tabs.remove(index);
-        if self.active_overview == Some(tab) {
-            self.active_overview = self
-                .overview_tabs
-                .get(index)
-                .or_else(|| index.checked_sub(1).and_then(|i| self.overview_tabs.get(i)))
-                .copied();
+        self.open_tabs
+            .retain(|open| *open != OpenTab::Overview(tab));
+        if self.active == Some(tab.into()) {
+            self.select_neighbor_after_close(open_index);
         }
     }
 
@@ -110,10 +140,9 @@ impl ShellState {
     }
 
     pub(crate) const fn active_tab(&self) -> Option<RequestKey> {
-        if self.active_overview.is_some() {
-            None
-        } else {
-            self.active_tab
+        match self.active {
+            Some(OpenTab::Request(key)) => Some(key),
+            _ => None,
         }
     }
 
@@ -126,14 +155,14 @@ impl ShellState {
     pub(crate) fn insert_tab(&mut self, key: RequestKey) {
         if !self.tabs.contains(&key) {
             self.tabs.push(key);
+            self.open_tabs.push(key.into());
         }
     }
 
     /// Selects `key` when that tab is already open.
     pub(crate) fn activate_tab(&mut self, key: RequestKey) {
         if self.tabs.contains(&key) {
-            self.active_overview = None;
-            self.active_tab = Some(key);
+            self.active = Some(key.into());
         }
     }
 
@@ -141,27 +170,82 @@ impl ShellState {
         let Some(index) = self.tabs.iter().position(|tab| *tab == key) else {
             return;
         };
+        let open_index = self
+            .open_tabs
+            .iter()
+            .position(|open| *open == OpenTab::Request(key))
+            .unwrap_or(index);
+        let active = self.active_open_tab();
         self.tabs.remove(index);
-        if self.active_tab == Some(key) {
-            self.active_tab = self
-                .tabs
-                .get(index)
-                .or_else(|| index.checked_sub(1).and_then(|index| self.tabs.get(index)))
-                .copied();
+        self.open_tabs.retain(|open| *open != OpenTab::Request(key));
+        if active == Some(OpenTab::Request(key)) {
+            self.select_neighbor_after_close(open_index);
         }
+    }
+
+    fn select_neighbor_after_close(&mut self, index: usize) {
+        self.active = self
+            .open_tabs
+            .get(index)
+            .or_else(|| index.checked_sub(1).and_then(|i| self.open_tabs.get(i)))
+            .copied();
+    }
+
+    pub(crate) fn active_open_tab(&self) -> Option<OpenTab> {
+        self.active
+    }
+
+    /// Restores saved order, retaining tabs without persistent locators at the end.
+    pub(crate) fn restore_tab_order(&mut self, order: impl IntoIterator<Item = OpenTab>) {
+        let mut restored = Vec::with_capacity(self.open_tabs.len());
+        for tab in order {
+            if self.open_tabs.contains(&tab) && !restored.contains(&tab) {
+                restored.push(tab);
+            }
+        }
+        let remaining: Vec<_> = self
+            .open_tabs
+            .iter()
+            .copied()
+            .filter(|tab| !restored.contains(tab))
+            .collect();
+        restored.extend(remaining);
+        self.open_tabs = restored;
+        self.refresh_tab_lists();
+    }
+
+    fn refresh_tab_lists(&mut self) {
+        self.tabs = self
+            .open_tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                OpenTab::Request(key) => Some(*key),
+                _ => None,
+            })
+            .collect();
+        self.overview_tabs = self
+            .open_tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                OpenTab::Overview(tab) => Some(*tab),
+                _ => None,
+            })
+            .collect();
     }
 
     /// Moves an open tab to the side of another open tab without changing selection.
     pub(crate) fn move_tab(
         &mut self,
-        source: RequestKey,
-        target: RequestKey,
+        source: impl Into<OpenTab>,
+        target: impl Into<OpenTab>,
         before: bool,
     ) -> bool {
-        let Some(from) = self.tabs.iter().position(|key| *key == source) else {
+        let source = source.into();
+        let target = target.into();
+        let Some(from) = self.open_tabs.iter().position(|tab| *tab == source) else {
             return false;
         };
-        let Some(target_index) = self.tabs.iter().position(|key| *key == target) else {
+        let Some(target_index) = self.open_tabs.iter().position(|tab| *tab == target) else {
             return false;
         };
         let insertion = target_index + usize::from(!before);
@@ -169,8 +253,9 @@ impl ShellState {
         if from == destination {
             return false;
         }
-        self.tabs.remove(from);
-        self.tabs.insert(destination, source);
+        self.open_tabs.remove(from);
+        self.open_tabs.insert(destination, source);
+        self.refresh_tab_lists();
         true
     }
 
@@ -244,10 +329,10 @@ impl ShellState {
     }
 
     pub(crate) fn reset_for_workspace(&mut self) {
+        self.open_tabs.clear();
         self.tabs.clear();
         self.overview_tabs.clear();
-        self.active_overview = None;
-        self.active_tab = None;
+        self.active = None;
         self.collapsed_folders.clear();
         self.resizing = None;
     }
@@ -346,6 +431,29 @@ mod tests {
         state.close_tab(first);
         assert!(!state.move_tab(first, second, true));
         assert!(!state.move_tab(second, first, true));
+    }
+
+    #[test]
+    fn mixed_tab_neighbors_follow_visual_order_without_changing_selection_on_drag() {
+        let (first, second, folder) = keys();
+        let collection = super::OverviewTab::Collection;
+        let folder = super::OverviewTab::Folder(folder);
+        let mut state = ShellState::default();
+        state.open_request(first);
+        state.open_overview(collection);
+        state.open_request(second);
+        state.open_overview(folder);
+        assert!(state.move_tab(folder, first, true));
+        assert_eq!(state.active_overview(), Some(folder));
+        state.close_overview(folder);
+        assert_eq!(state.active_tab(), Some(first));
+        state.close_tab(first);
+        assert_eq!(state.active_overview(), Some(collection));
+        state.close_tab(second);
+        assert_eq!(state.active_overview(), Some(collection));
+        state.close_overview(collection);
+        assert_eq!(state.active_open_tab(), None);
+        assert!(state.open_tabs().is_empty());
     }
 
     #[test]

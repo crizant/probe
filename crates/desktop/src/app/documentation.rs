@@ -149,6 +149,9 @@ impl ProbeApp {
                     && match pending {
                         PendingClose::Tab(_) => false,
                         PendingClose::Overview(selected) => selected == *target,
+                        PendingClose::OtherTabs {
+                            keep: crate::shell::OpenTab::Overview(tab),
+                        } => self.overview_target(*tab).as_ref() != Some(*target),
                         _ => true,
                     }
             })
@@ -162,6 +165,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_tab_context_menu(cx);
         let Some(target) = self.overview_target(tab) else {
             return;
         };
@@ -170,7 +174,9 @@ impl ProbeApp {
             && self.documentation_save_task.is_none()
         {
             self.shell.close_overview(tab);
+            self.select_and_reveal_active_request_in_sidebar();
             self.reveal_active_tab();
+            self.persist_session(cx);
             cx.notify();
         } else {
             self.prompt_unsaved(Vec::new(), pending, window, cx);

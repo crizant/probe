@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, path::PathBuf};
 
 use gpui::{Context, FocusHandle, Task};
-use probe_core::{RequestKey, WorkspaceItemRef};
+use probe_core::WorkspaceItemRef;
 
 use super::{DesktopMenu, DesktopSubmenu, PositionedContextMenu, ProbeApp, TabTooltip};
 
@@ -24,7 +24,7 @@ pub(super) struct TransientSurfaces {
     pub(super) request_execution_menu_open: bool,
     pub(super) request_tab_add_menu_open: bool,
     pub(super) tree_context_menu: Option<PositionedContextMenu<WorkspaceItemRef>>,
-    pub(super) tab_context_menu: Option<PositionedContextMenu<RequestKey>>,
+    pub(super) tab_context_menu: Option<PositionedContextMenu<crate::shell::OpenTab>>,
     pub(super) environment_manager_context_menu: Option<PositionedContextMenu<String>>,
     pub(super) tab_tooltip: Option<TabTooltip>,
     pub(super) tab_tooltip_epoch: usize,

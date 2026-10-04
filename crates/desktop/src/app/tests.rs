@@ -886,6 +886,8 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
             view.session.workspaces.insert(
                 canonical_destination.clone(),
                 crate::session::WorkspaceSessionState {
+                    ordered_tabs: Vec::new(),
+                    active_open_tab: None,
                     open_tabs: vec!["items/0/items/0".to_owned()],
                     active_tab: Some("items/0/items/0".to_owned()),
                     collapsed_folders: vec!["items/0".to_owned()],

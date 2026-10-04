@@ -80,6 +80,92 @@ fn dragging_request_tabs_reorders_without_selecting_them(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn mixed_tabs_share_drag_hover_and_close_interactions(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1200.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = nested_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request = workspace.requests()[0].key();
+    let folder = crate::shell::OverviewTab::Folder(workspace.folder_key("items/1").unwrap());
+    let collection = crate::shell::OverviewTab::Collection;
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request, cx);
+            view.select_open_tab(collection.into(), cx);
+            view.select_open_tab(folder.into(), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    for (source_selector, target_selector, source_tab) in [
+        ("overview-tab-1", "request-tab-0", folder),
+        ("overview-tab-1", "request-tab-0", collection),
+    ] {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let source = visual.debug_bounds(source_selector).unwrap();
+        let target = visual.debug_bounds(target_selector).unwrap();
+        let source_point = point(source.left() + px(12.0), source.center().y);
+        let drop_point = point(target.left() + px(12.0), target.center().y);
+        visual.simulate_mouse_move(source_point, None, Modifiers::default());
+        window
+            .update(&mut visual, |view, _, _| {
+                assert_eq!(
+                    view.transient.tab_tooltip.as_ref().map(|t| t.target),
+                    Some(source_tab.into())
+                );
+            })
+            .unwrap();
+        visual.simulate_mouse_down(source_point, MouseButton::Left, Modifiers::default());
+        visual.simulate_mouse_move(
+            point(source_point.x - px(8.0), source_point.y),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        visual.simulate_mouse_move(drop_point, Some(MouseButton::Left), Modifiers::default());
+        visual.simulate_mouse_up(drop_point, MouseButton::Left, Modifiers::default());
+        visual.run_until_parked();
+        cx.run_until_parked();
+    }
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.shell.open_tabs(),
+                &[folder.into(), collection.into(), request.into()]
+            );
+            assert_eq!(view.shell.active_overview(), Some(folder));
+        })
+        .unwrap();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let source = visual.debug_bounds("overview-tab-0").unwrap();
+    visual.simulate_mouse_down(source.center(), MouseButton::Right, Modifiers::default());
+    visual.simulate_mouse_up(source.center(), MouseButton::Right, Modifiers::default());
+    visual.run_until_parked();
+    let menu = visual.debug_bounds("tab-context-close-other").unwrap();
+    visual.simulate_click(menu.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(&mut visual, |view, _, _| {
+            assert_eq!(view.shell.open_tabs(), &[folder.into()]);
+            assert_eq!(view.shell.active_overview(), Some(folder));
+        })
+        .unwrap();
+    let tab = visual.debug_bounds("overview-tab-0").unwrap();
+    visual.simulate_mouse_down(tab.center(), MouseButton::Middle, Modifiers::default());
+    visual.simulate_mouse_up(tab.center(), MouseButton::Middle, Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(&mut visual, |view, _, _| {
+            assert!(view.shell.open_tabs().is_empty())
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn middle_clicking_a_request_tab_closes_it(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -164,7 +250,7 @@ fn request_tab_context_menu_closes_other_tabs_and_selects_its_target(cx: &mut Te
                 .map(|menu| menu.target)
         })
         .expect("test window should remain open");
-    assert_eq!(menu_target, Some(first));
+    assert_eq!(menu_target, Some(first.into()));
 
     window
         .update(cx, |view, window, cx| {
@@ -509,6 +595,30 @@ fn opening_many_request_tabs_scrolls_to_the_active_tab(cx: &mut TestAppContext) 
         last_visible,
         "the newly opened tab should be visible in the tab bar"
     );
+
+    // Exercise the same pointer wiring after horizontal scrolling.
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let source = visual.debug_bounds("request-tab-11").unwrap();
+    let target = visual.debug_bounds("request-tab-10").unwrap();
+    let source_point = point(source.left() + px(12.0), source.center().y);
+    let drop_point = point(target.left() + px(12.0), target.center().y);
+    visual.simulate_mouse_move(source_point, None, Modifiers::default());
+    visual.simulate_mouse_down(source_point, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_move(
+        point(source_point.x - px(8.0), source_point.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    visual.simulate_mouse_move(drop_point, Some(MouseButton::Left), Modifiers::default());
+    visual.simulate_mouse_up(drop_point, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.shell.tabs()[10..], [keys[11], keys[10]]);
+            assert_eq!(view.shell.active_tab(), Some(keys[11]));
+        })
+        .unwrap();
 }
 
 #[gpui::test]

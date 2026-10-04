@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct TabDrag {
-    pub(super) key: RequestKey,
+    pub(super) key: crate::shell::OpenTab,
     pub(super) label: String,
     pub(super) active: bool,
 }
@@ -30,6 +30,34 @@ impl Render for TabDrag {
 }
 
 impl ProbeApp {
+    pub(super) fn select_open_tab(&mut self, tab: crate::shell::OpenTab, cx: &mut Context<Self>) {
+        match tab {
+            crate::shell::OpenTab::Request(key) => self.select_request(key, cx),
+            crate::shell::OpenTab::Overview(tab) => {
+                self.shell.open_overview(tab);
+                self.reveal_active_tab();
+                self.selected_tree_item = match tab {
+                    crate::shell::OverviewTab::Folder(key) => Some(WorkspaceItemRef::Folder(key)),
+                    crate::shell::OverviewTab::Collection => None,
+                };
+                self.persist_session(cx);
+                cx.notify();
+            }
+        }
+    }
+
+    pub(super) fn request_close_open_tab(
+        &mut self,
+        tab: crate::shell::OpenTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match tab {
+            crate::shell::OpenTab::Request(key) => self.request_close_tab(key, window, cx),
+            crate::shell::OpenTab::Overview(tab) => self.request_close_overview(tab, window, cx),
+        }
+    }
+
     pub(super) fn new_detached_request(
         &mut self,
         graphql: bool,
@@ -64,12 +92,12 @@ impl ProbeApp {
 
     pub(super) fn on_tab_drag_move(
         &mut self,
-        source: RequestKey,
+        source: crate::shell::OpenTab,
         pointer: Point<Pixels>,
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        if !self.shell.tabs().contains(&source) || !bounds.contains(&pointer) {
+        if !self.shell.open_tabs().contains(&source) || !bounds.contains(&pointer) {
             self.tab_auto_scroll.stop();
             self.tab_drop_target = None;
             cx.notify();
@@ -118,7 +146,7 @@ impl ProbeApp {
 
     fn recompute_tab_drop_from_pointer(
         &mut self,
-        source: RequestKey,
+        source: crate::shell::OpenTab,
         pointer: Point<Pixels>,
         viewport: Bounds<Pixels>,
         cx: &mut Context<Self>,
@@ -131,7 +159,7 @@ impl ProbeApp {
         let x = f32::from(pointer.x);
         let offset = f32::from(self.tab_bar_scroll.offset().x);
         let mut candidate = None;
-        for (index, key) in self.shell.tabs().iter().enumerate() {
+        for (index, key) in self.shell.open_tabs().iter().enumerate() {
             let Some(bounds) = self.tab_bar_scroll.bounds_for_item(index) else {
                 continue;
             };
@@ -152,14 +180,16 @@ impl ProbeApp {
 
     pub(super) fn update_tab_drop_target(
         &mut self,
-        source: RequestKey,
-        target: RequestKey,
+        source: impl Into<crate::shell::OpenTab>,
+        target: impl Into<crate::shell::OpenTab>,
         before: bool,
         cx: &mut Context<Self>,
     ) {
+        let source = source.into();
+        let target = target.into();
         let next = (source != target
-            && self.shell.tabs().contains(&source)
-            && self.shell.tabs().contains(&target))
+            && self.shell.open_tabs().contains(&source)
+            && self.shell.open_tabs().contains(&target))
         .then_some((target, before));
         if self.tab_drop_target != next {
             self.tab_drop_target = next;
@@ -167,7 +197,12 @@ impl ProbeApp {
         }
     }
 
-    pub(super) fn drop_tab(&mut self, source: RequestKey, cx: &mut Context<Self>) {
+    pub(super) fn drop_tab(
+        &mut self,
+        source: impl Into<crate::shell::OpenTab>,
+        cx: &mut Context<Self>,
+    ) {
+        let source = source.into();
         let target = self.tab_drop_target.take();
         self.tab_drag_source = None;
         self.tab_auto_scroll.stop();
@@ -180,7 +215,7 @@ impl ProbeApp {
     }
 
     pub(super) fn close_tab_now(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let previous_active = self.shell.active_tab();
+        let previous_active = self.shell.active_open_tab();
         self.shell.close_tab(key);
         self.request_editor.remove(key);
         self.response_viewer.remove_selection(key);
@@ -191,7 +226,7 @@ impl ProbeApp {
             self.execution.remove(key);
             self.response_viewer.remove(key);
         }
-        if self.shell.active_tab() != previous_active {
+        if self.shell.active_open_tab() != previous_active {
             self.select_and_reveal_active_request_in_sidebar();
         }
         self.reveal_active_tab();
@@ -199,24 +234,26 @@ impl ProbeApp {
         cx.notify();
     }
 
-    pub(super) fn close_other_tabs_now(&mut self, keep: RequestKey, cx: &mut Context<Self>) {
-        let open_tabs = self.shell.tabs().to_vec();
-        if !open_tabs.contains(&keep) {
+    pub(super) fn close_other_tabs_now(
+        &mut self,
+        keep: impl Into<crate::shell::OpenTab>,
+        cx: &mut Context<Self>,
+    ) {
+        let keep = keep.into();
+        if !self.shell.open_tabs().contains(&keep) {
             return;
         }
-        for key in open_tabs {
-            if key != keep {
-                self.close_tab_now(key, cx);
+        for tab in self.shell.open_tabs().to_vec() {
+            if tab == keep {
+                continue;
+            }
+            match tab {
+                crate::shell::OpenTab::Request(key) => self.close_tab_now(key, cx),
+                crate::shell::OpenTab::Overview(tab) => self.shell.close_overview(tab),
             }
         }
-        for tab in self.shell.overview_tabs().to_vec() {
-            self.shell.close_overview(tab);
-        }
-        self.shell.open_request(keep);
-        self.select_and_reveal_active_request_in_sidebar();
-        self.reveal_active_tab();
+        self.select_open_tab(keep, cx);
         self.persist_session(cx);
-        cx.notify();
     }
 
     pub(super) fn dirty_keys(&self) -> Vec<RequestKey> {
@@ -259,31 +296,40 @@ impl ProbeApp {
         }
     }
 
-    pub(super) fn other_dirty_tab_keys(&self, keep: RequestKey) -> Vec<RequestKey> {
+    pub(super) fn other_dirty_tab_keys(
+        &self,
+        keep: impl Into<crate::shell::OpenTab>,
+    ) -> Vec<RequestKey> {
+        let keep = keep.into();
         self.shell
             .tabs()
             .iter()
             .copied()
-            .filter(|key| *key != keep)
+            .filter(|key| crate::shell::OpenTab::Request(*key) != keep)
             .filter(|key| self.request_is_dirty(*key))
             .collect()
     }
 
     pub(super) fn request_close_other_tabs(
         &mut self,
-        keep: RequestKey,
+        keep: impl Into<crate::shell::OpenTab>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.close_tab_context_menu(cx);
-        if !self.shell.tabs().contains(&keep) {
+        let keep = keep.into();
+        if !self.shell.open_tabs().contains(&keep) {
             return;
         }
         let dirty = self.other_dirty_tab_keys(keep);
-        if dirty.is_empty() && !self.documentation_blocks_close_or_open() {
+        let pending = PendingClose::OtherTabs { keep };
+        if dirty.is_empty()
+            && self.pending_overview_targets(&pending).is_empty()
+            && self.documentation_save_task.is_none()
+        {
             self.close_other_tabs_now(keep, cx);
         } else {
-            self.prompt_unsaved(dirty, PendingClose::OtherTabs { keep }, window, cx);
+            self.prompt_unsaved(dirty, pending, window, cx);
         }
     }
 
@@ -701,6 +747,7 @@ impl ProbeApp {
                 }
                 self.select_and_reveal_active_request_in_sidebar();
                 self.reveal_active_tab();
+                self.persist_session(cx);
                 cx.notify();
             }
             PendingClose::Tab(key) => self.close_tab_now(key, cx),
@@ -723,7 +770,15 @@ impl ProbeApp {
     }
 
     pub(super) fn select_and_reveal_active_request_in_sidebar(&mut self) {
+        if let Some(tab) = self.shell.active_overview() {
+            self.selected_tree_item = match tab {
+                crate::shell::OverviewTab::Folder(key) => Some(WorkspaceItemRef::Folder(key)),
+                crate::shell::OverviewTab::Collection => None,
+            };
+            return;
+        }
         let Some(key) = self.shell.active_tab() else {
+            self.selected_tree_item = None;
             return;
         };
         let is_graphql = self
@@ -742,24 +797,11 @@ impl ProbeApp {
     }
 
     pub(super) fn scroll_active_tab_into_view(&self) {
-        if let Some(active) = self.shell.active_overview() {
-            if let Some(index) = self
-                .shell
-                .overview_tabs()
-                .iter()
-                .position(|tab| *tab == active)
-            {
-                self.tab_bar_scroll
-                    .scroll_to_item(self.shell.tabs().len() + index);
-            }
-            return;
+        let active = self.shell.active_open_tab();
+        if let Some(active) = active
+            && let Some(index) = self.shell.open_tabs().iter().position(|tab| *tab == active)
+        {
+            self.tab_bar_scroll.scroll_to_item(index);
         }
-        let Some(active) = self.shell.active_tab() else {
-            return;
-        };
-        let Some(index) = self.shell.tabs().iter().position(|tab| *tab == active) else {
-            return;
-        };
-        self.tab_bar_scroll.scroll_to_item(index);
     }
 }

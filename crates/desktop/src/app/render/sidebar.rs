@@ -158,7 +158,7 @@ impl ProbeApp {
         };
         let key = context_menu.target;
         let position = context_menu.position;
-        if !self.shell.tabs().contains(&key) {
+        if !self.shell.open_tabs().contains(&key) {
             return div().into_any_element();
         }
 
@@ -177,7 +177,7 @@ impl ProbeApp {
             components::shortcut_label_for_action(window, &CloseActiveTab),
             move |window, cx| {
                 let _ = close_view.update(cx, |view, cx| {
-                    view.request_close_tab(key, window, cx);
+                    view.request_close_open_tab(key, window, cx);
                 });
             },
         ))
@@ -427,10 +427,10 @@ impl ProbeApp {
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| {
                                 view.select_tree_item(item, cx);
-                                view.shell
-                                    .open_overview(crate::shell::OverviewTab::Folder(key));
-                                view.reveal_active_tab();
-                                cx.notify();
+                                view.select_open_tab(
+                                    crate::shell::OverviewTab::Folder(key).into(),
+                                    cx,
+                                );
                             });
                         })
                         .when(can_edit, |row| {
@@ -1012,11 +1012,10 @@ impl ProbeApp {
                         )
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| {
-                                view.selected_tree_item = None;
-                                view.shell
-                                    .open_overview(crate::shell::OverviewTab::Collection);
-                                view.reveal_active_tab();
-                                cx.notify();
+                                view.select_open_tab(
+                                    crate::shell::OverviewTab::Collection.into(),
+                                    cx,
+                                );
                             });
                         }),
                 )

@@ -95,7 +95,7 @@ pub(crate) enum PendingClose {
     Tab(RequestKey),
     Overview(Option<String>),
     OtherTabs {
-        keep: RequestKey,
+        keep: crate::shell::OpenTab,
     },
     Workspace,
     Window,

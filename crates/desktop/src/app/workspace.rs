@@ -837,6 +837,18 @@ impl ProbeApp {
                 .map(|selector| Some(selector.to_owned())),
         };
         ShellSelectors {
+            ordered_tabs: self
+                .shell
+                .open_tabs()
+                .iter()
+                .map(|tab| (*tab, crate::session::TabLocator::capture(*tab, old)))
+                .collect(),
+            pending_keep: match self.pending_close.as_ref() {
+                Some(PendingClose::OtherTabs { keep }) => {
+                    crate::session::TabLocator::capture(*keep, old)
+                }
+                _ => None,
+            },
             overview_selectors: self
                 .shell
                 .overview_tabs()
@@ -936,9 +948,11 @@ impl ProbeApp {
                     *key = *new_key;
                 }
             }
-            Some(PendingClose::OtherTabs { keep }) => {
-                if let Some(new_key) = remaps.get(keep) {
-                    *keep = *new_key;
+            Some(PendingClose::OtherTabs {
+                keep: crate::shell::OpenTab::Request(key),
+            }) => {
+                if let Some(new_key) = remaps.get(key) {
+                    *key = *new_key;
                 }
             }
             _ => {}
@@ -1012,6 +1026,7 @@ impl ProbeApp {
     pub(super) fn restore_shell_selectors(
         &mut self,
         remaps: &BTreeMap<String, String>,
+        key_remaps: &BTreeMap<RequestKey, RequestKey>,
         selectors: ShellSelectors,
     ) {
         let loaded = self
@@ -1074,6 +1089,26 @@ impl ProbeApp {
         {
             self.shell.open_overview(tab);
         }
+        self.shell
+            .restore_tab_order(selectors.ordered_tabs.iter().filter_map(|(tab, locator)| {
+                match tab {
+                    crate::shell::OpenTab::Request(key) => {
+                        key_remaps.get(key).copied().map(Into::into)
+                    }
+                    crate::shell::OpenTab::Overview(_) => locator
+                        .as_ref()
+                        .and_then(|locator| locator.remap(remaps).resolve(loaded)),
+                }
+            }));
+        if let Some(keep) = selectors
+            .pending_keep
+            .as_ref()
+            .and_then(|locator| locator.remap(remaps).resolve(loaded))
+            && let Some(PendingClose::OtherTabs { keep: pending_keep }) =
+                self.pending_close.as_mut()
+        {
+            *pending_keep = keep;
+        }
         for selector in selectors.folder_selectors {
             let selector = remaps
                 .get(&selector)
@@ -1120,7 +1155,7 @@ impl ProbeApp {
             reconciled.baselines,
             &key_remaps,
         );
-        self.restore_shell_selectors(&reconciled.selector_remaps, selectors);
+        self.restore_shell_selectors(&reconciled.selector_remaps, &remaps, selectors);
         if let Some(key) = active_detached.and_then(|key| remaps.get(&key).copied()) {
             self.shell.activate_tab(key);
         }

@@ -66,11 +66,7 @@ impl ProbeApp {
                     .child(components::truncated_label(label.to_owned()))
                     .on_click(move |_, _, cx| {
                         let _ = select_view.update(cx, |view, cx| {
-                            view.shell
-                                .open_overview(crate::shell::OverviewTab::Folder(key));
-                            view.reveal_active_tab();
-                            view.selected_tree_item = Some(WorkspaceItemRef::Folder(key));
-                            cx.notify();
+                            view.select_open_tab(crate::shell::OverviewTab::Folder(key).into(), cx);
                         });
                     }),
             );

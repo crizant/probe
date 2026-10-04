@@ -52,6 +52,32 @@ impl ProbeApp {
         if let Some(key) = active_tab.or(fallback_tab) {
             self.shell.open_request(key);
         }
+        for tab in workspace
+            .ordered_tabs
+            .iter()
+            .filter_map(|locator| locator.resolve(loaded))
+        {
+            match tab {
+                crate::shell::OpenTab::Request(key) => self.shell.insert_tab(key),
+                crate::shell::OpenTab::Overview(tab) => self.shell.open_overview(tab),
+            }
+        }
+        self.shell.restore_tab_order(
+            workspace
+                .ordered_tabs
+                .iter()
+                .filter_map(|locator| locator.resolve(loaded)),
+        );
+        if let Some(tab) = workspace
+            .active_open_tab
+            .as_ref()
+            .and_then(|locator| locator.resolve(loaded))
+        {
+            match tab {
+                crate::shell::OpenTab::Request(key) => self.shell.activate_tab(key),
+                crate::shell::OpenTab::Overview(tab) => self.shell.open_overview(tab),
+            }
+        }
         for key in collapsed_folders {
             self.shell.collapse_folder(key);
         }
@@ -91,6 +117,16 @@ impl ProbeApp {
         self.session.workspaces.insert(
             path.clone(),
             WorkspaceSessionState {
+                ordered_tabs: self
+                    .shell
+                    .open_tabs()
+                    .iter()
+                    .filter_map(|tab| crate::session::TabLocator::capture(*tab, loaded))
+                    .collect(),
+                active_open_tab: self
+                    .shell
+                    .active_open_tab()
+                    .and_then(|tab| crate::session::TabLocator::capture(tab, loaded)),
                 open_tabs,
                 active_tab,
                 collapsed_folders,

@@ -472,7 +472,7 @@ fn close_other_tabs_keeps_a_detached_tab_after_key_remap(cx: &mut TestAppContext
             let keep = view.shell.active_tab().unwrap();
             view.new_detached_request(false, window, cx);
             let save = view.shell.active_tab().unwrap();
-            view.pending_close = Some(PendingClose::OtherTabs { keep });
+            view.pending_close = Some(PendingClose::OtherTabs { keep: keep.into() });
             view.persist_detached_request(save, "Saved".to_owned(), None, window, cx);
         })
         .unwrap();
@@ -1150,12 +1150,12 @@ fn reordered_tabs_are_captured_and_restored_in_session_order(cx: &mut TestAppCon
         .collect();
     assert_eq!(keys.len(), 2);
     window
-        .update(cx, |view, _, cx| {
+        .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
             view.shell.open_request(keys[0]);
             view.shell.open_request(keys[1]);
-            view.tab_drag_source = Some(keys[0]);
+            view.tab_drag_source = Some(keys[0].into());
             view.update_tab_drop_target(keys[0], keys[1], false, cx);
             view.drop_tab(keys[0], cx);
             assert_eq!(view.shell.tabs(), &[keys[1], keys[0]]);
@@ -1170,8 +1170,85 @@ fn reordered_tabs_are_captured_and_restored_in_session_order(cx: &mut TestAppCon
                 view.session.workspaces[view.workspace_path.as_ref().unwrap()].open_tabs,
                 saved_order
             );
+            let collection = crate::shell::OverviewTab::Collection;
+            view.select_open_tab(collection.into(), cx);
+            view.shell.move_tab(collection, keys[1], true);
+            view.capture_session();
+            let order = view.shell.open_tabs().to_vec();
+            let saved = view.session.workspaces[view.workspace_path.as_ref().unwrap()].clone();
+            let json = serde_json::to_string(&saved).unwrap();
+            assert!(json.contains("collection"));
+            view.shell.reset_for_workspace();
+            view.restore_shell_state(cx);
+            assert_eq!(view.shell.open_tabs(), order);
+            assert_eq!(view.shell.active_overview(), Some(collection));
+            view.new_detached_request(false, window, cx);
+            let detached = view.shell.active_tab().unwrap();
+            view.shell.move_tab(detached, collection, false);
+            view.select_open_tab(collection.into(), cx);
+            let fresh = probe_opencollection::load_workspace(view.workspace_path.as_ref().unwrap())
+                .unwrap();
+            view.apply_reconciled_workspace(reconciled_workspace(fresh), cx);
+            let restored: Vec<_> = view
+                .shell
+                .open_tabs()
+                .iter()
+                .filter_map(|tab| {
+                    crate::session::TabLocator::capture(
+                        *tab,
+                        view.loaded_workspace.as_ref().unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(restored, saved.ordered_tabs);
+            assert_eq!(view.shell.active_overview(), Some(collection));
+            assert!(matches!(view.shell.open_tabs()[1], crate::shell::OpenTab::Request(key) if view.detached_requests.contains(&key)));
         })
         .expect("test window should remain open");
+}
+
+#[gpui::test]
+fn close_other_tabs_keeps_overview_drafts_and_protects_other_dirty_tabs(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = nested_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request = workspace.requests()[0].key();
+    let folder = crate::shell::OverviewTab::Folder(workspace.folder_key("items/1").unwrap());
+    let collection = crate::shell::OverviewTab::Collection;
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request, cx);
+            view.select_open_tab(folder.into(), cx);
+            view.select_open_tab(collection.into(), cx);
+            view.edit_overview(None, true, "Unsaved collection docs".into(), cx);
+            let keep_collection = PendingClose::OtherTabs {
+                keep: collection.into(),
+            };
+            assert!(view.pending_overview_targets(&keep_collection).is_empty());
+            view.request_close_other_tabs(collection, window, cx);
+            assert!(view.application_dialog.is_none());
+            assert_eq!(view.shell.open_tabs(), &[collection.into()]);
+            assert!(view.has_dirty_overviews());
+            view.select_open_tab(folder.into(), cx);
+            view.request_close_other_tabs(folder, window, cx);
+            let Some(ApplicationDialog::Unsaved {
+                pending,
+                documentation,
+                ..
+            }) = view.application_dialog.as_ref()
+            else {
+                panic!("dirty overview must prompt before closing");
+            };
+            assert!(*documentation);
+            assert_eq!(view.pending_overview_targets(pending), vec![None]);
+            assert_eq!(view.shell.open_tabs(), &[collection.into(), folder.into()]);
+        })
+        .unwrap();
 }
 
 #[gpui::test]
@@ -2675,6 +2752,8 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
             view.session.workspaces.insert(
                 canonical_destination.clone(),
                 crate::session::WorkspaceSessionState {
+                    ordered_tabs: Vec::new(),
+                    active_open_tab: None,
                     open_tabs: vec!["items/0".to_owned()],
                     active_tab: Some("items/0".to_owned()),
                     collapsed_folders: vec!["items/0".to_owned()],

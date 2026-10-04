@@ -269,12 +269,10 @@ impl Render for ProbeApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|view, _: &CloseActiveTab, window, cx| {
-                if view.application_dialog.is_none() {
-                    if let Some(tab) = view.shell.active_overview() {
-                        view.request_close_overview(tab, window, cx);
-                    } else if let Some(key) = view.shell.active_tab() {
-                        view.request_close_tab(key, window, cx);
-                    }
+                if view.application_dialog.is_none()
+                    && let Some(tab) = view.shell.active_open_tab()
+                {
+                    view.request_close_open_tab(tab, window, cx);
                 }
             }))
             .on_action(cx.listener(|view, _: &AboutProbe, window, cx| {

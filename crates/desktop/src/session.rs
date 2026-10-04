@@ -16,10 +16,66 @@ use crate::shell::{DEFAULT_RESPONSE_HEIGHT, DEFAULT_RESPONSE_WIDTH, DEFAULT_SIDE
 const SCHEMA_VERSION: u32 = 2;
 const RECENT_COLLECTION_LIMIT: usize = 10;
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "selector", rename_all = "snake_case")]
+pub(crate) enum TabLocator {
+    Request(String),
+    Collection,
+    Folder(String),
+}
+
+impl TabLocator {
+    pub(crate) fn capture(
+        tab: crate::shell::OpenTab,
+        loaded: &probe_opencollection::LoadedWorkspace,
+    ) -> Option<Self> {
+        match tab {
+            crate::shell::OpenTab::Request(key) => loaded
+                .request_selector(key)
+                .map(|s| Self::Request(s.to_owned())),
+            crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Collection) => {
+                Some(Self::Collection)
+            }
+            crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) => loaded
+                .folder_selector(key)
+                .map(|s| Self::Folder(s.to_owned())),
+        }
+    }
+
+    pub(crate) fn resolve(
+        &self,
+        loaded: &probe_opencollection::LoadedWorkspace,
+    ) -> Option<crate::shell::OpenTab> {
+        match self {
+            Self::Request(selector) => loaded.request_key(selector).map(Into::into),
+            Self::Collection => Some(crate::shell::OverviewTab::Collection.into()),
+            Self::Folder(selector) => loaded
+                .folder_key(selector)
+                .map(|key| crate::shell::OverviewTab::Folder(key).into()),
+        }
+    }
+
+    pub(crate) fn remap(&self, remaps: &BTreeMap<String, String>) -> Self {
+        match self {
+            Self::Request(selector) => {
+                Self::Request(remaps.get(selector).unwrap_or(selector).clone())
+            }
+            Self::Folder(selector) => {
+                Self::Folder(remaps.get(selector).unwrap_or(selector).clone())
+            }
+            Self::Collection => Self::Collection,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct WorkspaceSessionState {
     pub(crate) open_tabs: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) ordered_tabs: Vec<TabLocator>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) active_open_tab: Option<TabLocator>,
     pub(crate) active_tab: Option<String>,
     pub(crate) collapsed_folders: Vec<String>,
 }
@@ -248,6 +304,12 @@ mod tests {
         state.workspaces.insert(
             "/tmp/example".into(),
             WorkspaceSessionState {
+                ordered_tabs: vec![
+                    super::TabLocator::Request("users/list.yml".into()),
+                    super::TabLocator::Collection,
+                    super::TabLocator::Folder("users".into()),
+                ],
+                active_open_tab: Some(super::TabLocator::Collection),
                 open_tabs: vec!["users/list.yml".to_owned()],
                 active_tab: Some("users/list.yml".to_owned()),
                 collapsed_folders: vec!["users".to_owned()],
@@ -274,6 +336,8 @@ mod tests {
         state.workspaces.insert(
             a.clone(),
             WorkspaceSessionState {
+                ordered_tabs: Vec::new(),
+                active_open_tab: None,
                 open_tabs: vec!["first".into(), "second".into()],
                 active_tab: Some("first".into()),
                 collapsed_folders: vec!["folder-a".into()],
@@ -283,6 +347,8 @@ mod tests {
         state.workspaces.insert(
             b.clone(),
             WorkspaceSessionState {
+                ordered_tabs: Vec::new(),
+                active_open_tab: None,
                 open_tabs: vec!["other".into()],
                 active_tab: Some("other".into()),
                 collapsed_folders: vec!["folder-b".into()],
