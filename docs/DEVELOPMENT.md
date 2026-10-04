@@ -39,6 +39,11 @@ without explicit approval.
 Keep shared fixtures under `tests/fixtures/`. CLI integration tests cover command
 behavior, JSON output, and exit codes.
 
+Before writing a new test, inspect the existing tests for the affected behavior.
+Prefer extending an existing test with focused assertions or additional cases when
+it already exercises the relevant setup and contract. Add a separate test when the
+behavior needs distinct setup or extending an existing test would obscure its purpose.
+
 When tests inspect or compare text files, account for platform line endings. Windows
 may check out fixtures with CRLF (`\r\n`), so avoid assuming LF (`\n`) unless the
 test explicitly normalizes line endings or the format requires them.
