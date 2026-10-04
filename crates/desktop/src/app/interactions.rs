@@ -349,11 +349,12 @@ impl ProbeApp {
 
     pub(super) fn open_tab_context_menu(
         &mut self,
-        key: RequestKey,
+        key: impl Into<crate::shell::OpenTab>,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        if !self.shell.tabs().contains(&key) {
+        let key = key.into();
+        if !self.shell.open_tabs().contains(&key) {
             return;
         }
         self.transient.tab_context_menu = Some(PositionedContextMenu {
@@ -403,10 +404,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         let target = target.into();
-        let is_open = match target {
-            TabTooltipTarget::Request(key) => self.shell.tabs().contains(&key),
-            TabTooltipTarget::Overview(tab) => self.shell.overview_tabs().contains(&tab),
-        };
+        let is_open = self.shell.open_tabs().contains(&target);
         if !is_open {
             return;
         }

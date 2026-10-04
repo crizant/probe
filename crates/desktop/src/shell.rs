@@ -28,18 +28,34 @@ pub(crate) enum ResizePane {
     Response,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum OverviewTab {
     Collection,
     Folder(FolderKey),
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum OpenTab {
+    Request(RequestKey),
+    Overview(OverviewTab),
+}
+
+impl From<RequestKey> for OpenTab {
+    fn from(key: RequestKey) -> Self {
+        Self::Request(key)
+    }
+}
+
+impl From<OverviewTab> for OpenTab {
+    fn from(tab: OverviewTab) -> Self {
+        Self::Overview(tab)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ShellState {
-    tabs: Vec<RequestKey>,
-    overview_tabs: Vec<OverviewTab>,
-    active_overview: Option<OverviewTab>,
-    active_tab: Option<RequestKey>,
+    open_tabs: Vec<OpenTab>,
+    active: Option<OpenTab>,
     collapsed_folders: HashSet<FolderKey>,
     selected_environment: Option<String>,
     pub(crate) sidebar_width: f32,
@@ -53,10 +69,8 @@ pub(crate) struct ShellState {
 impl Default for ShellState {
     fn default() -> Self {
         Self {
-            tabs: Vec::new(),
-            overview_tabs: Vec::new(),
-            active_overview: None,
-            active_tab: None,
+            open_tabs: Vec::new(),
+            active: None,
             collapsed_folders: HashSet::new(),
             selected_environment: None,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -76,92 +90,118 @@ fn max_response_height(window_height: f32) -> f32 {
 }
 
 impl ShellState {
-    pub(crate) fn overview_tabs(&self) -> &[OverviewTab] {
-        &self.overview_tabs
+    pub(crate) fn open_tabs(&self) -> &[OpenTab] {
+        &self.open_tabs
+    }
+
+    pub(crate) fn tabs(&self) -> impl DoubleEndedIterator<Item = RequestKey> + '_ {
+        self.open_tabs.iter().filter_map(|tab| match tab {
+            OpenTab::Request(key) => Some(*key),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn overview_tabs(&self) -> impl DoubleEndedIterator<Item = OverviewTab> + '_ {
+        self.open_tabs.iter().filter_map(|tab| match tab {
+            OpenTab::Overview(tab) => Some(*tab),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn active_open_tab(&self) -> Option<OpenTab> {
+        self.active
     }
 
     pub(crate) fn active_overview(&self) -> Option<OverviewTab> {
-        self.active_overview
-    }
-
-    pub(crate) fn open_overview(&mut self, tab: OverviewTab) {
-        if !self.overview_tabs.contains(&tab) {
-            self.overview_tabs.push(tab);
+        match self.active {
+            Some(OpenTab::Overview(tab)) => Some(tab),
+            _ => None,
         }
-        self.active_overview = Some(tab);
     }
 
-    pub(crate) fn close_overview(&mut self, tab: OverviewTab) {
-        let Some(index) = self.overview_tabs.iter().position(|open| *open == tab) else {
+    pub(crate) const fn active_tab(&self) -> Option<RequestKey> {
+        match self.active {
+            Some(OpenTab::Request(key)) => Some(key),
+            _ => None,
+        }
+    }
+
+    /// Inserts and activates a tab, reusing it if it is already open.
+    pub(crate) fn open(&mut self, tab: OpenTab) {
+        self.insert(tab);
+        self.activate(tab);
+    }
+
+    /// Appends a tab without changing selection.
+    pub(crate) fn insert(&mut self, tab: OpenTab) {
+        if !self.open_tabs.contains(&tab) {
+            self.open_tabs.push(tab);
+        }
+    }
+
+    /// Activates an already-open tab.
+    pub(crate) fn activate(&mut self, tab: OpenTab) {
+        if self.open_tabs.contains(&tab) {
+            self.active = Some(tab);
+        }
+    }
+
+    pub(crate) fn close(&mut self, tab: OpenTab) {
+        let Some(index) = self.open_tabs.iter().position(|open| *open == tab) else {
             return;
         };
-        self.overview_tabs.remove(index);
-        if self.active_overview == Some(tab) {
-            self.active_overview = self
-                .overview_tabs
+        self.open_tabs.remove(index);
+        if self.active == Some(tab) {
+            self.active = self
+                .open_tabs
                 .get(index)
-                .or_else(|| index.checked_sub(1).and_then(|i| self.overview_tabs.get(i)))
+                .or_else(|| index.checked_sub(1).and_then(|i| self.open_tabs.get(i)))
                 .copied();
         }
     }
 
-    pub(crate) fn tabs(&self) -> &[RequestKey] {
-        &self.tabs
-    }
-
-    pub(crate) const fn active_tab(&self) -> Option<RequestKey> {
-        if self.active_overview.is_some() {
-            None
-        } else {
-            self.active_tab
+    /// Replaces tab state after resolving saved locators or remapping runtime keys.
+    pub(crate) fn restore_tabs(
+        &mut self,
+        tabs: impl IntoIterator<Item = OpenTab>,
+        active: Option<OpenTab>,
+    ) {
+        self.open_tabs.clear();
+        self.active = None;
+        for tab in tabs {
+            self.insert(tab);
+        }
+        if let Some(tab) = active.or_else(|| self.open_tabs.last().copied()) {
+            self.activate(tab);
+        }
+        if self.active.is_none() {
+            self.active = self.open_tabs.last().copied();
         }
     }
 
     pub(crate) fn open_request(&mut self, key: RequestKey) {
-        self.insert_tab(key);
-        self.activate_tab(key);
+        self.open(key.into());
     }
-
-    /// Appends `key` when it is not already open, without changing the active tab.
-    pub(crate) fn insert_tab(&mut self, key: RequestKey) {
-        if !self.tabs.contains(&key) {
-            self.tabs.push(key);
-        }
+    pub(crate) fn open_overview(&mut self, tab: OverviewTab) {
+        self.open(tab.into());
     }
-
-    /// Selects `key` when that tab is already open.
-    pub(crate) fn activate_tab(&mut self, key: RequestKey) {
-        if self.tabs.contains(&key) {
-            self.active_overview = None;
-            self.active_tab = Some(key);
-        }
-    }
-
-    pub(crate) fn close_tab(&mut self, key: RequestKey) {
-        let Some(index) = self.tabs.iter().position(|tab| *tab == key) else {
-            return;
-        };
-        self.tabs.remove(index);
-        if self.active_tab == Some(key) {
-            self.active_tab = self
-                .tabs
-                .get(index)
-                .or_else(|| index.checked_sub(1).and_then(|index| self.tabs.get(index)))
-                .copied();
-        }
+    pub(crate) fn close_overview(&mut self, tab: OverviewTab) {
+        self.close(tab.into());
     }
 
     /// Moves an open tab to the side of another open tab without changing selection.
     pub(crate) fn move_tab(
         &mut self,
-        source: RequestKey,
-        target: RequestKey,
+        source: impl Into<OpenTab>,
+        target: impl Into<OpenTab>,
         before: bool,
     ) -> bool {
-        let Some(from) = self.tabs.iter().position(|key| *key == source) else {
+        let source = source.into();
+        let target = target.into();
+        let Some(from) = self.open_tabs.iter().position(|tab| *tab == source) else {
             return false;
         };
-        let Some(target_index) = self.tabs.iter().position(|key| *key == target) else {
+        let Some(target_index) = self.open_tabs.iter().position(|tab| *tab == target) else {
             return false;
         };
         let insertion = target_index + usize::from(!before);
@@ -169,8 +209,8 @@ impl ShellState {
         if from == destination {
             return false;
         }
-        self.tabs.remove(from);
-        self.tabs.insert(destination, source);
+        self.open_tabs.remove(from);
+        self.open_tabs.insert(destination, source);
         true
     }
 
@@ -244,10 +284,8 @@ impl ShellState {
     }
 
     pub(crate) fn reset_for_workspace(&mut self) {
-        self.tabs.clear();
-        self.overview_tabs.clear();
-        self.active_overview = None;
-        self.active_tab = None;
+        self.open_tabs.clear();
+        self.active = None;
         self.collapsed_folders.clear();
         self.resizing = None;
     }
@@ -284,51 +322,24 @@ mod tests {
     }
 
     #[test]
-    fn opening_requests_deduplicates_tabs_and_selects_them() {
-        let (first, second, _) = keys();
-        let mut state = ShellState::default();
-        state.open_request(first);
-        state.open_request(second);
-        state.open_request(first);
-
-        assert_eq!(state.tabs(), &[first, second]);
-        assert_eq!(state.active_tab(), Some(first));
-    }
-
-    #[test]
-    fn overview_tabs_reuse_close_and_reset_without_selecting_requests() {
+    fn shared_tab_primitives_insert_without_selection_and_reuse_open_tabs() {
         let (request, _, folder) = keys();
+        let folder = super::OverviewTab::Folder(folder).into();
+        let collection = super::OverviewTab::Collection.into();
         let mut state = ShellState::default();
-        state.open_request(request);
-        let collection = super::OverviewTab::Collection;
-        let folder = super::OverviewTab::Folder(folder);
-        state.open_overview(collection);
-        state.open_overview(folder);
-        state.open_overview(collection);
-        assert_eq!(state.overview_tabs(), &[collection, folder]);
-        assert_eq!(state.active_overview(), Some(collection));
-        assert_eq!(state.active_tab(), None);
-        state.close_overview(collection);
-        assert_eq!(state.active_overview(), Some(folder));
-        state.close_overview(folder);
-        assert_eq!(state.active_tab(), Some(request));
-        state.open_overview(collection);
-        state.open_request(request);
-        assert_eq!(state.active_overview(), None);
+        state.insert(request.into());
+        state.insert(folder);
+        assert_eq!(state.active_open_tab(), None);
+        state.activate(folder);
+        state.activate(collection);
+        assert_eq!(state.active_open_tab(), Some(folder));
+        state.open(request.into());
+        state.open(folder);
+        assert_eq!(state.open_tabs(), &[request.into(), folder]);
+        assert_eq!(state.active_open_tab(), Some(folder));
         state.reset_for_workspace();
-        assert!(state.overview_tabs().is_empty());
-    }
-
-    #[test]
-    fn closing_active_tab_selects_a_neighbor() {
-        let (first, second, _) = keys();
-        let mut state = ShellState::default();
-        state.open_request(first);
-        state.open_request(second);
-        state.close_tab(second);
-
-        assert_eq!(state.tabs(), &[first]);
-        assert_eq!(state.active_tab(), Some(first));
+        assert!(state.open_tabs().is_empty());
+        assert_eq!(state.active_open_tab(), None);
     }
 
     #[test]
@@ -338,14 +349,37 @@ mod tests {
         state.open_request(first);
         state.open_request(second);
         assert!(state.move_tab(second, first, true));
-        assert_eq!(state.tabs(), &[second, first]);
+        assert_eq!(state.tabs().collect::<Vec<_>>(), &[second, first]);
         assert_eq!(state.active_tab(), Some(second));
         assert!(!state.move_tab(second, first, true));
         assert!(state.move_tab(second, first, false));
-        assert_eq!(state.tabs(), &[first, second]);
-        state.close_tab(first);
+        assert_eq!(state.tabs().collect::<Vec<_>>(), &[first, second]);
+        state.close(first.into());
         assert!(!state.move_tab(first, second, true));
         assert!(!state.move_tab(second, first, true));
+    }
+
+    #[test]
+    fn mixed_tab_neighbors_follow_visual_order_without_changing_selection_on_drag() {
+        let (first, second, folder) = keys();
+        let collection = super::OverviewTab::Collection;
+        let folder = super::OverviewTab::Folder(folder);
+        let mut state = ShellState::default();
+        state.open_request(first);
+        state.open_overview(collection);
+        state.open_request(second);
+        state.open_overview(folder);
+        assert!(state.move_tab(folder, first, true));
+        assert_eq!(state.active_overview(), Some(folder));
+        state.close_overview(folder);
+        assert_eq!(state.active_tab(), Some(first));
+        state.close(first.into());
+        assert_eq!(state.active_overview(), Some(collection));
+        state.close(second.into());
+        assert_eq!(state.active_overview(), Some(collection));
+        state.close_overview(collection);
+        assert_eq!(state.active_open_tab(), None);
+        assert!(state.open_tabs().is_empty());
     }
 
     #[test]

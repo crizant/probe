@@ -17,15 +17,19 @@ impl ProbeApp {
             .get(path)
             .cloned()
             .unwrap_or_default();
-        let tabs: Vec<_> = workspace
-            .open_tabs
-            .iter()
-            .filter_map(|selector| loaded.request_key(selector))
-            .collect();
-        let active_tab = workspace
-            .active_tab
-            .as_deref()
-            .and_then(|selector| loaded.request_key(selector));
+        let (locators, active) = match workspace.ordered_tabs {
+            Some(tabs) => (tabs, workspace.active_open_tab),
+            None => (
+                workspace
+                    .open_tabs
+                    .into_iter()
+                    .map(crate::session::TabLocator::Request)
+                    .collect(),
+                workspace
+                    .active_tab
+                    .map(crate::session::TabLocator::Request),
+            ),
+        };
         let collapsed_folders: Vec<_> = workspace
             .collapsed_folders
             .iter()
@@ -45,13 +49,12 @@ impl ProbeApp {
                 PaneLayout::Vertical
             });
         self.refresh_system_menu(cx);
-        let fallback_tab = tabs.last().copied();
-        for key in tabs {
-            self.shell.insert_tab(key);
-        }
-        if let Some(key) = active_tab.or(fallback_tab) {
-            self.shell.open_request(key);
-        }
+        self.shell.restore_tabs(
+            locators
+                .iter()
+                .filter_map(|locator| locator.resolve(loaded)),
+            active.as_ref().and_then(|locator| locator.resolve(loaded)),
+        );
         for key in collapsed_folders {
             self.shell.collapse_folder(key);
         }
@@ -74,8 +77,7 @@ impl ProbeApp {
         let open_tabs = self
             .shell
             .tabs()
-            .iter()
-            .filter_map(|key| loaded.request_selector(*key).map(str::to_owned))
+            .filter_map(|key| loaded.request_selector(key).map(str::to_owned))
             .collect();
         let active_tab = self
             .shell
@@ -91,6 +93,17 @@ impl ProbeApp {
         self.session.workspaces.insert(
             path.clone(),
             WorkspaceSessionState {
+                ordered_tabs: Some(
+                    self.shell
+                        .open_tabs()
+                        .iter()
+                        .filter_map(|tab| crate::session::TabLocator::capture(*tab, loaded))
+                        .collect(),
+                ),
+                active_open_tab: self
+                    .shell
+                    .active_open_tab()
+                    .and_then(|tab| crate::session::TabLocator::capture(tab, loaded)),
                 open_tabs,
                 active_tab,
                 collapsed_folders,

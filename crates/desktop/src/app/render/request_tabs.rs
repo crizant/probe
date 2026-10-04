@@ -6,7 +6,6 @@ impl ProbeApp {
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let tab_count = self.shell.tabs().len();
         let mut active_tab_background: Hsla = theme.colors.actions.accent.into();
         active_tab_background.a = 0.12;
         let mut active_tab_close_hover: Hsla = theme.colors.actions.accent.into();
@@ -42,25 +41,72 @@ impl ProbeApp {
                 .border_b_1()
                 .border_color(theme.colors.borders.subtle);
         };
-        for key in self.shell.tabs() {
-            let Some(request) = loaded.workspace().request(*key) else {
-                continue;
-            };
-            let active = self.shell.active_tab() == Some(*key);
-            let detached = self.detached_requests.contains(key);
-            let dirty = detached || self.persistence.is_dirty(*key, request);
-            let label = if detached {
-                request
-                    .url
-                    .as_deref()
-                    .filter(|url| !url.trim().is_empty())
-                    .unwrap_or("Untitled request")
-            } else {
-                request
-                    .metadata
-                    .name
-                    .as_deref()
-                    .unwrap_or("Untitled request")
+        for (index, tab) in self.shell.open_tabs().iter().copied().enumerate() {
+            let (id, selector, label, active, dirty) = match tab {
+                crate::shell::OpenTab::Request(key) => {
+                    let Some(request) = loaded.workspace().request(key) else {
+                        continue;
+                    };
+                    let detached = self.detached_requests.contains(&key);
+                    let label = if detached {
+                        request
+                            .url
+                            .as_deref()
+                            .filter(|url| !url.trim().is_empty())
+                            .unwrap_or("Untitled request")
+                    } else {
+                        request
+                            .metadata
+                            .name
+                            .as_deref()
+                            .unwrap_or("Untitled request")
+                    };
+                    let request_index = self.shell.tabs().position(|open| open == key).unwrap_or(0);
+                    (
+                        gpui::ElementId::from(("request-tab", key.slot())),
+                        format!("request-tab-{request_index}"),
+                        label,
+                        self.shell.active_tab() == Some(key),
+                        detached || self.persistence.is_dirty(key, request),
+                    )
+                }
+                crate::shell::OpenTab::Overview(overview) => {
+                    let label = match overview {
+                        crate::shell::OverviewTab::Collection => loaded
+                            .workspace()
+                            .metadata()
+                            .name
+                            .as_deref()
+                            .unwrap_or("Collection"),
+                        crate::shell::OverviewTab::Folder(key) => {
+                            let Some(folder) = loaded.workspace().folder(key) else {
+                                continue;
+                            };
+                            folder.metadata.name.as_deref().unwrap_or("Folder")
+                        }
+                    };
+                    let overview_index = self
+                        .shell
+                        .overview_tabs()
+                        .position(|open| open == overview)
+                        .unwrap_or(0);
+                    (
+                        match overview {
+                            crate::shell::OverviewTab::Collection => {
+                                gpui::ElementId::from("collection-tab")
+                            }
+                            crate::shell::OverviewTab::Folder(key) => {
+                                gpui::ElementId::from(("folder-tab", key.slot()))
+                            }
+                        },
+                        format!("overview-tab-{overview_index}"),
+                        label,
+                        self.shell.active_overview() == Some(overview),
+                        self.overview_target(overview)
+                            .and_then(|target| self.overview_drafts.get(&target))
+                            .is_some_and(|draft| draft.is_dirty()),
+                    )
+                }
             };
             let select_view = cx.weak_entity();
             let close_view = cx.weak_entity();
@@ -75,20 +121,28 @@ impl ProbeApp {
             } else {
                 theme.colors.actions.disabled.into()
             };
-            let tab_key = *key;
-            let drop_before = self.tab_drop_target == Some((tab_key, true));
-            let drop_after = self.tab_drop_target == Some((tab_key, false));
-            let tab_index = self
-                .shell
-                .tabs()
-                .iter()
-                .position(|open| *open == *key)
-                .unwrap_or(0);
+            let drop_before = self.tab_drop_target == Some((tab, true));
+            let drop_after = self.tab_drop_target == Some((tab, false));
+            let close_id = match tab {
+                crate::shell::OpenTab::Request(key) => {
+                    gpui::ElementId::from(("close-tab", key.slot()))
+                }
+                crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Collection) => {
+                    gpui::ElementId::from("close-collection-tab")
+                }
+                crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) => {
+                    gpui::ElementId::from(("close-folder-tab", key.slot()))
+                }
+            };
             tab_strip = tab_strip.child(
-                Tab::new(("request-tab", key.slot()))
-                    .debug_selector(move || format!("request-tab-{tab_index}"))
+                Tab::new(id)
+                    .debug_selector(move || selector.clone())
+                    .accessibility_label(match tab {
+                        crate::shell::OpenTab::Overview(_) => format!("{label} overview"),
+                        _ => label.to_owned(),
+                    })
                     .selected(active)
-                    .set_position(tab_index + 1, tab_count + self.shell.overview_tabs().len())
+                    .set_position(index + 1, self.shell.open_tabs().len())
                     .h(px(request_tab_bar_height))
                     .min_w(px(80.0))
                     .max_w(px(176.0))
@@ -123,7 +177,7 @@ impl ProbeApp {
                     .cursor_pointer()
                     .on_drag(
                         TabDrag {
-                            key: tab_key,
+                            key: tab,
                             label: label.to_owned(),
                             active,
                         },
@@ -138,48 +192,44 @@ impl ProbeApp {
                     )
                     .on_mouse_move(move |event, _, cx| {
                         let _ = tooltip_move_view.update(cx, |view, cx| {
-                            view.update_tab_tooltip_position(tab_key, event.position, cx);
+                            view.update_tab_tooltip_position(tab, event.position, cx)
                         });
                     })
                     .on_hover(move |hovered, window, cx| {
                         let _ = if *hovered {
                             tooltip_hover_view.update(cx, |view, cx| {
-                                view.open_tab_tooltip(tab_key, window.mouse_position(), cx);
+                                view.open_tab_tooltip(tab, window.mouse_position(), cx)
                             })
                         } else {
-                            tooltip_leave_view.update(cx, |view, cx| {
-                                view.close_tab_tooltip(tab_key, cx);
-                            })
+                            tooltip_leave_view
+                                .update(cx, |view, cx| view.close_tab_tooltip(tab, cx))
                         };
                     })
                     .on_click(move |_, _, cx| {
-                        let _ = select_view.update(cx, |view, cx| view.select_request(tab_key, cx));
+                        let _ = select_view.update(cx, |view, cx| view.select_open_tab(tab, cx));
                     })
                     .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
                     .on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         let _ = context_menu_view.update(cx, |view, cx| {
-                            view.open_tab_context_menu(tab_key, event.position, cx);
+                            view.open_tab_context_menu(tab, event.position, cx);
                         });
                     })
                     .on_aux_click(move |event, window, cx| {
                         if event.is_middle_click() {
                             cx.stop_propagation();
-                            let _ = middle_close_view
-                                .update(cx, |view, cx| view.request_close_tab(tab_key, window, cx));
+                            let _ = middle_close_view.update(cx, |view, cx| {
+                                view.request_close_open_tab(tab, window, cx)
+                            });
                         }
                     })
-                    .child(
-                        components::truncated_label(label.to_owned())
-                            .flex_1()
-                            .when(active, |label| {
-                                label.debug_selector(|| "request-tab-label".into())
-                            }),
-                    )
+                    .child(components::truncated_label(label.to_owned()).flex_1().when(
+                        active && matches!(tab, crate::shell::OpenTab::Request(_)),
+                        |label| label.debug_selector(|| "request-tab-label".into()),
+                    ))
                     .when(dirty, |tab| {
                         tab.child(
                             div()
-                                .id(("request-dirty", key.slot()))
                                 .flex_none()
                                 .w(px(6.0))
                                 .h(px(6.0))
@@ -188,7 +238,8 @@ impl ProbeApp {
                         )
                     })
                     .child(
-                        Button::new(("close-tab", key.slot()))
+                        Button::new(close_id)
+                            .accessibility_label("Close tab")
                             .focusable(false)
                             .tab_stop(false)
                             .flex_none()
@@ -203,126 +254,7 @@ impl ProbeApp {
                             .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
                                 let _ = close_view.update(cx, |view, cx| {
-                                    view.request_close_tab(tab_key, window, cx)
-                                });
-                            }),
-                    ),
-            );
-        }
-
-        for (index, tab) in self.shell.overview_tabs().iter().copied().enumerate() {
-            let label = match tab {
-                crate::shell::OverviewTab::Collection => loaded
-                    .workspace()
-                    .metadata()
-                    .name
-                    .as_deref()
-                    .unwrap_or("Collection"),
-                crate::shell::OverviewTab::Folder(key) => {
-                    let Some(folder) = loaded.workspace().folder(key) else {
-                        continue;
-                    };
-                    folder.metadata.name.as_deref().unwrap_or("Folder")
-                }
-            };
-            let active = self.shell.active_overview() == Some(tab);
-            let dirty = self
-                .overview_target(tab)
-                .and_then(|target| self.overview_drafts.get(&target))
-                .is_some_and(|draft| draft.is_dirty());
-            let select_view = cx.weak_entity();
-            let close_view = cx.weak_entity();
-            let tooltip_hover_view = cx.weak_entity();
-            let tooltip_move_view = cx.weak_entity();
-            let tooltip_leave_view = cx.weak_entity();
-            tab_strip = tab_strip.child(
-                Tab::new(("overview-tab", index))
-                    .debug_selector(move || format!("overview-tab-{index}"))
-                    .accessibility_label(format!("{label} overview"))
-                    .selected(active)
-                    .set_position(
-                        tab_count + index + 1,
-                        tab_count + self.shell.overview_tabs().len(),
-                    )
-                    .h(px(request_tab_bar_height))
-                    .min_w(px(80.0))
-                    .max_w(px(176.0))
-                    .pl(px(theme.metrics.spacing_3))
-                    .pr(px(theme.metrics.spacing_1))
-                    .flex()
-                    .items_center()
-                    .gap(px(theme.metrics.spacing_1))
-                    .overflow_hidden()
-                    .rounded_tl(px(theme.metrics.radius_medium))
-                    .rounded_tr(px(theme.metrics.radius_medium))
-                    .when(active, |tab| {
-                        tab.bg(active_tab_background)
-                            .border_b_1()
-                            .border_color(theme.colors.actions.accent)
-                            .text_color(theme.colors.actions.accent)
-                    })
-                    .when(!active, |tab| {
-                        tab.text_color(theme.colors.text.secondary)
-                            .hover(move |tab| tab.bg(theme.colors.surfaces.sidebar))
-                    })
-                    .on_mouse_move(move |event, _, cx| {
-                        let _ = tooltip_move_view.update(cx, |view, cx| {
-                            view.update_tab_tooltip_position(tab, event.position, cx);
-                        });
-                    })
-                    .on_hover(move |hovered, window, cx| {
-                        let _ = if *hovered {
-                            tooltip_hover_view.update(cx, |view, cx| {
-                                view.open_tab_tooltip(tab, window.mouse_position(), cx);
-                            })
-                        } else {
-                            tooltip_leave_view.update(cx, |view, cx| {
-                                view.close_tab_tooltip(tab, cx);
-                            })
-                        };
-                    })
-                    .on_click(move |_, _, cx| {
-                        let _ = select_view.update(cx, |view, cx| {
-                            view.shell.open_overview(tab);
-                            view.reveal_active_tab();
-                            view.selected_tree_item = match tab {
-                                crate::shell::OverviewTab::Folder(key) => {
-                                    Some(WorkspaceItemRef::Folder(key))
-                                }
-                                _ => None,
-                            };
-                            cx.notify();
-                        });
-                    })
-                    .child(components::truncated_label(label.to_owned()).flex_1())
-                    .when(dirty, |tab| {
-                        tab.child(
-                            div()
-                                .flex_none()
-                                .w(px(6.0))
-                                .h(px(6.0))
-                                .rounded(px(3.0))
-                                .bg(theme.colors.actions.accent),
-                        )
-                    })
-                    .child(
-                        Button::new(("close-overview-tab", index))
-                            .accessibility_label("Close overview tab")
-                            .focusable(false)
-                            .tab_stop(false)
-                            .flex_none()
-                            .w(px(theme.metrics.icon_standard + 4.0))
-                            .h(px(theme.metrics.icon_standard + 4.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(theme.metrics.radius_small))
-                            .hover(move |close| close.bg(theme.colors.actions.disabled))
-                            .child(components::close_icon(theme))
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                let _ = close_view.update(cx, |view, cx| {
-                                    view.request_close_overview(tab, window, cx)
+                                    view.request_close_open_tab(tab, window, cx)
                                 });
                             }),
                     ),

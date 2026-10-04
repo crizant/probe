@@ -886,6 +886,8 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
             view.session.workspaces.insert(
                 canonical_destination.clone(),
                 crate::session::WorkspaceSessionState {
+                    ordered_tabs: None,
+                    active_open_tab: None,
                     open_tabs: vec!["items/0/items/0".to_owned()],
                     active_tab: Some("items/0/items/0".to_owned()),
                     collapsed_folders: vec!["items/0".to_owned()],
@@ -914,14 +916,17 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
             let loaded = view.loaded_workspace.as_ref().unwrap();
             assert!(loaded.request_key("items/0/items/0").is_some());
             assert!(loaded.folder_key("items/0").is_some());
-            assert!(view.shell.tabs().is_empty());
+            assert!(view.shell.tabs().next().is_none());
             assert!(
                 view.shell
                     .folder_is_expanded(loaded.folder_key("items/0").unwrap())
             );
             assert_eq!(
                 view.session.workspaces[&canonical_destination],
-                crate::session::WorkspaceSessionState::default()
+                crate::session::WorkspaceSessionState {
+                    ordered_tabs: Some(Vec::new()),
+                    ..Default::default()
+                }
             );
         })
         .unwrap();
@@ -1166,6 +1171,33 @@ fn reconciled_workspace(workspace: probe_opencollection::LoadedWorkspace) -> Rec
         baselines,
         selector_remaps,
     }
+}
+
+fn mixed_tab_window(
+    cx: &mut TestAppContext,
+) -> (gpui::WindowHandle<ProbeApp>, [crate::shell::OpenTab; 3]) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1200.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = nested_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let tabs = [
+        workspace.requests()[0].key().into(),
+        crate::shell::OverviewTab::Collection.into(),
+        crate::shell::OverviewTab::Folder(workspace.folder_key("items/1").unwrap()).into(),
+    ];
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            for tab in tabs {
+                view.select_open_tab(tab, cx);
+            }
+        })
+        .unwrap();
+    cx.run_until_parked();
+    (window, tabs)
 }
 
 fn hover_and_wait(

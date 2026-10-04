@@ -830,32 +830,18 @@ impl ProbeApp {
     }
 
     pub(super) fn snapshot_shell_selectors(&self, old: &LoadedWorkspace) -> ShellSelectors {
-        let overview_selector = |tab| match tab {
-            crate::shell::OverviewTab::Collection => Some(None),
-            crate::shell::OverviewTab::Folder(key) => old
-                .folder_selector(key)
-                .map(|selector| Some(selector.to_owned())),
-        };
         ShellSelectors {
-            overview_selectors: self
+            ordered_tabs: self
                 .shell
-                .overview_tabs()
+                .open_tabs()
                 .iter()
-                .copied()
-                .filter_map(overview_selector)
+                .map(|tab| (*tab, crate::session::TabLocator::capture(*tab, old)))
                 .collect(),
-            active_overview_selector: self.shell.active_overview().and_then(overview_selector),
-            tab_selectors: self
-                .shell
-                .tabs()
-                .iter()
-                .filter_map(|key| old.request_selector(*key).map(str::to_owned))
-                .collect(),
-            active_selector: self
-                .shell
-                .active_tab()
-                .and_then(|key| old.request_selector(key))
-                .map(str::to_owned),
+            active_tab: self.shell.active_open_tab(),
+            pending_keep: match self.pending_close.as_ref() {
+                Some(PendingClose::OtherTabs { keep }) => Some(*keep),
+                _ => None,
+            },
             folder_selectors: self
                 .shell
                 .collapsed_folders()
@@ -877,7 +863,13 @@ impl ProbeApp {
         mut workspace: LoadedWorkspace,
         baselines: Vec<(RequestKey, Request)>,
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
+        selector_remaps: &BTreeMap<String, String>,
     ) -> BTreeMap<RequestKey, RequestKey> {
+        let selectors = self.snapshot_shell_selectors(
+            self.loaded_workspace
+                .as_ref()
+                .expect("workspace must exist before reload"),
+        );
         let detached = self
             .detached_requests
             .iter()
@@ -891,8 +883,6 @@ impl ProbeApp {
                     .map(|request| (key, request))
             })
             .collect::<Vec<_>>();
-        let open_tabs = self.shell.tabs().to_vec();
-        let active_tab = self.shell.active_tab();
         let mut remaps = key_remaps.clone();
         for (old_key, request) in detached {
             let new_key = workspace.add_detached_request(request);
@@ -902,15 +892,6 @@ impl ProbeApp {
         self.persistence.reset(baselines);
         self.loaded_workspace = Some(workspace);
         self.shell.reset_for_workspace();
-        for old_key in open_tabs {
-            let Some(new_key) = remaps.get(&old_key).copied() else {
-                continue;
-            };
-            self.shell.insert_tab(new_key);
-        }
-        if let Some(new_key) = active_tab.and_then(|key| remaps.get(&key).copied()) {
-            self.shell.activate_tab(new_key);
-        }
         self.execution.remap_requests(&remaps);
         self.response_viewer.remap_requests(&remaps);
         self.request_editor.remap_requests(&remaps);
@@ -936,13 +917,16 @@ impl ProbeApp {
                     *key = *new_key;
                 }
             }
-            Some(PendingClose::OtherTabs { keep }) => {
-                if let Some(new_key) = remaps.get(keep) {
-                    *keep = *new_key;
+            Some(PendingClose::OtherTabs {
+                keep: crate::shell::OpenTab::Request(key),
+            }) => {
+                if let Some(new_key) = remaps.get(key) {
+                    *key = *new_key;
                 }
             }
             _ => {}
         }
+        self.restore_shell_selectors(selector_remaps, &remaps, selectors);
         remaps
     }
 
@@ -1012,6 +996,7 @@ impl ProbeApp {
     pub(super) fn restore_shell_selectors(
         &mut self,
         remaps: &BTreeMap<String, String>,
+        key_remaps: &BTreeMap<RequestKey, RequestKey>,
         selectors: ShellSelectors,
     ) {
         let loaded = self
@@ -1036,43 +1021,35 @@ impl ProbeApp {
         {
             selector.clone_from(mapped);
         }
-        for selector in selectors.tab_selectors {
-            if let Some(key) = remaps
-                .get(&selector)
-                .and_then(|selector| loaded.request_key(selector))
-            {
-                self.shell.insert_tab(key);
-            }
-        }
-        if self.shell.active_tab().is_none()
-            && let Some(selector) = selectors.active_selector
-            && let Some(key) = remaps
-                .get(&selector)
-                .and_then(|selector| loaded.request_key(selector))
-        {
-            self.shell.insert_tab(key);
-            self.shell.activate_tab(key);
-        }
-        let overview_tab = |selector: &Option<String>| match selector {
-            None => Some(crate::shell::OverviewTab::Collection),
-            Some(selector) => remaps
-                .get(selector)
-                .and_then(|selector| loaded.folder_key(selector))
-                .map(crate::shell::OverviewTab::Folder),
+        let restored: Vec<_> = selectors
+            .ordered_tabs
+            .iter()
+            .filter_map(|(tab, locator)| {
+                let resolved = match tab {
+                    crate::shell::OpenTab::Request(key) => {
+                        key_remaps.get(key).copied().map(Into::into)
+                    }
+                    crate::shell::OpenTab::Overview(_) => locator
+                        .as_ref()
+                        .and_then(|locator| locator.remap(remaps).resolve(loaded)),
+                }?;
+                Some((*tab, resolved))
+            })
+            .collect();
+        let resolve_runtime = |tab| {
+            restored
+                .iter()
+                .find_map(|(old, new)| (*old == tab).then_some(*new))
         };
-        let active_request = self.shell.active_tab();
-        for tab in selectors.overview_selectors.iter().filter_map(overview_tab) {
-            self.shell.open_overview(tab);
-        }
-        if let Some(active) = active_request.or_else(|| self.shell.tabs().last().copied()) {
-            self.shell.activate_tab(active);
-        }
-        if let Some(tab) = selectors
-            .active_overview_selector
-            .as_ref()
-            .and_then(overview_tab)
+        self.shell.restore_tabs(
+            restored.iter().map(|(_, tab)| *tab),
+            selectors.active_tab.and_then(resolve_runtime),
+        );
+        if let Some(keep) = selectors.pending_keep.and_then(resolve_runtime)
+            && let Some(PendingClose::OtherTabs { keep: pending_keep }) =
+                self.pending_close.as_mut()
         {
-            self.shell.open_overview(tab);
+            *pending_keep = keep;
         }
         for selector in selectors.folder_selectors {
             let selector = remaps
@@ -1107,23 +1084,15 @@ impl ProbeApp {
         let projection_warning = (old.diagnostics() != reconciled.workspace.diagnostics())
             .then(|| projection_warning(&reconciled.workspace))
             .flatten();
-        let selectors = self.snapshot_shell_selectors(old);
         let key_remaps =
             request_key_remaps(old, &reconciled.workspace, &reconciled.selector_remaps);
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
-        let active_detached = self
-            .shell
-            .active_tab()
-            .filter(|key| self.detached_requests.contains(key));
-        let remaps = self.install_reloaded_workspace(
+        self.install_reloaded_workspace(
             reconciled.workspace,
             reconciled.baselines,
             &key_remaps,
+            &reconciled.selector_remaps,
         );
-        self.restore_shell_selectors(&reconciled.selector_remaps, selectors);
-        if let Some(key) = active_detached.and_then(|key| remaps.get(&key).copied()) {
-            self.shell.activate_tab(key);
-        }
         self.remap_structure_dialog(&reconciled.selector_remaps);
         // The new-environment dialog is only a typed name. A refresh replaces
         // stored documents, and the next submit uses that refreshed workspace.

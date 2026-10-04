@@ -220,23 +220,7 @@ struct TabTooltip {
     open: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TabTooltipTarget {
-    Request(RequestKey),
-    Overview(crate::shell::OverviewTab),
-}
-
-impl From<RequestKey> for TabTooltipTarget {
-    fn from(key: RequestKey) -> Self {
-        Self::Request(key)
-    }
-}
-
-impl From<crate::shell::OverviewTab> for TabTooltipTarget {
-    fn from(tab: crate::shell::OverviewTab) -> Self {
-        Self::Overview(tab)
-    }
-}
+type TabTooltipTarget = crate::shell::OpenTab;
 
 struct PositionedContextMenu<T> {
     target: T,
@@ -362,8 +346,8 @@ pub(crate) struct ProbeApp {
     pretty_reveal: Cell<Option<PrettyRevealState>>,
     tab_bar_scroll: ScrollHandle,
     tab_auto_scroll: AutoScroll,
-    tab_drag_source: Option<RequestKey>,
-    tab_drop_target: Option<(RequestKey, bool)>,
+    tab_drag_source: Option<crate::shell::OpenTab>,
+    tab_drop_target: Option<(crate::shell::OpenTab, bool)>,
     pending_tab_reveal: bool,
     frame_variable_context: Option<components::VariableContext>,
     #[cfg(test)]

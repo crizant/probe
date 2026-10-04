@@ -57,7 +57,7 @@ fn folder_breadcrumbs_navigate_to_reusable_overviews_and_preserve_drafts(cx: &mu
                 view.selected_tree_item,
                 Some(WorkspaceItemRef::Folder(parent))
             );
-            assert_eq!(view.shell.overview_tabs().len(), 2);
+            assert_eq!(view.shell.overview_tabs().count(), 2);
             assert!(view.has_dirty_overviews());
             view.select_request(request, cx);
         })
@@ -80,7 +80,7 @@ fn folder_breadcrumbs_navigate_to_reusable_overviews_and_preserve_drafts(cx: &mu
                 view.shell.active_overview(),
                 Some(crate::shell::OverviewTab::Folder(child))
             );
-            assert_eq!(view.shell.overview_tabs().len(), 2);
+            assert_eq!(view.shell.overview_tabs().count(), 2);
             assert_eq!(
                 view.selected_tree_item, None,
                 "the current breadcrumb must not navigate"
