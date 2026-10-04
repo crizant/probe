@@ -333,12 +333,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.environment_save_task.is_some()
-            || self.documentation_save_task.is_some()
-            || self.request_save_task.is_some()
-            || self.structure_task.is_some()
-            || !self.pending_environment_saves.is_empty()
-        {
+        if self.has_active_workspace_write() || !self.pending_environment_saves.is_empty() {
             self.show_environment_dialog_error(
                 "Wait for the current save to finish.",
                 EnvironmentDialogErrorResolution::SavesIdle,
@@ -531,11 +526,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.environment_save_task.is_some()
-            || self.documentation_save_task.is_some()
-            || self.request_save_task.is_some()
-            || self.structure_task.is_some()
-        {
+        if self.has_active_workspace_write() {
             self.show_environment_dialog_error(
                 "Wait for the current save to finish.",
                 EnvironmentDialogErrorResolution::SavesIdle,
@@ -687,12 +678,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.loaded_workspace.is_none()
-            || self.structure_task.is_some()
-            || self.environment_save_task.is_some()
-            || self.documentation_save_task.is_some()
-            || self.request_save_task.is_some()
-        {
+        if self.loaded_workspace.is_none() || self.has_active_workspace_write() {
             return;
         }
         if self.environment_manager_is_dirty() {
@@ -752,11 +738,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.environment_save_task.is_some()
-            || self.documentation_save_task.is_some()
-            || self.request_save_task.is_some()
-            || self.structure_task.is_some()
-        {
+        if self.has_active_workspace_write() {
             self.show_environment_dialog_error(
                 "Wait for the current save before creating an environment.",
                 EnvironmentDialogErrorResolution::SavesIdle,

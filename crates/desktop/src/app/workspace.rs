@@ -170,8 +170,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
-        {
+        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
             self.prompt_unsaved(
                 dirty,
                 PendingClose::Open {
@@ -201,8 +200,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
-        {
+        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
             self.prompt_unsaved(dirty, PendingClose::Create { path }, window, cx);
             return;
         }
@@ -258,6 +256,13 @@ impl ProbeApp {
                 });
             })
             .detach();
+    }
+
+    pub(super) fn has_active_workspace_write(&self) -> bool {
+        self.structure_task.is_some()
+            || self.request_save_task.is_some()
+            || self.environment_save_task.is_some()
+            || self.documentation_save_task.is_some()
     }
 
     pub(super) fn has_pending_environment_work(&self) -> bool {

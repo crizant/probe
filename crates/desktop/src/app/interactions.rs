@@ -499,12 +499,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.loading
-            || self.environment_save_task.is_some()
-            || self.documentation_save_task.is_some()
-            || self.request_save_task.is_some()
-            || self.structure_task.is_some()
-        {
+        if self.loading || self.has_active_workspace_write() {
             return;
         }
         let Some((environment, name)) = self.pending_environment_saves.pop_first() else {

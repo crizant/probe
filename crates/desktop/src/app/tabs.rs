@@ -280,8 +280,7 @@ impl ProbeApp {
             return;
         }
         let dirty = self.other_dirty_tab_keys(keep);
-        if dirty.is_empty() && !self.has_dirty_overviews() && self.documentation_save_task.is_none()
-        {
+        if dirty.is_empty() && !self.documentation_blocks_close_or_open() {
             self.close_other_tabs_now(keep, cx);
         } else {
             self.prompt_unsaved(dirty, PendingClose::OtherTabs { keep }, window, cx);
@@ -290,8 +289,7 @@ impl ProbeApp {
 
     pub(super) fn request_close_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
-        {
+        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
             self.prompt_unsaved(dirty, PendingClose::Workspace, window, cx);
             return;
         }
@@ -312,8 +310,7 @@ impl ProbeApp {
             return false;
         }
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
-        {
+        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
             self.prompt_unsaved(dirty, PendingClose::Window, window, cx);
             return false;
         }
@@ -351,8 +348,7 @@ impl ProbeApp {
             return;
         }
         let dirty = self.dirty_keys();
-        if !dirty.is_empty() || self.has_dirty_overviews() || self.documentation_save_task.is_some()
-        {
+        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
             self.prompt_unsaved(dirty, PendingClose::Quit, window, cx);
             return;
         }
@@ -444,11 +440,7 @@ impl ProbeApp {
             self.show_toast(ToastIntent::Warning, "This request was written, but the collection could not refresh. Reopen the collection before saving it again.", cx);
             return;
         }
-        if self.structure_task.is_some()
-            || self.documentation_save_task.is_some()
-            || self.request_save_task.is_some()
-            || self.environment_save_task.is_some()
-        {
+        if self.has_active_workspace_write() {
             self.show_toast(
                 ToastIntent::Warning,
                 "Wait for the current save to finish.",

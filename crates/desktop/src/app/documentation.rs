@@ -119,6 +119,10 @@ impl ProbeApp {
         self.overview_drafts.values().any(OverviewDraft::is_dirty)
     }
 
+    pub(super) fn documentation_blocks_close_or_open(&self) -> bool {
+        self.has_dirty_overviews() || self.documentation_save_task.is_some()
+    }
+
     pub(super) fn complete_overview_draft_save(
         &mut self,
         target: &Option<String>,
@@ -184,12 +188,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.loading
-            || self.documentation_save_task.is_some()
-            || self.request_save_task.is_some()
-            || self.environment_save_task.is_some()
-            || self.structure_task.is_some()
-        {
+        if self.loading || self.has_active_workspace_write() {
             return;
         }
         let Some(target) = self.pending_documentation_saves.pop_front() else {
