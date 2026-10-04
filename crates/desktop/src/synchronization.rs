@@ -104,7 +104,7 @@ pub(crate) fn reconcile(
             .workspace()
             .request(key)
             .expect("fresh request key must remain valid");
-        let (merged, fields) = merge_request(state.baseline, state.local, disk);
+        let (merged, fields) = Request::reconcile(state.baseline, state.local, disk);
         if fields.is_empty() {
             merges.insert(key, merged);
         } else {
@@ -262,130 +262,6 @@ fn hinted_selector(selector: &str, rename_hints: &BTreeMap<String, String>) -> O
                 .get(&selector[..end])
                 .map(|to| format!("{to}{}", &selector[end..]))
         })
-}
-
-fn merge_request(
-    baseline: &Request,
-    local: &Request,
-    disk: &Request,
-) -> (Request, Vec<&'static str>) {
-    let mut merged = baseline.clone();
-    let mut conflicts = Vec::new();
-
-    merge_field(
-        &baseline.metadata.name,
-        &local.metadata.name,
-        &disk.metadata.name,
-        &mut merged.metadata.name,
-        "name",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.metadata.sequence,
-        &local.metadata.sequence,
-        &disk.metadata.sequence,
-        &mut merged.metadata.sequence,
-        "sequence",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.metadata.description,
-        &local.metadata.description,
-        &disk.metadata.description,
-        &mut merged.metadata.description,
-        "description",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.docs,
-        &local.docs,
-        &disk.docs,
-        &mut merged.docs,
-        "docs",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.method,
-        &local.method,
-        &disk.method,
-        &mut merged.method,
-        "method",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.url,
-        &local.url,
-        &disk.url,
-        &mut merged.url,
-        "URL",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.headers,
-        &local.headers,
-        &disk.headers,
-        &mut merged.headers,
-        "headers",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.query_parameters,
-        &local.query_parameters,
-        &disk.query_parameters,
-        &mut merged.query_parameters,
-        "query parameters",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.path_parameters,
-        &local.path_parameters,
-        &disk.path_parameters,
-        &mut merged.path_parameters,
-        "path parameters",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.kind,
-        &local.kind,
-        &disk.kind,
-        &mut merged.kind,
-        "body",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.authentication,
-        &local.authentication,
-        &disk.authentication,
-        &mut merged.authentication,
-        "authentication",
-        &mut conflicts,
-    );
-    merge_field(
-        &baseline.settings,
-        &local.settings,
-        &disk.settings,
-        &mut merged.settings,
-        "settings",
-        &mut conflicts,
-    );
-    (merged, conflicts)
-}
-
-fn merge_field<T: Clone + PartialEq>(
-    baseline: &T,
-    local: &T,
-    disk: &T,
-    output: &mut T,
-    name: &'static str,
-    conflicts: &mut Vec<&'static str>,
-) {
-    if local == baseline {
-        output.clone_from(disk);
-    } else if disk == baseline || local == disk {
-        output.clone_from(local);
-    } else {
-        conflicts.push(name);
-    }
 }
 
 #[cfg(test)]

@@ -6,32 +6,115 @@ use serde_json::{Map, Value};
 
 use crate::{Documentation, ItemMetadata};
 
-/// A native API request definition.
-///
-/// Fields shared by every protocol are stored once; protocol-specific state belongs to
-/// [`RequestKind`].
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Request {
-    /// Request metadata.
-    pub metadata: ItemMetadata,
+// Declare request fields and their conflict labels together. Reconciliation is
+// generated here so a field added to Request cannot be omitted from merging.
+macro_rules! define_request {
+    ($( $(#[$doc:meta])* $field:ident: $ty:ty => $label:literal, )*) => {
+        /// A native API request definition.
+        ///
+        /// Common fields are stored once; protocol-specific state belongs to [`RequestKind`].
+        #[derive(Clone, Debug, Default, PartialEq)]
+        pub struct Request {
+            /// Request metadata.
+            pub metadata: ItemMetadata,
+            $( $(#[$doc])* pub $field: $ty, )*
+        }
+
+        impl Request {
+            /// Reconciles local and incoming edits against a common baseline.
+            ///
+            /// Equal edits and changes on only one side merge. Differing edits to
+            /// the same field conflict, leaving that field at its baseline value.
+            /// Metadata fields merge separately; lists, settings, and protocol/body
+            /// state each remain one conflict unit.
+            #[must_use]
+            pub fn reconcile(baseline: &Self, local: &Self, incoming: &Self)
+                -> (Self, Vec<&'static str>)
+            {
+                let mut conflicts = Vec::new();
+                let merged = Self {
+                    metadata: reconcile_metadata(
+                        &baseline.metadata, &local.metadata, &incoming.metadata, &mut conflicts,
+                    ),
+                    $( $field: reconcile_field(
+                        &baseline.$field, &local.$field, &incoming.$field,
+                        $label, &mut conflicts,
+                    ), )*
+                };
+                (merged, conflicts)
+            }
+        }
+    };
+}
+
+define_request! {
     /// Request documentation. OpenCollection request `docs` is a plain string.
-    pub docs: Option<String>,
+    docs: Option<String> => "docs",
     /// HTTP method as written in the collection.
-    pub method: Option<String>,
+    method: Option<String> => "method",
     /// Request URL, which may contain variables.
-    pub url: Option<String>,
+    url: Option<String> => "URL",
     /// HTTP request headers.
-    pub headers: Vec<Header>,
+    headers: Vec<Header> => "headers",
     /// Query parameters.
-    pub query_parameters: Vec<QueryParameter>,
+    query_parameters: Vec<QueryParameter> => "query parameters",
     /// Path parameters.
-    pub path_parameters: Vec<QueryParameter>,
-    /// Request authentication configuration.
-    pub authentication: Option<Authentication>,
-    /// Execution settings.
-    pub settings: RequestSettings,
+    path_parameters: Vec<QueryParameter> => "path parameters",
     /// Protocol identity and protocol-specific body.
-    pub kind: RequestKind,
+    kind: RequestKind => "body",
+    /// Request authentication configuration.
+    authentication: Option<Authentication> => "authentication",
+    /// Execution settings.
+    settings: RequestSettings => "settings",
+}
+
+fn reconcile_metadata(
+    baseline: &ItemMetadata,
+    local: &ItemMetadata,
+    incoming: &ItemMetadata,
+    conflicts: &mut Vec<&'static str>,
+) -> ItemMetadata {
+    // Exhaustive construction requires new metadata fields to have a merge rule.
+    ItemMetadata {
+        name: reconcile_field(
+            &baseline.name,
+            &local.name,
+            &incoming.name,
+            "name",
+            conflicts,
+        ),
+        sequence: reconcile_field(
+            &baseline.sequence,
+            &local.sequence,
+            &incoming.sequence,
+            "sequence",
+            conflicts,
+        ),
+        description: reconcile_field(
+            &baseline.description,
+            &local.description,
+            &incoming.description,
+            "description",
+            conflicts,
+        ),
+    }
+}
+
+fn reconcile_field<T: Clone + PartialEq>(
+    baseline: &T,
+    local: &T,
+    incoming: &T,
+    name: &'static str,
+    conflicts: &mut Vec<&'static str>,
+) -> T {
+    if local == baseline {
+        incoming.clone()
+    } else if incoming == baseline || local == incoming {
+        local.clone()
+    } else {
+        conflicts.push(name);
+        baseline.clone()
+    }
 }
 
 /// A change to an optional request field.

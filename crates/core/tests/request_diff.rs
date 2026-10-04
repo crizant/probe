@@ -379,3 +379,130 @@ fn variants_without_selection() -> RequestBody {
         body: text_body("kept"),
     }])
 }
+
+#[test]
+fn reconciliation_covers_every_request_field_and_preserves_conflict_order() {
+    fn changed(value: &str, sequence: f64) -> Request {
+        Request {
+            metadata: ItemMetadata {
+                name: Some(value.into()),
+                sequence: Some(sequence),
+                description: Some(Documentation::Text(value.into())),
+            },
+            docs: Some(value.into()),
+            method: Some(value.into()),
+            url: Some(value.into()),
+            headers: vec![probe_core::Header {
+                name: "header".into(),
+                value: value.into(),
+                disabled: false,
+            }],
+            query_parameters: vec![probe_core::QueryParameter {
+                name: "query".into(),
+                value: value.into(),
+                disabled: false,
+            }],
+            path_parameters: vec![probe_core::QueryParameter {
+                name: "path".into(),
+                value: value.into(),
+                disabled: false,
+            }],
+            kind: RequestKind::Http {
+                body: Some(RequestBody::Single(Body::Raw(RawBody {
+                    kind: RawBodyKind::Text,
+                    data: value.into(),
+                }))),
+            },
+            authentication: Some(probe_core::Authentication {
+                kind: probe_core::AuthenticationKind::Bearer,
+                properties: [(
+                    "token".into(),
+                    probe_core::AuthenticationValue::String(value.into()),
+                )]
+                .into(),
+            }),
+            settings: probe_core::RequestSettings {
+                max_redirects: Some(sequence as usize),
+                ..Default::default()
+            },
+        }
+    }
+    let baseline = Request::default();
+    let local = changed("local", 1.0);
+    let incoming = changed("incoming", 2.0);
+    for (left, right) in [(&local, &baseline), (&baseline, &local), (&local, &local)] {
+        let (merged, conflicts) = Request::reconcile(&baseline, left, right);
+        assert_eq!(merged, local);
+        assert!(conflicts.is_empty());
+    }
+    let (merged, conflicts) = Request::reconcile(&baseline, &local, &incoming);
+    assert_eq!(merged, baseline);
+    assert_eq!(
+        conflicts,
+        [
+            "name",
+            "sequence",
+            "description",
+            "docs",
+            "method",
+            "URL",
+            "headers",
+            "query parameters",
+            "path parameters",
+            "body",
+            "authentication",
+            "settings",
+        ]
+    );
+
+    // Every supported save change also survives reconciliation with a separate
+    // incoming metadata edit. Unsupported sequence/settings edits stay incoming.
+    let mut draft = local;
+    draft.metadata.sequence = None;
+    draft.settings = Default::default();
+    let update = RequestUpdate::between(Some(&baseline), &draft).unwrap();
+    let mut saved = baseline.clone();
+    update.apply(&mut saved).unwrap();
+    assert_eq!(saved, draft);
+    let mut incoming = baseline.clone();
+    incoming.metadata.sequence = Some(3.0);
+    incoming.settings.follow_redirects = Some(false);
+    let (merged, conflicts) = Request::reconcile(&baseline, &draft, &incoming);
+    assert!(conflicts.is_empty());
+    draft.metadata.sequence = incoming.metadata.sequence;
+    draft.settings = incoming.settings;
+    assert_eq!(merged, draft);
+}
+
+#[test]
+fn reconciliation_keeps_protocol_and_graphql_body_as_one_conflict_unit() {
+    let baseline = Request {
+        kind: RequestKind::Graphql {
+            body: Some(GraphqlBody::Single(GraphqlOperation::default())),
+        },
+        ..Request::default()
+    };
+    let mut local = baseline.clone();
+    local
+        .apply_graphql_update(&probe_core::GraphqlUpdate {
+            query: FieldPatch::Set("query { viewer }".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut incoming = baseline.clone();
+    incoming
+        .apply_graphql_update(&probe_core::GraphqlUpdate {
+            operation_name: FieldPatch::Set("Viewer".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let (merged, conflicts) = Request::reconcile(&baseline, &local, &incoming);
+    assert_eq!(conflicts, ["body"]);
+    assert_eq!(merged, baseline);
+    incoming.kind = RequestKind::Http { body: None };
+    assert_eq!(Request::reconcile(&baseline, &local, &incoming).1, ["body"]);
+    assert_eq!(
+        Request::reconcile(&baseline, &baseline, &incoming),
+        (incoming, vec![])
+    );
+}
