@@ -107,66 +107,81 @@ impl RequestIcon {
     }
 }
 
-pub(crate) fn request_icon(theme: Theme, icon: &RequestIcon) -> gpui::Div {
-    let (cache_key, data, is_method): (&'static str, &'static [u8], bool) = match icon {
-        RequestIcon::Graphql => (
-            "probe-request-graphql",
-            include_bytes!("../../assets/icons/requests/graphql.svg"),
-            false,
-        ),
-        RequestIcon::Http { method } => match method.as_deref().unwrap_or("HTTP") {
-            "GET" => (
-                "probe-request-get",
-                include_bytes!("../../assets/icons/requests/get.svg"),
-                true,
-            ),
-            "POST" => (
-                "probe-request-post",
-                include_bytes!("../../assets/icons/requests/post.svg"),
-                true,
-            ),
-            "PUT" => (
-                "probe-request-put",
-                include_bytes!("../../assets/icons/requests/put.svg"),
-                true,
-            ),
-            "PATCH" => (
-                "probe-request-patch",
-                include_bytes!("../../assets/icons/requests/patch.svg"),
-                true,
-            ),
-            "DELETE" => (
-                "probe-request-delete",
-                include_bytes!("../../assets/icons/requests/delete.svg"),
-                true,
-            ),
-            "HEAD" => (
-                "probe-request-head",
-                include_bytes!("../../assets/icons/requests/head.svg"),
-                true,
-            ),
-            "OPTIONS" => (
-                "probe-request-options",
-                include_bytes!("../../assets/icons/requests/options.svg"),
-                true,
-            ),
-            "CONNECT" => (
-                "probe-request-connect",
-                include_bytes!("../../assets/icons/requests/connect.svg"),
-                true,
-            ),
-            "TRACE" => (
-                "probe-request-trace",
-                include_bytes!("../../assets/icons/requests/trace.svg"),
-                true,
-            ),
-            _ => (
-                "probe-request-http",
-                include_bytes!("../../assets/icons/requests/http.svg"),
+impl RequestIcon {
+    pub(crate) fn custom_method(&self) -> Option<&str> {
+        match self {
+            Self::Http {
+                method: Some(method),
+            } if !self.asset().2 => Some(method),
+            _ => None,
+        }
+    }
+
+    fn asset(&self) -> (&'static str, &'static [u8], bool) {
+        match self {
+            RequestIcon::Graphql => (
+                "probe-request-graphql",
+                include_bytes!("../../assets/icons/requests/graphql.svg"),
                 false,
             ),
-        },
-    };
+            RequestIcon::Http { method } => match method.as_deref().unwrap_or("HTTP") {
+                "GET" => (
+                    "probe-request-get",
+                    include_bytes!("../../assets/icons/requests/get.svg"),
+                    true,
+                ),
+                "POST" => (
+                    "probe-request-post",
+                    include_bytes!("../../assets/icons/requests/post.svg"),
+                    true,
+                ),
+                "PUT" => (
+                    "probe-request-put",
+                    include_bytes!("../../assets/icons/requests/put.svg"),
+                    true,
+                ),
+                "PATCH" => (
+                    "probe-request-patch",
+                    include_bytes!("../../assets/icons/requests/patch.svg"),
+                    true,
+                ),
+                "DELETE" => (
+                    "probe-request-delete",
+                    include_bytes!("../../assets/icons/requests/delete.svg"),
+                    true,
+                ),
+                "HEAD" => (
+                    "probe-request-head",
+                    include_bytes!("../../assets/icons/requests/head.svg"),
+                    true,
+                ),
+                "OPTIONS" => (
+                    "probe-request-options",
+                    include_bytes!("../../assets/icons/requests/options.svg"),
+                    true,
+                ),
+                "CONNECT" => (
+                    "probe-request-connect",
+                    include_bytes!("../../assets/icons/requests/connect.svg"),
+                    true,
+                ),
+                "TRACE" => (
+                    "probe-request-trace",
+                    include_bytes!("../../assets/icons/requests/trace.svg"),
+                    true,
+                ),
+                _ => (
+                    "probe-request-http",
+                    include_bytes!("../../assets/icons/requests/http.svg"),
+                    false,
+                ),
+            },
+        }
+    }
+}
+
+pub(crate) fn request_icon(theme: Theme, icon: &RequestIcon) -> gpui::Div {
+    let (cache_key, data, is_method) = icon.asset();
     let height = theme.metrics.icon_standard * 1.25;
     let width = height * 1.5;
     let color = match icon {

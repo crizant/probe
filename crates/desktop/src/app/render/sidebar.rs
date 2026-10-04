@@ -54,9 +54,21 @@ impl ProbeApp {
                 };
                 let icon =
                     components::RequestIcon::from_request(&request.kind, request.method.as_deref());
-                let marker = components::request_icon(theme, &icon)
+                let marker = div()
                     .id("request-tab-tooltip-method")
-                    .debug_selector(|| "request-tab-tooltip-method".into());
+                    .debug_selector(|| "request-tab-tooltip-method".into())
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(theme.metrics.spacing_2))
+                    .child(components::request_icon(theme, &icon))
+                    .children(icon.custom_method().map(|method| {
+                        div()
+                            .debug_selector(|| "request-tab-tooltip-custom-method".into())
+                            .font_family(theme.typography.monospace_family)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(method.to_owned())
+                    }));
                 (
                     request
                         .metadata

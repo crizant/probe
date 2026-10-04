@@ -520,7 +520,7 @@ fn hovering_a_request_tab_shows_the_full_label_tooltip(cx: &mut TestAppContext) 
     let fixture = large_fixture()
         .canonicalize()
         .expect("fixture should exist");
-    let workspace =
+    let mut workspace =
         probe_opencollection::load_workspace(&fixture).expect("large fixture should load");
     let keys: Vec<_> = workspace
         .requests()
@@ -529,6 +529,7 @@ fn hovering_a_request_tab_shows_the_full_label_tooltip(cx: &mut TestAppContext) 
         .map(|request| request.key())
         .collect();
     assert!(keys.len() >= 12, "large fixture should have many requests");
+    workspace.request_mut(*keys.last().unwrap()).unwrap().method = Some("PROPFIND".to_owned());
     window
         .update(cx, |view, _, cx| {
             view.session_store = None;
@@ -566,6 +567,13 @@ fn hovering_a_request_tab_shows_the_full_label_tooltip(cx: &mut TestAppContext) 
     assert!(
         visual.debug_bounds("request-tab-tooltip-method").is_some(),
         "the request tab tooltip should include the request method"
+    );
+
+    assert!(
+        visual
+            .debug_bounds("request-tab-tooltip-custom-method")
+            .is_some(),
+        "the generic HTTP icon must be accompanied by the custom method"
     );
 
     let fixture = nested_fixture()
