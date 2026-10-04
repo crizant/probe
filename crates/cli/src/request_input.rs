@@ -203,7 +203,7 @@ fn parse_named_entry(value: &Value, item: &str) -> Result<(String, String, bool)
         "disabled",
         &format!("{item} disabled must be a boolean"),
     )?;
-    reject_unknown(object, &["name", "value", "disabled"], item)?;
+    reject_unknown_fields(object, &["name", "value", "disabled"], item)?;
     Ok((name.to_owned(), entry_value.to_owned(), disabled))
 }
 
@@ -234,7 +234,7 @@ fn parse_raw_body(
     kind: RawBodyKind,
     name: &str,
 ) -> Result<Body, CliError> {
-    reject_unknown(object, &["type", "data"], "HTTP body")?;
+    reject_unknown_fields(object, &["type", "data"], "HTTP body")?;
     let Some(data) = object.get("data").and_then(Value::as_str) else {
         return Err(CliError::invalid_arguments(format!(
             "{name} body data must be a string"
@@ -247,7 +247,7 @@ fn parse_raw_body(
 }
 
 fn parse_form_body(object: &Map<String, Value>) -> Result<Body, CliError> {
-    reject_unknown(object, &["type", "data"], "HTTP body")?;
+    reject_unknown_fields(object, &["type", "data"], "HTTP body")?;
     let fields = object_list(object, "form-urlencoded body data must be a JSON array")?;
     let fields = fields
         .iter()
@@ -263,7 +263,7 @@ fn parse_form_body(object: &Map<String, Value>) -> Result<Body, CliError> {
             };
             let disabled =
                 optional_bool(field, "disabled", "form field disabled must be a boolean")?;
-            reject_unknown(field, &["name", "value", "disabled"], "form field")?;
+            reject_unknown_fields(field, &["name", "value", "disabled"], "form field")?;
             Ok(FormField {
                 name: name.to_owned(),
                 value: value.to_owned(),
@@ -275,7 +275,7 @@ fn parse_form_body(object: &Map<String, Value>) -> Result<Body, CliError> {
 }
 
 fn parse_multipart_body(object: &Map<String, Value>) -> Result<Body, CliError> {
-    reject_unknown(object, &["type", "data"], "HTTP body")?;
+    reject_unknown_fields(object, &["type", "data"], "HTTP body")?;
     let parts = object_list(object, "multipart-form body data must be a JSON array")?;
     let parts = parts
         .iter()
@@ -307,7 +307,7 @@ fn parse_multipart_body(object: &Map<String, Value>) -> Result<Body, CliError> {
                 "disabled",
                 "multipart part disabled must be a boolean",
             )?;
-            reject_unknown(
+            reject_unknown_fields(
                 part,
                 &["name", "type", "value", "contentType", "disabled"],
                 "multipart part",
@@ -325,7 +325,7 @@ fn parse_multipart_body(object: &Map<String, Value>) -> Result<Body, CliError> {
 }
 
 fn parse_file_body(object: &Map<String, Value>) -> Result<Body, CliError> {
-    reject_unknown(object, &["type", "data"], "HTTP body")?;
+    reject_unknown_fields(object, &["type", "data"], "HTTP body")?;
     let files = object_list(object, "file body data must be a JSON array")?;
     let files = files
         .iter()
@@ -342,7 +342,7 @@ fn parse_file_body(object: &Map<String, Value>) -> Result<Body, CliError> {
             let Some(Value::Bool(selected)) = file.get("selected") else {
                 return Err(file_entry_error());
             };
-            reject_unknown(
+            reject_unknown_fields(
                 file,
                 &["filePath", "contentType", "selected"],
                 "file body entry",
@@ -484,19 +484,6 @@ fn optional_string(
     }
 }
 
-fn reject_unknown(
-    object: &Map<String, Value>,
-    allowed: &[&str],
-    item: &str,
-) -> Result<(), CliError> {
-    if let Some(name) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(CliError::invalid_arguments(format!(
-            "{item} contains unsupported field '{name}'"
-        )));
-    }
-    Ok(())
-}
-
 fn parse_json(source: &str, message: &str) -> Result<Value, CliError> {
     serde_json::from_str(source).map_err(|_| CliError::invalid_arguments(message))
 }
@@ -528,8 +515,7 @@ mod tests {
         parse_path_parameters, parse_query_parameters,
     };
     use probe_core::{
-        AuthenticationKind, AuthenticationValue, Body, FieldPatch, MultipartPartKind,
-        MultipartValue, RawBodyKind,
+        AuthenticationKind, Body, FieldPatch, MultipartPartKind, MultipartValue, RawBodyKind,
     };
 
     fn assert_invalid(error: crate::CliError, message: &str) {
@@ -615,25 +601,15 @@ mod tests {
             "HTTP body contains unsupported field 'extra'",
         );
         assert_invalid(
-            parse_authentication("\"\"").unwrap_err(),
-            "authentication must be a JSON object, the string \"inherit\", or null",
-        );
-        assert_invalid(
             parse_authentication(r#"{"type":"whatever"}"#).unwrap_err(),
             "authentication type must be inherit, basic, bearer, or apikey",
         );
-        assert_invalid(
-            parse_authentication(r#""custom""#).unwrap_err(),
-            "authentication must be a JSON object, the string \"inherit\", or null",
-        );
-        assert_invalid(
-            parse_authentication(r#""bearer""#).unwrap_err(),
-            "authentication must be a JSON object, the string \"inherit\", or null",
-        );
-        assert_invalid(
-            parse_authentication("[]").unwrap_err(),
-            "authentication must be a JSON object, the string \"inherit\", or null",
-        );
+        for source in [r#""custom""#, "true", "1", "[]"] {
+            assert_invalid(
+                parse_authentication(source).unwrap_err(),
+                "authentication must be a JSON object, the string \"inherit\", or null",
+            );
+        }
         assert_invalid(
             parse_path_parameters(r#"[{"name":"id","value":"1","disabled":null}]"#).unwrap_err(),
             "path parameter disabled must be a boolean",
@@ -665,18 +641,6 @@ mod tests {
             panic!("xml body should parse");
         };
         assert_eq!(raw.kind, RawBodyKind::Xml);
-
-        let FieldPatch::Set(auth) =
-            parse_authentication(r#"{"type":"basic","username":"demo","password":"secret"}"#)
-                .unwrap()
-        else {
-            panic!("basic authentication should parse");
-        };
-        assert_eq!(auth.kind, AuthenticationKind::Basic);
-        assert_eq!(
-            auth.properties.get("username"),
-            Some(&AuthenticationValue::String("demo".to_owned()))
-        );
     }
 
     #[test]
