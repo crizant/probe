@@ -50,10 +50,16 @@ pub(super) fn library_icon(
     data: &'static LazyLock<Vec<u8>>,
     size: f32,
 ) -> gpui::Div {
-    let size = px(size);
+    svg_icon(cache_key, data.as_slice(), size, size)
+}
+
+fn svg_icon(cache_key: &'static str, data: &'static [u8], width: f32, height: f32) -> gpui::Div {
+    let width = px(width);
+    let height = px(height);
     div()
         .flex_none()
-        .size(size)
+        .w(width)
+        .h(height)
         .flex()
         .items_center()
         .justify_center()
@@ -64,15 +70,145 @@ pub(super) fn library_icon(
                     let _ = window.paint_svg(
                         bounds,
                         SharedString::from(cache_key),
-                        Some(data.as_slice()),
+                        Some(data),
                         TransformationMatrix::default(),
                         window.text_style().color,
                         cx,
                     );
                 },
             )
-            .size(size),
+            .w(width)
+            .h(height),
         )
+}
+
+/// Presentation data for a request icon, without retaining its request body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RequestIcon {
+    Http { method: Option<String> },
+    Graphql,
+}
+
+impl RequestIcon {
+    pub(crate) fn from_request(kind: &probe_core::RequestKind, method: Option<&str>) -> Self {
+        match kind {
+            probe_core::RequestKind::Http { .. } => Self::Http {
+                method: method.map(str::to_uppercase),
+            },
+            probe_core::RequestKind::Graphql { .. } => Self::Graphql,
+        }
+    }
+
+    pub(crate) fn label(&self) -> &str {
+        match self {
+            Self::Http { method } => method.as_deref().unwrap_or("HTTP"),
+            Self::Graphql => "GraphQL",
+        }
+    }
+
+    pub(crate) fn custom_method(&self) -> Option<&str> {
+        match self {
+            Self::Http {
+                method: Some(method),
+            } if !self.asset().2 => Some(method),
+            _ => None,
+        }
+    }
+
+    fn asset(&self) -> (&'static str, &'static [u8], bool) {
+        match self {
+            RequestIcon::Graphql => (
+                "probe-request-graphql",
+                include_bytes!("../../assets/icons/requests/graphql.svg"),
+                false,
+            ),
+            RequestIcon::Http { method } => match method.as_deref().unwrap_or("HTTP") {
+                "GET" => (
+                    "probe-request-get",
+                    include_bytes!("../../assets/icons/requests/get.svg"),
+                    true,
+                ),
+                "POST" => (
+                    "probe-request-post",
+                    include_bytes!("../../assets/icons/requests/post.svg"),
+                    true,
+                ),
+                "PUT" => (
+                    "probe-request-put",
+                    include_bytes!("../../assets/icons/requests/put.svg"),
+                    true,
+                ),
+                "PATCH" => (
+                    "probe-request-patch",
+                    include_bytes!("../../assets/icons/requests/patch.svg"),
+                    true,
+                ),
+                "DELETE" => (
+                    "probe-request-delete",
+                    include_bytes!("../../assets/icons/requests/delete.svg"),
+                    true,
+                ),
+                "HEAD" => (
+                    "probe-request-head",
+                    include_bytes!("../../assets/icons/requests/head.svg"),
+                    true,
+                ),
+                "OPTIONS" => (
+                    "probe-request-options",
+                    include_bytes!("../../assets/icons/requests/options.svg"),
+                    true,
+                ),
+                "CONNECT" => (
+                    "probe-request-connect",
+                    include_bytes!("../../assets/icons/requests/connect.svg"),
+                    true,
+                ),
+                "TRACE" => (
+                    "probe-request-trace",
+                    include_bytes!("../../assets/icons/requests/trace.svg"),
+                    true,
+                ),
+                _ => (
+                    "probe-request-http",
+                    include_bytes!("../../assets/icons/requests/http.svg"),
+                    false,
+                ),
+            },
+        }
+    }
+}
+
+pub(crate) fn request_icon(theme: Theme, icon: &RequestIcon) -> gpui::Div {
+    let (cache_key, data, is_method) = icon.asset();
+    let height = theme.metrics.icon_standard * 1.25;
+    let width = height * 1.5;
+    let color = match icon {
+        RequestIcon::Graphql => theme.colors.protocols.graphql,
+        RequestIcon::Http { .. } if is_method => theme.method_color(icon.label()),
+        RequestIcon::Http { .. } => theme.colors.protocols.http,
+    };
+    tree_icon_slot(
+        theme,
+        svg_icon(
+            cache_key,
+            data,
+            if is_method { width } else { height },
+            height,
+        ),
+    )
+    .text_color(color)
+}
+
+pub(crate) fn tree_icon_slot(theme: Theme, icon: impl IntoElement) -> gpui::Div {
+    let height = theme.metrics.icon_standard * 1.25;
+    div()
+        .w(px(height))
+        .h(px(height))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon)
 }
 
 pub(crate) fn tree_disclosure_icon(theme: Theme, expanded: bool) -> gpui::Div {

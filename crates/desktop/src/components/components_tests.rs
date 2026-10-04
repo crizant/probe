@@ -1529,3 +1529,31 @@ fn dropdown_button_menu_trigger_opens_and_activates_an_item(cx: &mut TestAppCont
     assert_eq!(primary_clicks, 0);
     assert_eq!(menu_activations, 1);
 }
+
+#[test]
+fn custom_method_labels_supplement_only_generic_http_icons() {
+    use super::RequestIcon;
+    use probe_core::RequestKind;
+
+    let http = RequestKind::Http { body: None };
+    for method in [
+        "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "CONNECT", "TRACE",
+    ] {
+        assert_eq!(
+            RequestIcon::from_request(&http, Some(method)).custom_method(),
+            None
+        );
+    }
+    for method in ["PROPFIND", "MKCOL", "CUSTOM-LONG-METHOD"] {
+        assert_eq!(
+            RequestIcon::from_request(&http, Some(method)).custom_method(),
+            Some(method)
+        );
+    }
+    assert_eq!(RequestIcon::from_request(&http, None).custom_method(), None);
+    assert_eq!(
+        RequestIcon::from_request(&RequestKind::Graphql { body: None }, Some("PROPFIND"))
+            .custom_method(),
+        None
+    );
+}

@@ -17,9 +17,12 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
+- The desktop request tree, editor breadcrumbs, and tab tooltips use globe icons with bold HTTP method labels and a GraphQL icon. Folder headings align with their immediate child requests; nested folders and guide lines show the hierarchy.
 - The desktop authentication selector offers Inherit, Basic, Bearer, and API Key. Other OpenCollection authentication types remain in the collection file.
 
 ### Fixed
+
+- Request tab tooltips show custom HTTP method names alongside the generic HTTP icon.
 
 - `collection unset --description-json` reports that collections have summary and docs, not a description.
 - An empty collection, folder, or request update reports that the update has no changed fields.

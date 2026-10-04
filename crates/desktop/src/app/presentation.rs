@@ -4,41 +4,6 @@ use crate::{
     response_inspector::InspectSelection, response_viewer::PreparedDocument, theme::Theme,
 };
 
-pub(crate) fn request_protocol_label(protocol: &probe_core::RequestKind) -> &'static str {
-    match protocol {
-        probe_core::RequestKind::Http { .. } => "HTTP",
-        probe_core::RequestKind::Graphql { .. } => "GQL",
-    }
-}
-
-pub(crate) fn request_protocol_color(
-    theme: Theme,
-    protocol: &probe_core::RequestKind,
-) -> gpui::Rgba {
-    match protocol {
-        probe_core::RequestKind::Http { .. } => theme.colors.protocols.http,
-        probe_core::RequestKind::Graphql { .. } => theme.colors.protocols.graphql,
-    }
-}
-
-pub(crate) fn request_navigation_label(protocol: &probe_core::RequestKind, method: &str) -> String {
-    match protocol {
-        probe_core::RequestKind::Http { .. } => super::tree::tree_method_label(method).to_owned(),
-        probe_core::RequestKind::Graphql { .. } => request_protocol_label(protocol).to_owned(),
-    }
-}
-
-pub(crate) fn request_navigation_color(
-    theme: Theme,
-    protocol: &probe_core::RequestKind,
-    method: &str,
-) -> gpui::Rgba {
-    match protocol {
-        probe_core::RequestKind::Http { .. } => theme.method_color(method),
-        probe_core::RequestKind::Graphql { .. } => request_protocol_color(theme, protocol),
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InspectListRow {
     Group { label: &'static str, count: usize },
@@ -163,31 +128,4 @@ pub(crate) struct ShellSelectors {
     pub(crate) active_selector: Option<String>,
     pub(crate) folder_selectors: Vec<String>,
     pub(crate) selected: Option<(probe_opencollection::ItemKind, String)>,
-}
-
-#[cfg(test)]
-mod tests {
-    use probe_core::RequestKind;
-
-    use super::{request_navigation_label, request_protocol_label};
-
-    #[test]
-    fn request_labels_distinguish_http_methods_from_graphql() {
-        assert_eq!(
-            request_protocol_label(&RequestKind::Http { body: None }),
-            "HTTP"
-        );
-        assert_eq!(
-            request_protocol_label(&RequestKind::Graphql { body: None }),
-            "GQL"
-        );
-        assert_eq!(
-            request_navigation_label(&RequestKind::Http { body: None }, "POST"),
-            "POST"
-        );
-        assert_eq!(
-            request_navigation_label(&RequestKind::Graphql { body: None }, "POST"),
-            "GQL"
-        );
-    }
 }

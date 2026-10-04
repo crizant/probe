@@ -1,6 +1,6 @@
 use super::*;
 
-const ADD_MENU_MARKER_WIDTH: f32 = 24.0;
+const ADD_MENU_MARKER_WIDTH: f32 = 30.0;
 
 impl ProbeApp {
     pub(super) fn render_toasts(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -52,17 +52,23 @@ impl ProbeApp {
                 let Some(request) = loaded.workspace().request(key) else {
                     return div().into_any_element();
                 };
-                let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
-                let navigation_label = request_navigation_label(&request.kind, &method);
+                let icon =
+                    components::RequestIcon::from_request(&request.kind, request.method.as_deref());
                 let marker = div()
                     .id("request-tab-tooltip-method")
                     .debug_selector(|| "request-tab-tooltip-method".into())
                     .flex_none()
-                    .font_family(theme.typography.monospace_family)
-                    .text_size(px(tree_method_font_size(theme, &navigation_label)))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(request_navigation_color(theme, &request.kind, &method))
-                    .child(navigation_label);
+                    .flex()
+                    .items_center()
+                    .gap(px(theme.metrics.spacing_2))
+                    .child(components::request_icon(theme, &icon))
+                    .children(icon.custom_method().map(|method| {
+                        div()
+                            .debug_selector(|| "request-tab-tooltip-custom-method".into())
+                            .font_family(theme.typography.monospace_family)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(method.to_owned())
+                    }));
                 (
                     request
                         .metadata
@@ -310,17 +316,25 @@ impl ProbeApp {
                     .name
                     .as_deref()
                     .unwrap_or("Untitled request");
-                let method = request.method.as_deref().unwrap_or("HTTP").to_uppercase();
-                let navigation_label = request_navigation_label(&request.kind, &method);
-                let navigation_color = request_navigation_color(theme, &request.kind, &method);
-                let is_graphql = request.kind.is_graphql();
+                let icon =
+                    components::RequestIcon::from_request(&request.kind, request.method.as_deref());
+                let protocol_label = icon.label();
                 let selected = self.selected_tree_item == Some(WorkspaceItemRef::Request(key));
                 let view = cx.weak_entity();
                 let context_menu_view = cx.weak_entity();
                 let item = WorkspaceItemRef::Request(key);
+                // Offset the artwork inside its slot to add breathing room while
+                // keeping request names aligned with the parent folder heading.
+                let marker = components::request_icon(theme, &icon)
+                    .relative()
+                    .left(px(-theme.metrics.spacing_1 / 4.0))
+                    .debug_selector(|| "request-tree-icon".into())
+                    .when(matches!(icon, components::RequestIcon::Graphql), |icon| {
+                        icon.debug_selector(|| "request-tree-protocol-label".into())
+                    });
                 let button =
                     tree_row_button(theme, ("request-tree-item", key.slot()), depth, selected)
-                        .accessibility_label(format!("Request {label}"))
+                        .accessibility_label(format!("{protocol_label} request {label}"))
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| view.select_request(key, cx));
                         })
@@ -335,23 +349,7 @@ impl ProbeApp {
                                 },
                             )
                         })
-                        .child(
-                            div()
-                                .w(px(26.0))
-                                .h_full()
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .truncate()
-                                .font_family(theme.typography.monospace_family)
-                                .text_size(px(tree_method_font_size(theme, &navigation_label)))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(navigation_color)
-                                .when(is_graphql, |label| {
-                                    label.debug_selector(|| "request-tree-protocol-label".into())
-                                })
-                                .child(navigation_label.clone()),
-                        )
+                        .child(marker)
                         .child(
                             components::truncated_label(label.to_owned())
                                 .flex_1()
@@ -366,7 +364,7 @@ impl ProbeApp {
                         kind: ItemKind::Request,
                         selector: loaded.request_selector(key).unwrap_or_default().to_owned(),
                         label: label.to_owned(),
-                        method: Some(navigation_label),
+                        icon: Some(icon),
                         depth,
                         selected,
                     },
@@ -391,6 +389,42 @@ impl ProbeApp {
                     "folder-disclosure-{}",
                     loaded.folder_selector(key).unwrap_or_default()
                 );
+                let disclosure = Button::new(("folder-disclosure", key.slot()))
+                    .debug_selector(move || disclosure_selector.clone())
+                    .accessibility_label(format!(
+                        "{} {label}",
+                        if expanded { "Collapse" } else { "Expand" }
+                    ))
+                    .w(px(tree_disclosure_width(theme)))
+                    .h(px(theme.metrics.tree_row_height))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        components::tree_disclosure_icon(theme, expanded)
+                            .relative()
+                            .left(px(-theme.metrics.spacing_1 / 2.0)),
+                    )
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        let _ = disclosure_view.update(cx, |view, cx| {
+                            view.shell.toggle_folder(key);
+                            view.rebuild_visible_tree_rows_after_visibility_change();
+                            view.persist_session(cx);
+                            cx.notify();
+                        });
+                    });
+                // The disclosure spans one level, aligning the folder heading with its child requests.
+                let marker = div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .child(disclosure)
+                    .child(components::tree_icon_slot(
+                        theme,
+                        components::tree_folder_icon(theme, expanded, false),
+                    ));
                 let button =
                     tree_row_button(theme, ("folder-tree-item", key.slot()), depth, selected)
                         .accessibility_label(format!("Folder {label}"))
@@ -414,31 +448,7 @@ impl ProbeApp {
                                 },
                             )
                         })
-                        .child(
-                            Button::new(("folder-disclosure", key.slot()))
-                                .debug_selector(move || disclosure_selector.clone())
-                                .accessibility_label(format!(
-                                    "{} {label}",
-                                    if expanded { "Collapse" } else { "Expand" }
-                                ))
-                                .w(px(theme.metrics.icon_standard))
-                                .h(px(theme.metrics.tree_row_height))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(components::tree_disclosure_icon(theme, expanded))
-                                .on_click(move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    let _ = disclosure_view.update(cx, |view, cx| {
-                                        view.shell.toggle_folder(key);
-                                        view.rebuild_visible_tree_rows_after_visibility_change();
-                                        view.persist_session(cx);
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(components::tree_folder_icon(theme, expanded, false))
+                        .child(marker)
                         .child(
                             components::truncated_label(label.to_owned())
                                 .flex_1()
@@ -450,7 +460,7 @@ impl ProbeApp {
                         kind: ItemKind::Folder,
                         selector: loaded.folder_selector(key).unwrap_or_default().to_owned(),
                         label: label.to_owned(),
-                        method: None,
+                        icon: None,
                         depth,
                         selected,
                     },
@@ -476,7 +486,7 @@ impl ProbeApp {
             kind,
             selector,
             label,
-            method,
+            icon,
             depth,
             selected,
         } = spec;
@@ -502,7 +512,7 @@ impl ProbeApp {
                     item,
                     kind,
                     label,
-                    method,
+                    icon,
                 },
                 move |drag, _, _, cx| {
                     let preview = drag.clone();
@@ -595,8 +605,10 @@ impl ProbeApp {
                 "New HTTP Request",
                 components::menu_leading_slot(
                     ADD_MENU_MARKER_WIDTH,
-                    components::protocol_marker(theme, "HTTP", theme.colors.protocols.http)
-                        .text_size(px(tree_method_font_size(theme, "HTTP"))),
+                    components::request_icon(
+                        theme,
+                        &components::RequestIcon::Http { method: None },
+                    ),
                 )
                 .debug_selector(|| "tree-new-http-request-leading".into()),
                 move |window, cx| {
@@ -613,8 +625,7 @@ impl ProbeApp {
                 "New GraphQL Request",
                 components::menu_leading_slot(
                     ADD_MENU_MARKER_WIDTH,
-                    components::protocol_marker(theme, "GQL", theme.colors.protocols.graphql)
-                        .text_size(px(tree_method_font_size(theme, "GQL"))),
+                    components::request_icon(theme, &components::RequestIcon::Graphql),
                 )
                 .debug_selector(|| "tree-new-graphql-request-leading".into()),
                 move |window, cx| {
