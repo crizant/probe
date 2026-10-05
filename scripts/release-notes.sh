@@ -20,13 +20,13 @@ changelog="${2:-CHANGELOG.md}"
 
 awk -v version="$version" '
   { sub(/\r$/, "") }
-  /^## / {
+  /^## \[(Unreleased|[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?)\]($| - )/ {
     active = ($0 == "## [" version "]" || index($0, "## [" version "] - ") == 1)
     if (active) found++
     next
   }
-  # The oldest release ends at the changelog-wide reference links.
-  /^\[[^]]+\]: / { active = 0 }
+  # Omit changelog-wide release links without truncating in-section definitions.
+  /^\[[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?\]:[[:space:]]+https?:\/\/[^[:space:]]+\/releases\/tag\// { next }
   active {
     body = body $0 "\n"
     if ($0 ~ /[^[:space:]]/ && $0 !~ /^### /) content = 1

@@ -79,6 +79,39 @@ printf '## [2.0.0]\n\n- Final note.\n' > "$tmp/final.md"
 printf '%s\n' '- Final note.' > "$tmp/expected.md"
 assert_notes v2.0.0 "$tmp/final.md"
 
+# In-section H2 headings and reference definitions must not truncate notes.
+cat > "$tmp/expected.md" <<'NOTES'
+[before]: https://example.com/before
+
+- Read [before].
+
+## Upgrade instructions
+
+- Follow [guide].
+
+[guide]: https://example.com/guide
+
+- A note after the link definition.
+
+## [Compatibility]
+
+- Keep this non-version heading too.
+NOTES
+{
+  printf '## [3.0.0] - 2026-10-05\n\n'
+  cat "$tmp/expected.md"
+  printf '\n## [2.0.0] - 2026-10-04\n\n- Older note.\n'
+} > "$tmp/references.md"
+assert_notes v3.0.0 "$tmp/references.md"
+# The oldest release keeps its local definitions but excludes global release links.
+{
+  printf '## [3.0.0] - 2026-10-05\n\n'
+  cat "$tmp/expected.md"
+  printf '\n[3.0.0]: https://example.com/releases/tag/v3.0.0\n'
+  printf '[2.0.0]: https://example.com/releases/tag/v2.0.0\n'
+} > "$tmp/references-final.md"
+assert_notes v3.0.0 "$tmp/references-final.md"
+
 assert_failure v1.2.1 "$tmp/changelog.md" 'section for [1.2.1], found 0'
 assert_failure vUnreleased "$tmp/changelog.md" 'invalid release tag'
 assert_failure v1.2.0 "$tmp/missing.md" 'cannot read changelog'
