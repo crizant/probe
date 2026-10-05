@@ -560,7 +560,7 @@ fn authentication_value(value: &AuthenticationValue) -> Value {
 
 #[cfg(test)]
 mod json_format_tests {
-    use super::{MAX_IN_MEMORY_RESPONSE_BYTES, json_char, json_newline, pretty_json_text};
+    use super::{MAX_IN_MEMORY_RESPONSE_BYTES, pretty_json_text};
 
     #[test]
     fn changes_only_whitespace_outside_strings() {
@@ -612,7 +612,7 @@ mod json_format_tests {
     }
 
     #[test]
-    fn falls_back_when_sibling_indentation_exceeds_the_output_budget() {
+    fn bounds_output_bytes_for_indentation_and_utf8() {
         let depth = 128;
         let siblings = MAX_IN_MEMORY_RESPONSE_BYTES / (depth * 2) + 1;
         let body = format!(
@@ -627,26 +627,14 @@ mod json_format_tests {
             pretty_json_text("[[0,0,0]]").as_deref(),
             Some("[\n  [\n    0,\n    0,\n    0\n  ]\n]")
         );
-    }
-
-    #[test]
-    fn output_budget_counts_utf8_bytes_and_indentation_before_appending() {
-        let mut pretty = " ".repeat(MAX_IN_MEMORY_RESPONSE_BYTES - 3);
-        assert_eq!(json_char(&mut pretty, '雪'), Some(()));
-        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES);
-        assert_eq!(json_char(&mut pretty, 'x'), None);
-        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES);
-
-        pretty.truncate(MAX_IN_MEMORY_RESPONSE_BYTES - 3);
-        assert_eq!(json_newline(&mut pretty, 2), None);
-        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES - 3);
-        assert_eq!(json_newline(&mut pretty, 1), Some(()));
-        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES);
-
-        pretty.truncate(MAX_IN_MEMORY_RESPONSE_BYTES - 2);
-        assert_eq!(json_newline(&mut pretty, 1), None);
-        assert_eq!(json_char(&mut pretty, '雪'), None);
-        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES - 2);
+        for extra_bytes in 0..=2 {
+            let bytes = MAX_IN_MEMORY_RESPONSE_BYTES + extra_bytes;
+            let body = format!("\"{}雪\"", "x".repeat(bytes - 5));
+            assert_eq!(
+                pretty_json_text(&body).map(|pretty| pretty.len()),
+                (extra_bytes == 0).then_some(bytes)
+            );
+        }
     }
 }
 
