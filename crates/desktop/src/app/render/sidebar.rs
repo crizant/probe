@@ -589,7 +589,7 @@ impl ProbeApp {
         let sidebar_import_popup_focus = self.transient.sidebar_import_popup_focus.clone();
         let can_edit = self.loaded_workspace.is_some() && self.structure_task.is_none();
         let add_menu_state_view = cx.weak_entity();
-        let add_popup = components::popup_surface(theme, "tree-add-menu-popup", 200.0)
+        let add_popup = components::popup_surface(theme, "tree-add-menu-popup", 160.0)
             .child(components::menu_button_with_leading(
                 theme,
                 "tree-new-http-request",

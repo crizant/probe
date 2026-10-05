@@ -57,6 +57,7 @@ pub(crate) fn menu_button_with_leading(
     content.gap = Some(theme.metrics.spacing_1);
     let mut style = MenuButtonStyle::standard(theme);
     style.height = theme.metrics.control_height;
+    style.padding_x = theme.metrics.spacing_1;
     menu_button_with_style(theme, id, content, true, style, on_activate)
 }
 
