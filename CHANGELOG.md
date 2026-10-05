@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-05
+
 ### Added
 
 - Show and edit an environment description in the desktop Environment manager. The field matches the request description field: a plain string and a `{content, type}` object show their text, explicit null shows an empty field, and saving writes that same documentation value. Clearing the field writes an empty string, or an empty `content` while keeping the object's type.
@@ -347,6 +349,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[0.10.0]: https://github.com/crizant/probe/releases/tag/v0.10.0
 [0.9.5]: https://github.com/crizant/probe/releases/tag/v0.9.5
 [0.9.4]: https://github.com/crizant/probe/releases/tag/v0.9.4
 [0.9.3]: https://github.com/crizant/probe/releases/tag/v0.9.3
