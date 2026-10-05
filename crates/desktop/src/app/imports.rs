@@ -311,7 +311,7 @@ impl ProbeApp {
         }
         if self.has_pending_environment_work() {
             self.pending_close = Some(PendingClose::Import(source));
-            self.start_next_environment_save(window, cx);
+            self.pump_workspace_writes(window, cx);
             return;
         }
         self.choose_import(source, window, cx);

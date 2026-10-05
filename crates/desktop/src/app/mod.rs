@@ -2,6 +2,7 @@ use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
+    ops::ControlFlow,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -54,6 +55,7 @@ mod tabs;
 mod transient;
 mod tree;
 mod workspace;
+mod workspace_writes;
 
 use detached_requests::DetachedRequests;
 #[cfg(test)]

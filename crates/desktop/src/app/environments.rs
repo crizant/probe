@@ -472,8 +472,7 @@ impl ProbeApp {
                     }
                 }
                 view.environment_save_workspace_path = None;
-                view.start_next_request_save(window, cx);
-                view.start_next_environment_save(window, cx);
+                view.pump_workspace_writes(window, cx);
                 cx.notify();
             });
         }));
@@ -578,8 +577,7 @@ impl ProbeApp {
                     }
                 }
                 view.environment_save_workspace_path = None;
-                view.start_next_request_save(window, cx);
-                view.start_next_environment_save(window, cx);
+                view.pump_workspace_writes(window, cx);
                 cx.notify();
             });
         }));
@@ -800,8 +798,7 @@ impl ProbeApp {
                         view.create_environment_dialog = None;
                         view.clear_environment_dialog_error(cx);
                         view.restore_environment_dialog_focus(window, cx);
-                        view.start_next_request_save(window, cx);
-                        view.start_next_environment_save(window, cx);
+                        view.pump_workspace_writes(window, cx);
                     }
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         view.environment_save_workspace_path = None;

@@ -343,7 +343,7 @@ impl ProbeApp {
         }
         if self.has_pending_environment_work() {
             self.pending_close = Some(PendingClose::Workspace);
-            self.start_next_environment_save(window, cx);
+            self.pump_workspace_writes(window, cx);
             return;
         }
         self.close_workspace_now(cx);
@@ -364,7 +364,7 @@ impl ProbeApp {
         }
         if self.has_pending_environment_work() {
             self.pending_close = Some(PendingClose::Window);
-            self.start_next_environment_save(window, cx);
+            self.pump_workspace_writes(window, cx);
             return false;
         }
         true
@@ -402,7 +402,7 @@ impl ProbeApp {
         }
         if self.has_pending_environment_work() {
             self.pending_close = Some(PendingClose::Quit);
-            self.start_next_environment_save(window, cx);
+            self.pump_workspace_writes(window, cx);
             return;
         }
         cx.quit();
@@ -454,7 +454,7 @@ impl ProbeApp {
         if let Some(tab) = self.shell.active_overview() {
             if let Some(target) = self.overview_target(tab) {
                 self.enqueue_documentation_save(target);
-                self.start_next_documentation_save(window, cx);
+                self.pump_workspace_writes(window, cx);
             }
             return;
         }
@@ -470,7 +470,7 @@ impl ProbeApp {
                 .is_some_and(|request| self.persistence.is_dirty(key, request));
             if dirty {
                 self.persistence.enqueue([key]);
-                self.start_next_request_save(window, cx);
+                self.pump_workspace_writes(window, cx);
             }
         }
     }
@@ -606,7 +606,7 @@ impl ProbeApp {
                                 view.open_save_detached_request_dialog(next, window, cx);
                             } else {
                                 view.persistence.enqueue(dirty);
-                                view.start_next_request_save(window, cx);
+                                view.pump_workspace_writes(window, cx);
                             }
                         }
                     }
@@ -632,29 +632,25 @@ impl ProbeApp {
         cx.notify();
     }
 
-    pub(super) fn start_next_request_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.loading
-            || self.documentation_save_task.is_some()
-            || self.request_save_task.is_some()
-            || self.environment_save_task.is_some()
-        {
-            return;
-        }
+    pub(super) fn start_request_save(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> ControlFlow<()> {
         let Some(key) = self.persistence.next() else {
-            self.finish_pending_close_if_idle(window, cx);
-            return;
+            return ControlFlow::Break(());
         };
         let Some(loaded) = &self.loaded_workspace else {
             self.persistence.fail(key);
-            return;
+            return ControlFlow::Break(());
         };
         let Some(request) = loaded.workspace().request(key) else {
             self.persistence.fail(key);
-            return;
+            return ControlFlow::Break(());
         };
         let Some(selector) = loaded.request_selector(key).map(str::to_owned) else {
             self.persistence.fail(key);
-            return;
+            return ControlFlow::Break(());
         };
         let (_revision, snapshot, update) = match self.persistence.begin(key, request) {
             Ok(save) => save,
@@ -666,7 +662,7 @@ impl ProbeApp {
                     format!("Could not save request: {error}"),
                     cx,
                 );
-                return;
+                return ControlFlow::Break(());
             }
         };
         let prepared = match loaded.prepare_request_save(&selector, update) {
@@ -679,7 +675,7 @@ impl ProbeApp {
                     format!("Could not save request: {error}"),
                     cx,
                 );
-                return;
+                return ControlFlow::Break(());
             }
         };
         let save_workspace_path = self.workspace_path.clone();
@@ -699,8 +695,7 @@ impl ProbeApp {
                     Ok(()) => {
                         view.persistence.complete(key, snapshot);
                         view.show_toast(ToastIntent::Success, "Request saved.", cx);
-                        view.start_next_request_save(window, cx);
-                        view.start_next_environment_save(window, cx);
+                        view.pump_workspace_writes(window, cx);
                     }
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         view.persistence.fail(key);
@@ -721,6 +716,7 @@ impl ProbeApp {
             });
         }));
         cx.notify();
+        ControlFlow::Continue(())
     }
 
     pub(super) fn finish_pending_close(
