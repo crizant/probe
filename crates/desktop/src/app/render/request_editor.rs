@@ -5,11 +5,11 @@ use probe_core::FolderKey;
 mod authentication;
 mod body;
 mod file;
-mod form;
 mod graphql;
-mod headers;
+mod key_value;
 mod multipart;
-mod parameters;
+
+use key_value::KeyValueEditorKind;
 
 impl ProbeApp {
     pub(super) fn render_editor_breadcrumb(
@@ -409,25 +409,30 @@ impl ProbeApp {
                 )
                 .into_any_element()
             }
-            EditorSection::Query => self.render_parameter_editor(
+            EditorSection::Query => self.render_key_value_editor(
                 key,
                 request,
-                ParameterEditorKind::Query,
+                KeyValueEditorKind::Query,
                 theme,
                 list_scroll,
                 cx,
             ),
-            EditorSection::Path => self.render_parameter_editor(
+            EditorSection::Path => self.render_key_value_editor(
                 key,
                 request,
-                ParameterEditorKind::Path,
+                KeyValueEditorKind::Path,
                 theme,
                 list_scroll,
                 cx,
             ),
-            EditorSection::Headers => {
-                self.render_header_editor(key, request, theme, list_scroll, cx)
-            }
+            EditorSection::Headers => self.render_key_value_editor(
+                key,
+                request,
+                KeyValueEditorKind::Headers,
+                theme,
+                list_scroll,
+                cx,
+            ),
             EditorSection::Body => self.render_body_editor(key, request, theme, cx),
             EditorSection::Authentication => {
                 self.render_authentication_editor(key, request, theme, list_scroll, cx)

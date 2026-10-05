@@ -82,6 +82,11 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
                             value: format!("value-{index}"),
                             disabled: false,
                         });
+                        request.path_parameters.push(QueryParameter {
+                            name: format!("path-{index}"),
+                            value: format!("value-{index}"),
+                            disabled: false,
+                        });
                     }
                 },
                 cx,
@@ -94,6 +99,7 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
     for (section, selector) in [
         (EditorSection::Headers, "header-name-field"),
         (EditorSection::Query, "query-name-row"),
+        (EditorSection::Path, "path-name-row"),
     ] {
         window
             .update(cx, |view, _, cx| {
@@ -141,6 +147,203 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
                 visual.run_until_parked();
             }
         }
+    }
+}
+
+#[gpui::test]
+fn key_value_editor_row_controls_update_their_rows_and_restore_focus(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.edit_request(
+                key,
+                |request| {
+                    request.url = Some("https://example.test".to_owned());
+                    request.kind = probe_core::RequestKind::Http {
+                        body: Some(probe_core::RequestBody::Single(
+                            probe_core::Body::FormUrlEncoded(Vec::new()),
+                        )),
+                    };
+                },
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    for (section, add_selector, remove_selector) in [
+        (
+            EditorSection::Query,
+            "add-query-parameter",
+            "remove-query-0",
+        ),
+        (EditorSection::Path, "add-path-parameter", "remove-path-0"),
+        (EditorSection::Headers, "add-header", "remove-header-0"),
+        (EditorSection::Body, "add-form-field", "remove-form-field-0"),
+    ] {
+        window
+            .update(cx, |view, _, cx| {
+                let key = view.shell.active_tab().unwrap();
+                view.request_editor.set_section(key, section);
+                cx.notify();
+            })
+            .unwrap();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let add = visual.debug_bounds(add_selector).unwrap();
+        visual.simulate_click(add.center(), Modifiers::default());
+        visual.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                let request = view.active_request().unwrap();
+                match section {
+                    EditorSection::Path => {
+                        assert_eq!(request.path_parameters.len(), 1);
+                        let parameter = &request.path_parameters[0];
+                        assert!(!parameter.name.is_empty());
+                        assert!(parameter.value.is_empty());
+                        assert!(!parameter.disabled);
+                        assert!(
+                            request
+                                .url
+                                .as_ref()
+                                .unwrap()
+                                .contains(&format!(":{}", parameter.name))
+                        );
+                    }
+                    EditorSection::Query => {
+                        assert_eq!(request.query_parameters.len(), 1);
+                        let parameter = &request.query_parameters[0];
+                        assert!(parameter.name.is_empty());
+                        assert!(parameter.value.is_empty());
+                        assert!(!parameter.disabled);
+                    }
+                    EditorSection::Headers => {
+                        assert_eq!(request.headers.len(), 1);
+                        let header = &request.headers[0];
+                        assert!(header.name.is_empty());
+                        assert!(header.value.is_empty());
+                        assert!(!header.disabled);
+                    }
+                    EditorSection::Body => {
+                        let Some(probe_core::RequestBody::Single(
+                            probe_core::Body::FormUrlEncoded(fields),
+                        )) = request.http_body()
+                        else {
+                            panic!("form editor must preserve the body kind");
+                        };
+                        assert_eq!(fields.len(), 1);
+                        assert!(fields[0].name.is_empty());
+                        assert!(fields[0].value.is_empty());
+                        assert!(!fields[0].disabled);
+                    }
+                    _ => unreachable!(),
+                }
+            })
+            .unwrap();
+        // Navigate from the focused add button through the real row controls:
+        // remove, enabled, value, then name. This also covers Form, whose inputs
+        // intentionally have no special debug selectors.
+        cx.simulate_keystrokes(window.into(), "shift-tab shift-tab shift-tab shift-tab");
+        cx.simulate_keystrokes(
+            window.into(),
+            if cfg!(target_os = "macos") {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            },
+        );
+        cx.simulate_input(window.into(), "edited");
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "tab");
+        cx.simulate_input(window.into(), "edited-value");
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "tab");
+        cx.run_until_parked();
+        visual.run_until_parked();
+        let keystroke = gpui::Keystroke::parse("space").unwrap();
+        visual.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        visual.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                let request = view.active_request().unwrap();
+                let (name, value, disabled) = match section {
+                    EditorSection::Path => {
+                        assert_eq!(request.url.as_deref(), Some("https://example.test/:edited"));
+                        let row = &request.path_parameters[0];
+                        (&row.name, &row.value, row.disabled)
+                    }
+                    EditorSection::Query => {
+                        let row = &request.query_parameters[0];
+                        (&row.name, &row.value, row.disabled)
+                    }
+                    EditorSection::Headers => {
+                        let row = &request.headers[0];
+                        (&row.name, &row.value, row.disabled)
+                    }
+                    EditorSection::Body => {
+                        let Some(probe_core::RequestBody::Single(
+                            probe_core::Body::FormUrlEncoded(fields),
+                        )) = request.http_body()
+                        else {
+                            panic!("editing a form row must preserve the body kind");
+                        };
+                        let row = &fields[0];
+                        (&row.name, &row.value, row.disabled)
+                    }
+                    _ => unreachable!(),
+                };
+                assert_eq!(name, "edited", "{section:?}");
+                assert_eq!(value, "edited-value", "{section:?}");
+                assert!(disabled, "{section:?}");
+            })
+            .unwrap();
+        // Re-enable before removal: enabled Path rows remove their URL segment,
+        // while disabled rows intentionally leave the URL untouched.
+        let keystroke = gpui::Keystroke::parse("space").unwrap();
+        visual.run_until_parked();
+        visual.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        visual.simulate_event(gpui::KeyUpEvent { keystroke });
+        visual.run_until_parked();
+        let remove = visual.debug_bounds(remove_selector).unwrap();
+        visual.simulate_click(remove.center(), Modifiers::default());
+        visual.run_until_parked();
+        window
+            .update(cx, |view, window, _| {
+                assert!(view.focus_handle.is_focused(window), "{section:?}");
+                let request = view.active_request().unwrap();
+                assert!(request.query_parameters.is_empty());
+                assert!(request.path_parameters.is_empty());
+                assert!(request.headers.is_empty());
+                assert_eq!(request.url.as_deref(), Some("https://example.test"));
+                let Some(probe_core::RequestBody::Single(
+                    probe_core::Body::FormUrlEncoded(fields),
+                )) = request.http_body()
+                else {
+                    panic!("removing a form row must preserve the body kind");
+                };
+                assert!(fields.is_empty());
+            })
+            .unwrap();
     }
 }
 
