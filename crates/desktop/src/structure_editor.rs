@@ -1,14 +1,13 @@
 use std::collections::BTreeSet;
 
-use probe_core::{FolderKey, ItemKind, RequestKey, Workspace, WorkspaceItemRef};
+use probe_core::{FolderKey, ItemKind, RequestKey, RequestProtocol, Workspace, WorkspaceItemRef};
 use probe_opencollection::{ItemLocator, LoadedWorkspace, StructureOperation};
 
 pub(crate) const ROOT_PARENT: &str = "";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StructureDialogMode {
-    CreateHttpRequest,
-    CreateGraphqlRequest,
+    CreateRequest(RequestProtocol),
     CreateFolder,
     SaveDetachedRequest { key: RequestKey },
     Rename { kind: ItemKind, selector: String },
@@ -45,20 +44,9 @@ impl StructureDialog {
             new_folder_name: None,
         }
     }
-    pub(crate) fn create_http_request(parent: Option<String>) -> Self {
+    pub(crate) fn create_request(protocol: RequestProtocol, parent: Option<String>) -> Self {
         Self {
-            mode: StructureDialogMode::CreateHttpRequest,
-            name: String::new(),
-            parent: parent.unwrap_or_default(),
-            index: String::new(),
-            expanded_folders: BTreeSet::new(),
-            new_folder_name: None,
-        }
-    }
-
-    pub(crate) fn create_graphql_request(parent: Option<String>) -> Self {
-        Self {
-            mode: StructureDialogMode::CreateGraphqlRequest,
+            mode: StructureDialogMode::CreateRequest(protocol),
             name: String::new(),
             parent: parent.unwrap_or_default(),
             index: String::new(),
@@ -102,8 +90,8 @@ impl StructureDialog {
 
     pub(crate) const fn title(&self) -> &'static str {
         match self.mode {
-            StructureDialogMode::CreateHttpRequest => "New HTTP Request",
-            StructureDialogMode::CreateGraphqlRequest => "New GraphQL Request",
+            StructureDialogMode::CreateRequest(RequestProtocol::Http) => "New HTTP Request",
+            StructureDialogMode::CreateRequest(RequestProtocol::Graphql) => "New GraphQL Request",
             StructureDialogMode::CreateFolder => "New Folder",
             StructureDialogMode::SaveDetachedRequest { .. } => "Save Request",
             StructureDialogMode::Rename { .. } => "Rename",
@@ -113,9 +101,7 @@ impl StructureDialog {
 
     pub(crate) const fn submit_label(&self) -> &'static str {
         match self.mode {
-            StructureDialogMode::CreateHttpRequest
-            | StructureDialogMode::CreateGraphqlRequest
-            | StructureDialogMode::CreateFolder => "Create",
+            StructureDialogMode::CreateRequest(_) | StructureDialogMode::CreateFolder => "Create",
             StructureDialogMode::SaveDetachedRequest { .. } => "Save",
             StructureDialogMode::Rename { .. } => "Rename",
             StructureDialogMode::Move { .. } => "Move",
@@ -151,7 +137,7 @@ impl StructureDialog {
             StructureDialogMode::SaveDetachedRequest { .. } => {
                 Err("Request save is handled by the desktop editor.".to_owned())
             }
-            StructureDialogMode::CreateHttpRequest => {
+            StructureDialogMode::CreateRequest(protocol) => {
                 if name.is_empty() {
                     return Err("Request name is required.".to_owned());
                 }
@@ -159,24 +145,9 @@ impl StructureDialog {
                     parent,
                     index: None,
                     name: name.to_owned(),
-                    method: Some("GET".to_owned()),
+                    method: Some(protocol.default_method().to_owned()),
                     url: None,
-                    protocol: probe_opencollection::CreatedRequestProtocol::Http,
-                    graphql: None,
-                    update: None,
-                })
-            }
-            StructureDialogMode::CreateGraphqlRequest => {
-                if name.is_empty() {
-                    return Err("Request name is required.".to_owned());
-                }
-                Ok(StructureOperation::CreateRequest {
-                    parent,
-                    index: None,
-                    name: name.to_owned(),
-                    method: Some("POST".to_owned()),
-                    url: None,
-                    protocol: probe_opencollection::CreatedRequestProtocol::Graphql,
+                    protocol: *protocol,
                     graphql: None,
                     update: None,
                 })
@@ -599,8 +570,8 @@ fn adjusted_drop_index(
 #[cfg(test)]
 mod tests {
     use probe_core::{
-        Collection, CollectionItem, Folder, ItemKind, ItemMetadata, Request, Workspace,
-        WorkspaceItemRef,
+        Collection, CollectionItem, Folder, ItemKind, ItemMetadata, Request, RequestProtocol,
+        Workspace, WorkspaceItemRef,
     };
     use probe_opencollection::{ItemLocator, StructureOperation};
 
@@ -612,6 +583,29 @@ mod tests {
 
     #[test]
     fn dialog_builds_typed_operations_and_validates_positions() {
+        for (protocol, method, title) in [
+            (RequestProtocol::Http, "GET", "New HTTP Request"),
+            (RequestProtocol::Graphql, "POST", "New GraphQL Request"),
+        ] {
+            let mut dialog = StructureDialog::create_request(protocol, Some("folder".to_owned()));
+            assert!(dialog.operation().is_err(), "requests require a name");
+            dialog.name = "  New request  ".to_owned();
+            assert_eq!(dialog.title(), title);
+            assert_eq!(dialog.submit_label(), "Create");
+            assert_eq!(
+                dialog.operation().unwrap(),
+                StructureOperation::CreateRequest {
+                    parent: Some("folder".to_owned()),
+                    index: None,
+                    name: "New request".to_owned(),
+                    method: Some(method.to_owned()),
+                    url: None,
+                    protocol,
+                    graphql: None,
+                    update: None,
+                }
+            );
+        }
         let mut dialog = StructureDialog::move_item(
             ItemKind::Request,
             "old.yml".to_owned(),

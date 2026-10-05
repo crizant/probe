@@ -423,6 +423,36 @@ impl RequestUpdate {
     }
 }
 
+/// Protocol identity independent of a request's body.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RequestProtocol {
+    /// A native OpenCollection HTTP request.
+    #[default]
+    Http,
+    /// A native OpenCollection GraphQL request.
+    Graphql,
+}
+
+impl RequestProtocol {
+    /// Returns the stable lowercase protocol name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Graphql => "graphql",
+        }
+    }
+
+    /// Returns the default HTTP method for this protocol.
+    #[must_use]
+    pub const fn default_method(self) -> &'static str {
+        match self {
+            Self::Http => "GET",
+            Self::Graphql => "POST",
+        }
+    }
+}
+
 /// The protocol of a native request and the body that belongs to that protocol.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RequestKind {
@@ -445,13 +475,19 @@ impl Default for RequestKind {
 }
 
 impl RequestKind {
+    /// Returns the protocol identity without its body data.
+    #[must_use]
+    pub const fn protocol(&self) -> RequestProtocol {
+        match self {
+            Self::Http { .. } => RequestProtocol::Http,
+            Self::Graphql { .. } => RequestProtocol::Graphql,
+        }
+    }
+
     /// Returns the stable lowercase protocol name.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Http { .. } => "http",
-            Self::Graphql { .. } => "graphql",
-        }
+        self.protocol().as_str()
     }
 
     /// Returns whether this is a native GraphQL request.

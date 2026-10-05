@@ -60,7 +60,7 @@ impl ProbeApp {
 
     pub(super) fn new_detached_request(
         &mut self,
-        graphql: bool,
+        protocol: probe_core::RequestProtocol,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -68,11 +68,12 @@ impl ProbeApp {
             return;
         };
         let request = Request {
-            method: Some(if graphql { "POST" } else { "GET" }.to_owned()),
-            kind: if graphql {
-                probe_core::RequestKind::Graphql { body: None }
-            } else {
-                probe_core::RequestKind::Http { body: None }
+            method: Some(protocol.default_method().to_owned()),
+            kind: match protocol {
+                probe_core::RequestProtocol::Graphql => {
+                    probe_core::RequestKind::Graphql { body: None }
+                }
+                probe_core::RequestProtocol::Http => probe_core::RequestKind::Http { body: None },
             },
             ..Request::default()
         };
@@ -80,7 +81,7 @@ impl ProbeApp {
         self.detached_requests.insert(key);
         self.transient.request_tab_add_menu_open = false;
         self.selected_tree_item = None;
-        self.request_editor.ensure_available_section(key, graphql);
+        self.request_editor.ensure_available_section(key, protocol);
         self.shell.open_request(key);
         self.response_viewer.ensure_available_tab(key);
         self.reveal_active_tab();
@@ -502,7 +503,7 @@ impl ProbeApp {
             return;
         };
         draft.metadata.name = Some(name.clone());
-        let graphql = draft.kind.is_graphql();
+        let protocol = draft.kind.protocol();
         let mut update = match probe_core::RequestUpdate::between(None, &draft) {
             Ok(update) => update,
             Err(error) => {
@@ -520,11 +521,7 @@ impl ProbeApp {
             name,
             method: draft.method.clone(),
             url: draft.url.clone(),
-            protocol: if graphql {
-                probe_opencollection::CreatedRequestProtocol::Graphql
-            } else {
-                probe_opencollection::CreatedRequestProtocol::Http
-            },
+            protocol,
             graphql: graphql_update,
             update: Some(update),
         };
@@ -782,13 +779,14 @@ impl ProbeApp {
             self.selected_tree_item = None;
             return;
         };
-        let is_graphql = self
+        let protocol = self
             .loaded_workspace
             .as_ref()
             .and_then(|loaded| loaded.workspace().request(key))
-            .is_some_and(|request| request.kind.is_graphql());
-        self.request_editor
-            .ensure_available_section(key, is_graphql);
+            .map_or(probe_core::RequestProtocol::Http, |request| {
+                request.kind.protocol()
+            });
+        self.request_editor.ensure_available_section(key, protocol);
         if self.detached_requests.contains(&key) {
             self.selected_tree_item = None;
         } else {

@@ -11,8 +11,8 @@ impl ProbeApp {
             return;
         };
         if !matches!(
-            request.kind,
-            probe_core::RequestKind::Http { .. } | probe_core::RequestKind::Graphql { .. }
+            request.kind.protocol(),
+            probe_core::RequestProtocol::Http | probe_core::RequestProtocol::Graphql
         ) {
             return;
         }

@@ -51,7 +51,7 @@ pub use request::{
     FileReference, FormField, GraphqlBody, GraphqlBodyVariant, GraphqlOperation,
     GraphqlRequestError, GraphqlUpdate, Header, MultipartPart, MultipartPartKind, MultipartValue,
     PreparedHttpRequest, QueryParameter, RawBody, RawBodyKind, Request, RequestBody,
-    RequestDiffError, RequestKind, RequestSettings, RequestUpdate,
+    RequestDiffError, RequestKind, RequestProtocol, RequestSettings, RequestUpdate,
 };
 pub use request_resolution::{
     RequestVariableInfo, VariableUsage, discover_request_variables, resolve_request,

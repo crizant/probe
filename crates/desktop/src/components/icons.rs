@@ -91,11 +91,11 @@ pub(crate) enum RequestIcon {
 
 impl RequestIcon {
     pub(crate) fn from_request(kind: &probe_core::RequestKind, method: Option<&str>) -> Self {
-        match kind {
-            probe_core::RequestKind::Http { .. } => Self::Http {
+        match kind.protocol() {
+            probe_core::RequestProtocol::Http => Self::Http {
                 method: method.map(str::to_uppercase),
             },
-            probe_core::RequestKind::Graphql { .. } => Self::Graphql,
+            probe_core::RequestProtocol::Graphql => Self::Graphql,
         }
     }
 

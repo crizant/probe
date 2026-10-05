@@ -3,12 +3,11 @@ use std::fs;
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, Collection, CollectionItem,
     CollectionMetadata, EnvironmentResolutionError, FieldPatch, FormField, Header, ItemMetadata,
-    QueryParameter, Request, RequestBody, RequestUpdate, resolve_environment,
+    QueryParameter, Request, RequestBody, RequestProtocol, RequestUpdate, resolve_environment,
 };
 use probe_opencollection::{
-    CreateError, CreatedRequestProtocol, SaveError, StructureError, StructureOperation,
-    create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
-    load_workspace_from_str,
+    CreateError, SaveError, StructureError, StructureOperation, create_bundled_workspace,
+    create_bundled_workspace_from_collection, load_workspace, load_workspace_from_str,
 };
 
 mod support;

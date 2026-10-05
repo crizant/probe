@@ -143,12 +143,7 @@ impl ProbeApp {
             .execution
             .response(key)
             .is_some_and(ResponseState::is_running);
-        let is_graphql = request.kind.is_graphql();
-        let sections = if is_graphql {
-            EditorSection::ALL_GRAPHQL.as_slice()
-        } else {
-            EditorSection::ALL_HTTP.as_slice()
-        };
+        let sections = EditorSection::for_protocol(request.kind.protocol());
         let mut section_tabs = Tabs::new("request-editor-sections")
             .flex()
             .items_center()
@@ -307,9 +302,9 @@ impl ProbeApp {
                                     );
                                     let popup = popup.when(
                                         matches!(
-                                            request.kind,
-                                            probe_core::RequestKind::Http { .. }
-                                                | probe_core::RequestKind::Graphql { .. }
+                                            request.kind.protocol(),
+                                            probe_core::RequestProtocol::Http
+                                                | probe_core::RequestProtocol::Graphql
                                         ),
                                         |popup| {
                                             popup.child(components::menu_button(
