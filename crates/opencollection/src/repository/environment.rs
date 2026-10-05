@@ -281,17 +281,19 @@ pub(super) fn validate_environment_replacement(
     mut replacement: Environment,
 ) -> Result<Environment, SaveError> {
     validate_unique_variable_names(&replacement).map_err(SaveError::Environment)?;
-    for variable in &original.variables {
-        let EnvironmentVariable::Secret(secret) = variable else {
+    for variable in original
+        .variables
+        .iter()
+        .filter(|variable| variable.is_secret())
+    {
+        let Some(name) = variable.name().filter(|name| !name.is_empty()) else {
             continue;
         };
-        let Some(name) = secret.name.as_deref().filter(|name| !name.is_empty()) else {
-            continue;
-        };
-        if replacement.variables.iter().any(|variable| {
-            matches!(variable,
-            EnvironmentVariable::Plain(plain) if plain.name.as_deref() == Some(name))
-        }) {
+        if replacement
+            .variables
+            .iter()
+            .any(|variable| !variable.is_secret() && variable.name() == Some(name))
+        {
             return Err(SaveError::Environment(
                 EnvironmentResolutionError::DuplicateVariable {
                     environment: replacement.name.clone(),
@@ -336,14 +338,7 @@ pub(super) fn apply_environment_replace(
         let Some(variable) = replacement
             .variables
             .iter()
-            .find(|variable| match variable {
-                EnvironmentVariable::Plain(variable) => {
-                    variable.name.as_deref() == Some(name.as_str())
-                }
-                EnvironmentVariable::Secret(variable) => {
-                    variable.name.as_deref() == Some(name.as_str())
-                }
-            })
+            .find(|variable| variable.name() == Some(name.as_str()))
         else {
             continue;
         };
@@ -370,10 +365,7 @@ pub(super) fn apply_environment_replace(
         retained.push(entry);
     }
     for variable in &replacement.variables {
-        let name = match variable {
-            EnvironmentVariable::Plain(variable) => variable.name.as_deref(),
-            EnvironmentVariable::Secret(variable) => variable.name.as_deref(),
-        };
+        let name = variable.name();
         let already_retained = retained.iter().any(|entry| {
             entry
                 .as_mapping()

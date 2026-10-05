@@ -6,7 +6,6 @@ use std::{
 
 use gpui::{AppContext as _, Context, FocusHandle, Window};
 use gpui_base::input::{InputEvent, InputState};
-use probe_core::EnvironmentVariable;
 
 use super::{ApplicationDialog, ProbeApp, SecretUiStatus, ToastIntent};
 use crate::credentials::{CredentialId, CredentialStore, CredentialStoreError};
@@ -75,9 +74,9 @@ impl ProbeApp {
             .effective_environment_variables(selected)
             .into_iter()
             .any(|row| {
-                matches!(row.variable,
-                EnvironmentVariable::Secret(ref secret)
-                    if secret.name.as_deref() == Some(name) && !secret.disabled)
+                row.variable.is_secret()
+                    && row.variable.name() == Some(name)
+                    && !row.variable.is_disabled()
             });
         effective_secret.then(|| SecretTarget {
             workspace: workspace.clone(),
@@ -111,9 +110,11 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return false;
         };
-        loaded.workspace().effective_environment_variables(&dialog.draft).iter().any(|row| {
-            matches!(&row.variable, EnvironmentVariable::Secret(secret) if secret.name.as_deref() == Some(name))
-        })
+        loaded
+            .workspace()
+            .effective_environment_variables(&dialog.draft)
+            .iter()
+            .any(|row| row.variable.is_secret() && row.variable.name() == Some(name))
     }
 
     /// Fill Environment Manager labels from presence metadata. Does not touch the
@@ -133,10 +134,8 @@ impl ProbeApp {
             .workspace()
             .effective_environment_variables(&dialog.draft)
             .into_iter()
-            .filter_map(|row| match row.variable {
-                EnvironmentVariable::Secret(secret) => secret.name,
-                EnvironmentVariable::Plain(_) => None,
-            })
+            .filter(|row| row.variable.is_secret())
+            .filter_map(|row| row.variable.name().map(str::to_owned))
             .collect();
         let statuses = names
             .into_iter()

@@ -392,6 +392,32 @@ fn runtime_secret_text_is_opaque_even_when_it_looks_like_a_template() {
     );
 }
 
+#[test]
+fn shared_accessors_edit_plain_and_secret_declarations_alike() {
+    let mut variables = vec![variable("host", "example.com"), secret("token")];
+    for variable in &mut variables {
+        variable.set_disabled(true);
+        *variable.name_mut() = variable.name().map(|name| format!("{name}Renamed"));
+    }
+
+    assert_eq!(
+        variables
+            .iter()
+            .map(|variable| (
+                variable.name(),
+                variable.is_disabled(),
+                variable.is_secret()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (Some("hostRenamed"), true, false),
+            (Some("tokenRenamed"), true, true)
+        ]
+    );
+    let resolved = resolve_environment(&[environment("local", None, variables)], "local").unwrap();
+    assert_eq!(resolved.variable("hostRenamed"), None);
+}
+
 fn variable(name: &str, value: &str) -> EnvironmentVariable {
     EnvironmentVariable::Plain(Variable {
         name: Some(name.to_owned()),
@@ -937,12 +963,7 @@ fn set_environment_variable_updates_overrides_and_rejects_secrets() {
         environments[1]
             .variables
             .iter()
-            .all(|variable| match variable {
-                EnvironmentVariable::Plain(variable) => {
-                    variable.name.as_deref() != Some("inheritedSecret")
-                }
-                EnvironmentVariable::Secret(_) => true,
-            })
+            .all(|variable| variable.is_secret() || variable.name() != Some("inheritedSecret"))
     );
 }
 
@@ -1291,11 +1312,7 @@ fn effective_names(rows: &[probe_core::EffectiveEnvironmentVariable]) -> Vec<(&s
     rows.iter()
         .map(|row| {
             (
-                match &row.variable {
-                    EnvironmentVariable::Plain(variable) => variable.name.as_deref(),
-                    EnvironmentVariable::Secret(variable) => variable.name.as_deref(),
-                }
-                .unwrap_or(""),
+                row.variable.name().unwrap_or(""),
                 row.defined_in.as_str(),
                 row.direct_index.is_some(),
             )
