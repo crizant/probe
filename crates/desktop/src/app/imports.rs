@@ -1,4 +1,174 @@
+use probe_core::ImportDiagnostic;
+use probe_postman::{ImportedPostmanCollection, PostmanImportPreview, inspect_postman_source};
+use probe_yaak::{
+    ImportedYaakWorkspace, YaakImportPreview, YaakWorkspaceSummary, inspect_yaak_source,
+};
+
 use super::*;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImportSource {
+    Postman,
+    Yaak,
+}
+
+impl ImportSource {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Postman => "Postman",
+            Self::Yaak => "Yaak",
+        }
+    }
+
+    const fn imported_kind(self) -> &'static str {
+        match self {
+            Self::Postman => "collection",
+            Self::Yaak => "workspace",
+        }
+    }
+
+    fn picker_options(self) -> PathPromptOptions {
+        PathPromptOptions {
+            files: true,
+            directories: matches!(self, Self::Yaak),
+            multiple: false,
+            prompt: Some(format!("Import from {}", self.label()).into()),
+        }
+    }
+}
+
+pub(crate) enum ImportConversion {
+    Postman(Box<PostmanImportPreview>),
+    Yaak {
+        preview: Box<YaakImportPreview>,
+        workspace_id: String,
+    },
+}
+
+impl ImportConversion {
+    pub(crate) const fn source(&self) -> ImportSource {
+        match self {
+            Self::Postman(_) => ImportSource::Postman,
+            Self::Yaak { .. } => ImportSource::Yaak,
+        }
+    }
+
+    pub(crate) fn convert(self, allow_partial: bool) -> ImportConversionResult {
+        let converted = match &self {
+            Self::Postman(preview) => preview
+                .convert(allow_partial)
+                .map(CollectionImport::from)
+                .map_err(|error| conversion_error(error.diagnostics(), &error)),
+            Self::Yaak {
+                preview,
+                workspace_id,
+            } => preview
+                .convert(Some(workspace_id), allow_partial)
+                .map(CollectionImport::from)
+                .map_err(|error| conversion_error(error.diagnostics(), &error)),
+        };
+        match converted {
+            Ok(import) => ImportConversionResult::Imported(Box::new(import)),
+            Err(ConversionError {
+                unsupported: Some(detail),
+                ..
+            }) if !allow_partial => ImportConversionResult::NeedsPartialConfirmation {
+                conversion: self,
+                detail,
+            },
+            Err(ConversionError { message, .. }) => ImportConversionResult::Failed(message),
+        }
+    }
+}
+
+struct ConversionError {
+    unsupported: Option<String>,
+    message: String,
+}
+
+fn conversion_error(
+    unsupported: Option<&[ImportDiagnostic]>,
+    error: &impl std::fmt::Display,
+) -> ConversionError {
+    ConversionError {
+        unsupported: unsupported.map(format_import_diagnostics),
+        message: error.to_string(),
+    }
+}
+
+pub(crate) enum ImportConversionResult {
+    Imported(Box<CollectionImport>),
+    NeedsPartialConfirmation {
+        conversion: ImportConversion,
+        detail: String,
+    },
+    Failed(String),
+}
+
+pub(crate) enum InspectedImport {
+    Ready(ImportConversion),
+    SelectYaakWorkspace {
+        preview: Box<YaakImportPreview>,
+        workspaces: Vec<YaakWorkspaceSummary>,
+    },
+}
+
+pub(crate) fn inspect_import(
+    source: ImportSource,
+    path: PathBuf,
+) -> Result<InspectedImport, String> {
+    match source {
+        ImportSource::Postman => inspect_postman_source(path)
+            .map(|preview| InspectedImport::Ready(ImportConversion::Postman(Box::new(preview))))
+            .map_err(|error| error.to_string()),
+        ImportSource::Yaak => {
+            let preview = Box::new(inspect_yaak_source(path).map_err(|error| error.to_string())?);
+            let workspaces = preview.workspaces();
+            Ok(match workspaces.as_slice() {
+                [workspace] => InspectedImport::Ready(ImportConversion::Yaak {
+                    workspace_id: workspace.id.clone(),
+                    preview,
+                }),
+                _ => InspectedImport::SelectYaakWorkspace {
+                    preview,
+                    workspaces,
+                },
+            })
+        }
+    }
+}
+
+pub(crate) struct CollectionImport {
+    pub(super) source: ImportSource,
+    pub(super) source_name: String,
+    pub(super) collection: Collection,
+    pub(super) warning_count: usize,
+    pub(super) selected_environment: Option<String>,
+}
+
+impl From<ImportedPostmanCollection> for CollectionImport {
+    fn from(imported: ImportedPostmanCollection) -> Self {
+        Self {
+            source: ImportSource::Postman,
+            source_name: imported.source.name,
+            collection: imported.collection,
+            warning_count: imported.diagnostics.len(),
+            selected_environment: imported.collection_variables_environment,
+        }
+    }
+}
+
+impl From<ImportedYaakWorkspace> for CollectionImport {
+    fn from(imported: ImportedYaakWorkspace) -> Self {
+        Self {
+            source: ImportSource::Yaak,
+            source_name: imported.workspace.name,
+            collection: imported.collection,
+            warning_count: imported.diagnostics.len(),
+            selected_environment: imported.default_environment,
+        }
+    }
+}
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum CollectionPathResolution {
@@ -153,19 +323,8 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match source {
-            ImportSource::Postman => self.choose_postman_import(window, cx),
-            ImportSource::Yaak => self.choose_yaak_import(window, cx),
-        }
-    }
-
-    pub(super) fn choose_yaak_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let receiver = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: true,
-            multiple: false,
-            prompt: Some("Import from Yaak".into()),
-        });
+        let source_label = source.label();
+        let receiver = cx.prompt_for_paths(source.picker_options());
         let view = cx.weak_entity();
         window
             .spawn(cx, async move |cx| {
@@ -176,48 +335,45 @@ impl ProbeApp {
                         let _ = view.update_in(cx, |view, _, cx| {
                             view.show_toast(
                                 ToastIntent::Error,
-                                format!("Could not open the Yaak source picker: {error}"),
+                                format!("Could not open the {source_label} source picker: {error}"),
                                 cx,
                             );
                         });
                         return;
                     }
                 };
-                let Some(source) = paths.into_iter().next() else {
+                let Some(path) = paths.into_iter().next() else {
                     return;
                 };
                 let _ = view.update_in(cx, |view, _, cx| {
                     view.loading = true;
                     cx.notify();
                 });
-                let preview = match cx
-                    .background_spawn(async move { inspect_yaak_source(source) })
-                    .await
-                {
-                    Ok(preview) => preview,
-                    Err(error) => {
-                        let _ = view.update_in(cx, |view, _, cx| {
-                            view.loading = false;
-                            view.show_toast(
-                                ToastIntent::Error,
-                                format!("Could not inspect Yaak data: {error}"),
-                                cx,
-                            );
-                        });
-                        return;
+                let inspected = cx
+                    .background_spawn(async move { inspect_import(source, path) })
+                    .await;
+                let _ = view.update_in(cx, |view, window, cx| match inspected {
+                    Ok(InspectedImport::Ready(conversion)) => {
+                        view.convert_import(conversion, false, window, cx);
                     }
-                };
-                let summaries = preview.workspaces();
-                let _ = view.update_in(cx, |view, window, cx| {
-                    if let [workspace] = summaries.as_slice() {
-                        view.convert_yaak_import(preview, workspace.id.clone(), false, window, cx);
-                    } else {
+                    Ok(InspectedImport::SelectYaakWorkspace {
+                        preview,
+                        workspaces,
+                    }) => {
                         view.show_application_dialog(
                             ApplicationDialog::SelectYaakWorkspace {
                                 preview,
-                                workspaces: summaries,
+                                workspaces,
                             },
                             window,
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        view.loading = false;
+                        view.show_toast(
+                            ToastIntent::Error,
+                            format!("Could not inspect {source_label} data: {error}"),
                             cx,
                         );
                     }
@@ -226,68 +382,14 @@ impl ProbeApp {
             .detach();
     }
 
-    pub(super) fn choose_postman_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let receiver = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Import from Postman".into()),
-        });
-        let view = cx.weak_entity();
-        window
-            .spawn(cx, async move |cx| {
-                let paths = match receiver.await {
-                    Ok(Ok(Some(paths))) => paths,
-                    Ok(Ok(None)) | Err(_) => return,
-                    Ok(Err(error)) => {
-                        let _ = view.update_in(cx, |view, _, cx| {
-                            view.show_toast(
-                                ToastIntent::Error,
-                                format!("Could not open the Postman source picker: {error}"),
-                                cx,
-                            );
-                        });
-                        return;
-                    }
-                };
-                let Some(source) = paths.into_iter().next() else {
-                    return;
-                };
-                let _ = view.update_in(cx, |view, _, cx| {
-                    view.loading = true;
-                    cx.notify();
-                });
-                let preview = match cx
-                    .background_spawn(async move { inspect_postman_source(source) })
-                    .await
-                {
-                    Ok(preview) => preview,
-                    Err(error) => {
-                        let _ = view.update_in(cx, |view, _, cx| {
-                            view.loading = false;
-                            view.show_toast(
-                                ToastIntent::Error,
-                                format!("Could not inspect Postman data: {error}"),
-                                cx,
-                            );
-                        });
-                        return;
-                    }
-                };
-                let _ = view.update_in(cx, |view, window, cx| {
-                    view.convert_postman_import(preview, false, window, cx);
-                });
-            })
-            .detach();
-    }
-
-    pub(super) fn convert_postman_import(
+    pub(super) fn convert_import(
         &mut self,
-        preview: PostmanImportPreview,
+        conversion: ImportConversion,
         allow_partial: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let source_label = conversion.source().label();
         self.application_dialog = None;
         self.loading = true;
         cx.notify();
@@ -295,61 +397,31 @@ impl ProbeApp {
         window
             .spawn(cx, async move |cx| {
                 let result = cx
-                    .background_spawn(async move {
-                        match preview.convert(allow_partial) {
-                            Ok(imported) => PostmanConversionResult::Imported(Box::new(imported)),
-                            Err(PostmanImportError::Unsupported(diagnostics)) if !allow_partial => {
-                                PostmanConversionResult::NeedsPartialConfirmation {
-                                    preview: Box::new(preview),
-                                    detail: format_import_diagnostics(&diagnostics),
-                                }
-                            }
-                            Err(error) => PostmanConversionResult::Failed(error.to_string()),
-                        }
-                    })
+                    .background_spawn(async move { conversion.convert(allow_partial) })
                     .await;
                 let _ = view.update_in(cx, |view, window, cx| match result {
-                    PostmanConversionResult::Imported(imported) => {
-                        view.choose_postman_import_destination(*imported, window, cx);
+                    ImportConversionResult::Imported(import) => {
+                        view.choose_import_destination(*import, window, cx);
                     }
-                    PostmanConversionResult::NeedsPartialConfirmation { preview, detail } => {
+                    ImportConversionResult::NeedsPartialConfirmation { conversion, detail } => {
                         view.loading = false;
                         view.show_application_dialog(
-                            ApplicationDialog::ConfirmPartialPostmanImport { preview, detail },
+                            ApplicationDialog::ConfirmPartialImport { conversion, detail },
                             window,
                             cx,
                         );
                     }
-                    PostmanConversionResult::Failed(error) => {
+                    ImportConversionResult::Failed(error) => {
                         view.loading = false;
                         view.show_toast(
                             ToastIntent::Error,
-                            format!("Could not convert Postman data: {error}"),
+                            format!("Could not convert {source_label} data: {error}"),
                             cx,
                         );
                     }
                 });
             })
             .detach();
-    }
-
-    pub(super) fn choose_postman_import_destination(
-        &mut self,
-        imported: ImportedPostmanCollection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.choose_import_destination(
-            CollectionImport {
-                source_name: imported.source.name,
-                collection: imported.collection,
-                warning_count: imported.diagnostics.len(),
-                selected_environment: imported.collection_variables_environment,
-                kind: ImportedCollectionKind::Postman,
-            },
-            window,
-            cx,
-        );
     }
 
     pub(super) fn choose_import_destination(
@@ -358,8 +430,8 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let source_label = import.kind.source_label();
-        let imported_kind = import.kind.imported_kind();
+        let source_label = import.source.label();
+        let imported_kind = import.source.imported_kind();
         let filename = suggested_collection_filename(&import.source_name);
         let CollectionImport {
             collection,
@@ -447,87 +519,6 @@ impl ProbeApp {
                 });
             })
             .detach();
-    }
-
-    pub(super) fn convert_yaak_import(
-        &mut self,
-        preview: YaakImportPreview,
-        workspace_id: String,
-        allow_partial: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.application_dialog = None;
-        self.loading = true;
-        cx.notify();
-        let view = cx.weak_entity();
-        window
-            .spawn(cx, async move |cx| {
-                let result = cx
-                    .background_spawn(async move {
-                        match preview.convert(Some(&workspace_id), allow_partial) {
-                            Ok(imported) => YaakConversionResult::Imported(imported),
-                            Err(YaakImportError::Unsupported(diagnostics)) if !allow_partial => {
-                                YaakConversionResult::NeedsPartialConfirmation {
-                                    preview,
-                                    workspace_id,
-                                    detail: format_import_diagnostics(&diagnostics),
-                                }
-                            }
-                            Err(error) => YaakConversionResult::Failed(error.to_string()),
-                        }
-                    })
-                    .await;
-                let _ = view.update_in(cx, |view, window, cx| match result {
-                    YaakConversionResult::Imported(imported) => {
-                        view.choose_yaak_import_destination(imported, window, cx);
-                    }
-                    YaakConversionResult::NeedsPartialConfirmation {
-                        preview,
-                        workspace_id,
-                        detail,
-                    } => {
-                        view.loading = false;
-                        view.show_application_dialog(
-                            ApplicationDialog::ConfirmPartialYaakImport {
-                                preview,
-                                workspace_id,
-                                detail,
-                            },
-                            window,
-                            cx,
-                        );
-                    }
-                    YaakConversionResult::Failed(error) => {
-                        view.loading = false;
-                        view.show_toast(
-                            ToastIntent::Error,
-                            format!("Could not convert Yaak data: {error}"),
-                            cx,
-                        );
-                    }
-                });
-            })
-            .detach();
-    }
-
-    pub(super) fn choose_yaak_import_destination(
-        &mut self,
-        imported: ImportedYaakWorkspace,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.choose_import_destination(
-            CollectionImport {
-                source_name: imported.workspace.name,
-                collection: imported.collection,
-                warning_count: imported.diagnostics.len(),
-                selected_environment: imported.default_environment,
-                kind: ImportedCollectionKind::Yaak,
-            },
-            window,
-            cx,
-        );
     }
 
     pub(super) fn new_collection_directory(&self) -> PathBuf {

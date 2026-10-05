@@ -18,7 +18,10 @@ use probe_postman::{COLLECTION_VARIABLES_ENVIRONMENT, inspect_postman_source};
 use probe_yaak::{ImportDiagnostic, ImportDiagnosticSeverity, inspect_yaak_source};
 use tokio::sync::oneshot;
 
-use super::imports::{CollectionPathResolution, resolve_collection_path};
+use super::imports::{
+    CollectionPathResolution, ImportConversion, ImportConversionResult, InspectedImport,
+    inspect_import, resolve_collection_path,
+};
 use super::{
     ApplicationDialog, ApplicationDialogAction, CloseImportSubmenu, DesktopMenu,
     IMPORT_DIAGNOSTIC_GROUP_LIMIT, ImportSource, OpenFileMenu, OpenImportSubmenu, PendingClose,
@@ -826,6 +829,53 @@ fn import_diagnostics_bound_the_number_of_issue_groups() {
     );
 }
 
+#[test]
+fn import_inspection_selects_the_only_yaak_workspace() {
+    let Ok(InspectedImport::Ready(conversion)) =
+        inspect_import(ImportSource::Yaak, yaak_fixture("export-v4.json"))
+    else {
+        panic!("single-workspace Yaak export should be ready to convert");
+    };
+    assert_eq!(conversion.source(), ImportSource::Yaak);
+    let ImportConversionResult::Imported(import) = conversion.convert(false) else {
+        panic!("lossless Yaak export should convert");
+    };
+    assert_eq!(import.source, ImportSource::Yaak);
+    assert_eq!(
+        import.selected_environment.as_deref(),
+        Some("Global Variables")
+    );
+}
+
+#[test]
+fn import_inspection_reports_invalid_sources() {
+    assert!(inspect_import(ImportSource::Postman, postman_fixture("malformed.json")).is_err());
+    assert!(inspect_import(ImportSource::Postman, yaak_fixture("sync")).is_err());
+}
+
+#[test]
+fn lossy_import_conversion_waits_for_confirmation_then_imports_partially() {
+    let Ok(InspectedImport::Ready(conversion)) = inspect_import(
+        ImportSource::Postman,
+        postman_fixture("collection-lossy.json"),
+    ) else {
+        panic!("Postman collection should be ready to convert");
+    };
+    let ImportConversionResult::NeedsPartialConfirmation { conversion, detail } =
+        conversion.convert(false)
+    else {
+        panic!("strict lossy conversion should require confirmation");
+    };
+    assert!(detail.contains("lossy"));
+    assert_eq!(conversion.source(), ImportSource::Postman);
+
+    let ImportConversionResult::Imported(import) = conversion.convert(true) else {
+        panic!("confirmed partial conversion should import supported data");
+    };
+    assert_eq!(import.source, ImportSource::Postman);
+    assert!(import.warning_count > 0);
+}
+
 #[gpui::test]
 fn postman_lossy_import_requires_desktop_confirmation(cx: &mut TestAppContext) {
     cx.update(Theme::init);
@@ -836,17 +886,27 @@ fn postman_lossy_import_requires_desktop_confirmation(cx: &mut TestAppContext) {
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
-            view.convert_postman_import(preview, false, window, cx);
+            view.convert_import(
+                ImportConversion::Postman(Box::new(preview)),
+                false,
+                window,
+                cx,
+            );
         })
         .unwrap();
     cx.run_until_parked();
 
     window
         .update(cx, |view, _, _| {
+            let dialog = view.application_dialog.as_ref().unwrap();
             assert!(matches!(
-                view.application_dialog,
-                Some(ApplicationDialog::ConfirmPartialPostmanImport { .. })
+                dialog,
+                ApplicationDialog::ConfirmPartialImport {
+                    conversion: ImportConversion::Postman(_),
+                    ..
+                }
             ));
+            assert_eq!(dialog.title(), "Some Postman data cannot be represented");
             assert!(!view.loading);
         })
         .unwrap();
@@ -889,7 +949,7 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
                     collapsed_folders: vec!["items/0".to_owned()],
                 },
             );
-            view.choose_postman_import_destination(imported, window, cx);
+            view.choose_import_destination(imported.into(), window, cx);
         })
         .unwrap();
     assert!(cx.did_prompt_for_new_path());
@@ -950,7 +1010,7 @@ fn successful_yaak_import_selects_global_environment(cx: &mut TestAppContext) {
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
-            view.choose_yaak_import_destination(imported, window, cx);
+            view.choose_import_destination(imported.into(), window, cx);
         })
         .unwrap();
     assert!(cx.did_prompt_for_new_path());
