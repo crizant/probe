@@ -304,17 +304,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let dirty = self.dirty_keys();
-        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
-            self.prompt_unsaved(dirty, PendingClose::Import(source), window, cx);
-            return;
-        }
-        if self.has_pending_environment_work() {
-            self.pending_close = Some(PendingClose::Import(source));
-            self.pump_workspace_writes(window, cx);
-            return;
-        }
-        self.choose_import(source, window, cx);
+        self.request_workspace_transition(PendingClose::Import(source), window, cx);
     }
 
     pub(super) fn choose_import(

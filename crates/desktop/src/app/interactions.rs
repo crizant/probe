@@ -303,7 +303,7 @@ impl ProbeApp {
             .parent
             .and_then(|key| loaded.folder_selector(key).map(str::to_owned));
         let Some(operation) = structure_operation_for_drop(
-            drag.kind,
+            drag.item.kind(),
             selector,
             source_parent,
             source_index,

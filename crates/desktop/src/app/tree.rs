@@ -16,14 +16,12 @@ pub(crate) struct TreeRow {
 #[derive(Clone, Debug)]
 pub(crate) struct TreeDrag {
     pub(crate) item: WorkspaceItemRef,
-    pub(crate) kind: ItemKind,
     pub(crate) label: String,
     pub(crate) icon: Option<components::RequestIcon>,
 }
 
 pub(crate) struct TreeRowSpec {
     pub(crate) item: WorkspaceItemRef,
-    pub(crate) kind: ItemKind,
     pub(crate) selector: String,
     pub(crate) label: String,
     pub(crate) icon: Option<components::RequestIcon>,
@@ -47,7 +45,7 @@ impl Render for TreeDrag {
             .text_size(px(theme.typography.caption_size));
         if let Some(icon) = &self.icon {
             preview = preview.child(components::request_icon(theme, icon));
-        } else if self.kind == ItemKind::Folder {
+        } else if self.item.kind() == ItemKind::Folder {
             preview = preview.child(components::tree_folder_icon(theme, false, false));
         }
         preview.child(self.label.clone())
