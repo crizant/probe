@@ -196,7 +196,7 @@ fn key_value_editor_row_controls_update_their_rows_and_restore_focus(cx: &mut Te
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.edit_request(
                 key,

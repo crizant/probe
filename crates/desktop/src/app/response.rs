@@ -10,12 +10,6 @@ impl ProbeApp {
         let Some(request) = loaded.workspace().request(key).cloned() else {
             return;
         };
-        if !matches!(
-            request.kind.protocol(),
-            probe_core::RequestProtocol::Http | probe_core::RequestProtocol::Graphql
-        ) {
-            return;
-        }
         let input = ExecutionInput {
             request,
             environments: loaded.workspace().environments().to_vec(),
