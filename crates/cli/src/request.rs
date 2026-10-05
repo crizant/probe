@@ -226,6 +226,7 @@ pub(crate) struct RunOptions<'a> {
     pub(crate) dry_run: bool,
     pub(crate) secret_provider_env: bool,
     pub(crate) expectations: &'a [StatusExpectation],
+    pub(crate) human_output: bool,
 }
 
 pub(crate) fn run(
@@ -304,8 +305,15 @@ pub(crate) fn run(
         return Err(CliError::expectation_failed(&outcomes));
     }
     response_output(
-        &method,
-        &url,
+        || {
+            response_human(
+                &method,
+                &url,
+                &response,
+                options.output.map(PathBuf::as_path),
+            )
+        },
+        options.human_output,
         request_json,
         &response,
         options.output,
@@ -371,8 +379,8 @@ fn selected_request<'a>(
 }
 
 fn response_output(
-    method: &str,
-    url: &str,
+    render_human: impl FnOnce() -> String,
+    human_output: bool,
     request_json: serde_json::Value,
     response: &HttpResponse,
     output: Option<&PathBuf>,
@@ -395,9 +403,69 @@ fn response_output(
         );
     }
     Ok(CommandOutput {
-        human: response_human(method, url, response, output),
+        human: if human_output {
+            render_human()
+        } else {
+            String::new()
+        },
         json,
     })
+}
+
+#[cfg(test)]
+mod response_output_tests {
+    use super::response_output;
+    use probe_http::HttpResponse;
+    use serde_json::json;
+
+    #[test]
+    fn response_human_rendering_is_lazy_and_preserves_json() {
+        let body = br#"{"message":"hello"}"#.to_vec();
+        let response = HttpResponse {
+            status: 200,
+            reason: "OK".to_owned(),
+            url: "https://example.com".to_owned(),
+            duration: std::time::Duration::ZERO,
+            size: body.len(),
+            headers: Vec::new(),
+            body,
+            body_complete: true,
+            body_file: None,
+            body_retention_error: None,
+        };
+        let human = response_output(
+            || "human response\n".to_owned(),
+            crate::human_output_requested(false, false),
+            json!({}),
+            &response,
+            None,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(human.human, "human response\n");
+
+        // Both --json and --quiet disable the human renderer before response output.
+        for (json_output, quiet) in [(true, false), (false, true)] {
+            let output = response_output(
+                || panic!("human response rendering must be skipped"),
+                crate::human_output_requested(json_output, quiet),
+                json!({}),
+                &response,
+                None,
+                &[],
+            )
+            .unwrap();
+            assert!(output.human.is_empty());
+            assert_eq!(output.json, human.json);
+            let rendered = output.render(json_output, quiet);
+            if quiet {
+                assert!(rendered.is_empty());
+            } else {
+                let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+                assert_eq!(value["schemaVersion"], crate::JSON_SCHEMA_VERSION);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

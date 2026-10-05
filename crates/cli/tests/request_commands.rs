@@ -1358,6 +1358,21 @@ fn human_response_pretty_prints_json_without_colors() {
 }
 
 #[test]
+fn human_response_preserves_json_tokens() {
+    for (body, expected) in [
+        (r#"{"z":1,"a":2}"#, "{\n  \"z\": 1,\n  \"a\": 2\n}"),
+        (r#"{"a":1,"a":2}"#, "{\n  \"a\": 1,\n  \"a\": 2\n}"),
+        (
+            "[1234567890123456789012345678901234567890,1.2300,1E+999,-0]",
+            "[\n  1234567890123456789012345678901234567890,\n  1.2300,\n  1E+999,\n  -0\n]",
+        ),
+    ] {
+        let output = run_response_output(body, "application/json", false);
+        assert!(output.ends_with(&format!("\n\n{expected}\n")), "{output}");
+    }
+}
+
+#[test]
 fn human_response_preserves_invalid_json() {
     let body = "  {\"broken\":\n";
     let output = run_response_output(body, "application/json", false);
@@ -1378,7 +1393,7 @@ fn human_response_preserves_non_json() {
 
 #[test]
 fn structured_response_preserves_original_json_body() {
-    let body = r#"{"items":[1,true,null]}"#;
+    let body = r#"{"z":1,"a":2,"a":3,"items":[123456789012345678901234567890,1E+999,-0,"\u0061"]}"#;
     let output = run_response_output(body, "application/json", true);
     let value: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["response"]["body"]["content"], body);
