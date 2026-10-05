@@ -111,16 +111,16 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          mkdir -p target
+          # Cache restore may clean target/ on a partial hit; keep inputs outside it.
           git diff --unified=0 "$BASE_SHA...$HEAD_SHA" -- \
             crates/application/src crates/cli/src crates/core/src crates/http/src \
             crates/opencollection/src crates/postman/src crates/yaak/src \
-            > target/mutants.diff
+            > "$RUNNER_TEMP/mutants.diff"
           git diff --name-only "$BASE_SHA...$HEAD_SHA" -- \
             crates/application/src crates/cli/src crates/core/src crates/http/src \
             crates/opencollection/src crates/postman/src crates/yaak/src \
-            > target/mutants-files.txt
-          if grep -q '\.rs$' target/mutants-files.txt; then
+            > "$RUNNER_TEMP/mutants-files.txt"
+          if grep -q '\.rs$' "$RUNNER_TEMP/mutants-files.txt"; then
             echo 'changed=true' >> "$GITHUB_OUTPUT"
           fi
       - if: steps.diff.outputs.changed == 'true'
@@ -137,4 +137,4 @@ jobs:
         env:
           # Override rust-cache's default for repeated builds of mutated source.
           CARGO_INCREMENTAL: "1"
-        run: cargo mutants --workspace --in-diff target/mutants.diff -j 2
+        run: cargo mutants --workspace --in-diff "$RUNNER_TEMP/mutants.diff" -j 2
