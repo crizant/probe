@@ -560,7 +560,7 @@ fn authentication_value(value: &AuthenticationValue) -> Value {
 
 #[cfg(test)]
 mod json_format_tests {
-    use super::{MAX_IN_MEMORY_RESPONSE_BYTES, pretty_json_text};
+    use super::{MAX_IN_MEMORY_RESPONSE_BYTES, json_newline, pretty_json_text};
 
     #[test]
     fn changes_only_whitespace_outside_strings() {
@@ -627,6 +627,12 @@ mod json_format_tests {
             pretty_json_text("[[0,0,0]]").as_deref(),
             Some("[\n  [\n    0,\n    0,\n    0\n  ]\n]")
         );
+        // Check pre-append boundaries that a later character's fallback can hide.
+        for (remaining, depth, fits) in [(3, 1, true), (6, 3, false)] {
+            let mut pretty = " ".repeat(MAX_IN_MEMORY_RESPONSE_BYTES - remaining);
+            assert_eq!(json_newline(&mut pretty, depth), fits.then_some(()));
+            assert!(pretty.len() <= MAX_IN_MEMORY_RESPONSE_BYTES);
+        }
         for extra_bytes in 0..=2 {
             let bytes = MAX_IN_MEMORY_RESPONSE_BYTES + extra_bytes;
             let body = format!("\"{}雪\"", "x".repeat(bytes - 5));
