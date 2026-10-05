@@ -5,7 +5,7 @@ impl ProbeApp {
     pub(super) fn recover_committed_save(
         &mut self,
         saved_path: Option<PathBuf>,
-        documentation: Option<(Option<String>, super::documentation::OverviewContent)>,
+        documentation: Option<(OverviewTarget, super::documentation::OverviewContent)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -998,18 +998,24 @@ impl ProbeApp {
             .expect("workspace was replaced");
         self.overview_drafts = std::mem::take(&mut self.overview_drafts)
             .into_iter()
-            .map(|(target, draft)| {
-                let target =
-                    target.map(|selector| remaps.get(&selector).cloned().unwrap_or(selector));
+            .map(|(mut target, draft)| {
+                if let OverviewTarget::Folder(selector) = &mut target
+                    && let Some(mapped) = remaps.get(selector)
+                {
+                    selector.clone_from(mapped);
+                }
                 (target, draft)
             })
             .collect();
-        for selector in self.pending_documentation_saves.iter_mut().flatten() {
-            if let Some(mapped) = remaps.get(selector) {
+        for target in &mut self.pending_documentation_saves {
+            if let OverviewTarget::Folder(selector) = target
+                && let Some(mapped) = remaps.get(selector)
+            {
                 selector.clone_from(mapped);
             }
         }
-        if let Some(PendingClose::Overview(Some(selector))) = self.pending_close.as_mut()
+        if let Some(PendingClose::Overview(OverviewTarget::Folder(selector))) =
+            self.pending_close.as_mut()
             && let Some(mapped) = remaps.get(selector)
         {
             selector.clone_from(mapped);

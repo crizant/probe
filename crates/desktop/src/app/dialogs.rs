@@ -7,6 +7,8 @@ use probe_yaak::{ImportedYaakWorkspace, YaakImportPreview, YaakWorkspaceSummary}
 
 use crate::{components, session::SessionState};
 
+use super::documentation::OverviewTarget;
+
 pub(crate) const IMPORT_DIAGNOSTIC_GROUP_LIMIT: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,7 +94,7 @@ impl EnvironmentManagerDialog {
 
 pub(crate) enum PendingClose {
     Tab(RequestKey),
-    Overview(Option<String>),
+    Overview(OverviewTarget),
     OtherTabs {
         keep: crate::shell::OpenTab,
     },
