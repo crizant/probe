@@ -1345,6 +1345,67 @@ fn run_rejects_malformed_runtime_variables_without_exposing_the_value() {
 }
 
 #[test]
+fn human_response_pretty_prints_json_without_colors() {
+    for content_type in [
+        "application/json",
+        "Application/JSON; charset=utf-8",
+        "application/problem+json",
+    ] {
+        let output = run_response_output(r#"{"items":[1,true,null]}"#, content_type, false);
+        assert!(output.ends_with("\n\n{\n  \"items\": [\n    1,\n    true,\n    null\n  ]\n}\n"));
+        assert!(!output.contains('\u{1b}'));
+    }
+}
+
+#[test]
+fn human_response_preserves_invalid_json() {
+    let body = "  {\"broken\":\n";
+    let output = run_response_output(body, "application/json", false);
+    assert!(output.ends_with(&format!("\n\n{body}")));
+}
+
+#[test]
+fn human_response_preserves_non_json() {
+    for (body, content_type) in [
+        ("plain text\n", "text/plain"),
+        (r#"{"items":[1,true,null]}"#, "text/plain"),
+        (r#"{"items":[1,true,null]}"#, "application/jsonp"),
+    ] {
+        let output = run_response_output(body, content_type, false);
+        assert!(output.ends_with(&format!("\n\n{}\n", body.trim_end_matches('\n'))));
+    }
+}
+
+#[test]
+fn structured_response_preserves_original_json_body() {
+    let body = r#"{"items":[1,true,null]}"#;
+    let output = run_response_output(body, "application/json", true);
+    let value: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["response"]["body"]["content"], body);
+    assert_eq!(value["response"]["body"]["encoding"], "utf8");
+    assert_eq!(value["response"]["body"]["omitted"], false);
+}
+
+fn run_response_output(body: &str, content_type: &'static str, json: bool) -> String {
+    let (server_url, server) = serve_once(body.as_bytes().to_vec(), content_type);
+    let workspace = runtime_fixture(&server_url);
+    let mut command = probe();
+    command
+        .args(["request", "run"])
+        .arg(&workspace)
+        .args(["items/0", "--environment", "local"]);
+    if json {
+        command.arg("--json");
+    }
+    let output = command.output().expect("request should run");
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
 fn writes_response_body_to_an_explicit_file() {
     let response_body = vec![0, 159, 146, 150];
     let (server_url, server) = serve_once(response_body.clone(), "application/octet-stream");

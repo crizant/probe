@@ -39,6 +39,8 @@ pub(super) fn response_human(
             MAX_IN_MEMORY_RESPONSE_BYTES
         ));
     } else if let Ok(body) = std::str::from_utf8(&response.body) {
+        let pretty = pretty_json_body(response, body);
+        let body = pretty.as_deref().unwrap_or(body);
         rendered.push_str(body);
         if !body.ends_with('\n') {
             rendered.push('\n');
@@ -47,6 +49,24 @@ pub(super) fn response_human(
         rendered.push_str("Binary response body omitted; use --output <file>.\n");
     }
     rendered
+}
+
+fn pretty_json_body(response: &HttpResponse, body: &str) -> Option<String> {
+    let content_type = response
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("content-type"))?
+        .value
+        .split(';')
+        .next()?
+        .trim()
+        .to_ascii_lowercase();
+    let (_, subtype) = content_type.split_once('/')?;
+    if subtype != "json" && !subtype.ends_with("+json") {
+        return None;
+    }
+    let value: Value = serde_json::from_str(body).ok()?;
+    serde_json::to_string_pretty(&value).ok()
 }
 
 pub(super) fn response_json(
