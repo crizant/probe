@@ -195,16 +195,13 @@ impl ProbeApp {
         }
     }
 
-    pub(super) fn start_next_documentation_save(
+    pub(super) fn start_documentation_save(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        if self.loading || self.has_active_workspace_write() {
-            return;
-        }
+    ) -> ControlFlow<()> {
         let Some(target) = self.pending_documentation_saves.pop_front() else {
-            return;
+            return ControlFlow::Break(());
         };
         let Some(draft) = self
             .overview_drafts
@@ -212,23 +209,21 @@ impl ProbeApp {
             .filter(|draft| draft.is_dirty())
             .cloned()
         else {
-            self.start_next_documentation_save(window, cx);
-            self.finish_pending_close_if_idle(window, cx);
-            return;
+            return ControlFlow::Continue(());
         };
         let Some(current) = self.overview_content(&target) else {
             self.fail_documentation_save(
                 "The folder no longer exists. Discard this documentation draft to continue.",
                 cx,
             );
-            return;
+            return ControlFlow::Break(());
         };
         // Only overlapping edits conflict; unrelated disk changes remain untouched.
         if (draft.original.first != draft.current.first && current.first != draft.original.first)
             || (draft.original.docs != draft.current.docs && current.docs != draft.original.docs)
         {
             self.fail_documentation_save("Documentation changed on disk. Discard the draft and review the updated documentation before editing again.", cx);
-            return;
+            return ControlFlow::Break(());
         }
         let loaded = self
             .loaded_workspace
@@ -253,7 +248,7 @@ impl ProbeApp {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.fail_documentation_save(format!("Could not save documentation: {error}"), cx);
-                return;
+                return ControlFlow::Break(());
             }
         };
         let path = self.workspace_path.clone();
@@ -273,9 +268,7 @@ impl ProbeApp {
                     Ok(()) => {
                         view.complete_overview_draft_save(&target, &draft.current);
                         view.show_toast(ToastIntent::Success, "Documentation saved.", cx);
-                        view.start_next_documentation_save(window, cx);
-                        view.start_next_request_save(window, cx);
-                        view.start_next_environment_save(window, cx);
+                        view.pump_workspace_writes(window, cx);
                     }
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         view.pending_documentation_saves.clear();
@@ -296,6 +289,7 @@ impl ProbeApp {
             });
         }));
         cx.notify();
+        ControlFlow::Continue(())
     }
 
     fn fail_documentation_save(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {

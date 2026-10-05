@@ -480,27 +480,22 @@ impl ProbeApp {
         {
             self.pending_environment_saves
                 .insert((environment, name.to_owned()));
-            self.start_next_environment_save(window, cx);
+            self.pump_workspace_writes(window, cx);
             cx.notify();
         }
     }
 
-    pub(super) fn start_next_environment_save(
+    pub(super) fn start_environment_save(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        if self.loading || self.has_active_workspace_write() {
-            return;
-        }
+    ) -> ControlFlow<()> {
         let Some((environment, name)) = self.pending_environment_saves.pop_first() else {
-            self.finish_pending_close_if_idle(window, cx);
-            return;
+            return ControlFlow::Break(());
         };
         let Some(loaded) = &self.loaded_workspace else {
             self.pending_environment_saves.insert((environment, name));
-            self.finish_pending_close_if_idle(window, cx);
-            return;
+            return ControlFlow::Break(());
         };
         let prepared = match loaded.prepare_environment_variable_save(&environment, &name) {
             Ok(prepared) => prepared,
@@ -512,7 +507,7 @@ impl ProbeApp {
                     format!("Could not save environment variable: {error}"),
                     cx,
                 );
-                return;
+                return ControlFlow::Break(());
             }
         };
         self.environment_save_workspace_path = self.workspace_path.clone();
@@ -535,8 +530,7 @@ impl ProbeApp {
                 match result {
                     Ok(()) => {
                         view.environment_save_workspace_path = None;
-                        view.start_next_request_save(window, cx);
-                        view.start_next_environment_save(window, cx);
+                        view.pump_workspace_writes(window, cx);
                     }
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         view.environment_save_workspace_path = None;
@@ -557,5 +551,6 @@ impl ProbeApp {
             });
         }));
         cx.notify();
+        ControlFlow::Continue(())
     }
 }

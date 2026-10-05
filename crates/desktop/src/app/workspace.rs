@@ -188,7 +188,7 @@ impl ProbeApp {
                 path,
                 restored_state: restored_state.map(Box::new),
             });
-            self.start_next_environment_save(window, cx);
+            self.pump_workspace_writes(window, cx);
             return;
         }
         self.load_workspace_path(path, restored_state, window, cx);
@@ -207,7 +207,7 @@ impl ProbeApp {
         }
         if self.has_pending_environment_work() {
             self.pending_close = Some(PendingClose::Create { path });
-            self.start_next_environment_save(window, cx);
+            self.pump_workspace_writes(window, cx);
             return;
         }
         self.create_workspace_path(path, window, cx);
@@ -268,36 +268,6 @@ impl ProbeApp {
 
     pub(super) fn has_pending_environment_work(&self) -> bool {
         self.environment_save_task.is_some() || !self.pending_environment_saves.is_empty()
-    }
-
-    pub(super) fn finish_pending_close_if_idle(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.request_save_task.is_some()
-            || self.environment_save_task.is_some()
-            || self.documentation_save_task.is_some()
-            || self.persistence.has_outstanding_saves()
-        {
-            return;
-        }
-        if !self.pending_environment_saves.is_empty() {
-            self.start_next_environment_save(window, cx);
-            return;
-        }
-        if !self.pending_documentation_saves.is_empty() {
-            self.start_next_documentation_save(window, cx);
-            return;
-        }
-        if let Some(pending) = self.pending_close.take() {
-            let dirty = self.pending_close_dirty_keys(&pending);
-            if dirty.is_empty() && self.pending_overview_targets(&pending).is_empty() {
-                self.finish_pending_close(pending, window, cx);
-            } else {
-                self.prompt_unsaved(dirty, pending, window, cx);
-            }
-        }
     }
 
     pub(super) fn pending_close_dirty_keys(&self, pending: &PendingClose) -> Vec<RequestKey> {
@@ -610,7 +580,7 @@ impl ProbeApp {
                     self.open_save_detached_request_dialog(key, window, cx);
                 } else {
                     self.persistence.enqueue(keys);
-                    self.start_next_request_save(window, cx);
+                    self.pump_workspace_writes(window, cx);
                 }
             }
             (
