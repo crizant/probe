@@ -23,6 +23,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+      - name: Test release notes extraction
+        shell: bash
+        run: bash scripts/test-release-notes.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
