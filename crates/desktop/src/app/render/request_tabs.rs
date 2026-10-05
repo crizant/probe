@@ -281,7 +281,7 @@ impl ProbeApp {
                 None,
                 move |window, cx| {
                     let _ = http_view.update(cx, |view, cx| {
-                        view.new_detached_request(false, window, cx);
+                        view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
                     });
                 },
             ))
@@ -292,7 +292,7 @@ impl ProbeApp {
                 None,
                 move |window, cx| {
                     let _ = graphql_view.update(cx, |view, cx| {
-                        view.new_detached_request(true, window, cx);
+                        view.new_detached_request(probe_core::RequestProtocol::Graphql, window, cx);
                     });
                 },
             ));

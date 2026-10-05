@@ -1,5 +1,5 @@
-use probe_core::{FieldPatch, GraphqlUpdate};
-use probe_opencollection::{CreatedRequestProtocol, StructureOperation};
+use probe_core::{FieldPatch, GraphqlUpdate, RequestProtocol};
+use probe_opencollection::StructureOperation;
 
 use super::*;
 
@@ -23,7 +23,7 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
                     name: "GraphQL Query".to_owned(),
                     method: Some("POST".to_owned()),
                     url: Some("https://api.example.com/graphql".to_owned()),
-                    protocol: CreatedRequestProtocol::Graphql,
+                    protocol: RequestProtocol::Graphql,
                     graphql: Some(GraphqlUpdate {
                         query: FieldPatch::Set("query { viewer { login } }".to_owned()),
                         variables: FieldPatch::Unchanged,
@@ -66,7 +66,9 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
                 Some("query { viewer { login } }")
             );
             assert!(
-                view.request_editor.section(key).available_for(true),
+                view.request_editor
+                    .section(key)
+                    .available_for(RequestProtocol::Graphql),
                 "created GraphQL request should leave a GraphQL-available section selected"
             );
         })
@@ -149,7 +151,7 @@ fn graphql_variables_extensions_and_operation_name_persist(cx: &mut TestAppConte
                     name: "GraphQL with Variables".to_owned(),
                     method: Some("POST".to_owned()),
                     url: Some("https://api.example.com/graphql".to_owned()),
-                    protocol: CreatedRequestProtocol::Graphql,
+                    protocol: RequestProtocol::Graphql,
                     graphql: Some(GraphqlUpdate {
                         query: FieldPatch::Set(
                             "query GetUser($id: Int!) { user(id: $id) { name } }".to_owned(),
@@ -257,7 +259,7 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
                     name: "HTTP".to_owned(),
                     method: Some("GET".to_owned()),
                     url: Some("https://api.example.com".to_owned()),
-                    protocol: CreatedRequestProtocol::Http,
+                    protocol: RequestProtocol::Http,
                     graphql: None,
                     update: None,
                 },
@@ -277,7 +279,7 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
                     name: "GraphQL".to_owned(),
                     method: Some("POST".to_owned()),
                     url: Some("https://api.example.com/graphql".to_owned()),
-                    protocol: CreatedRequestProtocol::Graphql,
+                    protocol: RequestProtocol::Graphql,
                     graphql: None,
                     update: None,
                 },
@@ -348,7 +350,7 @@ fn closing_graphql_tab_resets_unavailable_editor_section(cx: &mut TestAppContext
                     name: "HTTP".to_owned(),
                     method: Some("GET".to_owned()),
                     url: Some("https://api.example.com".to_owned()),
-                    protocol: CreatedRequestProtocol::Http,
+                    protocol: RequestProtocol::Http,
                     graphql: None,
                     update: None,
                 },
@@ -368,7 +370,7 @@ fn closing_graphql_tab_resets_unavailable_editor_section(cx: &mut TestAppContext
                     name: "GraphQL".to_owned(),
                     method: Some("POST".to_owned()),
                     url: Some("https://api.example.com/graphql".to_owned()),
-                    protocol: CreatedRequestProtocol::Graphql,
+                    protocol: RequestProtocol::Graphql,
                     graphql: None,
                     update: None,
                 },

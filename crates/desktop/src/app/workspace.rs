@@ -937,8 +937,7 @@ impl ProbeApp {
 
         let mut target_exists = true;
         match &mut dialog.mode {
-            StructureDialogMode::CreateHttpRequest
-            | StructureDialogMode::CreateGraphqlRequest
+            StructureDialogMode::CreateRequest(_)
             | StructureDialogMode::SaveDetachedRequest { .. }
             | StructureDialogMode::CreateFolder => {}
             StructureDialogMode::Rename { kind, selector }

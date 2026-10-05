@@ -2,9 +2,9 @@ use std::{iter::Peekable, path::PathBuf, vec::IntoIter};
 
 use probe_core::{
     CollectionUpdate, Documentation, FieldPatch, FolderUpdate, GraphqlUpdate, ItemKind,
-    RequestUpdate, StatusExpectation,
+    RequestProtocol, RequestUpdate, StatusExpectation,
 };
-use probe_opencollection::{CreatedRequestProtocol, ItemLocator, StructureOperation};
+use probe_opencollection::{ItemLocator, StructureOperation};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -675,9 +675,9 @@ fn parse_request_create(mut parser: Parser) -> Result<Command, CliError> {
         }
     }
     let path = one_path(&path)?;
-    let protocol = created_request_protocol(options.request_type.as_deref(), &options.fields)?;
+    let protocol = request_protocol(options.request_type.as_deref(), &options.fields)?;
     let mut update = options.fields.update()?;
-    if protocol == CreatedRequestProtocol::Graphql
+    if protocol == RequestProtocol::Graphql
         && (!update.body.is_unchanged() || !update.body_content.is_unchanged())
     {
         return Err(CliError::invalid_arguments(
@@ -1011,22 +1011,22 @@ impl RequestFields {
     }
 }
 
-fn created_request_protocol(
+fn request_protocol(
     request_type: Option<&str>,
     fields: &RequestFields,
-) -> Result<CreatedRequestProtocol, CliError> {
+) -> Result<RequestProtocol, CliError> {
     match request_type {
-        None if fields.graphql_requested() => Ok(CreatedRequestProtocol::Graphql),
+        None if fields.graphql_requested() => Ok(RequestProtocol::Graphql),
         None | Some("http") => {
             if fields.graphql_requested() {
                 Err(CliError::invalid_arguments(
                     "GraphQL fields cannot be applied to an HTTP request",
                 ))
             } else {
-                Ok(CreatedRequestProtocol::Http)
+                Ok(RequestProtocol::Http)
             }
         }
-        Some("graphql") => Ok(CreatedRequestProtocol::Graphql),
+        Some("graphql") => Ok(RequestProtocol::Graphql),
         Some(_) => Err(CliError::invalid_arguments(
             "--type must be http or graphql",
         )),

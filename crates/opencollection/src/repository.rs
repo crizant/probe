@@ -12,9 +12,9 @@ use std::{
 use atomic_write_file::AtomicWriteFile;
 use probe_core::{
     Body, CollectionItem, CollectionUpdate, Documentation, Environment, EnvironmentResolutionError,
-    EnvironmentVariable, FieldPatch, FolderKey, FolderUpdate, RequestKey, RequestUpdate, Variable,
-    VariableValue, VariableValueSet, VariableValueVariant, Workspace, WorkspaceItemRef,
-    validate_environments, validate_unique_variable_names,
+    EnvironmentVariable, FieldPatch, FolderKey, FolderUpdate, RequestKey, RequestProtocol,
+    RequestUpdate, Variable, VariableValue, VariableValueSet, VariableValueVariant, Workspace,
+    WorkspaceItemRef, validate_environments, validate_unique_variable_names,
 };
 use serde_yaml_ng::Value;
 
@@ -1485,13 +1485,18 @@ pub(crate) fn apply_request_update(
             },
         );
     }
-    let is_graphql = request
+    let protocol = if request
         .get(Value::String("info".to_owned()))
         .and_then(Value::as_mapping)
         .and_then(|info| info.get(Value::String("type".to_owned())))
         .and_then(Value::as_str)
-        == Some("graphql");
-    let details_name = if is_graphql { "graphql" } else { "http" };
+        == Some("graphql")
+    {
+        RequestProtocol::Graphql
+    } else {
+        RequestProtocol::Http
+    };
+    let details_name = protocol.as_str();
     if !update.method.is_unchanged()
         || !update.url.is_unchanged()
         || update.headers.is_some()
@@ -1541,7 +1546,7 @@ pub(crate) fn apply_request_update(
             );
         }
         if !update.body.is_unchanged() {
-            if is_graphql {
+            if protocol == RequestProtocol::Graphql {
                 return Err(SaveError::InvalidDocument(
                     "HTTP body updates cannot be applied to a native GraphQL request".to_owned(),
                 ));
@@ -1554,7 +1559,7 @@ pub(crate) fn apply_request_update(
             set_optional_merged(details, "body", value);
         }
         if !update.body_content.is_unchanged() {
-            if is_graphql {
+            if protocol == RequestProtocol::Graphql {
                 return Err(SaveError::Graphql(probe_core::GraphqlRequestError::NotHttp));
             }
             match &update.body_content {
@@ -1572,7 +1577,7 @@ pub(crate) fn apply_request_update(
             set_optional(details, "auth", value);
         }
         if let Some(graphql) = &update.graphql {
-            if !is_graphql {
+            if protocol != RequestProtocol::Graphql {
                 return Err(SaveError::Graphql(
                     probe_core::GraphqlRequestError::NotGraphql,
                 ));

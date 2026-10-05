@@ -608,7 +608,11 @@ impl ProbeApp {
                 move |window, cx| {
                     let _ = new_http_request_view.update(cx, |view, cx| {
                         view.transient.structure_add_menu_open = false;
-                        view.open_create_request_dialog(window, cx);
+                        view.open_create_request_dialog(
+                            probe_core::RequestProtocol::Http,
+                            window,
+                            cx,
+                        );
                     });
                 },
             ))
@@ -625,7 +629,11 @@ impl ProbeApp {
                 move |window, cx| {
                     let _ = new_graphql_request_view.update(cx, |view, cx| {
                         view.transient.structure_add_menu_open = false;
-                        view.open_create_graphql_request_dialog(window, cx);
+                        view.open_create_request_dialog(
+                            probe_core::RequestProtocol::Graphql,
+                            window,
+                            cx,
+                        );
                     });
                 },
             ))

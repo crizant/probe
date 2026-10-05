@@ -55,13 +55,14 @@ impl ProbeApp {
                 .workspace()
                 .contains_item(WorkspaceItemRef::Request(key))
         }) {
-            let is_graphql = self
+            let protocol = self
                 .loaded_workspace
                 .as_ref()
                 .and_then(|loaded| loaded.workspace().request(key))
-                .is_some_and(|request| request.kind.is_graphql());
-            self.request_editor
-                .ensure_available_section(key, is_graphql);
+                .map_or(probe_core::RequestProtocol::Http, |request| {
+                    request.kind.protocol()
+                });
+            self.request_editor.ensure_available_section(key, protocol);
             self.selected_tree_item =
                 (!self.detached_requests.contains(&key)).then_some(WorkspaceItemRef::Request(key));
             self.shell.open_request(key);
@@ -101,6 +102,7 @@ impl ProbeApp {
 
     pub(super) fn open_create_request_dialog(
         &mut self,
+        protocol: probe_core::RequestProtocol,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -108,23 +110,8 @@ impl ProbeApp {
             return;
         }
         self.create_environment_dialog = None;
-        self.structure_dialog = Some(StructureDialog::create_http_request(
-            self.selected_parent_selector(),
-        ));
-        self.structure_dialog_focus.focus(window, cx);
-        cx.notify();
-    }
-
-    pub(super) fn open_create_graphql_request_dialog(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.loaded_workspace.is_none() || self.structure_task.is_some() {
-            return;
-        }
-        self.create_environment_dialog = None;
-        self.structure_dialog = Some(StructureDialog::create_graphql_request(
+        self.structure_dialog = Some(StructureDialog::create_request(
+            protocol,
             self.selected_parent_selector(),
         ));
         self.structure_dialog_focus.focus(window, cx);
@@ -680,13 +667,14 @@ impl ProbeApp {
         if let Some(WorkspaceItemRef::Request(key)) = self.selected_tree_item
             && result.previous_selector.is_none()
         {
-            let is_graphql = self
+            let protocol = self
                 .loaded_workspace
                 .as_ref()
                 .and_then(|loaded| loaded.workspace().request(key))
-                .is_some_and(|request| request.kind.is_graphql());
-            self.request_editor
-                .ensure_available_section(key, is_graphql);
+                .map_or(probe_core::RequestProtocol::Http, |request| {
+                    request.kind.protocol()
+                });
+            self.request_editor.ensure_available_section(key, protocol);
             self.shell.open_request(key);
         }
         self.rebuild_visible_tree_rows();

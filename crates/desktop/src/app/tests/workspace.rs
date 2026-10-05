@@ -1,7 +1,47 @@
 use super::*;
-use crate::app::documentation::OverviewTarget;
+use crate::app::{NewGraphqlRequest, NewRequest, documentation::OverviewTarget};
 use probe_core::ItemKind;
 use probe_opencollection::ItemLocator;
+
+#[gpui::test]
+fn request_creation_dialog_uses_the_selected_protocol(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, _, _| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    for (action, protocol) in [
+        (
+            Box::new(NewRequest) as Box<dyn gpui::Action>,
+            probe_core::RequestProtocol::Http,
+        ),
+        (
+            Box::new(NewGraphqlRequest) as Box<dyn gpui::Action>,
+            probe_core::RequestProtocol::Graphql,
+        ),
+    ] {
+        window
+            .update(cx, |_, window, cx| {
+                window.dispatch_action(action, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                let dialog = view.structure_dialog.as_ref().unwrap();
+                assert_eq!(dialog.mode, StructureDialogMode::CreateRequest(protocol));
+            })
+            .unwrap();
+    }
+}
 
 #[gpui::test]
 fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
@@ -16,7 +56,7 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
             let original_count = view.loaded_workspace.as_ref().unwrap().requests().len();
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let http_key = view.shell.active_tab().unwrap();
             assert_eq!(
                 view.active_request().unwrap().method.as_deref(),
@@ -32,8 +72,17 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
                 view.active_request().unwrap().url.as_deref(),
                 Some("https://example.test")
             );
-            view.new_detached_request(true, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Graphql, window, cx);
             assert!(view.active_request().unwrap().kind.is_graphql());
+            assert_eq!(
+                view.active_request().unwrap().method.as_deref(),
+                Some("POST")
+            );
+            assert_eq!(
+                view.request_editor
+                    .section(view.shell.active_tab().unwrap()),
+                EditorSection::Path
+            );
             assert_eq!(
                 view.loaded_workspace.as_ref().unwrap().requests().len(),
                 original_count
@@ -65,7 +114,7 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.request_editor.set_section(key, EditorSection::Headers);
             view.edit_request(
@@ -163,7 +212,7 @@ fn key_value_editor_row_controls_update_their_rows_and_restore_focus(cx: &mut Te
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.edit_request(
                 key,
@@ -286,7 +335,7 @@ fn saving_detached_request_preserves_edited_fields(cx: &mut TestAppContext) {
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.edit_request(
                 key,
@@ -341,7 +390,7 @@ fn saving_detached_request_keeps_the_persisted_sequence(cx: &mut TestAppContext)
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.edit_request(
                 key,
@@ -418,7 +467,7 @@ fn saving_detached_graphql_request_preserves_query(cx: &mut TestAppContext) {
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
-            view.new_detached_request(true, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Graphql, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.edit_request(
                 key,
@@ -474,7 +523,7 @@ fn saving_background_draft_keeps_the_user_selected_tab(cx: &mut TestAppContext) 
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let draft_key = view.shell.active_tab().unwrap();
             view.persist_detached_request(draft_key, "Background".to_owned(), None, window, cx);
             view.select_request(existing_key, cx);
@@ -513,7 +562,7 @@ fn saving_detached_request_keeps_unrelated_request_dirty(cx: &mut TestAppContext
                 },
                 cx,
             );
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let draft_key = view.shell.active_tab().unwrap();
             view.persist_detached_request(draft_key, "Saved Draft".to_owned(), None, window, cx);
         })
@@ -545,7 +594,7 @@ fn editing_detached_request_during_save_keeps_the_edit_dirty(cx: &mut TestAppCon
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.edit_request(
                 key,
@@ -645,9 +694,9 @@ fn close_other_tabs_keeps_a_detached_tab_after_key_remap(cx: &mut TestAppContext
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let keep = view.shell.active_tab().unwrap();
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let save = view.shell.active_tab().unwrap();
             view.pending_close = Some(PendingClose::OtherTabs { keep: keep.into() });
             view.persist_detached_request(save, "Saved".to_owned(), None, window, cx);
@@ -678,7 +727,7 @@ fn save_dialog_survives_workspace_reload(cx: &mut TestAppContext) {
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let old_key = view.shell.active_tab().unwrap();
             view.open_save_detached_request_dialog(old_key, window, cx);
             let mut fresh = probe_opencollection::load_workspace(&fixture).unwrap();
@@ -689,7 +738,7 @@ fn save_dialog_survives_workspace_reload(cx: &mut TestAppContext) {
                     name: "External".to_owned(),
                     method: Some("GET".to_owned()),
                     url: None,
-                    protocol: probe_opencollection::CreatedRequestProtocol::Http,
+                    protocol: probe_core::RequestProtocol::Http,
                     graphql: None,
                     update: None,
                 })
@@ -742,7 +791,7 @@ fn save_dialog_records_the_selected_parent(cx: &mut TestAppContext) {
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             let folder = view
                 .loaded_workspace
@@ -785,7 +834,7 @@ fn creating_a_folder_from_the_save_dialog_keeps_the_draft_and_saves_into_it(
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.edit_request(
                 key,
@@ -895,7 +944,7 @@ fn enter_in_the_save_folder_field_creates_the_folder_without_saving(cx: &mut Tes
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.open_save_detached_request_dialog(key, window, cx);
             let dialog = view.structure_dialog.as_mut().unwrap();
@@ -992,7 +1041,7 @@ fn enter_on_a_save_destination_selects_that_folder(cx: &mut TestAppContext) {
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
             view.open_save_detached_request_dialog(key, window, cx);
@@ -1053,7 +1102,7 @@ fn creating_a_folder_keeps_open_tab_order(cx: &mut TestAppContext) {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
             view.select_request(persisted, cx);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             assert_eq!(view.shell.tabs().count(), 2);
             assert_eq!(view.shell.tabs().next().unwrap(), persisted);
             assert_eq!(
@@ -1131,7 +1180,7 @@ fn save_dialog_stays_open_when_a_save_is_already_running(cx: &mut TestAppContext
             );
             view.save_active_editor(window, cx);
             assert!(view.request_save_task.is_some());
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.open_save_detached_request_dialog(key, window, cx);
             view.structure_dialog.as_mut().unwrap().name = "Placed".to_owned();
@@ -1198,7 +1247,7 @@ fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
         .update(cx, |view, window, cx| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let key = view.shell.active_tab().unwrap();
             view.open_save_detached_request_dialog(key, window, cx);
             let dialog = view.structure_dialog.as_mut().unwrap();
@@ -1364,7 +1413,7 @@ fn reconciliation_preserves_interleaved_detached_tab_and_its_selection(cx: &mut 
     let (window, [request, _, _]) = mixed_tab_window(cx);
     window
         .update(cx, |view, window, cx| {
-            view.new_detached_request(false, window, cx);
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
             let old_detached = view.shell.active_open_tab().unwrap();
             view.shell.move_tab(old_detached, request, false);
             let loaded = view.loaded_workspace.as_ref().unwrap();
@@ -1769,7 +1818,7 @@ fn creating_root_request_without_selection_selects_opens_and_reveals_it(cx: &mut
                     name: "Created Root".to_owned(),
                     method: Some("GET".to_owned()),
                     url: None,
-                    protocol: probe_opencollection::CreatedRequestProtocol::Http,
+                    protocol: probe_core::RequestProtocol::Http,
                     graphql: None,
                     update: None,
                 },
@@ -1833,7 +1882,7 @@ fn creating_request_in_selected_folder_selects_child_and_expands_parent(cx: &mut
                     name: "Created Child".to_owned(),
                     method: Some("GET".to_owned()),
                     url: None,
-                    protocol: probe_opencollection::CreatedRequestProtocol::Http,
+                    protocol: probe_core::RequestProtocol::Http,
                     graphql: None,
                     update: None,
                 },

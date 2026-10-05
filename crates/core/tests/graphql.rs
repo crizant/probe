@@ -1,8 +1,8 @@
 use probe_core::{
     Body, BodyVariant, Environment, EnvironmentVariable, FieldPatch, GraphqlBody,
     GraphqlBodyVariant, GraphqlOperation, GraphqlRequestError, GraphqlUpdate, QueryParameter,
-    RawBody, RawBodyKind, Request, RequestBody, RequestKind, RequestUpdate, Variable,
-    VariableValue, VariableValueSet, resolve_environment, resolve_request,
+    RawBody, RawBodyKind, Request, RequestBody, RequestKind, RequestProtocol, RequestUpdate,
+    Variable, VariableValue, VariableValueSet, resolve_environment, resolve_request,
 };
 use serde_json::{Map, Value, json};
 
@@ -34,6 +34,53 @@ fn graphql_request(body: Option<GraphqlBody>) -> Request {
     Request {
         kind: RequestKind::Graphql { body },
         ..Request::default()
+    }
+}
+
+#[test]
+fn protocol_identity_and_defaults_are_independent_of_body() {
+    assert_eq!(RequestProtocol::default(), RequestProtocol::Http);
+    assert_eq!(RequestKind::default().protocol(), RequestProtocol::Http);
+    for (kind, protocol, name, method) in [
+        (
+            RequestKind::Http { body: None },
+            RequestProtocol::Http,
+            "http",
+            "GET",
+        ),
+        (
+            RequestKind::Http {
+                body: Some(RequestBody::Single(Body::Raw(RawBody {
+                    kind: RawBodyKind::Json,
+                    data: r#"{"query":"{ viewer }"}"#.to_owned(),
+                }))),
+            },
+            RequestProtocol::Http,
+            "http",
+            "GET",
+        ),
+        (
+            RequestKind::Graphql { body: None },
+            RequestProtocol::Graphql,
+            "graphql",
+            "POST",
+        ),
+        (
+            RequestKind::Graphql {
+                body: Some(GraphqlBody::Single(GraphqlOperation {
+                    query: Some("{ viewer }".to_owned()),
+                    ..GraphqlOperation::default()
+                })),
+            },
+            RequestProtocol::Graphql,
+            "graphql",
+            "POST",
+        ),
+    ] {
+        assert_eq!(kind.protocol(), protocol);
+        assert_eq!(kind.as_str(), name);
+        assert_eq!(protocol.as_str(), name);
+        assert_eq!(protocol.default_method(), method);
     }
 }
 

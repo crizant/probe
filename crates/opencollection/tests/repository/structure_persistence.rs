@@ -3,6 +3,40 @@ use probe_core::ItemKind;
 use probe_opencollection::ItemLocator;
 
 #[test]
+fn creation_preserves_omitted_and_explicit_methods() {
+    let path = temporary_path("protocol-defaults.yml");
+    fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    for (name, protocol, method) in [
+        ("HTTP default", RequestProtocol::Http, None),
+        ("GraphQL default", RequestProtocol::Graphql, None),
+        ("HTTP override", RequestProtocol::Http, Some("PATCH")),
+        ("GraphQL override", RequestProtocol::Graphql, Some("GET")),
+    ] {
+        let created = loaded
+            .apply_structure(StructureOperation::CreateRequest {
+                parent: None,
+                index: None,
+                name: name.to_owned(),
+                method: method.map(str::to_owned),
+                url: None,
+                protocol,
+                graphql: None,
+                update: None,
+            })
+            .unwrap();
+        let reloaded = load_workspace(&path).unwrap();
+        let key = reloaded.request_key(&created.selector.unwrap()).unwrap();
+        let request = reloaded.workspace().request(key).unwrap();
+        assert_eq!(request.kind.protocol(), protocol);
+        assert_eq!(request.method.as_deref(), method);
+        assert!(request.http_body().is_none());
+        assert!(request.graphql().is_none());
+    }
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn bundled_create_writes_complete_request_in_one_operation() {
     let path = temporary_path("complete-create.yml");
     fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
@@ -14,7 +48,7 @@ fn bundled_create_writes_complete_request_in_one_operation() {
             name: "Complete".to_owned(),
             method: Some("POST".to_owned()),
             url: Some("https://example.test".to_owned()),
-            protocol: CreatedRequestProtocol::Http,
+            protocol: RequestProtocol::Http,
             graphql: None,
             update: Some(probe_core::RequestUpdate {
                 headers: Some(vec![probe_core::Header {
@@ -49,7 +83,7 @@ fn invalid_create_update_leaves_bundled_source_untouched() {
         name: "Invalid".to_owned(),
         method: Some("POST".to_owned()),
         url: None,
-        protocol: CreatedRequestProtocol::Graphql,
+        protocol: RequestProtocol::Graphql,
         graphql: None,
         update: Some(probe_core::RequestUpdate {
             body: FieldPatch::Clear,
@@ -73,7 +107,7 @@ fn unbundled_create_writes_complete_request_before_publishing_file() {
             name: "Complete".to_owned(),
             method: Some("POST".to_owned()),
             url: Some("https://example.test".to_owned()),
-            protocol: CreatedRequestProtocol::Http,
+            protocol: RequestProtocol::Http,
             graphql: None,
             update: Some(probe_core::RequestUpdate {
                 headers: Some(vec![probe_core::Header {
@@ -109,7 +143,7 @@ fn bundled_structure_edits_save_reload_and_preserve_unknown_fields() {
             name: "Created".to_owned(),
             method: Some("PUT".to_owned()),
             url: Some("https://example.com/created".to_owned()),
-            protocol: CreatedRequestProtocol::Http,
+            protocol: RequestProtocol::Http,
             graphql: None,
             update: None,
         })
@@ -313,7 +347,7 @@ fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
             name: "Created Request".to_owned(),
             method: Some("PATCH".to_owned()),
             url: Some("https://example.com/created".to_owned()),
-            protocol: CreatedRequestProtocol::Http,
+            protocol: RequestProtocol::Http,
             graphql: None,
             update: None,
         })
@@ -591,7 +625,7 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
             name: "Unsafe".to_owned(),
             method: None,
             url: None,
-            protocol: CreatedRequestProtocol::Http,
+            protocol: RequestProtocol::Http,
             graphql: None,
             update: None,
         })
@@ -610,7 +644,7 @@ fn structure_edits_reject_duplicates_invalid_destinations_and_conflicts() {
             name: "Alpha".to_owned(),
             method: None,
             url: None,
-            protocol: CreatedRequestProtocol::Http,
+            protocol: RequestProtocol::Http,
             graphql: None,
             update: None,
         })
@@ -673,7 +707,7 @@ fn bundled_create_can_write_native_graphql_requests() {
             name: "Viewer".to_owned(),
             method: Some("POST".to_owned()),
             url: Some("https://example.com/graphql".to_owned()),
-            protocol: CreatedRequestProtocol::Graphql,
+            protocol: RequestProtocol::Graphql,
             graphql: Some(probe_core::GraphqlUpdate {
                 query: probe_core::FieldPatch::Set("query Viewer { viewer { login } }".to_owned()),
                 operation_name: FieldPatch::Set("Viewer".to_owned()),

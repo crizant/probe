@@ -67,11 +67,14 @@ impl EditorSection {
         )
     }
 
-    pub(crate) fn available_for(self, is_graphql: bool) -> bool {
-        if is_graphql {
-            Self::ALL_GRAPHQL.contains(&self)
-        } else {
-            Self::ALL_HTTP.contains(&self)
+    pub(crate) fn available_for(self, protocol: probe_core::RequestProtocol) -> bool {
+        Self::for_protocol(protocol).contains(&self)
+    }
+
+    pub(crate) fn for_protocol(protocol: probe_core::RequestProtocol) -> &'static [Self] {
+        match protocol {
+            probe_core::RequestProtocol::Graphql => &Self::ALL_GRAPHQL,
+            probe_core::RequestProtocol::Http => &Self::ALL_HTTP,
         }
     }
 }
@@ -203,16 +206,19 @@ impl RequestEditorState {
         self.sections.remove(&key);
     }
 
-    pub(crate) fn ensure_available_section(&mut self, key: RequestKey, is_graphql: bool) {
-        if self.section(key).available_for(is_graphql) {
+    pub(crate) fn ensure_available_section(
+        &mut self,
+        key: RequestKey,
+        protocol: probe_core::RequestProtocol,
+    ) {
+        if self.section(key).available_for(protocol) {
             return;
         }
         self.set_section(
             key,
-            if is_graphql {
-                EditorSection::GraphqlQuery
-            } else {
-                EditorSection::Body
+            match protocol {
+                probe_core::RequestProtocol::Graphql => EditorSection::GraphqlQuery,
+                probe_core::RequestProtocol::Http => EditorSection::Body,
             },
         );
     }
@@ -629,7 +635,7 @@ mod tests {
         let key = request_key();
         let mut editor = RequestEditorState::default();
         editor.set_section(key, EditorSection::Body);
-        editor.ensure_available_section(key, true);
+        editor.ensure_available_section(key, probe_core::RequestProtocol::Graphql);
         assert_eq!(editor.section(key), EditorSection::GraphqlQuery);
     }
 
@@ -638,7 +644,7 @@ mod tests {
         let key = request_key();
         let mut editor = RequestEditorState::default();
         editor.set_section(key, EditorSection::GraphqlVariables);
-        editor.ensure_available_section(key, false);
+        editor.ensure_available_section(key, probe_core::RequestProtocol::Http);
         assert_eq!(editor.section(key), EditorSection::Body);
     }
 
@@ -647,13 +653,13 @@ mod tests {
         let key = request_key();
         let mut editor = RequestEditorState::default();
         editor.set_section(key, EditorSection::Headers);
-        editor.ensure_available_section(key, true);
+        editor.ensure_available_section(key, probe_core::RequestProtocol::Graphql);
         assert_eq!(editor.section(key), EditorSection::Headers);
-        editor.ensure_available_section(key, false);
+        editor.ensure_available_section(key, probe_core::RequestProtocol::Http);
         assert_eq!(editor.section(key), EditorSection::Headers);
         editor.set_section(key, EditorSection::Docs);
-        editor.ensure_available_section(key, true);
-        editor.ensure_available_section(key, false);
+        editor.ensure_available_section(key, probe_core::RequestProtocol::Graphql);
+        editor.ensure_available_section(key, probe_core::RequestProtocol::Http);
         assert_eq!(editor.section(key), EditorSection::Docs);
     }
 

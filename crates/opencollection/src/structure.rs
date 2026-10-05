@@ -9,7 +9,7 @@ use std::{
 use atomic_write_file::AtomicWriteFile;
 use serde_yaml_ng::{Mapping, Value};
 
-use probe_core::{FieldPatch, GraphqlUpdate, ItemKind, RequestUpdate};
+use probe_core::{FieldPatch, GraphqlUpdate, ItemKind, RequestProtocol, RequestUpdate};
 
 use crate::repository::{
     LoadedWorkspace, SaveError, SaveLock, WorkspaceSource, apply_request_update, atomic_write,
@@ -46,27 +46,6 @@ impl ItemLocator {
     }
 }
 
-/// Protocol identity for a newly created request.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CreatedRequestProtocol {
-    /// A native OpenCollection HTTP request.
-    #[default]
-    Http,
-    /// A native OpenCollection GraphQL request.
-    Graphql,
-}
-
-impl CreatedRequestProtocol {
-    /// Returns the OpenCollection `info.type` value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Http => "http",
-            Self::Graphql => "graphql",
-        }
-    }
-}
-
 /// A repository-owned structural workspace operation.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::large_enum_variant)]
@@ -84,7 +63,7 @@ pub enum StructureOperation {
         /// Initial URL.
         url: Option<String>,
         /// Native protocol identity written to `info.type`.
-        protocol: CreatedRequestProtocol,
+        protocol: RequestProtocol,
         /// Initial native GraphQL body, when creating a GraphQL request.
         graphql: Option<GraphqlUpdate>,
         /// Additional request fields written in the same atomic creation operation.
@@ -505,7 +484,7 @@ fn request_value(
     name: &str,
     method: Option<String>,
     url: Option<String>,
-    protocol: CreatedRequestProtocol,
+    protocol: RequestProtocol,
     graphql: Option<GraphqlUpdate>,
 ) -> Value {
     let mut details = Mapping::new();
@@ -515,7 +494,7 @@ fn request_value(
     if let Some(url) = url {
         details.insert(Value::String("url".to_owned()), Value::String(url));
     }
-    if protocol == CreatedRequestProtocol::Graphql
+    if protocol == RequestProtocol::Graphql
         && let Some(graphql) = graphql
         && !graphql.is_empty()
     {
