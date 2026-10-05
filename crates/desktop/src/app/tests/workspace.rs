@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::documentation::OverviewTarget;
+use crate::app::{NewGraphqlRequest, NewRequest, documentation::OverviewTarget};
 use probe_core::ItemKind;
 use probe_opencollection::ItemLocator;
 
@@ -12,19 +12,35 @@ fn request_creation_dialog_uses_the_selected_protocol(cx: &mut TestAppContext) {
     let fixture = bundled_fixture().canonicalize().unwrap();
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
     window
-        .update(cx, |view, window, cx| {
+        .update(cx, |view, _, _| {
             view.session_store = None;
             view.set_workspace(fixture, workspace);
-            for protocol in [
-                probe_core::RequestProtocol::Http,
-                probe_core::RequestProtocol::Graphql,
-            ] {
-                view.open_create_request_dialog(protocol, window, cx);
-                let dialog = view.structure_dialog.as_ref().unwrap();
-                assert_eq!(dialog.mode, StructureDialogMode::CreateRequest(protocol));
-            }
         })
         .unwrap();
+    cx.run_until_parked();
+    for (action, protocol) in [
+        (
+            Box::new(NewRequest) as Box<dyn gpui::Action>,
+            probe_core::RequestProtocol::Http,
+        ),
+        (
+            Box::new(NewGraphqlRequest) as Box<dyn gpui::Action>,
+            probe_core::RequestProtocol::Graphql,
+        ),
+    ] {
+        window
+            .update(cx, |_, window, cx| {
+                window.dispatch_action(action, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                let dialog = view.structure_dialog.as_ref().unwrap();
+                assert_eq!(dialog.mode, StructureDialogMode::CreateRequest(protocol));
+            })
+            .unwrap();
+    }
 }
 
 #[gpui::test]
