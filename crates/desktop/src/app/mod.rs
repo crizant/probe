@@ -37,11 +37,6 @@ use probe_opencollection::{
     CompletedEnvironmentDelete, LoadedWorkspace, StructureOperation, StructureResult,
     create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
 };
-use probe_postman::{
-    ImportedPostmanCollection, PostmanImportError, PostmanImportPreview, inspect_postman_source,
-};
-use probe_yaak::{ImportedYaakWorkspace, YaakImportError, YaakImportPreview, inspect_yaak_source};
-
 mod chrome;
 mod detached_requests;
 mod dialogs;
@@ -66,11 +61,11 @@ pub(crate) use dialogs::IMPORT_DIAGNOSTIC_GROUP_LIMIT;
 use dialogs::{
     ApplicationDialog, ApplicationDialogAction, CANCEL_DIALOG_ACTION, DesktopMenu,
     DesktopMenuDefinition, DesktopMenuItem, DesktopSubmenu, DialogActionSpec,
-    EnvironmentManagerDialog, ImportSource, PendingClose, PostmanConversionResult, SecretUiStatus,
-    StoredSecretRename, YaakConversionResult, format_import_diagnostics,
-    suggested_collection_filename,
+    EnvironmentManagerDialog, PendingClose, SecretUiStatus, StoredSecretRename,
+    format_import_diagnostics, suggested_collection_filename,
 };
 use documentation::OverviewTarget;
+use imports::{ImportConversion, ImportSource};
 use presentation::{
     InspectListRow, PrettyRevealState, ShellSelectors, inspect_list_rows, inspect_row_index,
     inspect_row_label, placeholder_message, request_method_options, response_status_color,
@@ -226,36 +221,6 @@ type TabTooltipTarget = crate::shell::OpenTab;
 struct PositionedContextMenu<T> {
     target: T,
     position: Point<Pixels>,
-}
-
-#[derive(Clone, Copy)]
-enum ImportedCollectionKind {
-    Postman,
-    Yaak,
-}
-
-impl ImportedCollectionKind {
-    const fn source_label(self) -> &'static str {
-        match self {
-            Self::Postman => "Postman",
-            Self::Yaak => "Yaak",
-        }
-    }
-
-    const fn imported_kind(self) -> &'static str {
-        match self {
-            Self::Postman => "collection",
-            Self::Yaak => "workspace",
-        }
-    }
-}
-
-struct CollectionImport {
-    source_name: String,
-    collection: Collection,
-    warning_count: usize,
-    selected_environment: Option<String>,
-    kind: ImportedCollectionKind,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

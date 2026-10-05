@@ -682,7 +682,11 @@ impl ProbeApp {
                 ApplicationDialogAction::SelectWorkspace(index),
             ) => {
                 if let Some(workspace) = workspaces.get(index) {
-                    self.convert_yaak_import(preview, workspace.id.clone(), false, window, cx);
+                    let conversion = ImportConversion::Yaak {
+                        preview,
+                        workspace_id: workspace.id.clone(),
+                    };
+                    self.convert_import(conversion, false, window, cx);
                 } else {
                     self.loading = false;
                     cx.notify();
@@ -700,22 +704,13 @@ impl ProbeApp {
                 }
             }
             (
-                ApplicationDialog::ConfirmPartialYaakImport {
-                    preview,
-                    workspace_id,
-                    ..
-                },
+                ApplicationDialog::ConfirmPartialImport { conversion, .. },
                 ApplicationDialogAction::ImportSupportedData,
-            ) => self.convert_yaak_import(preview, workspace_id, true, window, cx),
-            (
-                ApplicationDialog::ConfirmPartialPostmanImport { preview, .. },
-                ApplicationDialogAction::ImportSupportedData,
-            ) => self.convert_postman_import(*preview, true, window, cx),
+            ) => self.convert_import(conversion, true, window, cx),
             (
                 ApplicationDialog::SelectYaakWorkspace { .. }
                 | ApplicationDialog::SelectCollectionFile { .. }
-                | ApplicationDialog::ConfirmPartialYaakImport { .. }
-                | ApplicationDialog::ConfirmPartialPostmanImport { .. },
+                | ApplicationDialog::ConfirmPartialImport { .. },
                 ApplicationDialogAction::Cancel,
             ) => {
                 self.loading = false;

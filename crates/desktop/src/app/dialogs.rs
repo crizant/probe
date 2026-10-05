@@ -2,20 +2,16 @@ use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
 
 use gpui::Action;
 use probe_core::{Environment, ImportDiagnostic, ImportDiagnosticSeverity, ItemKind, RequestKey};
-use probe_postman::{ImportedPostmanCollection, PostmanImportPreview};
-use probe_yaak::{ImportedYaakWorkspace, YaakImportPreview, YaakWorkspaceSummary};
+use probe_yaak::{YaakImportPreview, YaakWorkspaceSummary};
 
 use crate::{components, session::SessionState};
 
-use super::documentation::OverviewTarget;
+use super::{
+    documentation::OverviewTarget,
+    imports::{ImportConversion, ImportSource},
+};
 
 pub(crate) const IMPORT_DIAGNOSTIC_GROUP_LIMIT: usize = 8;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ImportSource {
-    Postman,
-    Yaak,
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct EnvironmentManagerDialog {
@@ -149,19 +145,14 @@ pub(crate) enum ApplicationDialog {
         detail: String,
     },
     SelectYaakWorkspace {
-        preview: YaakImportPreview,
+        preview: Box<YaakImportPreview>,
         workspaces: Vec<YaakWorkspaceSummary>,
     },
     SelectCollectionFile {
         candidates: Vec<PathBuf>,
     },
-    ConfirmPartialYaakImport {
-        preview: YaakImportPreview,
-        workspace_id: String,
-        detail: String,
-    },
-    ConfirmPartialPostmanImport {
-        preview: Box<PostmanImportPreview>,
+    ConfirmPartialImport {
+        conversion: ImportConversion,
         detail: String,
     },
 }
@@ -254,12 +245,10 @@ impl ApplicationDialog {
             }
             Self::SelectYaakWorkspace { .. } => Cow::Borrowed("Select a Yaak workspace"),
             Self::SelectCollectionFile { .. } => Cow::Borrowed("Select a collection"),
-            Self::ConfirmPartialYaakImport { .. } => {
-                Cow::Borrowed("Some Yaak data cannot be represented")
-            }
-            Self::ConfirmPartialPostmanImport { .. } => {
-                Cow::Borrowed("Some Postman data cannot be represented")
-            }
+            Self::ConfirmPartialImport { conversion, .. } => Cow::Owned(format!(
+                "Some {} data cannot be represented",
+                conversion.source().label()
+            )),
         }
     }
 
@@ -277,8 +266,7 @@ impl ApplicationDialog {
             | Self::DeleteEnvironment { detail, .. }
             | Self::DeleteStoredSecret { detail, .. }
             | Self::FilesystemConflict { detail, .. }
-            | Self::ConfirmPartialYaakImport { detail, .. }
-            | Self::ConfirmPartialPostmanImport { detail, .. } => Cow::Borrowed(detail),
+            | Self::ConfirmPartialImport { detail, .. } => Cow::Borrowed(detail),
             Self::RenameStoredSecrets {
                 kind: StoredSecretRename::Environment,
             } => Cow::Borrowed(ENVIRONMENT_SECRET_RENAME_DETAIL),
@@ -303,8 +291,7 @@ impl ApplicationDialog {
         match self {
             Self::SelectYaakWorkspace { .. }
             | Self::SelectCollectionFile { .. }
-            | Self::ConfirmPartialYaakImport { .. }
-            | Self::ConfirmPartialPostmanImport { .. } => components::WIDE_DIALOG_WIDTH,
+            | Self::ConfirmPartialImport { .. } => components::WIDE_DIALOG_WIDTH,
             _ => components::COMPACT_DIALOG_WIDTH,
         }
     }
@@ -319,9 +306,7 @@ impl ApplicationDialog {
             Self::FilesystemConflict { .. } => Some(FILESYSTEM_CONFLICT_DIALOG_ACTIONS),
             Self::SelectYaakWorkspace { .. } => None,
             Self::SelectCollectionFile { .. } => None,
-            Self::ConfirmPartialYaakImport { .. } | Self::ConfirmPartialPostmanImport { .. } => {
-                Some(PARTIAL_IMPORT_DIALOG_ACTIONS)
-            }
+            Self::ConfirmPartialImport { .. } => Some(PARTIAL_IMPORT_DIALOG_ACTIONS),
         }
     }
 
@@ -336,25 +321,6 @@ impl ApplicationDialog {
             (spec.style == components::DialogActionStyle::Destructive).then_some(spec.action)
         })
     }
-}
-
-pub(crate) enum YaakConversionResult {
-    Imported(ImportedYaakWorkspace),
-    NeedsPartialConfirmation {
-        preview: YaakImportPreview,
-        workspace_id: String,
-        detail: String,
-    },
-    Failed(String),
-}
-
-pub(crate) enum PostmanConversionResult {
-    Imported(Box<ImportedPostmanCollection>),
-    NeedsPartialConfirmation {
-        preview: Box<PostmanImportPreview>,
-        detail: String,
-    },
-    Failed(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
