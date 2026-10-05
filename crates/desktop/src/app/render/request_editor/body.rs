@@ -80,8 +80,15 @@ impl ProbeApp {
                         )),
                 );
             }
-            Some(RequestBody::Single(Body::FormUrlEncoded(fields))) => {
-                editor = editor.child(self.render_form_body_editor(key, fields, theme, cx));
+            Some(RequestBody::Single(Body::FormUrlEncoded(_))) => {
+                editor = editor.child(self.render_key_value_editor(
+                    key,
+                    request,
+                    KeyValueEditorKind::Form,
+                    theme,
+                    None,
+                    cx,
+                ));
             }
             Some(RequestBody::Single(Body::Multipart(parts))) => {
                 editor = editor.child(self.render_multipart_body_editor(key, parts, theme, cx));

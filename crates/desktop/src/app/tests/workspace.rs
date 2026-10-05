@@ -115,6 +115,11 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
                             value: format!("value-{index}"),
                             disabled: false,
                         });
+                        request.path_parameters.push(QueryParameter {
+                            name: format!("path-{index}"),
+                            value: format!("value-{index}"),
+                            disabled: false,
+                        });
                     }
                 },
                 cx,
@@ -127,6 +132,7 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
     for (section, selector) in [
         (EditorSection::Headers, "header-name-field"),
         (EditorSection::Query, "query-name-row"),
+        (EditorSection::Path, "path-name-row"),
     ] {
         window
             .update(cx, |view, _, cx| {
@@ -175,6 +181,130 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
             }
         }
     }
+}
+
+#[gpui::test]
+fn key_value_editor_row_controls_update_their_rows_and_restore_focus(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.new_detached_request(false, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.edit_request(
+                key,
+                |request| {
+                    request.url = Some("https://example.test/:id".to_owned());
+                    request.path_parameters.push(QueryParameter {
+                        name: "id".into(),
+                        value: "123".into(),
+                        disabled: false,
+                    });
+                },
+                cx,
+            );
+            view.request_editor.set_section(key, EditorSection::Query);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    // Query exercises every shared callback once; other kinds only need adapter checks.
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let add = visual.debug_bounds("add-query-parameter").unwrap();
+    visual.simulate_click(add.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.active_request().unwrap().query_parameters.len(), 1);
+        })
+        .unwrap();
+
+    // From Add, traverse Remove, Enabled, Value, then Name.
+    cx.simulate_keystrokes(window.into(), "shift-tab shift-tab shift-tab shift-tab");
+    cx.simulate_input(window.into(), "edited");
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), "tab");
+    cx.simulate_input(window.into(), "edited-value");
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), "tab");
+    visual.run_until_parked();
+    let keystroke = gpui::Keystroke::parse("space").unwrap();
+    visual.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    visual.simulate_event(gpui::KeyUpEvent { keystroke });
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let row = &view.active_request().unwrap().query_parameters[0];
+            assert_eq!(row.name, "edited");
+            assert_eq!(row.value, "edited-value");
+            assert!(row.disabled);
+        })
+        .unwrap();
+    let remove = visual.debug_bounds("remove-query-0").unwrap();
+    visual.simulate_click(remove.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, window, _| {
+            assert!(view.focus_handle.is_focused(window));
+            assert!(view.active_request().unwrap().query_parameters.is_empty());
+        })
+        .unwrap();
+
+    // Only check Path-specific routing here; core tests own the URL-sync semantics.
+    window
+        .update(cx, |view, _, cx| {
+            let key = view.shell.active_tab().unwrap();
+            view.request_editor.set_section(key, EditorSection::Path);
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let row = visual.debug_bounds("path-name-row").unwrap();
+    visual.simulate_click(
+        row.origin + point(row.size.width / 4.0, row.size.height / 2.0),
+        Modifiers::default(),
+    );
+    cx.simulate_keystrokes(
+        window.into(),
+        if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        },
+    );
+    cx.simulate_input(window.into(), "renamed");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.active_request().unwrap().url.as_deref(),
+                Some("https://example.test/:renamed")
+            );
+        })
+        .unwrap();
+
+    // Headers are rendered by the existing scrolling test; Form needs only a smoke check.
+    window
+        .update(cx, |view, _, cx| {
+            let key = view.shell.active_tab().unwrap();
+            view.change_body_kind(key, BodyEditorKind::Form, cx);
+            view.request_editor.set_section(key, EditorSection::Body);
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("add-form-field").is_some());
 }
 
 #[gpui::test]
