@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::documentation::OverviewTarget;
 use probe_core::ItemKind;
 use probe_opencollection::ItemLocator;
 
@@ -1270,7 +1271,12 @@ fn close_other_tabs_preserves_the_kept_overview_draft(cx: &mut TestAppContext) {
     let (window, [_, collection, _]) = mixed_tab_window(cx);
     window
         .update(cx, |view, window, cx| {
-            view.edit_overview(None, true, "Unsaved collection docs".into(), cx);
+            view.edit_overview(
+                OverviewTarget::Collection,
+                true,
+                "Unsaved collection docs".into(),
+                cx,
+            );
             view.request_close_other_tabs(collection, window, cx);
             assert!(view.application_dialog.is_none());
             assert_eq!(view.shell.open_tabs(), &[collection]);
@@ -1285,7 +1291,12 @@ fn close_other_tabs_prompts_for_a_draft_on_another_overview(cx: &mut TestAppCont
     let (window, tabs @ [_, _, folder]) = mixed_tab_window(cx);
     window
         .update(cx, |view, window, cx| {
-            view.edit_overview(None, true, "Unsaved collection docs".into(), cx);
+            view.edit_overview(
+                OverviewTarget::Collection,
+                true,
+                "Unsaved collection docs".into(),
+                cx,
+            );
             view.request_close_other_tabs(folder, window, cx);
             let Some(ApplicationDialog::Unsaved {
                 pending,
@@ -1296,7 +1307,10 @@ fn close_other_tabs_prompts_for_a_draft_on_another_overview(cx: &mut TestAppCont
                 panic!("dirty overview must prompt before closing");
             };
             assert!(*documentation);
-            assert_eq!(view.pending_overview_targets(pending), vec![None]);
+            assert_eq!(
+                view.pending_overview_targets(pending),
+                vec![OverviewTarget::Collection]
+            );
             assert_eq!(view.shell.open_tabs(), tabs);
         })
         .unwrap();
@@ -3389,7 +3403,11 @@ fn committed_documentation_save_keeps_drafts_until_recovery_integrates(cx: &mut 
         ));
         let workspace = probe_opencollection::load_workspace(&path).unwrap();
         let replacement = probe_opencollection::load_workspace(&path).unwrap();
-        let target = folder.then(|| "items/0".to_owned());
+        let target = if folder {
+            OverviewTarget::Folder("items/0".to_owned())
+        } else {
+            OverviewTarget::Collection
+        };
         let recovery_path = if reload_fails {
             path.with_extension("missing.yml")
         } else {
@@ -3553,7 +3571,12 @@ fn documentation_editors_save_preserve_media_types_and_keep_later_edits_dirty(
             assert!(view.has_dirty_overviews());
             view.save_active_editor(window, cx);
             assert!(view.documentation_save_task.is_some());
-            view.edit_overview(None, true, "Newer collection guide".into(), cx);
+            view.edit_overview(
+                OverviewTarget::Collection,
+                true,
+                "Newer collection guide".into(),
+                cx,
+            );
         })
         .unwrap();
     visual.run_until_parked();
@@ -3656,7 +3679,12 @@ fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAp
             view.set_workspace(path.clone(), workspace);
             let tab = crate::shell::OverviewTab::Collection;
             view.shell.open_overview(tab);
-            view.edit_overview(None, false, "Local summary".into(), cx);
+            view.edit_overview(
+                OverviewTarget::Collection,
+                false,
+                "Local summary".into(),
+                cx,
+            );
             view.request_close_overview(tab, window, cx);
             assert!(matches!(
                 view.application_dialog,
@@ -3676,7 +3704,7 @@ fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAp
             assert!(view.shell.overview_tabs().next().is_none());
             view.shell
                 .open_overview(crate::shell::OverviewTab::Collection);
-            view.edit_overview(None, true, "Unsaved docs".into(), cx);
+            view.edit_overview(OverviewTarget::Collection, true, "Unsaved docs".into(), cx);
             let external = format!("{}external: retained\n", fs::read_to_string(&path).unwrap());
             fs::write(&path, external).unwrap();
             view.save_active_editor(window, cx);

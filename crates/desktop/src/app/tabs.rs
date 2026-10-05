@@ -736,8 +736,8 @@ impl ProbeApp {
         match pending {
             PendingClose::Overview(target) => {
                 let tab = match target {
-                    None => Some(crate::shell::OverviewTab::Collection),
-                    Some(selector) => self
+                    OverviewTarget::Collection => Some(crate::shell::OverviewTab::Collection),
+                    OverviewTarget::Folder(selector) => self
                         .loaded_workspace
                         .as_ref()
                         .and_then(|loaded| loaded.folder_key(&selector))

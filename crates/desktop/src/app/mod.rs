@@ -70,6 +70,7 @@ use dialogs::{
     StoredSecretRename, YaakConversionResult, format_import_diagnostics,
     suggested_collection_filename,
 };
+use documentation::OverviewTarget;
 use presentation::{
     InspectListRow, PrettyRevealState, ShellSelectors, inspect_list_rows, inspect_row_index,
     inspect_row_label, placeholder_message, request_method_options, response_status_color,
@@ -299,8 +300,8 @@ pub(crate) struct ProbeApp {
     session_save_task: Option<Task<()>>,
     request_save_task: Option<Task<()>>,
     documentation_save_task: Option<Task<()>>,
-    overview_drafts: BTreeMap<Option<String>, documentation::OverviewDraft>,
-    pending_documentation_saves: std::collections::VecDeque<Option<String>>,
+    overview_drafts: BTreeMap<OverviewTarget, documentation::OverviewDraft>,
+    pending_documentation_saves: std::collections::VecDeque<OverviewTarget>,
     environment_save_task: Option<Task<()>>,
     environment_save_workspace_path: Option<PathBuf>,
     environment_manager_close_after_save: bool,

@@ -1,6 +1,12 @@
 use super::*;
 use probe_core::{Documentation, FieldPatch};
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum OverviewTarget {
+    Collection,
+    Folder(String),
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct OverviewContent {
     pub(super) first: Option<Documentation>,
@@ -49,28 +55,28 @@ pub(super) fn patch<T: Clone + PartialEq>(old: &Option<T>, new: &Option<T>) -> F
 }
 
 impl ProbeApp {
-    pub(super) fn overview_target(&self, tab: crate::shell::OverviewTab) -> Option<Option<String>> {
+    pub(super) fn overview_target(&self, tab: crate::shell::OverviewTab) -> Option<OverviewTarget> {
         match tab {
-            crate::shell::OverviewTab::Collection => Some(None),
+            crate::shell::OverviewTab::Collection => Some(OverviewTarget::Collection),
             crate::shell::OverviewTab::Folder(key) => self
                 .loaded_workspace
                 .as_ref()?
                 .folder_selector(key)
-                .map(|selector| Some(selector.to_owned())),
+                .map(|selector| OverviewTarget::Folder(selector.to_owned())),
         }
     }
 
-    pub(super) fn overview_content(&self, target: &Option<String>) -> Option<OverviewContent> {
+    pub(super) fn overview_content(&self, target: &OverviewTarget) -> Option<OverviewContent> {
         let loaded = self.loaded_workspace.as_ref()?;
         match target {
-            None => {
+            OverviewTarget::Collection => {
                 let metadata = loaded.workspace().metadata();
                 Some(OverviewContent {
                     first: metadata.summary.clone().map(Documentation::Text),
                     docs: metadata.docs.clone(),
                 })
             }
-            Some(selector) => {
+            OverviewTarget::Folder(selector) => {
                 let folder = loaded.workspace().folder(loaded.folder_key(selector)?)?;
                 Some(OverviewContent {
                     first: folder.metadata.description.clone(),
@@ -82,7 +88,7 @@ impl ProbeApp {
 
     pub(super) fn edit_overview(
         &mut self,
-        target: Option<String>,
+        target: OverviewTarget,
         docs: bool,
         text: String,
         cx: &mut Context<Self>,
@@ -125,7 +131,7 @@ impl ProbeApp {
 
     pub(super) fn complete_overview_draft_save(
         &mut self,
-        target: &Option<String>,
+        target: &OverviewTarget,
         submitted: &OverviewContent,
     ) {
         if let Some(saved) = self.overview_content(target)
@@ -141,7 +147,7 @@ impl ProbeApp {
         }
     }
 
-    pub(super) fn pending_overview_targets(&self, pending: &PendingClose) -> Vec<Option<String>> {
+    pub(super) fn pending_overview_targets(&self, pending: &PendingClose) -> Vec<OverviewTarget> {
         self.overview_drafts
             .iter()
             .filter(|(target, draft)| {
@@ -183,7 +189,7 @@ impl ProbeApp {
         }
     }
 
-    pub(super) fn enqueue_documentation_save(&mut self, target: Option<String>) {
+    pub(super) fn enqueue_documentation_save(&mut self, target: OverviewTarget) {
         if !self.pending_documentation_saves.contains(&target) {
             self.pending_documentation_saves.push_back(target);
         }
@@ -229,11 +235,13 @@ impl ProbeApp {
             .as_ref()
             .expect("overview content requires a workspace");
         let prepared = match &target {
-            None => loaded.prepare_collection_save(probe_core::CollectionUpdate {
-                summary: patch(&draft.original.summary(), &draft.current.summary()),
-                docs: patch(&draft.original.docs, &draft.current.docs),
-            }),
-            Some(selector) => loaded.prepare_folder_save(
+            OverviewTarget::Collection => {
+                loaded.prepare_collection_save(probe_core::CollectionUpdate {
+                    summary: patch(&draft.original.summary(), &draft.current.summary()),
+                    docs: patch(&draft.original.docs, &draft.current.docs),
+                })
+            }
+            OverviewTarget::Folder(selector) => loaded.prepare_folder_save(
                 selector,
                 probe_core::FolderUpdate {
                     description: patch(&draft.original.first, &draft.current.first),
