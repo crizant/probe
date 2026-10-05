@@ -73,15 +73,15 @@ fn pretty_json_text(body: &str) -> Option<String> {
     // number spelling/precision, and string escapes exactly as received.
     let raw: &serde_json::value::RawValue = serde_json::from_str(body).ok()?;
     let mut chars = raw.get().chars().peekable();
-    let mut pretty = String::with_capacity(body.len());
+    let mut pretty = String::with_capacity(body.len().min(MAX_IN_MEMORY_RESPONSE_BYTES));
     let mut depth = 0;
     while let Some(ch) = chars.next() {
         match ch {
             '"' => {
-                pretty.push(ch);
+                json_char(&mut pretty, ch)?;
                 let mut escaped = false;
                 for ch in chars.by_ref() {
-                    pretty.push(ch);
+                    json_char(&mut pretty, ch)?;
                     if ch == '"' && !escaped {
                         break;
                     }
@@ -89,7 +89,7 @@ fn pretty_json_text(body: &str) -> Option<String> {
                 }
             }
             '{' | '[' => {
-                pretty.push(ch);
+                json_char(&mut pretty, ch)?;
                 depth += 1;
                 // Bound indentation expansion for deeply nested response bodies.
                 if depth > 128 {
@@ -97,31 +97,47 @@ fn pretty_json_text(body: &str) -> Option<String> {
                 }
                 while chars.next_if(|ch| ch.is_ascii_whitespace()).is_some() {}
                 if !matches!(chars.peek(), Some('}' | ']')) {
-                    json_newline(&mut pretty, depth);
+                    json_newline(&mut pretty, depth)?;
                 }
             }
             '}' | ']' => {
                 depth -= 1;
                 if !pretty.ends_with(['{', '[']) {
-                    json_newline(&mut pretty, depth);
+                    json_newline(&mut pretty, depth)?;
                 }
-                pretty.push(ch);
+                json_char(&mut pretty, ch)?;
             }
             ',' => {
-                pretty.push(ch);
-                json_newline(&mut pretty, depth);
+                json_char(&mut pretty, ch)?;
+                json_newline(&mut pretty, depth)?;
             }
-            ':' => pretty.push_str(": "),
+            ':' => {
+                json_char(&mut pretty, ':')?;
+                json_char(&mut pretty, ' ')?;
+            }
             ch if ch.is_ascii_whitespace() => {}
-            ch => pretty.push(ch),
+            ch => json_char(&mut pretty, ch)?,
         }
     }
     Some(pretty)
 }
 
-fn json_newline(pretty: &mut String, depth: usize) {
+// Apply the response retention limit to formatted output too, before growing it.
+fn json_char(pretty: &mut String, ch: char) -> Option<()> {
+    if ch.len_utf8() > MAX_IN_MEMORY_RESPONSE_BYTES - pretty.len() {
+        return None;
+    }
+    pretty.push(ch);
+    Some(())
+}
+
+fn json_newline(pretty: &mut String, depth: usize) -> Option<()> {
+    if 1 + depth * 2 > MAX_IN_MEMORY_RESPONSE_BYTES - pretty.len() {
+        return None;
+    }
     pretty.push('\n');
     pretty.extend(std::iter::repeat_n(' ', depth * 2));
+    Some(())
 }
 
 pub(super) fn response_json(
@@ -544,7 +560,7 @@ fn authentication_value(value: &AuthenticationValue) -> Value {
 
 #[cfg(test)]
 mod json_format_tests {
-    use super::pretty_json_text;
+    use super::{MAX_IN_MEMORY_RESPONSE_BYTES, json_char, json_newline, pretty_json_text};
 
     #[test]
     fn changes_only_whitespace_outside_strings() {
@@ -593,6 +609,44 @@ mod json_format_tests {
         let body = format!("{}0{}", "[".repeat(128), "]".repeat(128));
         assert!(pretty_json_text(&body).is_some());
         assert_eq!(pretty_json_text(&format!("[{body}]")), None);
+    }
+
+    #[test]
+    fn falls_back_when_sibling_indentation_exceeds_the_output_budget() {
+        let depth = 128;
+        let siblings = MAX_IN_MEMORY_RESPONSE_BYTES / (depth * 2) + 1;
+        let body = format!(
+            "{}{}0{}",
+            "[".repeat(depth),
+            "0,".repeat(siblings),
+            "]".repeat(depth)
+        );
+        assert!(body.len() < MAX_IN_MEMORY_RESPONSE_BYTES);
+        assert_eq!(pretty_json_text(&body), None);
+        assert_eq!(
+            pretty_json_text("[[0,0,0]]").as_deref(),
+            Some("[\n  [\n    0,\n    0,\n    0\n  ]\n]")
+        );
+    }
+
+    #[test]
+    fn output_budget_counts_utf8_bytes_and_indentation_before_appending() {
+        let mut pretty = " ".repeat(MAX_IN_MEMORY_RESPONSE_BYTES - 3);
+        assert_eq!(json_char(&mut pretty, '雪'), Some(()));
+        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES);
+        assert_eq!(json_char(&mut pretty, 'x'), None);
+        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES);
+
+        pretty.truncate(MAX_IN_MEMORY_RESPONSE_BYTES - 3);
+        assert_eq!(json_newline(&mut pretty, 2), None);
+        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES - 3);
+        assert_eq!(json_newline(&mut pretty, 1), Some(()));
+        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES);
+
+        pretty.truncate(MAX_IN_MEMORY_RESPONSE_BYTES - 2);
+        assert_eq!(json_newline(&mut pretty, 1), None);
+        assert_eq!(json_char(&mut pretty, '雪'), None);
+        assert_eq!(pretty.len(), MAX_IN_MEMORY_RESPONSE_BYTES - 2);
     }
 }
 
