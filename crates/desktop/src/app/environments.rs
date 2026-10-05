@@ -53,16 +53,7 @@ impl ProbeApp {
                         .draft
                         .variables
                         .iter()
-                        .all(|variable| match variable {
-                            EnvironmentVariable::Plain(variable) => variable
-                                .name
-                                .as_deref()
-                                .is_some_and(|name| !name.trim().is_empty()),
-                            EnvironmentVariable::Secret(variable) => variable
-                                .name
-                                .as_deref()
-                                .is_some_and(|name| !name.trim().is_empty()),
-                        })
+                        .all(|variable| variable.name().is_some_and(|name| !name.trim().is_empty()))
             })
     }
 
@@ -348,22 +339,14 @@ impl ProbeApp {
         let mut replacement = dialog.draft.clone();
         replacement.name = replacement.name.trim().to_owned();
         for variable in &mut replacement.variables {
-            let name = match variable {
-                EnvironmentVariable::Plain(variable) => &mut variable.name,
-                EnvironmentVariable::Secret(variable) => &mut variable.name,
-            };
-            if let Some(name) = name.as_mut() {
+            if let Some(name) = variable.name_mut().as_mut() {
                 *name = name.trim().to_owned();
             }
         }
-        let invalid_variable = replacement.variables.iter().any(|variable| match variable {
-            EnvironmentVariable::Plain(variable) => {
-                variable.name.as_deref().is_none_or(str::is_empty)
-            }
-            EnvironmentVariable::Secret(variable) => {
-                variable.name.as_deref().is_none_or(str::is_empty)
-            }
-        });
+        let invalid_variable = replacement
+            .variables
+            .iter()
+            .any(|variable| variable.name().is_none_or(str::is_empty));
         if replacement.name.is_empty() || invalid_variable {
             self.show_environment_dialog_error(
                 "Environment and variable names are required.",
@@ -878,14 +861,11 @@ fn environment_has_secret_declaration(
     probe_core::effective_environment_variables(environments, environment)
         .iter()
         .any(|row| {
-            matches!(
-                &row.variable,
-                EnvironmentVariable::Secret(secret)
-                    if secret
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| !name.trim().is_empty())
-            )
+            row.variable.is_secret()
+                && row
+                    .variable
+                    .name()
+                    .is_some_and(|name| !name.trim().is_empty())
         })
 }
 
@@ -905,14 +885,13 @@ fn trimmed_secret_names(environment: &Environment) -> Vec<String> {
     environment
         .variables
         .iter()
-        .filter_map(|variable| match variable {
-            EnvironmentVariable::Secret(secret) => secret
-                .name
-                .as_deref()
+        .filter(|variable| variable.is_secret())
+        .filter_map(|variable| {
+            variable
+                .name()
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
-                .map(str::to_owned),
-            EnvironmentVariable::Plain(_) => None,
+                .map(str::to_owned)
         })
         .collect()
 }

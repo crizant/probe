@@ -192,14 +192,14 @@ pub fn unset_environment_variable(
     let Some(index) = environment
         .variables
         .iter()
-        .position(|variable| variable_entry_name(variable) == Some(variable_name))
+        .position(|variable| variable.name() == Some(variable_name))
     else {
         return Err(EnvironmentResolutionError::VariableNotFound {
             environment: environment_name.to_owned(),
             variable: variable_name.to_owned(),
         });
     };
-    if matches!(environment.variables[index], EnvironmentVariable::Secret(_)) {
+    if environment.variables[index].is_secret() {
         return Err(EnvironmentResolutionError::SecretVariableUnavailable(
             variable_name.to_owned(),
         ));
@@ -228,7 +228,7 @@ pub fn validate_unique_variable_names(
 ) -> Result<(), EnvironmentResolutionError> {
     let mut names = BTreeSet::new();
     for variable in &environment.variables {
-        let Some(name) = variable_entry_name(variable) else {
+        let Some(name) = variable.name() else {
             continue;
         };
         if name.is_empty() {
@@ -255,7 +255,7 @@ pub fn effective_environment_variables(
     let mut rows = Vec::new();
     let mut seen = BTreeSet::new();
     for (index, variable) in selected.variables.iter().enumerate() {
-        if let Some(name) = variable_entry_name(variable) {
+        if let Some(name) = variable.name() {
             seen.insert(name.to_owned());
         }
         rows.push(EffectiveEnvironmentVariable {
@@ -278,7 +278,7 @@ pub fn effective_environment_variables(
             break;
         };
         for variable in &environment.variables {
-            let Some(name) = variable_entry_name(variable) else {
+            let Some(name) = variable.name() else {
                 continue;
             };
             if !seen.insert(name.to_owned()) {
@@ -303,13 +303,6 @@ fn named_environment_mut<'a>(
         .iter_mut()
         .find(|environment| environment.name == environment_name)
         .ok_or_else(|| EnvironmentResolutionError::EnvironmentNotFound(environment_name.to_owned()))
-}
-
-fn variable_entry_name(variable: &EnvironmentVariable) -> Option<&str> {
-    match variable {
-        EnvironmentVariable::Plain(variable) => variable.name.as_deref(),
-        EnvironmentVariable::Secret(variable) => variable.name.as_deref(),
-    }
 }
 
 fn assign_variable_value(slot: &mut Option<VariableValueSet>, value: String) {

@@ -603,12 +603,9 @@ fn environment_replace_preserves_unknown_fields_and_edits_secret_declarations() 
     let mut replacement = loaded.workspace().environments()[1].clone();
     replacement.description = None;
     replacement.extends = None;
-    replacement.variables.retain(|variable| match variable {
-        probe_core::EnvironmentVariable::Plain(variable) => {
-            variable.name.as_deref() != Some("host")
-        }
-        probe_core::EnvironmentVariable::Secret(_) => true,
-    });
+    replacement
+        .variables
+        .retain(|variable| variable.is_secret() || variable.name() != Some("host"));
     replacement
         .variables
         .push(probe_core::EnvironmentVariable::Plain(
@@ -647,14 +644,12 @@ fn environment_replace_preserves_unknown_fields_and_edits_secret_declarations() 
             media_type: "text/markdown".to_owned(),
         })
     );
-    assert!(reloaded.workspace().environments()[1].variables.iter().all(
-        |variable| match variable {
-            probe_core::EnvironmentVariable::Plain(variable) => {
-                variable.name.as_deref() != Some("host")
-            }
-            probe_core::EnvironmentVariable::Secret(_) => true,
-        }
-    ));
+    assert!(
+        reloaded.workspace().environments()[1]
+            .variables
+            .iter()
+            .all(|variable| variable.is_secret() || variable.name() != Some("host"))
+    );
 
     let mut base = loaded.workspace().environments()[0].clone();
     base.variables

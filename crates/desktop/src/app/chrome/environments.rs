@@ -207,11 +207,7 @@ impl ProbeApp {
             Some(index) => EnvironmentVariableRowId::Direct(dialog.variable_row_ids[index]),
             None => EnvironmentVariableRowId::Inherited {
                 defined_in: row.defined_in.clone(),
-                name: match &row.variable {
-                    EnvironmentVariable::Plain(variable) => variable.name.clone(),
-                    EnvironmentVariable::Secret(variable) => variable.name.clone(),
-                }
-                .unwrap_or_default(),
+                name: row.variable.name().unwrap_or_default().to_owned(),
             },
         };
         let name_row_id = stable_row_id.clone();
@@ -230,17 +226,14 @@ impl ProbeApp {
                 "inherited-{}-{}-{}",
                 dialog.original_name,
                 row.defined_in,
-                match &row.variable {
-                    EnvironmentVariable::Plain(variable) => variable.name.as_deref().unwrap_or(""),
-                    EnvironmentVariable::Secret(variable) => variable.name.as_deref().unwrap_or(""),
-                }
+                row.variable.name().unwrap_or("")
             ),
         };
         let (value, editable) = match &row.variable {
             EnvironmentVariable::Plain(variable) => environment_variable_text(variable),
             EnvironmentVariable::Secret(_) => (String::new(), false),
         };
-        let secret = matches!(row.variable, EnvironmentVariable::Secret(_));
+        let secret = row.variable.is_secret();
         let direct_index = row.direct_index;
         let inherited = direct_index.is_none();
         let toggle_variable = row.variable.clone();
@@ -249,15 +242,8 @@ impl ProbeApp {
         let value_view = cx.weak_entity();
         let remove_view = cx.weak_entity();
         let variable_name_view = cx.weak_entity();
-        let name = match &row.variable {
-            EnvironmentVariable::Plain(variable) => variable.name.clone(),
-            EnvironmentVariable::Secret(variable) => variable.name.clone(),
-        }
-        .unwrap_or_default();
-        let enabled = match &row.variable {
-            EnvironmentVariable::Plain(variable) => !variable.disabled,
-            EnvironmentVariable::Secret(variable) => !variable.disabled,
-        };
+        let name = row.variable.name().unwrap_or_default().to_owned();
+        let enabled = !row.variable.is_disabled();
         let value_selector = if name.is_empty() {
             format!("environment-variable-value-{row_index}")
         } else {
@@ -284,10 +270,7 @@ impl ProbeApp {
                 busy,
                 move |enabled, _, cx| {
                     let mut variable = toggle_variable.clone();
-                    match &mut variable {
-                        EnvironmentVariable::Plain(variable) => variable.disabled = !enabled,
-                        EnvironmentVariable::Secret(variable) => variable.disabled = !enabled,
-                    }
+                    variable.set_disabled(!enabled);
                     let _ = toggle_view.update(cx, |view, cx| {
                         view.apply_environment_manager_draft(cx, |dialog| {
                             if let Some(index) = direct_index {
@@ -359,16 +342,9 @@ impl ProbeApp {
                                         view.apply_environment_manager_draft(cx, |dialog| {
                                             if let EnvironmentVariableRowId::Direct(id) = name_row_id
                                                 && let Some(index) = dialog.variable_row_ids.iter().position(|row| *row == id)
+                                                && let Some(variable) = dialog.draft.variables.get_mut(index)
                                             {
-                                                match dialog.draft.variables.get_mut(index) {
-                                                    Some(EnvironmentVariable::Plain(variable)) => {
-                                                        variable.name = Some(value.to_string())
-                                                    }
-                                                    Some(EnvironmentVariable::Secret(variable)) => {
-                                                        variable.name = Some(value.to_string())
-                                                    }
-                                                    None => {}
-                                                }
+                                                *variable.name_mut() = Some(value.to_string());
                                             }
                                         });
                                     });

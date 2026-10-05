@@ -515,27 +515,17 @@ pub(crate) fn effective_variable_declarations(
     let mut declarations = BTreeMap::new();
     for environment in index.inheritance_chain(selected)? {
         for variable in &environment.variables {
-            let (name, declaration) = match variable {
-                EnvironmentVariable::Plain(variable) => (
-                    variable.name.as_ref(),
-                    if variable.disabled {
-                        EffectiveVariableDeclaration::Disabled
-                    } else {
-                        EffectiveVariableDeclaration::Plain
-                    },
-                ),
-                EnvironmentVariable::Secret(variable) => (
-                    variable.name.as_ref(),
-                    if variable.disabled {
-                        EffectiveVariableDeclaration::Disabled
-                    } else {
-                        EffectiveVariableDeclaration::Secret
-                    },
-                ),
+            let Some(name) = variable.name() else {
+                continue;
             };
-            if let Some(name) = name {
-                declarations.insert(name.clone(), declaration);
-            }
+            let declaration = if variable.is_disabled() {
+                EffectiveVariableDeclaration::Disabled
+            } else if variable.is_secret() {
+                EffectiveVariableDeclaration::Secret
+            } else {
+                EffectiveVariableDeclaration::Plain
+            };
+            declarations.insert(name.to_owned(), declaration);
         }
     }
     Ok(declarations)
@@ -761,33 +751,20 @@ pub(crate) fn raw_variables(
     let mut raw = BTreeMap::new();
     for environment in index.inheritance_chain(selected)? {
         for variable in &environment.variables {
-            match variable {
-                EnvironmentVariable::Plain(variable) => {
-                    let Some(name) = variable.name.as_ref() else {
-                        continue;
-                    };
-                    let value = match (&variable.value, variable.disabled) {
-                        (_, true) | (None, false) => RawVariable::Unavailable,
-                        (Some(value), false) => {
-                            RawVariable::Value(select_value(value, &environment.name, name)?)
-                        }
-                    };
-                    raw.insert(name.clone(), value);
-                }
-                EnvironmentVariable::Secret(variable) => {
-                    let Some(name) = variable.name.as_ref() else {
-                        continue;
-                    };
-                    raw.insert(
-                        name.clone(),
-                        if variable.disabled {
-                            RawVariable::Unavailable
-                        } else {
-                            RawVariable::Secret
-                        },
-                    );
-                }
-            }
+            let Some(name) = variable.name() else {
+                continue;
+            };
+            let value = match variable {
+                _ if variable.is_disabled() => RawVariable::Unavailable,
+                EnvironmentVariable::Plain(variable) => match &variable.value {
+                    Some(value) => {
+                        RawVariable::Value(select_value(value, &environment.name, name)?)
+                    }
+                    None => RawVariable::Unavailable,
+                },
+                EnvironmentVariable::Secret(_) => RawVariable::Secret,
+            };
+            raw.insert(name.to_owned(), value);
         }
     }
     Ok(raw)

@@ -26,6 +26,48 @@ pub enum EnvironmentVariable {
     Secret(SecretVariable),
 }
 
+impl EnvironmentVariable {
+    /// Returns the variable name.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Plain(variable) => variable.name.as_deref(),
+            Self::Secret(variable) => variable.name.as_deref(),
+        }
+    }
+
+    /// Returns mutable access to the variable name.
+    pub fn name_mut(&mut self) -> &mut Option<String> {
+        match self {
+            Self::Plain(variable) => &mut variable.name,
+            Self::Secret(variable) => &mut variable.name,
+        }
+    }
+
+    /// Returns whether the variable is disabled.
+    #[must_use]
+    pub const fn is_disabled(&self) -> bool {
+        match self {
+            Self::Plain(variable) => variable.disabled,
+            Self::Secret(variable) => variable.disabled,
+        }
+    }
+
+    /// Sets whether the variable is disabled.
+    pub fn set_disabled(&mut self, disabled: bool) {
+        match self {
+            Self::Plain(variable) => variable.disabled = disabled,
+            Self::Secret(variable) => variable.disabled = disabled,
+        }
+    }
+
+    /// Returns whether the variable is a secret declaration.
+    #[must_use]
+    pub const fn is_secret(&self) -> bool {
+        matches!(self, Self::Secret(_))
+    }
+}
+
 /// A non-secret environment variable.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Variable {
