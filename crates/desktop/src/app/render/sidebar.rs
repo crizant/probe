@@ -1,7 +1,5 @@
 use super::*;
 
-const ADD_MENU_MARKER_WIDTH: f32 = 30.0;
-
 impl ProbeApp {
     pub(super) fn render_toasts(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.toasts.is_empty() {

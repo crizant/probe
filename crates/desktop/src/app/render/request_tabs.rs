@@ -274,22 +274,33 @@ impl ProbeApp {
         let http_view = cx.weak_entity();
         let graphql_view = cx.weak_entity();
         let add_popup = components::popup_surface(theme, "request-tab-add-popup", 160.0)
-            .child(components::menu_button(
+            .child(components::menu_button_with_leading(
                 theme,
                 "request-tab-new-http",
                 "HTTP",
-                None,
+                "New HTTP Request",
+                components::menu_leading_slot(
+                    ADD_MENU_MARKER_WIDTH,
+                    components::request_icon(
+                        theme,
+                        &components::RequestIcon::Http { method: None },
+                    ),
+                ),
                 move |window, cx| {
                     let _ = http_view.update(cx, |view, cx| {
                         view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
                     });
                 },
             ))
-            .child(components::menu_button(
+            .child(components::menu_button_with_leading(
                 theme,
                 "request-tab-new-graphql",
                 "GraphQL",
-                None,
+                "New GraphQL Request",
+                components::menu_leading_slot(
+                    ADD_MENU_MARKER_WIDTH,
+                    components::request_icon(theme, &components::RequestIcon::Graphql),
+                ),
                 move |window, cx| {
                     let _ = graphql_view.update(cx, |view, cx| {
                         view.new_detached_request(probe_core::RequestProtocol::Graphql, window, cx);

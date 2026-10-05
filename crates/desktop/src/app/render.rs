@@ -8,6 +8,8 @@ mod request_tabs;
 mod response;
 mod sidebar;
 
+const ADD_MENU_MARKER_WIDTH: f32 = 30.0;
+
 pub(super) fn response_page_button(
     theme: Theme,
     id: &'static str,
