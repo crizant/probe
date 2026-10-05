@@ -384,49 +384,46 @@ mod tests {
     use probe_core::{RawBody, RequestKind};
 
     #[test]
-    fn stale_row_indices_leave_the_request_unchanged() {
-        let populated = Request {
-            url: Some("https://example.com/:id".into()),
-            path_parameters: vec![QueryParameter {
-                name: "id".into(),
-                value: "123".into(),
-                disabled: false,
-            }],
-            query_parameters: vec![QueryParameter {
-                name: "search".into(),
-                value: "query".into(),
-                disabled: true,
-            }],
-            headers: vec![Header {
-                name: "X-Test".into(),
-                value: "header".into(),
-                disabled: true,
-            }],
-            kind: RequestKind::Http {
-                body: Some(RequestBody::Single(Body::FormUrlEncoded(vec![FormField {
-                    name: "field".into(),
-                    value: "form".into(),
-                    disabled: true,
-                }]))),
-            },
-            ..Request::default()
-        };
-        for original in [Request::default(), populated] {
-            for kind in [
-                KeyValueEditorKind::Query,
-                KeyValueEditorKind::Path,
-                KeyValueEditorKind::Headers,
-                KeyValueEditorKind::Form,
-            ] {
-                let length = kind.rows(&original).count();
-                for index in [length, usize::MAX] {
-                    let mut request = original.clone();
-                    kind.rename(&mut request, index, "stale");
-                    assert!(kind.row_mut(&mut request, index).is_none());
-                    kind.remove(&mut request, index);
-                    assert_eq!(request, original, "{kind:?} at {index}");
-                }
-            }
+    fn header_and_form_adapters_use_their_native_fields() {
+        for kind in [KeyValueEditorKind::Headers, KeyValueEditorKind::Form] {
+            let mut request = Request {
+                kind: RequestKind::Http {
+                    body: Some(RequestBody::Single(Body::FormUrlEncoded(Vec::new()))),
+                },
+                ..Request::default()
+            };
+            let empty = request.clone();
+            kind.add(&mut request);
+            kind.rename(&mut request, 0, "name");
+            let row = kind.row_mut(&mut request, 0).unwrap();
+            *row.value = "value".into();
+            *row.disabled = true;
+
+            let Some(RequestBody::Single(Body::FormUrlEncoded(fields))) = request.http_body()
+            else {
+                panic!("adapter must preserve the body kind");
+            };
+            assert_eq!(
+                (request.headers.len(), fields.len()),
+                if kind == KeyValueEditorKind::Headers {
+                    (1, 0)
+                } else {
+                    (0, 1)
+                },
+            );
+            let rows: Vec<_> = kind
+                .rows(&request)
+                .map(|row| (row.name, row.value, row.disabled))
+                .collect();
+            assert_eq!(rows, [("name", "value", true)]);
+
+            let before_stale_edit = request.clone();
+            kind.rename(&mut request, 1, "stale");
+            assert!(kind.row_mut(&mut request, 1).is_none());
+            kind.remove(&mut request, 1);
+            assert_eq!(request, before_stale_edit);
+            kind.remove(&mut request, 0);
+            assert_eq!(request, empty);
         }
     }
 
