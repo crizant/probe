@@ -350,7 +350,7 @@ impl Render for ProbeApp {
                             .child(self.render_tabs(theme, cx))
                             .child(self.render_editor_response(
                                 theme,
-                                window.bounds().size.height.into(),
+                                window.viewport_size().height.into(),
                                 cx,
                             ))
                             .when(!self.shell.sidebar_collapsed, |column| {
