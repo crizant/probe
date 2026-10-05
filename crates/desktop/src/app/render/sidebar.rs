@@ -353,7 +353,6 @@ impl ProbeApp {
                 self.wrap_tree_row(
                     TreeRowSpec {
                         item,
-                        kind: ItemKind::Request,
                         selector: loaded.request_selector(key).unwrap_or_default().to_owned(),
                         label: label.to_owned(),
                         icon: Some(icon),
@@ -449,7 +448,6 @@ impl ProbeApp {
                 self.wrap_tree_row(
                     TreeRowSpec {
                         item,
-                        kind: ItemKind::Folder,
                         selector: loaded.folder_selector(key).unwrap_or_default().to_owned(),
                         label: label.to_owned(),
                         icon: None,
@@ -475,7 +473,6 @@ impl ProbeApp {
     ) -> gpui::AnyElement {
         let TreeRowSpec {
             item,
-            kind,
             selector,
             label,
             icon,
@@ -490,32 +487,22 @@ impl ProbeApp {
             indicator,
             Some(DropIndicator::IntoFolder(folder)) if item == WorkspaceItemRef::Folder(folder)
         );
-        let indent = match kind {
-            ItemKind::Folder | ItemKind::Request => tree_level_indent(theme, depth),
-        };
+        let indent = tree_level_indent(theme, depth);
         let drag_view = cx.weak_entity();
         let row_id = match item {
             WorkspaceItemRef::Request(key) => ("tree-drop-request", key.slot()),
             WorkspaceItemRef::Folder(key) => ("tree-drop-folder", key.slot()),
         };
         let button = if can_edit {
-            button.on_drag(
-                TreeDrag {
-                    item,
-                    kind,
-                    label,
-                    icon,
-                },
-                move |drag, _, _, cx| {
-                    let preview = drag.clone();
-                    let item = drag.item;
-                    let _ = drag_view.update(cx, |view, cx| {
-                        view.tree_drag_source = Some(item);
-                        view.select_tree_item(item, cx);
-                    });
-                    cx.new(|_| preview)
-                },
-            )
+            button.on_drag(TreeDrag { item, label, icon }, move |drag, _, _, cx| {
+                let preview = drag.clone();
+                let item = drag.item;
+                let _ = drag_view.update(cx, |view, cx| {
+                    view.tree_drag_source = Some(item);
+                    view.select_tree_item(item, cx);
+                });
+                cx.new(|_| preview)
+            })
         } else {
             button
         };

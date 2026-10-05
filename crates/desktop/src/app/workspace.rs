@@ -170,28 +170,11 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let dirty = self.dirty_keys();
-        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
-            self.prompt_unsaved(
-                dirty,
-                PendingClose::Open {
-                    path,
-                    restored_state: restored_state.map(Box::new),
-                },
-                window,
-                cx,
-            );
-            return;
-        }
-        if self.has_pending_environment_work() {
-            self.pending_close = Some(PendingClose::Open {
-                path,
-                restored_state: restored_state.map(Box::new),
-            });
-            self.pump_workspace_writes(window, cx);
-            return;
-        }
-        self.load_workspace_path(path, restored_state, window, cx);
+        let pending = PendingClose::Open {
+            path,
+            restored_state: restored_state.map(Box::new),
+        };
+        self.request_workspace_transition(pending, window, cx);
     }
 
     pub(super) fn request_create_workspace(
@@ -200,17 +183,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let dirty = self.dirty_keys();
-        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
-            self.prompt_unsaved(dirty, PendingClose::Create { path }, window, cx);
-            return;
-        }
-        if self.has_pending_environment_work() {
-            self.pending_close = Some(PendingClose::Create { path });
-            self.pump_workspace_writes(window, cx);
-            return;
-        }
-        self.create_workspace_path(path, window, cx);
+        self.request_workspace_transition(PendingClose::Create { path }, window, cx);
     }
 
     pub(super) fn create_workspace_path(

@@ -336,17 +336,24 @@ impl ProbeApp {
     }
 
     pub(super) fn request_close_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.request_workspace_transition(PendingClose::Workspace, window, cx);
+    }
+
+    pub(super) fn request_workspace_transition(
+        &mut self,
+        pending: PendingClose,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let dirty = self.dirty_keys();
         if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
-            self.prompt_unsaved(dirty, PendingClose::Workspace, window, cx);
-            return;
-        }
-        if self.has_pending_environment_work() {
-            self.pending_close = Some(PendingClose::Workspace);
+            self.prompt_unsaved(dirty, pending, window, cx);
+        } else if self.has_pending_environment_work() {
+            self.pending_close = Some(pending);
             self.pump_workspace_writes(window, cx);
-            return;
+        } else {
+            self.finish_pending_close(pending, window, cx);
         }
-        self.close_workspace_now(cx);
     }
 
     pub(super) fn request_close_window(
@@ -395,17 +402,7 @@ impl ProbeApp {
         if self.application_dialog.is_some() {
             return;
         }
-        let dirty = self.dirty_keys();
-        if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
-            self.prompt_unsaved(dirty, PendingClose::Quit, window, cx);
-            return;
-        }
-        if self.has_pending_environment_work() {
-            self.pending_close = Some(PendingClose::Quit);
-            self.pump_workspace_writes(window, cx);
-            return;
-        }
-        cx.quit();
+        self.request_workspace_transition(PendingClose::Quit, window, cx);
     }
 
     pub(super) fn prompt_unsaved(
