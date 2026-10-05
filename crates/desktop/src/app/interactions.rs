@@ -18,11 +18,11 @@ impl ProbeApp {
             Some(ResizePane::Sidebar) => self.shell.resize_sidebar(event.position.x.into()),
             Some(ResizePane::Response) => match self.shell.pane_layout {
                 PaneLayout::Vertical => self.shell.resize_response(
-                    window.window_bounds().get_bounds().size.height.into(),
+                    window.viewport_size().height.into(),
                     event.position.y.into(),
                 ),
                 PaneLayout::Horizontal => self.shell.resize_response_width(
-                    window.window_bounds().get_bounds().size.width.into(),
+                    window.viewport_size().width.into(),
                     event.position.x.into(),
                 ),
             },
