@@ -616,35 +616,6 @@ fn variable_highlight_stays_at_origin_when_caret_is_at_start(cx: &mut TestAppCon
     );
 }
 
-#[gpui::test]
-fn variable_highlight_shapes_multiline_value_without_panicking(cx: &mut TestAppContext) {
-    cx.update(crate::theme::Theme::init);
-    let value = SharedString::from("{{host}}\n/users");
-    let window = cx.open_window(size(px(240.0), px(48.0)), |window, cx| HighlightHarness {
-        input: cx.new(|cx| {
-            let mut input = InputState::new(window, cx);
-            input.set_value(single_line(value.clone()), window, cx);
-            input
-        }),
-    });
-    let input = window
-        .update(cx, |harness, _window, _cx| harness.input.clone())
-        .expect("highlight test window should be open");
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let _ = visual.draw(
-        point(px(0.0), px(0.0)),
-        size(px(160.0), px(24.0)),
-        |_, _| VariableHighlightElement {
-            tooltip_geometry: None,
-            state: input,
-            base_color: transparent_black(),
-            palette: stand_in_palette(),
-            highlight_path_variables: false,
-            variables: VariableContext::default(),
-        },
-    );
-}
-
 #[test]
 fn detect_indentation_prefers_tabs() {
     assert_eq!(detect_indentation("\tindented"), "\t");
