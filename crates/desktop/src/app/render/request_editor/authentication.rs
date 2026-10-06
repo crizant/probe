@@ -6,7 +6,7 @@ impl ProbeApp {
         key: RequestKey,
         request: &Request,
         theme: Theme,
-        list_scroll: Option<&ScrollHandle>,
+        list_scroll: Option<&components::ListScroll>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let active = request

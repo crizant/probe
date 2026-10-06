@@ -25,16 +25,16 @@ fn environment_manager_row_ids_follow_insertions_and_removals() {
     dialog.add_variable(variable());
     assert_eq!(dialog.variable_row_ids, [0, 1]);
 
-    dialog.draft.variables.push(variable());
-    dialog.draft.variables.push(variable());
+    dialog.draft_mut().variables.push(variable());
+    dialog.draft_mut().variables.push(variable());
     dialog.sync_variable_row_ids();
     assert_eq!(dialog.variable_row_ids, [0, 1, 2, 3]);
     assert_eq!(dialog.next_variable_row_id, 4);
 
     dialog.remove_variable(1);
     assert_eq!(dialog.variable_row_ids, [0, 2, 3]);
-    assert_eq!(dialog.draft.variables.len(), 3);
-    dialog.remove_variable(dialog.draft.variables.len());
+    assert_eq!(dialog.draft().variables.len(), 3);
+    dialog.remove_variable(dialog.draft().variables.len());
     dialog.remove_variable(99);
     assert_eq!(dialog.variable_row_ids, [0, 2, 3]);
 }
@@ -113,7 +113,7 @@ fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut Te
             .expect("manager should remain open");
         assert_eq!(dialog.original_name, "development");
         dialog
-            .draft
+            .draft_mut()
             .variables
             .push(EnvironmentVariable::Plain(Variable {
                 name: Some("retries".to_owned()),
@@ -159,7 +159,7 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
     workspace.open_manager(cx, "base");
     workspace.update(cx, |view, _, cx| {
         view.apply_environment_manager_draft(cx, |dialog| {
-            for variable in &mut dialog.draft.variables {
+            for variable in &mut dialog.draft_mut().variables {
                 if let EnvironmentVariable::Plain(variable) = variable
                     && variable.name.as_deref() == Some("host")
                 {
@@ -172,7 +172,8 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
                 dialog.add_variable(EnvironmentVariable::Plain(Variable {
                     name: Some(format!("scroll-{index}")),
                     value: Some(VariableValueSet::Single(VariableValue::String(format!(
-                        "value-{index}"
+                        "value-{index}-{}",
+                        "x".repeat(400)
                     )))),
                     disabled: false,
                 }));
@@ -181,6 +182,12 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
     });
     cx.run_until_parked();
 
+    let builds = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .effective_row_builds
+    });
     let offset_y = |workspace: &EnvironmentWorkspace, cx: &mut TestAppContext| {
         workspace.update(cx, |view, _, _| {
             view.environment_variables_scroll
@@ -192,37 +199,64 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
         })
     };
     let mut visual = workspace.visual(cx);
-    let field = visual
-        .debug_bounds("environment-variable-value-host")
-        .expect("a value field should accept the pointer");
-    // Keep the pointer stationary while rows and their gaps pass underneath it.
-    for tick in 0..48 {
-        let delta_y = if tick >= 24 && tick % 2 == 0 {
-            px(8.0)
-        } else {
-            px(-8.0)
-        };
-        let before = offset_y(&workspace, cx);
-        visual.simulate_event(gpui::ScrollWheelEvent {
-            position: field.center(),
-            delta: gpui::ScrollDelta::Pixels(if tick % 3 == 0 {
-                point(px(0.0), delta_y)
-            } else {
-                point(px(2.0), delta_y)
-            }),
-            modifiers: Modifiers::default(),
-            touch_phase: if tick == 0 {
-                gpui::TouchPhase::Started
-            } else {
-                gpui::TouchPhase::Moved
-            },
+    for selector in [
+        "environment-variable-value-host",
+        "environment-variable-name-host",
+    ] {
+        workspace.update(cx, |view, _, cx| {
+            view.environment_variables_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
         });
-        assert_eq!(offset_y(&workspace, cx), before + delta_y);
-        // Burst several events between frames, including rapid reversals.
-        if tick % 4 == 3 {
-            visual.run_until_parked();
+        visual.run_until_parked();
+        let field = visual
+            .debug_bounds(selector)
+            .expect("a variable field should accept the pointer");
+        // Keep the pointer stationary while rows and their gaps pass underneath it.
+        for tick in 0..48 {
+            let delta_y = if tick >= 24 && tick % 2 == 0 {
+                px(8.0)
+            } else {
+                px(-8.0)
+            };
+            let before = offset_y(&workspace, cx);
+            visual.simulate_event(gpui::ScrollWheelEvent {
+                position: field.center(),
+                delta: gpui::ScrollDelta::Pixels(if tick % 3 == 0 {
+                    point(px(0.0), delta_y)
+                } else {
+                    point(px(2.0), delta_y)
+                }),
+                modifiers: Modifiers::default(),
+                touch_phase: if tick == 0 {
+                    gpui::TouchPhase::Started
+                } else {
+                    gpui::TouchPhase::Moved
+                },
+            });
+            assert_eq!(offset_y(&workspace, cx), before + delta_y);
+            // Burst several events between frames, including rapid reversals.
+            if tick % 4 == 3 {
+                visual.run_until_parked();
+            }
         }
+        assert_eq!(
+            workspace.update(cx, |view, _, _| {
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .effective_row_builds
+            }),
+            builds,
+            "scroll frames must reuse effective rows"
+        );
     }
+    let field = visual
+        .debug_bounds("environment-manager-variables")
+        .unwrap();
     let before = offset_y(&workspace, cx);
     visual.simulate_event(gpui::ScrollWheelEvent {
         position: field.center(),
@@ -291,6 +325,51 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
         list_after, list_before,
         "a horizontal wheel on a focused overflowing field should leave the list in place"
     );
+    workspace.update(cx, |view, _, cx| {
+        view.environment_variables_scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    });
+    visual.run_until_parked();
+    let start = visual
+        .debug_bounds("environment-variable-value-host")
+        .unwrap()
+        .center();
+    let target = visual
+        .debug_bounds("environment-variable-value-scroll-1")
+        .unwrap()
+        .center();
+    visual.simulate_click(target, Modifiers::default());
+    visual.run_until_parked();
+    let before = offset_y(&workspace, cx);
+    let delta_y = start.y - target.y;
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: start,
+        delta: gpui::ScrollDelta::Pixels(point(px(1.0), delta_y)),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Started,
+    });
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("environment-variable-value-scroll-1")
+            .unwrap()
+            .contains(&start)
+    );
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: start,
+        delta: gpui::ScrollDelta::Pixels(point(px(-80.0), px(-3.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    assert_eq!(
+        offset_y(&workspace, cx),
+        before + delta_y + px(-3.0),
+        "a focused overflowing row entering the pointer must retain the list's vertical axis"
+    );
 }
 
 #[gpui::test]
@@ -323,7 +402,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
                 .iter()
                 .position(|row| crate::app::dialogs::EnvironmentVariableRowId::Direct(*row) == *id)
                 .unwrap();
-            let EnvironmentVariable::Plain(variable) = &dialog.draft.variables[index] else {
+            let EnvironmentVariable::Plain(variable) = &dialog.draft().variables[index] else {
                 panic!("plain variable")
             };
             (
@@ -356,7 +435,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
                 .iter()
                 .position(|id| crate::app::dialogs::EnvironmentVariableRowId::Direct(*id) == row_id)
                 .unwrap();
-            let EnvironmentVariable::Plain(variable) = &dialog.draft.variables[index] else {
+            let EnvironmentVariable::Plain(variable) = &dialog.draft().variables[index] else {
                 panic!("plain variable")
             };
             assert_eq!(
@@ -374,7 +453,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
                 .iter()
                 .position(|id| crate::app::dialogs::EnvironmentVariableRowId::Direct(*id) == row_id)
                 .unwrap();
-            let EnvironmentVariable::Plain(variable) = &dialog.draft.variables[index] else {
+            let EnvironmentVariable::Plain(variable) = &dialog.draft().variables[index] else {
                 panic!("plain variable")
             };
             if field_kind == "name" {
@@ -383,7 +462,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
                 let value = environment_variable_text(variable).0;
                 assert!(value.contains("before") && value.contains("edited"));
             }
-            let EnvironmentVariable::Plain(next) = &dialog.draft.variables[index + 1] else {
+            let EnvironmentVariable::Plain(next) = &dialog.draft().variables[index + 1] else {
                 panic!("plain variable")
             };
             assert_eq!(next.name.as_deref(), Some("focus-1"));
@@ -399,7 +478,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
                 .iter()
                 .position(|id| crate::app::dialogs::EnvironmentVariableRowId::Direct(*id) == row_id)
                 .unwrap();
-            let EnvironmentVariable::Plain(variable) = &dialog.draft.variables[index] else {
+            let EnvironmentVariable::Plain(variable) = &dialog.draft().variables[index] else {
                 panic!("plain variable")
             };
             variable.name.clone().unwrap()
@@ -516,7 +595,11 @@ fn environment_manager_releases_the_field_on_blur_environment_change_and_close(
             .find(|environment| environment.name == "base")
             .unwrap()
             .clone();
-        view.environment_manager_dialog.as_mut().unwrap().draft = original;
+        *view
+            .environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut() = original;
         view.select_environment_manager_environment("development", cx);
         assert!(
             view.environment_manager_dialog
@@ -558,7 +641,7 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
         view.environment_manager_dialog
             .as_ref()
             .unwrap()
-            .draft
+            .draft()
             .variables
             .len()
     });
@@ -614,7 +697,7 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
     let direct_index = workspace.update(cx, |view, _, _| {
         let dialog = view.environment_manager_dialog.as_ref().unwrap();
         let matches: Vec<_> = dialog
-            .draft
+            .draft()
             .variables
             .iter()
             .enumerate()
@@ -709,7 +792,7 @@ fn environment_manager_scrolls_a_new_row_into_view(cx: &mut TestAppContext) {
         view.environment_manager_dialog
             .as_ref()
             .unwrap()
-            .draft
+            .draft()
             .variables
             .len()
     });
@@ -752,7 +835,7 @@ fn environment_manager_scrolls_a_new_row_into_view(cx: &mut TestAppContext) {
             view.environment_manager_dialog
                 .as_ref()
                 .unwrap()
-                .draft
+                .draft()
                 .variables
                 .last(),
             Some(EnvironmentVariable::Secret(_))
@@ -793,7 +876,7 @@ fn environment_manager_virtualizes_rows_and_resets_scroll_on_environment_change(
             .environment_manager_dialog
             .as_ref()
             .unwrap()
-            .draft
+            .draft()
             .variables
             .len()
             .saturating_sub(1);
@@ -828,7 +911,11 @@ fn environment_manager_virtualizes_rows_and_resets_scroll_on_environment_change(
             .find(|environment| environment.name == "base")
             .unwrap()
             .clone();
-        view.environment_manager_dialog.as_mut().unwrap().draft = original;
+        *view
+            .environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut() = original;
         let previous_scroll = view.environment_variables_scroll.0.clone();
         view.select_environment_manager_environment("development", cx);
         assert_eq!(
@@ -876,8 +963,11 @@ fn environment_manager_protects_dirty_draft_and_restores_create_focus(cx: &mut T
             window.focused(cx),
             Some(view.environment_manager_dialog_focus.clone())
         );
-        view.environment_manager_dialog.as_mut().unwrap().draft.name =
-            "renamed-development".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "renamed-development".to_owned();
     });
     cx.run_until_parked();
 
@@ -894,7 +984,7 @@ fn environment_manager_protects_dirty_draft_and_restores_create_focus(cx: &mut T
         let draft_name = |view: &ProbeApp| {
             view.environment_manager_dialog
                 .as_ref()
-                .map(|dialog| dialog.draft.name.clone())
+                .map(|dialog| dialog.draft().name.clone())
         };
         assert!(view.create_environment_dialog.is_none());
         assert_eq!(draft_name(view).as_deref(), Some("renamed-development"));
@@ -921,7 +1011,11 @@ fn environment_manager_validation_errors_are_scoped_and_dismissible(cx: &mut Tes
         view.select_environment(Some("development".to_owned()), cx);
         view.open_environment_manager_dialog(window, cx);
         view.show_toast(ToastIntent::Error, "App-level error", cx);
-        view.environment_manager_dialog.as_mut().unwrap().draft.name = "  ".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "  ".to_owned();
         view.save_environment_manager_dialog(window, cx);
         assert!(
             has_active_toast(
@@ -994,7 +1088,11 @@ fn environment_manager_routes_blocked_save_and_create_failures_to_its_error(
         );
         view.pending_environment_saves.clear();
 
-        view.environment_manager_dialog.as_mut().unwrap().draft.name = "base".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "base".to_owned();
         view.save_environment_manager_dialog(window, cx);
         assert!(
             has_active_toast(view, ToastIntent::Error, "Could not save environment:"),
@@ -1002,7 +1100,11 @@ fn environment_manager_routes_blocked_save_and_create_failures_to_its_error(
             toast_debug(view)
         );
 
-        view.environment_manager_dialog.as_mut().unwrap().draft.name = "development".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "development".to_owned();
         view.open_create_environment_dialog(window, cx);
         *view
             .create_environment_dialog
@@ -1024,10 +1126,14 @@ fn environment_dialog_auto_dismisses_errors_when_their_condition_resolves(cx: &m
     workspace.update(cx, |view, window, cx| {
         view.select_environment(Some("development".to_owned()), cx);
         view.open_environment_manager_dialog(window, cx);
-        view.environment_manager_dialog.as_mut().unwrap().draft.name = "  ".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "  ".to_owned();
         view.save_environment_manager_dialog(window, cx);
         view.apply_environment_manager_draft(cx, |dialog| {
-            dialog.draft.name = "development".to_owned();
+            dialog.draft_mut().name = "development".to_owned();
         });
     });
     cx.run_until_parked();
@@ -1048,10 +1154,14 @@ fn environment_dialog_auto_dismisses_errors_when_their_condition_resolves(cx: &m
     });
 
     workspace.update(cx, |view, window, cx| {
-        view.environment_manager_dialog.as_mut().unwrap().draft.name = "base".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "base".to_owned();
         view.save_environment_manager_dialog(window, cx);
         view.apply_environment_manager_draft(cx, |dialog| {
-            dialog.draft.name = "development".to_owned();
+            dialog.draft_mut().name = "development".to_owned();
         });
     });
     cx.run_until_parked();
@@ -1093,9 +1203,9 @@ fn environment_manager_saves_plain_variables_and_parent(cx: &mut TestAppContext)
         view.select_environment(Some("development".to_owned()), cx);
         view.open_environment_manager_dialog(window, cx);
         let dialog = view.environment_manager_dialog.as_mut().unwrap();
-        dialog.draft.extends = None;
+        dialog.draft_mut().extends = None;
         dialog
-            .draft
+            .draft_mut()
             .variables
             .push(EnvironmentVariable::Plain(Variable {
                 name: Some("region".to_owned()),
@@ -1136,7 +1246,7 @@ fn platform_save_hotkey_saves_dirty_environment_manager(cx: &mut TestAppContext)
         view.select_environment(Some("development".to_owned()), cx);
         view.open_environment_manager_dialog(window, cx);
         view.apply_environment_manager_draft(cx, |dialog| {
-            dialog.draft.extends = None;
+            dialog.draft_mut().extends = None;
         });
         assert!(!view.environment_manager_save_disabled());
     });
@@ -1218,7 +1328,7 @@ fn platform_save_hotkey_is_disabled_while_environment_manager_save_is_busy(
         view.select_environment(Some("development".to_owned()), cx);
         view.open_environment_manager_dialog(window, cx);
         view.apply_environment_manager_draft(cx, |dialog| {
-            dialog.draft.extends = None;
+            dialog.draft_mut().extends = None;
         });
         view.save_environment_manager_dialog(window, cx);
         assert!(view.environment_save_task.is_some());
@@ -1247,9 +1357,13 @@ fn environment_manager_save_ignores_edits_made_while_busy(cx: &mut TestAppContex
         view.save_environment_manager_dialog(window, cx);
         assert!(view.environment_save_task.is_some());
         view.apply_environment_manager_draft(cx, |dialog| {
-            dialog.draft.name = "hijacked".to_owned();
+            dialog.draft_mut().name = "hijacked".to_owned();
         });
-        view.environment_manager_dialog.as_mut().unwrap().draft.name = "hijacked".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "hijacked".to_owned();
     });
     cx.run_until_parked();
 
@@ -1264,7 +1378,7 @@ fn environment_manager_save_ignores_edits_made_while_busy(cx: &mut TestAppContex
             .as_ref()
             .expect("manager should rebind to the saved environment");
         assert_eq!(dialog.original_name, "development");
-        assert_eq!(dialog.draft.name, "development");
+        assert_eq!(dialog.draft().name, "development");
     });
     assert!(saved_environment(&workspace, "development").is_some());
     assert!(saved_environment(&workspace, "hijacked").is_none());
@@ -1320,7 +1434,7 @@ fn environment_manager_delete_preserves_a_dirty_draft_for_another_environment(
         view.select_environment_manager_environment("development", cx);
         let dialog = view.environment_manager_dialog.as_mut().unwrap();
         assert_eq!(dialog.original_name, "development");
-        dialog.draft.name = "renamed-development".to_owned();
+        dialog.draft_mut().name = "renamed-development".to_owned();
         view.delete_environment("staging".to_owned(), window, cx);
     });
     cx.run_until_parked();
@@ -1336,7 +1450,7 @@ fn environment_manager_delete_preserves_a_dirty_draft_for_another_environment(
             .as_ref()
             .expect("manager should keep the current draft");
         assert_eq!(dialog.original_name, "development");
-        assert_eq!(dialog.draft.name, "renamed-development");
+        assert_eq!(dialog.draft().name, "renamed-development");
     });
 }
 
@@ -1414,8 +1528,11 @@ fn environment_manager_closes_when_the_workspace_resets(cx: &mut TestAppContext)
     let other_workspace = probe_opencollection::load_workspace(&other).unwrap();
     workspace.update(cx, |view, window, cx| {
         view.open_environment_manager_dialog(window, cx);
-        view.environment_manager_dialog.as_mut().unwrap().draft.name =
-            "renamed-development".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "renamed-development".to_owned();
         view.set_workspace(other, other_workspace);
         assert!(view.environment_manager_dialog.is_none());
         let reloaded = probe_opencollection::load_workspace(&workspace.path).unwrap();
@@ -1424,6 +1541,102 @@ fn environment_manager_closes_when_the_workspace_resets(cx: &mut TestAppContext)
         view.close_workspace_now(cx);
         assert!(view.environment_manager_dialog.is_none());
     });
+}
+
+#[gpui::test]
+fn environment_manager_cached_rows_follow_draft_edits_and_selection(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "development");
+    let rows = |cx: &mut TestAppContext| {
+        workspace.update(cx, |view, _, _| {
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .cached_effective_rows()
+                .clone()
+                .unwrap()
+        })
+    };
+    let original = rows(cx);
+    assert!(
+        original
+            .iter()
+            .any(|row| row.variable.name() == Some("secretToken") && row.direct_index.is_none())
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                name: Some("baseUrl".into()),
+                value: Some(VariableValueSet::Single(VariableValue::String(
+                    "override".into(),
+                ))),
+                disabled: true,
+            }));
+        });
+    });
+    cx.run_until_parked();
+    let overridden = rows(cx);
+    assert!(!Rc::ptr_eq(&original, &overridden));
+    let overrides = overridden
+        .iter()
+        .filter(|row| row.variable.name() == Some("baseUrl"))
+        .collect::<Vec<_>>();
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(overrides[0].direct_index, Some(2));
+    assert!(
+        matches!(&overrides[0].variable, EnvironmentVariable::Plain(variable) if variable.disabled && environment_variable_text(variable).0 == "override")
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| dialog.remove_variable(2));
+    });
+    cx.run_until_parked();
+    assert!(
+        rows(cx)
+            .iter()
+            .any(|row| row.variable.name() == Some("baseUrl") && row.direct_index.is_none())
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| dialog.draft_mut().extends = None);
+    });
+    cx.run_until_parked();
+    assert!(rows(cx).iter().all(|row| row.direct_index.is_some()));
+    assert!(
+        !rows(cx)
+            .iter()
+            .any(|row| row.variable.name() == Some("secretToken"))
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.draft_mut().extends = Some("base".into())
+        });
+        view.select_environment_manager_environment("base", cx);
+    });
+    cx.run_until_parked();
+    let selected = rows(cx);
+    assert!(
+        selected
+            .iter()
+            .all(|row| row.defined_in == "base" && row.direct_index.is_some())
+    );
+    assert!(
+        selected
+            .iter()
+            .any(|row| matches!(row.variable, EnvironmentVariable::Secret(_)))
+    );
+    // A future feature may edit outside apply_environment_manager_draft. The owner
+    // must invalidate before lending the mutable draft, without adapter bookkeeping.
+    workspace.update(cx, |view, _, cx| {
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "renamed-base".into();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let renamed = rows(cx);
+    assert!(!Rc::ptr_eq(&selected, &renamed));
+    assert!(renamed.iter().all(|row| row.defined_in == "renamed-base"));
 }
 
 #[gpui::test]
@@ -1441,13 +1654,16 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
         );
         view.apply_reconciled_workspace(reload(), cx);
         assert_eq!(manager_environment(view), Some("development"));
-        view.environment_manager_dialog.as_mut().unwrap().draft.name =
-            "renamed-development".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "renamed-development".to_owned();
         view.apply_reconciled_workspace(reload(), cx);
         assert_eq!(
             view.environment_manager_dialog
                 .as_ref()
-                .map(|dialog| dialog.draft.name.as_str()),
+                .map(|dialog| dialog.draft().name.as_str()),
             Some("renamed-development")
         );
         assert_eq!(
@@ -1456,17 +1672,68 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
             "a reload must not relabel a stored secret from the unsaved environment name"
         );
         view.apply_environment_manager_draft(cx, |dialog| {
-            dialog.draft.name = "development".to_owned();
+            dialog.draft_mut().name = "development".to_owned();
         });
         assert_eq!(
             manager_status(view, "secretToken"),
             Some(SecretUiStatus::Stored)
         );
-        view.environment_manager_dialog.as_mut().unwrap().draft.name =
-            "renamed-development".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "renamed-development".to_owned();
         assert!(view.toasts.is_empty(), "{:?}", toast_debug(view));
     });
 
+    cx.run_until_parked();
+    let previous_rows = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .cached_effective_rows()
+            .clone()
+            .unwrap()
+    });
+    let mut parent_changed = probe_opencollection::load_workspace(&workspace.path).unwrap();
+    let mut parent = parent_changed.workspace().environments()[0].clone();
+    parent.variables.push(EnvironmentVariable::Plain(Variable {
+        name: Some("newInherited".into()),
+        value: None,
+        disabled: false,
+    }));
+    let saved = parent_changed
+        .prepare_environment_replace("base", parent)
+        .unwrap()
+        .execute()
+        .unwrap();
+    parent_changed.complete_environment_replace(saved).unwrap();
+    workspace.update(cx, |view, _, cx| {
+        view.apply_reconciled_workspace(reconciled_workspace(parent_changed), cx);
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(dialog.draft().name, "renamed-development");
+        assert!(
+            dialog.cached_effective_rows().is_none(),
+            "parent changes must invalidate a retained dirty draft"
+        );
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        let rows = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .cached_effective_rows()
+            .as_ref()
+            .unwrap();
+        assert!(!Rc::ptr_eq(&previous_rows, rows));
+        let inherited = rows
+            .iter()
+            .find(|row| row.variable.name() == Some("newInherited"))
+            .unwrap();
+        assert_eq!(inherited.defined_in, "base");
+        assert_eq!(inherited.direct_index, None);
+    });
     let mut changed = probe_opencollection::load_workspace(&workspace.path).unwrap();
     let mut replacement = changed.workspace().environments()[1].clone();
     replacement.extends = None;
@@ -1484,8 +1751,8 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
             .as_ref()
             .expect("manager should rebind to disk");
         assert_eq!(dialog.original_name, "development");
-        assert_eq!(dialog.draft.name, "development");
-        assert_eq!(dialog.draft.extends, None);
+        assert_eq!(dialog.draft().name, "development");
+        assert_eq!(dialog.draft().extends, None);
         assert!(
             has_active_toast(
                 view,
@@ -1517,8 +1784,11 @@ fn environment_manager_cancel_with_unsaved_changes_prompts(cx: &mut TestAppConte
     workspace.update(cx, |view, window, cx| {
         view.select_environment(Some("development".to_owned()), cx);
         view.open_environment_manager_dialog(window, cx);
-        view.environment_manager_dialog.as_mut().unwrap().draft.name =
-            "renamed-development".to_owned();
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .name = "renamed-development".to_owned();
         view.request_close_environment_manager_dialog(window, cx);
         assert!(matches!(
             view.application_dialog,
@@ -1542,7 +1812,7 @@ fn environment_manager_cancel_with_unsaved_changes_prompts(cx: &mut TestAppConte
         assert_eq!(
             view.environment_manager_dialog
                 .as_ref()
-                .map(|dialog| dialog.draft.name.as_str()),
+                .map(|dialog| dialog.draft().name.as_str()),
             Some("renamed-development")
         );
         view.request_close_environment_manager_dialog(window, cx);
@@ -1791,7 +2061,7 @@ fn environment_manager_reads_writes_and_clears_description(cx: &mut TestAppConte
             view.environment_manager_dialog
                 .as_ref()
                 .unwrap()
-                .draft
+                .draft()
                 .description,
             Some(probe_core::Documentation::Text(
                 "Local development".to_owned()
@@ -1807,7 +2077,7 @@ fn environment_manager_reads_writes_and_clears_description(cx: &mut TestAppConte
                 view.environment_manager_dialog
                     .as_ref()
                     .unwrap()
-                    .draft
+                    .draft()
                     .description
                     .as_ref(),
             ),
@@ -1844,7 +2114,7 @@ fn environment_manager_reads_writes_and_clears_description(cx: &mut TestAppConte
             view.environment_manager_dialog
                 .as_ref()
                 .unwrap()
-                .draft
+                .draft()
                 .description,
             Some(probe_core::Documentation::Content {
                 content: "Staging notes".to_owned(),
@@ -1894,7 +2164,7 @@ fn environment_manager_reads_writes_and_clears_description(cx: &mut TestAppConte
             view.environment_manager_dialog
                 .as_ref()
                 .unwrap()
-                .draft
+                .draft()
                 .description,
             Some(probe_core::Documentation::Null)
         );
@@ -1935,7 +2205,7 @@ fn environment_manager_shows_an_environment_without_a_description_key(cx: &mut T
             view.environment_manager_dialog
                 .as_ref()
                 .unwrap()
-                .draft
+                .draft()
                 .description,
             None
         );

@@ -16,10 +16,14 @@ pub(crate) const IMPORT_DIAGNOSTIC_GROUP_LIMIT: usize = 8;
 #[derive(Clone, Debug)]
 pub(crate) struct EnvironmentManagerDialog {
     pub(crate) original_name: String,
-    pub(crate) draft: Environment,
+    draft: Environment,
     pub(crate) secret_statuses: BTreeMap<String, SecretUiStatus>,
     pub(crate) variable_row_ids: Vec<u64>,
     pub(crate) next_variable_row_id: u64,
+    // Invalidated by draft edits and workspace reconciliation; secret presence is rendered separately.
+    effective_rows: Option<std::rc::Rc<Vec<probe_core::EffectiveEnvironmentVariable>>>,
+    #[cfg(test)]
+    pub(crate) effective_row_builds: usize,
     pub(crate) active_field: Option<(
         EnvironmentVariableRowId,
         EnvironmentFieldKind,
@@ -58,12 +62,55 @@ impl EnvironmentManagerDialog {
             secret_statuses: BTreeMap::new(),
             variable_row_ids: (0..next_variable_row_id).collect(),
             next_variable_row_id,
+            effective_rows: None,
+            #[cfg(test)]
+            effective_row_builds: 0,
             active_field: None,
         }
     }
 
+    pub(crate) fn draft(&self) -> &Environment {
+        &self.draft
+    }
+
+    /// Invalidate before exposing mutable access, including edits outside the app adapter.
+    pub(crate) fn draft_mut(&mut self) -> &mut Environment {
+        self.effective_rows = None;
+        &mut self.draft
+    }
+
+    pub(crate) fn effective_rows(
+        &mut self,
+        environments: &[Environment],
+    ) -> std::rc::Rc<Vec<probe_core::EffectiveEnvironmentVariable>> {
+        self.effective_rows
+            .get_or_insert_with(|| {
+                #[cfg(test)]
+                {
+                    self.effective_row_builds += 1;
+                }
+                std::rc::Rc::new(probe_core::effective_environment_variables(
+                    environments,
+                    &self.draft,
+                ))
+            })
+            .clone()
+    }
+
+    /// Inherited rows depend on the workspace even when the direct draft is retained.
+    pub(crate) fn rebind_workspace(&mut self) {
+        self.effective_rows = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_effective_rows(
+        &self,
+    ) -> &Option<std::rc::Rc<Vec<probe_core::EffectiveEnvironmentVariable>>> {
+        &self.effective_rows
+    }
+
     pub(crate) fn add_variable(&mut self, variable: probe_core::EnvironmentVariable) {
-        self.draft.variables.push(variable);
+        self.draft_mut().variables.push(variable);
         self.variable_row_ids.push(self.next_variable_row_id);
         self.next_variable_row_id += 1;
     }
@@ -82,7 +129,7 @@ impl EnvironmentManagerDialog {
             }) {
                 self.active_field = None;
             }
-            self.draft.variables.remove(index);
+            self.draft_mut().variables.remove(index);
             self.variable_row_ids.remove(index);
         }
     }

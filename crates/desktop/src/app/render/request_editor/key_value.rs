@@ -248,7 +248,7 @@ impl ProbeApp {
         request: &Request,
         kind: KeyValueEditorKind,
         theme: Theme,
-        list_scroll: Option<&ScrollHandle>,
+        list_scroll: Option<&components::ListScroll>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
@@ -294,29 +294,42 @@ impl ProbeApp {
                             ),
                     )
                     .child(
-                        div().flex_1().min_w(px(0.0)).child(
-                            components::variable_text_input(
-                                theme,
-                                (kind.value_id(), index),
-                                row.value.to_owned(),
-                                "Value",
-                                self.variable_context(cx),
-                                move |value, _, input_cx| {
-                                    let _ = value_view.update(input_cx, |view, cx| {
-                                        view.edit_request(
-                                            key,
-                                            |request| {
-                                                if let Some(row) = kind.row_mut(request, index) {
-                                                    *row.value = value.to_string();
-                                                }
-                                            },
-                                            cx,
-                                        );
-                                    });
-                                },
-                            )
-                            .list_scroll(list_scroll),
-                        ),
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .when(kind == KeyValueEditorKind::Headers, |cell| {
+                                cell.debug_selector(move || {
+                                    if index == 0 {
+                                        "header-value-field".into()
+                                    } else {
+                                        format!("header-value-field-{index}")
+                                    }
+                                })
+                            })
+                            .child(
+                                components::variable_text_input(
+                                    theme,
+                                    (kind.value_id(), index),
+                                    row.value.to_owned(),
+                                    "Value",
+                                    self.variable_context(cx),
+                                    move |value, _, input_cx| {
+                                        let _ = value_view.update(input_cx, |view, cx| {
+                                            view.edit_request(
+                                                key,
+                                                |request| {
+                                                    if let Some(row) = kind.row_mut(request, index)
+                                                    {
+                                                        *row.value = value.to_string();
+                                                    }
+                                                },
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                )
+                                .list_scroll(list_scroll),
+                            ),
                     )
                     .child(components::switch(
                         theme,

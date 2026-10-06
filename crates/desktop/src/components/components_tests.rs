@@ -338,6 +338,8 @@ struct TextContextMenuHarness {
 }
 
 struct ScrollableInputHarness {
+    row_id: usize,
+    arbitration: super::ListScroll,
     input: Entity<InputState>,
     list_scroll: ScrollHandle,
     value: SharedString,
@@ -347,21 +349,24 @@ impl Render for ScrollableInputHarness {
     fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let mut input = super::text_input_base(
             Theme::light(),
-            "scrollable-input",
+            ("scrollable-input", self.row_id),
             self.value.clone(),
             "Value",
         );
         input.debug_selector = Some("scrollable-input");
         input.shared_input = Some(self.input.clone());
-        input.list_scroll = Some(self.list_scroll.clone());
+        input.list_scroll = Some(self.arbitration.clone());
         div()
             .id("scrollable-input-list")
             .w(px(240.0))
             .h(px(120.0))
             .overflow_y_scroll()
             .track_scroll(&self.list_scroll)
-            .child(input)
-            .child(div().h(px(500.0)))
+            .child(super::list_scroll_region(
+                div().child(input).child(div().h(px(500.0))),
+                &self.list_scroll,
+                &self.arbitration,
+            ))
     }
 }
 
@@ -372,6 +377,8 @@ fn vertical_trackpad_frames_scroll_the_list_even_when_one_is_mostly_horizontal(
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
         ScrollableInputHarness {
+            row_id: 0,
+            arbitration: cx.new(|_| super::ListScrollState::default()),
             input: cx.new(|cx| InputState::new(window, cx)),
             list_scroll: ScrollHandle::new(),
             value: "x".repeat(400).into(),
@@ -465,6 +472,8 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
         ScrollableInputHarness {
+            row_id: 0,
+            arbitration: cx.new(|_| super::ListScrollState::default()),
             input: cx.new(|cx| InputState::new(window, cx)),
             list_scroll: ScrollHandle::new(),
             value: "x".repeat(400).into(),
@@ -531,6 +540,29 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
             assert_eq!(view.list_scroll.offset().y, list_before);
         })
         .unwrap();
+    let text_before = window
+        .update(cx, |_, _, cx| input.read(cx).scroll_offset().x)
+        .unwrap();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Lines(point(0.0, -1.0)),
+        modifiers: Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(
+                input.read(cx).scroll_offset().x < text_before,
+                "Shift+wheel should scroll focused overflowing text"
+            );
+            assert_eq!(view.list_scroll.offset().y, list_before);
+            assert!(input.read(cx).focus_handle(cx).is_focused(window));
+        })
+        .unwrap();
 }
 
 #[gpui::test]
@@ -538,6 +570,8 @@ fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut 
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
         ScrollableInputHarness {
+            row_id: 0,
+            arbitration: cx.new(|_| super::ListScrollState::default()),
             input: cx.new(|cx| InputState::new(window, cx)),
             list_scroll: ScrollHandle::new(),
             value: "x".repeat(400).into(),
@@ -1556,4 +1590,47 @@ fn custom_method_labels_supplement_only_generic_http_icons() {
             .custom_method(),
         None
     );
+}
+
+#[gpui::test]
+fn precise_axis_survives_a_list_field_remount(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
+        ScrollableInputHarness {
+            row_id: 0,
+            arbitration: cx.new(|_| super::ListScrollState::default()),
+            input: cx.new(|cx| InputState::new(window, cx)),
+            list_scroll: ScrollHandle::new(),
+            value: "x".repeat(400).into(),
+        }
+    });
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let position = visual.debug_bounds("scrollable-input").unwrap().center();
+    visual.simulate_click(position, Modifiers::default());
+    visual.run_until_parked();
+    for row in 0..3 {
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(if row == 0 {
+                point(px(1.0), px(-4.0))
+            } else {
+                point(px(-40.0), px(-3.0))
+            }),
+            modifiers: Modifiers::default(),
+            touch_phase: if row == 0 {
+                gpui::TouchPhase::Started
+            } else {
+                gpui::TouchPhase::Moved
+            },
+        });
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(view.list_scroll.offset().y, px(-4.0 - row as f32 * 3.0));
+                view.row_id += 1;
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+    }
 }

@@ -50,7 +50,7 @@ fn manager_secret_status_comes_from_presence_for_the_effective_environment(
             .as_ref()
             .unwrap()
             .workspace()
-            .effective_environment_variables(&dialog.draft)
+            .effective_environment_variables(dialog.draft())
             .into_iter()
             .find(|row| matches!(&row.variable, EnvironmentVariable::Secret(secret) if secret.name.as_deref() == Some("secretToken")))
             .unwrap()
@@ -144,7 +144,7 @@ fn manager_secret_row_actions_follow_presence_and_saved_state(cx: &mut TestAppCo
 
     workspace.update(cx, |view, _, cx| {
         view.apply_environment_manager_draft(cx, |dialog| {
-            dialog.draft.color = Some("#abcdef".into())
+            dialog.draft_mut().color = Some("#abcdef".into())
         });
     });
     visual.run_until_parked();
@@ -166,7 +166,7 @@ fn manager_new_secret_must_be_saved_before_credential_can_be_set(cx: &mut TestAp
     workspace.update(cx, |view, window, cx| {
         view.apply_environment_manager_draft(cx, |dialog| {
             dialog
-                .draft
+                .draft_mut()
                 .variables
                 .push(EnvironmentVariable::Secret(SecretVariable {
                     name: Some(String::new()),
@@ -181,7 +181,9 @@ fn manager_new_secret_must_be_saved_before_credential_can_be_set(cx: &mut TestAp
         );
         assert!(!view.environment_manager_draft_has_required_names());
         view.apply_environment_manager_draft(cx, |dialog| {
-            if let Some(EnvironmentVariable::Secret(secret)) = dialog.draft.variables.last_mut() {
+            if let Some(EnvironmentVariable::Secret(secret)) =
+                dialog.draft_mut().variables.last_mut()
+            {
                 secret.name = Some("newToken".into());
             }
         });
@@ -305,7 +307,7 @@ fn manager_trash_removes_declaration_without_deleting_native_value(cx: &mut Test
     visual.simulate_click(trash.center(), Modifiers::default());
     visual.run_until_parked();
     workspace.update(cx, |view, window, cx| {
-        let draft = &view.environment_manager_dialog.as_ref().unwrap().draft;
+        let draft = &view.environment_manager_dialog.as_ref().unwrap().draft();
         assert!(!draft.variables.iter().any(is_token));
         view.save_environment_manager_dialog(window, cx);
     });
@@ -359,7 +361,9 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
     workspace.store.set(&old_id, "private").unwrap();
     workspace.open_manager(cx, "development");
     workspace.update(cx, |view, window, cx| {
-        view.apply_environment_manager_draft(cx, |dialog| dialog.draft.name = "production".into());
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.draft_mut().name = "production".into()
+        });
         assert!(!view.can_manage_secret("secretToken"));
         view.save_environment_manager_dialog(window, cx);
         assert!(matches!(
@@ -373,7 +377,11 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
         assert!(view.application_dialog.is_none());
         assert!(view.environment_save_task.is_none());
         assert_eq!(
-            view.environment_manager_dialog.as_ref().unwrap().draft.name,
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft()
+                .name,
             "production"
         );
     });
@@ -390,7 +398,11 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
     cx.run_until_parked();
     workspace.update(cx, |view, _, _| {
         assert_eq!(
-            view.environment_manager_dialog.as_ref().unwrap().draft.name,
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft()
+                .name,
             "production"
         );
         assert_eq!(
@@ -410,7 +422,7 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
     workspace.update(cx, |view, window, cx| {
         view.select_environment_manager_environment("base", cx);
         view.apply_environment_manager_draft(cx, |dialog| {
-            for variable in &mut dialog.draft.variables {
+            for variable in &mut dialog.draft_mut().variables {
                 if let EnvironmentVariable::Secret(secret) = variable
                     && secret.name.as_deref() == Some("secretToken")
                 {
@@ -441,7 +453,9 @@ fn environment_manager_close_save_confirms_secret_rename_before_closing(cx: &mut
     let workspace = EnvironmentWorkspace::writable(cx, "secret-rename-close");
     workspace.open_manager(cx, "development");
     workspace.update(cx, |view, window, cx| {
-        view.apply_environment_manager_draft(cx, |dialog| dialog.draft.name = "production".into());
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.draft_mut().name = "production".into()
+        });
         view.request_close_environment_manager_dialog(window, cx);
         view.handle_application_dialog_action(ApplicationDialogAction::Save, window, cx);
         assert!(matches!(
@@ -568,7 +582,7 @@ fn manager_secret_dialog_cannot_save_after_draft_becomes_dirty(cx: &mut TestAppC
         type_secret(view, window, cx, "must-not-write");
         view.apply_environment_manager_draft(cx, |dialog| {
             dialog
-                .draft
+                .draft_mut()
                 .variables
                 .push(EnvironmentVariable::Plain(Variable {
                     name: Some("newPlain".into()),
