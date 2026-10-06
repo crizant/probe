@@ -184,58 +184,6 @@ fn variable_tooltip_presentation_keeps_unavailable_when_not_writable() {
     assert!(missing.hint.is_none());
 }
 
-#[gpui::test]
-fn variable_span_layout_keeps_duplicate_names_and_follows_scroll(cx: &mut TestAppContext) {
-    cx.update(crate::theme::Theme::init);
-    let window = cx.open_window(size(px(240.0), px(48.0)), |window, cx| HighlightHarness {
-        input: cx.new(|cx| InputState::new(window, cx)),
-    });
-    window
-        .update(cx, |_, window, _| {
-            let font_family = Theme::light().typography.monospace_family;
-            let value = "{{host}}/{{host}}";
-            let ranges = variable_ranges(value);
-            let unscrolled =
-                variable_span_layout(window, value, &ranges, font_family, 14.0, px(0.0), 0, None);
-            assert_eq!(unscrolled.len(), 2);
-            assert_eq!(unscrolled[0].0, "host");
-            assert_eq!(unscrolled[1].0, "host");
-            assert!(
-                unscrolled[1].1 > unscrolled[0].1,
-                "duplicate names should keep separate span origins, got {unscrolled:?}"
-            );
-
-            let scrolled = variable_span_layout(
-                window,
-                value,
-                &ranges,
-                font_family,
-                14.0,
-                px(-12.0),
-                0,
-                None,
-            );
-            assert_eq!(scrolled[0].1, unscrolled[0].1 - px(12.0));
-            assert_eq!(scrolled[1].1, unscrolled[1].1 - px(12.0));
-
-            let followed = variable_span_layout(
-                window,
-                value,
-                &ranges,
-                font_family,
-                14.0,
-                px(0.0),
-                value.len(),
-                Some(px(40.0)),
-            );
-            assert!(
-                followed[0].1 < px(0.0),
-                "caret past a narrow field should shift hover spans left, got {followed:?}"
-            );
-        })
-        .expect("span layout test window should remain open");
-}
-
 #[test]
 fn body_text_highlights_overlay_mustache_variables() {
     let value = "{\"host\":\"{{host}}\"}";
@@ -537,47 +485,6 @@ fn search_highlight_bounds_include_last_character_before_newline(cx: &mut TestAp
     );
 }
 
-#[test]
-fn input_text_scroll_offset_shifts_left_when_caret_overflows() {
-    assert_eq!(
-        input_text_scroll_offset(px(50.0), px(50.0), px(100.0), px(0.0)),
-        px(0.0),
-        "caret inside the field should not scroll"
-    );
-    assert_eq!(
-        input_text_scroll_offset(px(200.0), px(200.0), px(100.0), px(0.0)),
-        px(-110.0),
-        "caret past the right edge should match gpui-base scroll_to"
-    );
-}
-
-#[test]
-fn input_text_scroll_offset_keeps_existing_scroll_while_caret_stays_visible() {
-    assert_eq!(
-        input_text_scroll_offset(px(550.0), px(700.0), px(200.0), px(-500.0)),
-        px(-500.0),
-        "caret still visible in the scrolled viewport should not reset scroll"
-    );
-}
-
-#[test]
-fn input_text_scroll_offset_scrolls_back_when_caret_moves_left_offscreen() {
-    assert_eq!(
-        input_text_scroll_offset(px(150.0), px(700.0), px(200.0), px(-500.0)),
-        px(-140.0),
-        "caret off the left edge should scroll right to reveal it"
-    );
-}
-
-#[test]
-fn input_text_scroll_offset_clamps_immediately_when_deleting_at_end() {
-    assert_eq!(
-        input_text_scroll_offset(px(692.0), px(692.0), px(200.0), px(-510.0)),
-        px(-502.0),
-        "a shorter line should move the overlay with the input on the deletion frame"
-    );
-}
-
 struct HighlightHarness {
     input: Entity<InputState>,
 }
@@ -621,6 +528,7 @@ fn variable_highlight_scrolls_with_caret_at_end_of_long_url(cx: &mut TestAppCont
     let visible = size(px(160.0), px(24.0));
     let (_, prepaint) = visual.draw(point(px(0.0), px(0.0)), visible, |_, _| {
         VariableHighlightElement {
+            tooltip_geometry: None,
             state: input.clone(),
             base_color: transparent_black(),
             palette: stand_in_palette(),
@@ -666,7 +574,8 @@ fn variable_highlight_stays_at_origin_when_caret_is_at_start(cx: &mut TestAppCon
         point(px(0.0), px(0.0)),
         size(px(160.0), px(24.0)),
         |_, _| VariableHighlightElement {
-            state: input,
+            tooltip_geometry: None,
+            state: input.clone(),
             base_color: transparent_black(),
             palette: stand_in_palette(),
             highlight_path_variables: false,
@@ -679,33 +588,31 @@ fn variable_highlight_stays_at_origin_when_caret_is_at_start(cx: &mut TestAppCon
         px(0.0),
         "caret at the start should keep the variable highlight at its origin"
     );
-}
-
-#[gpui::test]
-fn variable_highlight_shapes_multiline_value_without_panicking(cx: &mut TestAppContext) {
-    cx.update(crate::theme::Theme::init);
-    let value = SharedString::from("{{host}}\n/users");
-    let window = cx.open_window(size(px(240.0), px(48.0)), |window, cx| HighlightHarness {
-        input: cx.new(|cx| {
-            let mut input = InputState::new(window, cx);
-            input.set_value(single_line(value.clone()), window, cx);
-            input
-        }),
-    });
-    let input = window
-        .update(cx, |harness, _window, _cx| harness.input.clone())
-        .expect("highlight test window should be open");
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let _ = visual.draw(
+    window
+        .update(cx, |_, _, cx| {
+            input.update(cx, |state, cx| {
+                state.set_scroll_offset(point(px(-40.0), px(0.0)), cx)
+            });
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let native = input.read_with(cx, |state, _| state.scroll_offset().x);
+    assert_eq!(native, px(-40.0));
+    let (_, prepaint) = visual.draw(
         point(px(0.0), px(0.0)),
         size(px(160.0), px(24.0)),
         |_, _| VariableHighlightElement {
-            state: input,
+            tooltip_geometry: None,
+            state: input.clone(),
             base_color: transparent_black(),
             palette: stand_in_palette(),
             highlight_path_variables: false,
             variables: VariableContext::default(),
         },
+    );
+    assert_eq!(
+        prepaint.scroll_offset, native,
+        "manual scrolling may leave the caret offscreen; highlights must follow the native offset"
     );
 }
 
@@ -1016,4 +923,144 @@ fn compute_outdent_at_end_of_indented_line_removes_leading_indent() {
     let (text, start, end, selection) = super::core::compute_outdent(value, 7..7);
     assert_eq!(text, "hello");
     assert_eq!((start, end, selection), (0, value.len(), 5..5));
+}
+
+struct TooltipScrollHarness {
+    input: Entity<InputState>,
+    origin_shift: Pixels,
+    renders: usize,
+}
+
+impl Render for TooltipScrollHarness {
+    fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::light();
+        self.renders += 1;
+        div()
+            .ml(self.origin_shift)
+            .w(px(240.0))
+            .h(px(24.0))
+            .child(variable_input_overlay(
+                theme,
+                self.input.clone(),
+                "tooltip-scroll".into(),
+                InputBase::new("tooltip-scroll-input")
+                    .w_full()
+                    .child(Input::new(&self.input)),
+                self.input.read(cx).value(),
+                VariableContext::default(),
+                false,
+                window,
+                cx,
+            ))
+    }
+}
+
+#[gpui::test]
+fn input_tooltip_hits_follow_native_scroll_with_an_offscreen_caret(cx: &mut TestAppContext) {
+    cx.update(crate::theme::Theme::init);
+    let window = cx.open_window(size(px(320.0), px(80.0)), |window, cx| {
+        TooltipScrollHarness {
+            origin_shift: px(0.0),
+            renders: 0,
+            input: cx.new(|cx| {
+                let mut input = InputState::new(window, cx);
+                input.set_value(
+                    format!("prefix-{{{{host}}}}/{{{{host}}}}{}", "x".repeat(200)),
+                    window,
+                    cx,
+                );
+                input.set_selected_range(0..0, cx);
+                input
+            }),
+        }
+    });
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let assert_native_hits = |visual: &mut VisualTestContext| {
+        let expected = window
+            .update(visual, |view, _, cx| {
+                let input = view.input.read(cx);
+                variable_ranges(&input.value())
+                    .iter()
+                    .map(|reference| input.range_to_bounds(&reference.range).unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap();
+        for (selector, expected) in ["variable-hover-trigger", "variable-hover-trigger-1"]
+            .into_iter()
+            .zip(expected)
+        {
+            let actual = visual.debug_bounds(selector).unwrap();
+            // GPUI snaps div hitboxes to device pixels; native glyph bounds are fractional.
+            for (edge, native) in [
+                (actual.left(), expected.left()),
+                (actual.top(), expected.top()),
+                (actual.right(), expected.right()),
+                (actual.bottom(), expected.bottom()),
+            ] {
+                assert!(
+                    (edge - native).abs() <= px(0.5),
+                    "{selector}: {actual:?} vs native {expected:?}"
+                );
+            }
+        }
+    };
+    assert_native_hits(&mut visual);
+    window
+        .update(cx, |view, _, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_scroll_offset(point(px(-40.0), px(0.0)), cx)
+            });
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let native = window
+        .update(cx, |view, _, cx| view.input.read(cx).scroll_offset().x)
+        .unwrap();
+    assert_eq!(native, px(-40.0));
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                view.input.read(cx).cursor(),
+                0,
+                "wheel scrolling may leave the caret offscreen"
+            );
+        })
+        .unwrap();
+    assert_native_hits(&mut visual);
+    for replacement in [None, Some(format!("prefix-{{{{host}}}}{}", "x".repeat(20)))] {
+        window
+            .update(cx, |view, window, cx| {
+                view.input.update(cx, |input, cx| {
+                    if let Some(value) = replacement {
+                        input.set_value(value, window, cx);
+                    }
+                    let end = input.value().len();
+                    input.set_selected_range(end..end, cx);
+                });
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert_native_hits(&mut visual);
+    }
+    let before = window.update(cx, |view, _, _| view.renders).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.origin_shift = px(8.0);
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert_native_hits(&mut visual);
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.renders,
+                before + 1,
+                "moving the row must not add a tooltip geometry redraw"
+            );
+        })
+        .unwrap();
 }

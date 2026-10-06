@@ -440,7 +440,9 @@ pub(in crate::components) fn text_input_base(
     }
 }
 
-const SCROLL_GESTURE_GAP: Duration = Duration::from_millis(28);
+// Unphased adapters need an idle boundary. Allow several delayed frames (up to
+// 100 ms in the regression) while releasing the axis after 200 ms of inactivity.
+const SCROLL_GESTURE_GAP: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ListedFieldAxis {
@@ -453,7 +455,7 @@ enum ListedFieldWheel {
     /// Scroll the surrounding list and keep the field from seeing the wheel.
     List { delta_y: Pixels },
     /// Shift maps a vertical wheel onto the field's horizontal text offset.
-    ShiftText { delta_x: Pixels },
+    ShiftText,
     /// A horizontal gesture belongs to the field's own wheel handler, which
     /// clamps against the current scroll range.
     Field,
@@ -464,7 +466,6 @@ struct ListedFieldWheelSample {
     at: Instant,
     phase: TouchPhase,
     precise: bool,
-    focused: bool,
     shift: bool,
     delta_x: Pixels,
     delta_y: Pixels,
@@ -534,7 +535,7 @@ impl ListedFieldGesture {
 fn classify_listed_field_wheel(
     gesture: &mut ListedFieldGesture,
     sample: ListedFieldWheelSample,
-    overflows: impl FnOnce() -> bool,
+    field_eligible: impl FnOnce() -> bool,
 ) -> ListedFieldWheel {
     if sample.precise {
         gesture.track_precise(sample.at, sample.phase, sample.delta_x, sample.delta_y);
@@ -546,13 +547,11 @@ fn classify_listed_field_wheel(
     } else {
         sample.delta_x.abs() > sample.delta_y.abs()
     };
-    if sample.focused && (horizontal || sample.shift) && overflows() {
+    if (horizontal || sample.shift) && field_eligible() {
         if horizontal {
             ListedFieldWheel::Field
         } else {
-            ListedFieldWheel::ShiftText {
-                delta_x: sample.delta_y,
-            }
+            ListedFieldWheel::ShiftText
         }
     } else {
         ListedFieldWheel::List {
@@ -565,7 +564,7 @@ fn single_line_input_overflows(input: &InputState) -> bool {
     if input.scroll_offset().x < px(0.0) {
         return true;
     }
-    let len = input.value().len();
+    let len = input.text().len();
     if len == 0 {
         return false;
     }
@@ -594,6 +593,34 @@ pub(crate) type ListScroll = Entity<ListScrollState>;
 pub(crate) struct ListScrollState {
     gesture: ListedFieldGesture,
     fields: Vec<Entity<InputState>>,
+    pending_text_scroll: BTreeMap<EntityId, Pixels>,
+}
+
+impl ListScrollState {
+    fn scroll_field_text(&mut self, state: &Entity<InputState>, delta_x: Pixels, cx: &mut App) {
+        let input = state.read(cx);
+        let current = self
+            .pending_text_scroll
+            .get(&state.entity_id())
+            .copied()
+            .unwrap_or(input.scroll_offset().x);
+        let Some(text) = input.range_to_bounds(&(0..input.text().len())) else {
+            return;
+        };
+        let viewport = input.input_bounds().size.width;
+        // Pinned gpui-base reserves RIGHT_MARGIN for overflowing left-aligned lines.
+        // Clamp each queued event so an immediate reversal can leave the text edge.
+        let content = if text.size.width + px(10.0) > viewport {
+            text.size.width + px(10.0)
+        } else {
+            text.size.width
+        };
+        let next = (current + delta_x).clamp((viewport - content).min(px(0.0)), px(0.0));
+        self.pending_text_scroll.insert(state.entity_id(), next);
+        state.update(cx, |input, cx| {
+            input.set_scroll_offset(point(next, px(0.0)), cx)
+        });
+    }
 }
 
 #[derive(IntoElement)]
@@ -649,6 +676,8 @@ impl RenderOnce for ListScrollRegion {
                 canvas(
                     |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
                     move |_bounds, hitbox, window, _cx| {
+                        // Fields have painted and committed their deferred offsets.
+                        gesture.update(_cx, |list, _| list.pending_text_scroll.clear());
                         let scroll = scroll.clone();
                         let gesture = gesture.clone();
                         let view = window.current_view();
@@ -668,8 +697,6 @@ impl RenderOnce for ListScrollRegion {
                                             at: Instant::now(),
                                             phase: event.touch_phase,
                                             precise,
-                                            // Resolve the focused field lazily for horizontal candidates.
-                                            focused: true,
                                             shift: event.modifiers.shift,
                                             delta_x: delta.x,
                                             delta_y: delta.y,
@@ -697,22 +724,44 @@ impl RenderOnce for ListScrollRegion {
                                 match target {
                                     // The field's own handler applies this delta and
                                     // clamps it against the current range immediately.
-                                    ListedFieldWheel::Field => {}
-                                    ListedFieldWheel::ShiftText { delta_x } => {
-                                        if delta_x != px(0.0) {
-                                            state.as_ref().expect("focused field").update(
-                                                cx,
-                                                |input, cx| {
-                                                    let mut offset = input.scroll_offset();
-                                                    offset.x += delta_x;
-                                                    offset.y = px(0.0);
-                                                    input.set_scroll_offset(offset, cx);
-                                                },
+                                    ListedFieldWheel::Field => {
+                                        let state = state.as_ref().expect("eligible field");
+                                        if gesture
+                                            .read(cx)
+                                            .pending_text_scroll
+                                            .contains_key(&state.entity_id())
+                                        {
+                                            let delta = event.delta.pixel_delta(
+                                                state
+                                                    .read(cx)
+                                                    .line_height()
+                                                    .unwrap_or(window.line_height()),
                                             );
+                                            gesture.update(cx, |list, cx| {
+                                                list.scroll_field_text(state, delta.x, cx)
+                                            });
+                                            cx.stop_propagation();
+                                        }
+                                    }
+                                    ListedFieldWheel::ShiftText => {
+                                        let state = state.as_ref().expect("eligible field");
+                                        let delta = event.delta.pixel_delta(
+                                            state
+                                                .read(cx)
+                                                .line_height()
+                                                .unwrap_or(window.line_height()),
+                                        );
+                                        if delta.y != px(0.0) {
+                                            gesture.update(cx, |list, cx| {
+                                                list.scroll_field_text(state, delta.y, cx)
+                                            });
                                         }
                                         cx.stop_propagation();
                                     }
                                     ListedFieldWheel::List { delta_y } => {
+                                        // Keep this path over gaps too: GPUI's vertical-only
+                                        // scroll fallback maps a horizontal-only delta to y,
+                                        // breaking the shared axis as rows pass the pointer.
                                         if scroll_list_vertically(&scroll, delta_y) {
                                             cx.notify(view);
                                         }
@@ -842,7 +891,6 @@ mod tests {
         at: Instant,
         phase: TouchPhase,
         precise: bool,
-        focused: bool,
         shift: bool,
         delta_x: f32,
         delta_y: f32,
@@ -851,7 +899,6 @@ mod tests {
             at,
             phase,
             precise,
-            focused,
             shift,
             delta_x: px(delta_x),
             delta_y: px(delta_y),
@@ -865,7 +912,7 @@ mod tests {
         assert_eq!(
             classify_listed_field_wheel(
                 &mut gesture,
-                sample(at, TouchPhase::Started, true, true, false, 2.0, -40.0),
+                sample(at, TouchPhase::Started, true, false, 2.0, -40.0),
                 || panic!("vertical scrolling must not inspect text overflow"),
             ),
             ListedFieldWheel::List { delta_y: px(-40.0) }
@@ -873,15 +920,15 @@ mod tests {
         assert_eq!(
             classify_listed_field_wheel(
                 &mut ListedFieldGesture::default(),
-                sample(at, TouchPhase::Moved, true, false, false, 40.0, 0.0),
-                || panic!("unfocused scrolling must not inspect text overflow"),
+                sample(at, TouchPhase::Moved, true, false, 40.0, 0.0),
+                || false,
             ),
             ListedFieldWheel::List { delta_y: px(0.0) }
         );
         assert_eq!(
             classify_listed_field_wheel(
                 &mut ListedFieldGesture::default(),
-                sample(at, TouchPhase::Moved, false, true, true, 0.0, -40.0),
+                sample(at, TouchPhase::Moved, false, true, 0.0, -40.0),
                 || false,
             ),
             ListedFieldWheel::List { delta_y: px(-40.0) }
@@ -893,18 +940,10 @@ mod tests {
         assert_eq!(
             classify_listed_field_wheel(
                 &mut ListedFieldGesture::default(),
-                sample(
-                    Instant::now(),
-                    TouchPhase::Moved,
-                    false,
-                    true,
-                    true,
-                    0.0,
-                    -40.0
-                ),
+                sample(Instant::now(), TouchPhase::Moved, false, true, 0.0, -40.0),
                 || true,
             ),
-            ListedFieldWheel::ShiftText { delta_x: px(-40.0) }
+            ListedFieldWheel::ShiftText
         );
     }
 
@@ -919,12 +958,12 @@ mod tests {
             let mut gesture = ListedFieldGesture::default();
             classify_listed_field_wheel(
                 &mut gesture,
-                sample(at, TouchPhase::Started, true, true, false, 3.0, -40.0),
+                sample(at, TouchPhase::Started, true, false, 3.0, -40.0),
                 || panic!("vertical scrolling must not inspect text overflow"),
             );
             let boundary = classify_listed_field_wheel(
                 &mut gesture,
-                sample(at + elapsed, phase, true, true, false, delta_x, delta_y),
+                sample(at + elapsed, phase, true, false, delta_x, delta_y),
                 || panic!("gesture boundaries must not inspect text overflow"),
             );
             assert_eq!(
@@ -940,7 +979,6 @@ mod tests {
                     sample(
                         at + elapsed + Duration::from_millis(1),
                         TouchPhase::Moved,
-                        true,
                         true,
                         false,
                         -30.0,
@@ -966,7 +1004,7 @@ mod tests {
             let mut gesture = ListedFieldGesture::default();
             classify_listed_field_wheel(
                 &mut gesture,
-                sample(at, first_phase, true, false, false, 1.0, -40.0),
+                sample(at, first_phase, true, false, 1.0, -40.0),
                 || false,
             );
             assert_eq!(
@@ -975,7 +1013,6 @@ mod tests {
                     sample(
                         at + Duration::from_secs(1),
                         TouchPhase::Moved,
-                        true,
                         true,
                         false,
                         -80.0,
@@ -986,5 +1023,45 @@ mod tests {
                 expected
             );
         }
+    }
+    #[test]
+    fn unphased_gesture_survives_delayed_frames_and_releases_after_idle() {
+        let at = Instant::now();
+        let mut gesture = ListedFieldGesture::default();
+        classify_listed_field_wheel(
+            &mut gesture,
+            sample(at, TouchPhase::Moved, true, false, 1.0, -40.0),
+            || false,
+        );
+        assert_eq!(
+            classify_listed_field_wheel(
+                &mut gesture,
+                sample(
+                    at + Duration::from_millis(100),
+                    TouchPhase::Moved,
+                    true,
+                    false,
+                    -80.0,
+                    -3.0
+                ),
+                || true
+            ),
+            ListedFieldWheel::List { delta_y: px(-3.0) }
+        );
+        assert_eq!(
+            classify_listed_field_wheel(
+                &mut gesture,
+                sample(
+                    at + Duration::from_millis(300),
+                    TouchPhase::Moved,
+                    true,
+                    false,
+                    -80.0,
+                    -3.0
+                ),
+                || true
+            ),
+            ListedFieldWheel::Field
+        );
     }
 }

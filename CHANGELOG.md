@@ -9,6 +9,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 ### Fixed
 
 - Long environment lists in Environment Manager scroll while keeping rows and text at their normal size.
+- Variable highlights and tooltip hit areas follow manual text scrolling when the caret is offscreen.
+- Shift+wheel accumulates rapid events and reverses correctly at text edges, using the field’s line height. Trackpad events without gesture phases tolerate delayed frames before releasing their axis after an idle pause.
 - Scrolling over text fields in Environment Manager and request-editor lists retains the trackpad gesture axis across rows. Environment Manager reuses effective variable rows during scrolling.
 
 ## [0.10.1] - 2026-10-06

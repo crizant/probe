@@ -563,6 +563,36 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
             assert!(input.read(cx).focus_handle(cx).is_focused(window));
         })
         .unwrap();
+    let (before, line_height) = window
+        .update(cx, |_, _, cx| {
+            (
+                input.read(cx).scroll_offset().x,
+                input.read(cx).line_height().unwrap(),
+            )
+        })
+        .unwrap();
+    for _ in 0..2 {
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position: field.center(),
+            delta: gpui::ScrollDelta::Lines(point(0.0, -1.0)),
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+    }
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                input.read(cx).scroll_offset().x,
+                before - line_height * 2.0,
+                "Shift wheel events between layouts must accumulate"
+            );
+            assert_eq!(view.list_scroll.offset().y, list_before);
+        })
+        .unwrap();
 }
 
 #[gpui::test]
@@ -636,6 +666,47 @@ fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut 
             assert!(
                 reversed > edge,
                 "reversing during the same gesture should move off the clamped edge, edge={edge:?} reversed={reversed:?}"
+            );
+            assert_eq!(view.list_scroll.offset().y, list_before);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(cx, |_, _, cx| {
+            input.update(cx, |input, cx| {
+                input.set_scroll_offset(point(px(0.0), px(0.0)), cx);
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    for (phase, delta_y) in [
+        (gpui::TouchPhase::Started, px(-100_000.0)),
+        (gpui::TouchPhase::Moved, px(8.0)),
+    ] {
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position: field.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), delta_y)),
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+            touch_phase: phase,
+        });
+    }
+    // Switching to a native horizontal event before layout must keep the queued Shift movement.
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: field.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(4.0), px(0.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Started,
+    });
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                input.read(cx).scroll_offset().x,
+                edge + px(12.0),
+                "queued Shift scrolling must clamp each event and retain mixed-event reversals"
             );
             assert_eq!(view.list_scroll.offset().y, list_before);
         })
@@ -1632,5 +1703,44 @@ fn precise_axis_survives_a_list_field_remount(cx: &mut TestAppContext) {
             })
             .unwrap();
         visual.run_until_parked();
+    }
+    // Keep the pointer stationary while a row scrolls away and returns through a gap.
+    let input = window.update(cx, |view, _, _| view.input.clone()).unwrap();
+    let text_before = input.read_with(cx, |input, _| input.scroll_offset().x);
+    for (delta, expected) in [
+        (point(px(1.0), px(-30.0)), px(-40.0)),
+        (point(px(-40.0), px(0.0)), px(-40.0)),
+        (point(px(-40.0), px(6.0)), px(-34.0)),
+        (point(px(1.0), px(40.0)), px(0.0)),
+        (point(px(-40.0), px(-3.0)), px(-3.0)),
+    ] {
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(delta),
+            modifiers: Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        visual.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    view.list_scroll.offset().y,
+                    expected,
+                    "the same gesture must keep its vertical component across fields and gaps"
+                );
+                assert_eq!(input.read(cx).scroll_offset().x, text_before);
+                if expected <= px(-34.0) {
+                    assert!(
+                        !input.read(cx).input_bounds().contains(&position),
+                        "a gap must move under the stationary pointer"
+                    );
+                } else {
+                    assert!(
+                        input.read(cx).input_bounds().contains(&position),
+                        "the field must return beneath the stationary pointer"
+                    );
+                }
+            })
+            .unwrap();
     }
 }
