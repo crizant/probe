@@ -1,0 +1,59 @@
+name: macOS Build Comparison
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: "1.99.0"
+
+jobs:
+  build-desktop:
+    name: Build Desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          targets: aarch64-apple-darwin
+      - name: Print build environment
+        run: |
+          sw_vers
+          rustc -vV
+          xcodebuild -version
+          xcrun --show-sdk-version
+          xcrun --show-sdk-path
+          clang --version
+          test "$(rustc --version | awk '{print $2}')" = "$RUSTUP_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-build-comparison-${{ matrix.os }}
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --version 0.11.0 --locked
+      - name: Build macOS app bundle
+        run: cargo bundle --release -p probe-desktop --format osx --target aarch64-apple-darwin
+      - name: Ad-hoc sign macOS app bundle
+        run: codesign --force --deep --sign - "target/aarch64-apple-darwin/release/bundle/osx/Probe.app"
+      - name: Package macOS app bundle
+        run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            "target/aarch64-apple-darwin/release/bundle/osx/Probe.app" \
+            "dist/probe-desktop-${{ matrix.os }}-arm64.zip"
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: probe-desktop-${{ matrix.os }}-arm64
+          path: dist/probe-desktop-${{ matrix.os }}-arm64.zip
+          if-no-files-found: error
