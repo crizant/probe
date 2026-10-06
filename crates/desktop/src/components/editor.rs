@@ -36,7 +36,7 @@ use variables::variable_editor_overlay;
 pub(super) use variables::{
     PlaceholderTone, ReferenceKind, VariableHighlightElement, VariableHighlightPalette,
     placeholder_tone, reference_status, variable_highlight_palette, variable_highlight_runs,
-    variable_ranges, variable_span_layout, variable_tooltip_presentation,
+    variable_ranges, variable_tooltip_presentation,
 };
 pub(super) use variables::{
     VariableTooltipPresentation, input_variable_ranges, variable_input_overlay,

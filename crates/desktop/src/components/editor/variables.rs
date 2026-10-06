@@ -16,7 +16,26 @@ pub(in crate::components) fn variable_input_overlay(
 ) -> gpui::AnyElement {
     let ranges = input_variable_ranges(&value, highlight_path_variables);
     let tooltip_ranges = variable_ranges(&value);
-    let current_scroll = state.read(cx).scroll_offset().x;
+    let tooltip_geometry = (!tooltip_ranges.is_empty()).then(|| {
+        let hover = window.use_keyed_state(
+            ElementId::NamedChild(Arc::new(tooltip_id.clone()), SharedString::from("hover")),
+            cx,
+            VariableHoverState::new,
+        );
+        let origin = hover.read(cx).overlay_origin;
+        InputTooltipGeometry {
+            hover,
+            ranges: tooltip_ranges
+                .iter()
+                .map(|reference| {
+                    (
+                        reference.range.clone(),
+                        input_tooltip_bounds(state.read(cx), &reference.range, origin),
+                    )
+                })
+                .collect(),
+        }
+    });
     // Input paints first so it keeps native caret, selection, and scroll.
     // The overlay sits on top and recolors supported variable spans.
     let mut wrapper = div()
@@ -33,62 +52,45 @@ pub(in crate::components) fn variable_input_overlay(
             theme.typography.body_size,
             highlight_path_variables,
             variables.clone(),
-            (!tooltip_ranges.is_empty()).then_some(current_scroll),
+            tooltip_geometry.clone(),
         ));
-    if tooltip_ranges.is_empty() {
+    let Some(geometry) = tooltip_geometry else {
         return wrapper.into_any_element();
+    };
+    let hover = geometry.hover;
+    let mut hits = div()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .overflow_hidden()
+        .on_prepaint({
+            let hover = hover.clone();
+            move |bounds, _, cx| {
+                hover.update(cx, |state, _| state.overlay_origin = Some(bounds.origin));
+            }
+        });
+    for (index, (reference, (_, bounds))) in tooltip_ranges.iter().zip(&geometry.ranges).enumerate()
+    {
+        let Some(bounds) = bounds else { continue };
+        hits = hits.child(variable_hover_hit(
+            ("variable-hover", index),
+            index,
+            reference.name(&value).to_owned(),
+            hover.clone(),
+            bounds.origin.x,
+            bounds.origin.y,
+            bounds.size.width.max(px(1.0)),
+            Some(bounds.size.height.max(px(1.0))),
+            if index == 0 {
+                "variable-hover-trigger".into()
+            } else {
+                format!("variable-hover-trigger-{index}")
+            },
+        ));
     }
-
-    let hover = window.use_keyed_state(
-        ElementId::NamedChild(Arc::new(tooltip_id), SharedString::from("hover")),
-        cx,
-        VariableHoverState::new,
-    );
-    let spans = variable_span_layout(
-        window,
-        &value,
-        &tooltip_ranges,
-        theme.typography.monospace_family,
-        theme.typography.body_size,
-        current_scroll,
-    );
-    let mut hits = div().relative().w_full().h_full();
-    for (index, (name, left, width)) in spans.into_iter().enumerate() {
-        hits = hits.child(
-            variable_hover_hit(
-                ("variable-hover", index),
-                index,
-                name,
-                hover.clone(),
-                left,
-                px(0.0),
-                width,
-                None,
-                if index == 0 {
-                    "variable-hover-trigger".into()
-                } else {
-                    format!("variable-hover-trigger-{index}")
-                },
-            )
-            .top(px(0.0))
-            .bottom(px(0.0)),
-        );
-    }
-    wrapper = wrapper.child(
-        div()
-            .absolute()
-            .top(px(0.0))
-            .bottom(px(0.0))
-            .left(px(0.0))
-            .right(px(0.0))
-            .border_1()
-            .border_color(transparent_black())
-            .px(px(theme.metrics.spacing_2))
-            .overflow_hidden()
-            .flex()
-            .items_center()
-            .child(hits),
-    );
+    wrapper = wrapper.child(hits);
 
     with_variable_tooltip(
         wrapper,
@@ -286,38 +288,21 @@ fn with_variable_tooltip(
         .into_any_element()
 }
 
-pub(in crate::components) fn variable_span_layout(
-    window: &mut Window,
-    value: &str,
-    ranges: &[VariableReference],
-    font_family: &'static str,
-    font_size: f32,
-    current_scroll_x: Pixels,
-) -> Vec<(String, Pixels, Pixels)> {
-    let run = TextRun {
-        len: value.len(),
-        font: font(font_family),
-        color: transparent_black(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let line =
-        window
-            .text_system()
-            .shape_line(SharedString::from(value), px(font_size), &[run], None);
-    ranges
-        .iter()
-        .map(|reference| {
-            let start = line.x_for_index(reference.range.start) + current_scroll_x;
-            let end = line.x_for_index(reference.range.end) + current_scroll_x;
-            (
-                reference.name(value).to_owned(),
-                start,
-                (end - start).max(px(1.0)),
-            )
-        })
-        .collect()
+#[derive(Clone)]
+pub(in crate::components) struct InputTooltipGeometry {
+    hover: Entity<VariableHoverState>,
+    ranges: Vec<(Range<usize>, Option<Bounds<Pixels>>)>,
+}
+
+fn input_tooltip_bounds(
+    input: &InputState,
+    range: &Range<usize>,
+    origin: Option<Point<Pixels>>,
+) -> Option<Bounds<Pixels>> {
+    let origin = origin?;
+    let mut bounds = input.range_to_bounds(range)?;
+    bounds.origin -= origin;
+    Some(bounds)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -329,7 +314,7 @@ fn variable_highlight_layer(
     text_size: f32,
     highlight_path_variables: bool,
     variables: VariableContext,
-    tooltip_scroll_offset: Option<Pixels>,
+    tooltip_geometry: Option<InputTooltipGeometry>,
 ) -> impl IntoElement {
     let base_color = if ranges_empty {
         transparent_black()
@@ -361,7 +346,7 @@ fn variable_highlight_layer(
             palette: variable_highlight_palette(theme),
             highlight_path_variables,
             variables,
-            tooltip_scroll_offset,
+            tooltip_geometry,
         })
 }
 
@@ -371,7 +356,7 @@ pub(in crate::components) struct VariableHighlightElement {
     pub(in crate::components) palette: VariableHighlightPalette,
     pub(in crate::components) highlight_path_variables: bool,
     pub(in crate::components) variables: VariableContext,
-    pub(in crate::components) tooltip_scroll_offset: Option<Pixels>,
+    pub(in crate::components) tooltip_geometry: Option<InputTooltipGeometry>,
 }
 
 pub(in crate::components) struct VariableHighlightPrepaintState {
@@ -461,14 +446,16 @@ impl Element for VariableHighlightElement {
         // Native Input paints first and owns caret following and clamping. Manual
         // scrolling may intentionally leave the caret outside the visible viewport.
         let scroll_offset = self.state.read(cx).scroll_offset().x;
-        // Tooltip hitboxes were laid out before Input committed this offset in
-        // paint. Re-render their owner only when that finalized geometry changed.
-        if self
-            .tooltip_scroll_offset
-            .is_some_and(|offset| offset != scroll_offset)
-        {
-            let view = window.current_view();
-            cx.defer(move |cx| cx.notify(view));
+        // Input publishes layout during paint. Compare native ranges relative to
+        // the overlay so moving a row does not itself schedule another render.
+        if let Some(geometry) = &self.tooltip_geometry {
+            let origin = geometry.hover.read(cx).overlay_origin;
+            if geometry.ranges.iter().any(|(range, bounds)| {
+                input_tooltip_bounds(self.state.read(cx), range, origin) != *bounds
+            }) {
+                let view = window.current_view();
+                cx.defer(move |cx| cx.notify(view));
+            }
         }
         prepaint.scroll_offset = scroll_offset;
         let line = prepaint.line.take();

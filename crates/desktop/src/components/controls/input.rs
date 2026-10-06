@@ -759,6 +759,9 @@ impl RenderOnce for ListScrollRegion {
                                         cx.stop_propagation();
                                     }
                                     ListedFieldWheel::List { delta_y } => {
+                                        // Keep this path over gaps too: GPUI's vertical-only
+                                        // scroll fallback maps a horizontal-only delta to y,
+                                        // breaking the shared axis as rows pass the pointer.
                                         if scroll_list_vertically(&scroll, delta_y) {
                                             cx.notify(view);
                                         }

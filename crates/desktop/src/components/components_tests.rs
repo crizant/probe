@@ -1704,4 +1704,43 @@ fn precise_axis_survives_a_list_field_remount(cx: &mut TestAppContext) {
             .unwrap();
         visual.run_until_parked();
     }
+    // Keep the pointer stationary while a row scrolls away and returns through a gap.
+    let input = window.update(cx, |view, _, _| view.input.clone()).unwrap();
+    let text_before = input.read_with(cx, |input, _| input.scroll_offset().x);
+    for (delta, expected) in [
+        (point(px(1.0), px(-30.0)), px(-40.0)),
+        (point(px(-40.0), px(0.0)), px(-40.0)),
+        (point(px(-40.0), px(6.0)), px(-34.0)),
+        (point(px(1.0), px(40.0)), px(0.0)),
+        (point(px(-40.0), px(-3.0)), px(-3.0)),
+    ] {
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(delta),
+            modifiers: Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        visual.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    view.list_scroll.offset().y,
+                    expected,
+                    "the same gesture must keep its vertical component across fields and gaps"
+                );
+                assert_eq!(input.read(cx).scroll_offset().x, text_before);
+                if expected <= px(-34.0) {
+                    assert!(
+                        !input.read(cx).input_bounds().contains(&position),
+                        "a gap must move under the stationary pointer"
+                    );
+                } else {
+                    assert!(
+                        input.read(cx).input_bounds().contains(&position),
+                        "the field must return beneath the stationary pointer"
+                    );
+                }
+            })
+            .unwrap();
+    }
 }
