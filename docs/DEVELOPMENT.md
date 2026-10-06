@@ -13,10 +13,12 @@ on 1.95.0 before building artifacts.
 
 Production CLI and desktop release artifacts use explicitly pinned Rust 1.99.0.
 The release workflow selects that compiler and each platform target in one setup
-step per build job. This build compiler is independent of the MSRV; using it does
-not raise the minimum compiler required to build Probe from source. Keep both
-versions explicit rather than selecting floating `stable`, and keep GPUI and
-dependency upgrades separate from toolchain changes.
+step per build job. Each build job sets `RUSTUP_TOOLCHAIN` to override the
+repository's MSRV toolchain file for Cargo and its subprocesses, and verifies the
+active compiler before caching or building. This build compiler is independent of
+the MSRV; using it does not raise the minimum compiler required to build Probe from
+source. Keep both versions explicit rather than selecting floating `stable`, and
+keep GPUI and dependency upgrades separate from toolchain changes.
 
 ## Rust and Async Work
 
