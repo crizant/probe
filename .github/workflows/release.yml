@@ -13,7 +13,7 @@ env:
 
 jobs:
   validate:
-    name: Validate
+    name: Validate MSRV (Rust 1.95)
     runs-on: ubuntu-latest
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -51,6 +51,9 @@ jobs:
     name: Build CLI (${{ matrix.platform }})
     needs: validate
     runs-on: ${{ matrix.os }}
+    env:
+      # Override the repository's MSRV toolchain for all build subprocesses.
+      RUSTUP_TOOLCHAIN: "1.99.0"
     strategy:
       fail-fast: false
       matrix:
@@ -75,9 +78,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.95.0
-      - name: Add Rust target
-        run: rustup target add ${{ matrix.target }}
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+      - name: Verify release Rust toolchain
+        shell: bash
+        run: |
+          rustc --version
+          test "$(rustc --version | awk '{print $2}')" = "$RUSTUP_TOOLCHAIN"
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.platform }}
@@ -126,6 +133,9 @@ jobs:
     name: Build Desktop (${{ matrix.platform }})
     needs: validate
     runs-on: ${{ matrix.os }}
+    env:
+      # Override the repository's MSRV toolchain for all build subprocesses.
+      RUSTUP_TOOLCHAIN: "1.99.0"
     strategy:
       fail-fast: false
       matrix:
@@ -150,9 +160,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.95.0
-      - name: Add Rust target
-        run: rustup target add ${{ matrix.target }}
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+      - name: Verify release Rust toolchain
+        shell: bash
+        run: |
+          rustc --version
+          test "$(rustc --version | awk '{print $2}')" = "$RUSTUP_TOOLCHAIN"
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.platform }}
