@@ -88,7 +88,8 @@ executes the request.
 engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes the raw
 response body to the specified path using bounded streaming; response metadata remains on
 stdout. The destination is replaced only after the complete response has been written.
-Human output shows the request method and URL, status, duration, response size, and
+Human output shows the request method and effective URL from the built HTTP request
+(after path/query parameters and URL normalization), status, duration, response size, and
 response body. `Final URL:` appears only when redirects change the effective URL
 initially sent by the HTTP engine. Path/query parameters and URL normalization
 alone do not show it. Response headers are hidden by default; add `--show-headers`
@@ -181,7 +182,7 @@ values in the response reason, headers, and body are redacted, including byte se
 in non-UTF-8 bodies. Failure messages for such a run withhold HTTP diagnostics; the error
 category and exit code still reflect the failure kind. Encoded or otherwise
 transformed echoes may remain visible in CLI output. When a runtime secret is used,
-the reported final URL is the presentation request URL because redirects can encode
+the reported initial and final URLs are the presentation request URL because redirects can encode
 or transform secret text. `--output <file>` intentionally saves the original server
 response bytes; that file can contain echoed secrets and must be handled as sensitive.
 A `--var name=value` override of a declared secret also stays secret, but process

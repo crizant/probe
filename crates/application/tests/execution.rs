@@ -341,6 +341,7 @@ async fn secret_bearing_response_is_redacted_and_reports_the_presentation_url() 
     assert!(contains(&head, &format!("Bearer {SECRET}")));
     let response = executed.response;
     assert_eq!(response.url, format!("{base}/{{{{token}}}}"));
+    assert_eq!(response.initial_url, format!("{base}/{{{{token}}}}"));
     assert!(!response.url_changed);
     assert_eq!(response.body, b"[REDACTED]\xff-tail");
     let echo = response

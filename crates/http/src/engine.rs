@@ -228,6 +228,7 @@ impl HttpEngine {
                 status: status.as_u16(),
                 reason: status.canonical_reason().unwrap_or_default().to_owned(),
                 url,
+                initial_url: initial_url.to_string(),
                 url_changed,
                 duration: started.elapsed(),
                 size: body.size,

@@ -1382,6 +1382,10 @@ fn effective_request_urls_do_not_look_like_redirects() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let human = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            human.starts_with(&format!("GET {base_url}{expected_path}\n")),
+            "{human}"
+        );
         assert!(!human.contains("Final URL:"), "{human}");
         assert!(human.ends_with("\n\nhello\n"));
         let captured = server.join().unwrap();
@@ -1389,6 +1393,58 @@ fn effective_request_urls_do_not_look_like_redirects() {
             captured
                 .head
                 .starts_with(&format!("GET {expected_path} HTTP/1.1\r\n")),
+            "{captured:?}"
+        );
+        fs::remove_file(workspace).unwrap();
+    }
+}
+
+#[test]
+fn secret_bearing_urls_keep_references_in_human_and_json_output() {
+    // Spaces and punctuation are encoded by the engine: replacing raw secret
+    // substrings in the built URL would not be a safe disclosure policy.
+    let secret = "private value&tail";
+    for json in [false, true] {
+        let (base_url, server) = serve_once(b"hello".to_vec(), "text/plain");
+        let url = format!("{base_url}/users/{{{{token}}}}?token={{{{token}}}}");
+        let workspace = run_url_fixture(&url, "");
+        let mut source = fs::read_to_string(&workspace).unwrap();
+        source.push_str("config:\n  environments:\n    - name: local\n      variables:\n        - name: token\n          secret: true\n");
+        fs::write(&workspace, source).unwrap();
+        let mut command = probe();
+        command
+            .args(["request", "run"])
+            .arg(&workspace)
+            .args([
+                "items/0",
+                "--environment",
+                "local",
+                "--secret-provider",
+                "env",
+            ])
+            .env("token", secret);
+        if json {
+            command.arg("--json");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let rendered = String::from_utf8(output.stdout).unwrap();
+        assert!(!rendered.contains(secret), "{rendered}");
+        assert!(!rendered.contains("private%20value"), "{rendered}");
+        assert!(!rendered.contains("Final URL:"), "{rendered}");
+        if json {
+            let value: Value = serde_json::from_str(&rendered).unwrap();
+            assert_eq!(value["request"]["url"], url);
+            assert_eq!(value["response"]["url"], url);
+            assert!(value["response"].get("initial_url").is_none());
+        } else {
+            assert!(rendered.starts_with(&format!("GET {url}\n")), "{rendered}");
+        }
+        let captured = server.join().unwrap();
+        assert!(
+            captured.head.starts_with(
+                "GET /users/private%20value&tail?token=private%20value&tail HTTP/1.1\r\n"
+            ),
             "{captured:?}"
         );
         fs::remove_file(workspace).unwrap();
@@ -1432,7 +1488,14 @@ fn real_redirects_show_the_final_url_and_keep_json_unchanged() {
             assert_eq!(value["response"]["url"], final_url);
             assert!(value["response"].get("urlChanged").is_none());
             assert!(value["response"].get("url_changed").is_none());
+            assert!(value["response"].get("initialUrl").is_none());
+            assert!(value["response"].get("initial_url").is_none());
+            assert_eq!(value["request"]["url"], initial_url);
         } else {
+            assert!(
+                rendered.starts_with(&format!("GET {initial_url}\n")),
+                "{rendered}"
+            );
             assert!(
                 rendered.contains(&format!("Final URL: {final_url}\n")),
                 "{rendered}"

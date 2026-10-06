@@ -241,6 +241,7 @@ impl SecretDisclosure {
         };
         // A redirect may encode or transform secret bytes, so only the
         // reference-preserving URL is safe to present.
+        response.initial_url.clone_from(&self.presentation_url);
         response.url.clone_from(&self.presentation_url);
         response.url_changed = false;
         response.reason = secrets.redact_secrets(&response.reason);

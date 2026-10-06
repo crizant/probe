@@ -32,6 +32,8 @@ pub struct HttpResponse {
     pub status: u16,
     /// Canonical reason phrase when one is defined.
     pub reason: String,
+    /// Effective URL from the built HTTP request, before redirects.
+    pub initial_url: String,
     /// Final URL after redirects.
     pub url: String,
     /// Whether redirects changed the effective URL initially sent by the engine.

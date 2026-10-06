@@ -8,6 +8,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
+- `probe request run` shows the effective URL sent by the HTTP engine in human output, including path/query parameters and URL normalization. Secret-bearing runs retain safe variable references; JSON output is unchanged.
 - `probe request run` shows `Final URL:` in human output only when redirects change the effective URL initially sent. Path/query parameters and URL normalization alone do not show it. JSON output continues to include the response URL.
 - `probe request run` hides response headers in human output by default. Add `--show-headers` to include them; JSON output continues to include headers.
 

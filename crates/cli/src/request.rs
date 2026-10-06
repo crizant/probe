@@ -276,7 +276,6 @@ pub(crate) fn run(
         .method
         .clone()
         .unwrap_or_else(|| "<unset>".to_owned());
-    let url = display.url.clone().unwrap_or_else(|| "<unset>".to_owned());
     let request_json = run_request_json(display).map_err(CliError::graphql)?;
     let execution = prepared.into_http().map_err(CliError::graphql)?;
     let execution_options = ExecutionOptions {
@@ -309,7 +308,6 @@ pub(crate) fn run(
         || {
             response_human(
                 &method,
-                &url,
                 &response,
                 options.output.map(PathBuf::as_path),
                 options.show_headers,
@@ -425,6 +423,7 @@ mod response_output_tests {
         let body = br#"{"message":"hello"}"#.to_vec();
         let response = HttpResponse {
             status: 200,
+            initial_url: "https://example.com/start".to_owned(),
             url_changed: false,
             reason: "OK".to_owned(),
             url: "https://example.com".to_owned(),

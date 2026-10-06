@@ -1414,6 +1414,7 @@ mod tests {
     fn response(status: u16) -> HttpResponse {
         HttpResponse {
             status,
+            initial_url: "https://example.com/start".to_owned(),
             url_changed: false,
             reason: String::new(),
             url: String::new(),
