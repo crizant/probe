@@ -564,7 +564,7 @@ fn single_line_input_overflows(input: &InputState) -> bool {
     if input.scroll_offset().x < px(0.0) {
         return true;
     }
-    let len = input.value().len();
+    let len = input.text().len();
     if len == 0 {
         return false;
     }
@@ -604,7 +604,7 @@ impl ListScrollState {
             .get(&state.entity_id())
             .copied()
             .unwrap_or(input.scroll_offset().x);
-        let Some(text) = input.range_to_bounds(&(0..input.value().len())) else {
+        let Some(text) = input.range_to_bounds(&(0..input.text().len())) else {
             return;
         };
         let viewport = input.input_bounds().size.width;
