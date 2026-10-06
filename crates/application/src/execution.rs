@@ -115,49 +115,53 @@ impl PreparedRequest {
     pub fn into_http(mut self) -> Result<HttpExecution, GraphqlRequestError> {
         let request = self.execution.into_http()?;
         if let Some(environment) = &self.disclosure.secrets {
-            let method_controls_url = self.presentation.kind.is_graphql();
-            let presentation_method = self.presentation.method.clone();
-            // Use the actual method so GraphQL GET fields become query parameters
-            // even when the method itself was resolved from a secret.
-            self.presentation
-                .method
-                .clone_from(&request.request().method);
-            let mut presentation = self.presentation.into_http()?.request().clone();
-            // Scan the symbolic method, since GraphQL URL construction depends on
-            // it even when the generated query parameters contain no secret values.
-            presentation.method = presentation_method;
-            presentation
-                .query_parameters
-                .retain(|parameter| !parameter.disabled);
-            presentation
-                .path_parameters
-                .retain(|parameter| !parameter.disabled);
-            let usages = request_secret_usages(&presentation, environment)
-                .expect("prepared presentation references were validated during resolution");
-            let query_auth = request
-                .request()
-                .authentication
-                .as_ref()
-                .is_some_and(|auth| {
-                    auth.kind == AuthenticationKind::ApiKey
-                        && auth.properties.get("placement")
-                            == Some(&AuthenticationValue::String("query".to_owned()))
-                });
-            self.disclosure.initial_url_uses_secrets = usages.iter().any(|usage| {
-                matches!(
-                    usage,
-                    VariableUsage::Url
-                        | VariableUsage::PathParameter { .. }
-                        | VariableUsage::QueryParameter { .. }
-                ) || (query_auth && matches!(usage, VariableUsage::Authentication { .. }))
-                    || (method_controls_url && matches!(usage, VariableUsage::Method))
-            });
+            self.disclosure.initial_url_uses_secrets =
+                initial_url_depends_on_secret(self.presentation, request.request(), environment)?;
         }
         Ok(HttpExecution {
             request,
             disclosure: self.disclosure,
         })
     }
+}
+
+/// Classifies initial URL values and structure using symbolic secret provenance.
+fn initial_url_depends_on_secret(
+    mut presentation: Request,
+    execution: &Request,
+    environment: &ResolvedEnvironment,
+) -> Result<bool, GraphqlRequestError> {
+    let method_controls_url = presentation.kind.is_graphql();
+    let presentation_method = presentation.method.clone();
+    // Use the actual method so GraphQL GET fields become query parameters
+    // even when the method itself was resolved from a secret.
+    presentation.method.clone_from(&execution.method);
+    let mut presentation = presentation.into_http()?.request().clone();
+    // Scan the symbolic method, since GraphQL URL construction depends on
+    // it even when the generated query parameters contain no secret values.
+    presentation.method = presentation_method;
+    presentation
+        .query_parameters
+        .retain(|parameter| !parameter.disabled);
+    presentation
+        .path_parameters
+        .retain(|parameter| !parameter.disabled);
+    let usages = request_secret_usages(&presentation, environment)
+        .expect("prepared presentation references were validated during resolution");
+    let query_auth = execution.authentication.as_ref().is_some_and(|auth| {
+        auth.kind == AuthenticationKind::ApiKey
+            && auth.properties.get("placement")
+                == Some(&AuthenticationValue::String("query".to_owned()))
+    });
+    Ok(usages.iter().any(|usage| {
+        matches!(
+            usage,
+            VariableUsage::Url
+                | VariableUsage::PathParameter { .. }
+                | VariableUsage::QueryParameter { .. }
+        ) || (query_auth && matches!(usage, VariableUsage::Authentication { .. }))
+            || (method_controls_url && matches!(usage, VariableUsage::Method))
+    }))
 }
 
 impl fmt::Debug for PreparedRequest {
@@ -177,12 +181,6 @@ pub struct HttpExecution {
 }
 
 impl HttpExecution {
-    /// Whether the built initial URL's values or structure depend on a secret.
-    #[must_use]
-    pub const fn initial_url_uses_secrets(&self) -> bool {
-        self.disclosure.initial_url_uses_secrets
-    }
-
     /// Whether runtime secret material was resolved for this request.
     #[must_use]
     pub const fn uses_secrets(&self) -> bool {

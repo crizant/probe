@@ -67,11 +67,6 @@ async fn secret_methods_hide_graphql_url_structure_but_preserve_http_urls() {
                 assert_eq!(prepared.presentation().method.as_deref(), Some(reference));
                 let execution = prepared.into_http().unwrap();
                 assert!(execution.uses_secrets());
-                assert_eq!(
-                    execution.initial_url_uses_secrets(),
-                    graphql,
-                    "{graphql} {method} {reference}"
-                );
                 let response = execution
                     .execute(
                         &HttpEngine::new().unwrap(),
@@ -104,7 +99,8 @@ async fn secret_methods_hide_graphql_url_structure_but_preserve_http_urls() {
                         safe_url.clone()
                     } else {
                         format!("{base}/search?q=hello+world")
-                    }
+                    },
+                    "graphql={graphql}, method={method}, reference={reference}"
                 );
                 assert_eq!(response.url, safe_url);
                 assert!(!response.url_changed);
@@ -282,7 +278,6 @@ async fn initial_url_disclosure_tracks_secret_provenance_and_http_placement() {
         let safe_url = prepared.presentation().url.clone().unwrap();
         let execution = prepared.into_http().unwrap();
         assert!(execution.uses_secrets(), "{case}");
-        assert_eq!(execution.initial_url_uses_secrets(), secret_url, "{case}");
         let response = execution
             .execute(
                 &HttpEngine::new().unwrap(),
