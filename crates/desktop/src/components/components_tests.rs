@@ -371,103 +371,6 @@ impl Render for ScrollableInputHarness {
 }
 
 #[gpui::test]
-fn vertical_trackpad_frames_scroll_the_list_even_when_one_is_mostly_horizontal(
-    cx: &mut TestAppContext,
-) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
-        ScrollableInputHarness {
-            row_id: 0,
-            arbitration: cx.new(|_| super::ListScrollState::default()),
-            input: cx.new(|cx| InputState::new(window, cx)),
-            list_scroll: ScrollHandle::new(),
-            value: "x".repeat(400).into(),
-        }
-    });
-    cx.run_until_parked();
-
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let field = visual
-        .debug_bounds("scrollable-input")
-        .expect("the overflowing input should render");
-    let (input, list_before, text_before) = window
-        .update(cx, |view, _, cx| {
-            assert!(view.list_scroll.max_offset().y > px(0.0));
-            (
-                view.input.clone(),
-                view.list_scroll.offset().y,
-                view.input.read(cx).scroll_offset().x,
-            )
-        })
-        .unwrap();
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(-80.0), px(-24.0))),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Started,
-    });
-    visual.run_until_parked();
-    window
-        .update(cx, |view, _, cx| {
-            assert_eq!(
-                view.list_scroll.offset().y,
-                list_before + px(-24.0),
-                "an unfocused field should give the vertical component to the list"
-            );
-            assert_eq!(input.read(cx).scroll_offset().x, text_before);
-        })
-        .unwrap();
-
-    window
-        .update(cx, |view, _, cx| {
-            view.list_scroll.set_offset(point(px(0.0), px(0.0)));
-            cx.notify();
-        })
-        .unwrap();
-    visual.run_until_parked();
-    let field = visual
-        .debug_bounds("scrollable-input")
-        .expect("the field should return to the top of the list");
-    visual.simulate_click(field.center(), Modifiers::default());
-    visual.run_until_parked();
-    let (list_before, text_before) = window
-        .update(cx, |view, window, cx| {
-            assert!(view.input.read(cx).focus_handle(cx).is_focused(window));
-            (
-                view.list_scroll.offset().y,
-                view.input.read(cx).scroll_offset().x,
-            )
-        })
-        .unwrap();
-    for (phase, delta) in [
-        (gpui::TouchPhase::Started, point(px(3.0), px(-36.0))),
-        (gpui::TouchPhase::Moved, point(px(-48.0), px(8.0))),
-    ] {
-        visual.simulate_event(gpui::ScrollWheelEvent {
-            position: field.center(),
-            delta: gpui::ScrollDelta::Pixels(delta),
-            modifiers: Modifiers::default(),
-            touch_phase: phase,
-        });
-    }
-    visual.run_until_parked();
-    window
-        .update(cx, |view, _, cx| {
-            assert_eq!(
-                view.list_scroll.offset().y,
-                list_before + px(-28.0),
-                "a sideways frame inside a vertical gesture should still scroll the list"
-            );
-            assert_eq!(
-                input.read(cx).scroll_offset().x,
-                text_before,
-                "sideways drift should not move text during a vertical gesture"
-            );
-        })
-        .unwrap();
-}
-
-#[gpui::test]
 fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
@@ -1664,7 +1567,9 @@ fn custom_method_labels_supplement_only_generic_http_icons() {
 }
 
 #[gpui::test]
-fn precise_axis_survives_a_list_field_remount(cx: &mut TestAppContext) {
+fn list_scroll_accumulates_bursts_and_retains_axis_across_remounts_and_gaps(
+    cx: &mut TestAppContext,
+) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
         ScrollableInputHarness {
@@ -1678,7 +1583,64 @@ fn precise_axis_survives_a_list_field_remount(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let position = visual.debug_bounds("scrollable-input").unwrap().center();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(point(px(-80.0), px(-24.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Started,
+    });
+    window
+        .update(cx, |view, window, cx| {
+            assert!(!view.input.read(cx).focus_handle(cx).is_focused(window));
+            assert_eq!(view.list_scroll.offset().y, px(-24.0));
+            assert_eq!(view.input.read(cx).scroll_offset().x, px(0.0));
+            view.list_scroll.set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
     visual.simulate_click(position, Modifiers::default());
+    visual.run_until_parked();
+    let text_before = window
+        .update(cx, |view, window, cx| {
+            assert!(view.input.read(cx).focus_handle(cx).is_focused(window));
+            view.input.read(cx).scroll_offset().x
+        })
+        .unwrap();
+    // These events arrive before layout; reversal and sideways drift must retain the list axis.
+    for (phase, delta, expected) in [
+        (
+            gpui::TouchPhase::Started,
+            point(px(3.0), px(-36.0)),
+            px(-36.0),
+        ),
+        (
+            gpui::TouchPhase::Moved,
+            point(px(-48.0), px(8.0)),
+            px(-28.0),
+        ),
+    ] {
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(delta),
+            modifiers: Modifiers::default(),
+            touch_phase: phase,
+        });
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(view.list_scroll.offset().y, expected);
+                assert_eq!(view.input.read(cx).scroll_offset().x, text_before);
+            })
+            .unwrap();
+    }
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.list_scroll.offset().y, px(-28.0));
+            view.list_scroll.set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
+        })
+        .unwrap();
     visual.run_until_parked();
     for row in 0..3 {
         visual.simulate_event(gpui::ScrollWheelEvent {

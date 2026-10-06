@@ -440,8 +440,8 @@ pub(in crate::components) fn text_input_base(
     }
 }
 
-// Unphased adapters need an idle boundary. Allow several delayed frames (up to
-// 100 ms in the regression) while releasing the axis after 200 ms of inactivity.
+// Pinned GPUI Wayland scroll frames carry only Moved, so unphased gestures need
+// an idle boundary that tolerates delayed frames.
 const SCROLL_GESTURE_GAP: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -906,45 +906,51 @@ mod tests {
     }
 
     #[test]
-    fn vertical_and_unfocused_wheels_stay_with_the_list() {
-        let at = Instant::now();
-        let mut gesture = ListedFieldGesture::default();
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut gesture,
-                sample(at, TouchPhase::Started, true, false, 2.0, -40.0),
-                || panic!("vertical scrolling must not inspect text overflow"),
+    fn wheel_routing_respects_axis_shift_and_field_eligibility() {
+        for (precise, shift, x, y, eligible, expected) in [
+            (
+                true,
+                false,
+                2.0,
+                -40.0,
+                true,
+                ListedFieldWheel::List { delta_y: px(-40.0) },
             ),
-            ListedFieldWheel::List { delta_y: px(-40.0) }
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut ListedFieldGesture::default(),
-                sample(at, TouchPhase::Moved, true, false, 40.0, 0.0),
-                || false,
+            (
+                true,
+                false,
+                40.0,
+                0.0,
+                false,
+                ListedFieldWheel::List { delta_y: px(0.0) },
             ),
-            ListedFieldWheel::List { delta_y: px(0.0) }
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut ListedFieldGesture::default(),
-                sample(at, TouchPhase::Moved, false, true, 0.0, -40.0),
-                || false,
+            (true, false, 40.0, 0.0, true, ListedFieldWheel::Field),
+            (
+                false,
+                true,
+                0.0,
+                -40.0,
+                false,
+                ListedFieldWheel::List { delta_y: px(-40.0) },
             ),
-            ListedFieldWheel::List { delta_y: px(-40.0) }
-        );
-    }
-
-    #[test]
-    fn shift_wheel_scrolls_overflowing_text() {
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut ListedFieldGesture::default(),
-                sample(Instant::now(), TouchPhase::Moved, false, true, 0.0, -40.0),
-                || true,
-            ),
-            ListedFieldWheel::ShiftText
-        );
+            (false, true, 0.0, -40.0, true, ListedFieldWheel::ShiftText),
+        ] {
+            assert_eq!(
+                classify_listed_field_wheel(
+                    &mut ListedFieldGesture::default(),
+                    sample(Instant::now(), TouchPhase::Moved, precise, shift, x, y),
+                    || {
+                        assert!(
+                            shift || x.abs() > y.abs(),
+                            "vertical scrolling must not inspect text overflow"
+                        );
+                        eligible
+                    },
+                ),
+                expected,
+                "precise={precise}, shift={shift}, eligible={eligible}"
+            );
+        }
     }
 
     #[test]
@@ -992,76 +998,37 @@ mod tests {
         }
     }
     #[test]
-    fn explicit_gestures_keep_the_axis_across_slow_frames() {
-        let at = Instant::now();
-        for (first_phase, expected) in [
+    fn gesture_axis_persistence_depends_on_phases_and_idle_gaps() {
+        for (first_phase, delays) in [
             (
                 TouchPhase::Started,
-                ListedFieldWheel::List { delta_y: px(-3.0) },
+                [(100, false), (200, false), (1000, false)],
             ),
-            (TouchPhase::Moved, ListedFieldWheel::Field),
+            (TouchPhase::Moved, [(100, false), (199, false), (200, true)]),
         ] {
+            let mut at = Instant::now();
             let mut gesture = ListedFieldGesture::default();
             classify_listed_field_wheel(
                 &mut gesture,
                 sample(at, first_phase, true, false, 1.0, -40.0),
                 || false,
             );
-            assert_eq!(
-                classify_listed_field_wheel(
-                    &mut gesture,
-                    sample(
-                        at + Duration::from_secs(1),
-                        TouchPhase::Moved,
-                        true,
-                        false,
-                        -80.0,
-                        -3.0
+            for (delay_ms, released) in delays {
+                at += Duration::from_millis(delay_ms);
+                assert_eq!(
+                    classify_listed_field_wheel(
+                        &mut gesture,
+                        sample(at, TouchPhase::Moved, true, false, -80.0, -3.0),
+                        || true,
                     ),
-                    || true
-                ),
-                expected
-            );
+                    if released {
+                        ListedFieldWheel::Field
+                    } else {
+                        ListedFieldWheel::List { delta_y: px(-3.0) }
+                    },
+                    "{first_phase:?} gesture after {delay_ms} ms idle"
+                );
+            }
         }
-    }
-    #[test]
-    fn unphased_gesture_survives_delayed_frames_and_releases_after_idle() {
-        let at = Instant::now();
-        let mut gesture = ListedFieldGesture::default();
-        classify_listed_field_wheel(
-            &mut gesture,
-            sample(at, TouchPhase::Moved, true, false, 1.0, -40.0),
-            || false,
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut gesture,
-                sample(
-                    at + Duration::from_millis(100),
-                    TouchPhase::Moved,
-                    true,
-                    false,
-                    -80.0,
-                    -3.0
-                ),
-                || true
-            ),
-            ListedFieldWheel::List { delta_y: px(-3.0) }
-        );
-        assert_eq!(
-            classify_listed_field_wheel(
-                &mut gesture,
-                sample(
-                    at + Duration::from_millis(300),
-                    TouchPhase::Moved,
-                    true,
-                    false,
-                    -80.0,
-                    -3.0
-                ),
-                || true
-            ),
-            ListedFieldWheel::Field
-        );
     }
 }
