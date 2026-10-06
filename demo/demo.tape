@@ -4,7 +4,8 @@ Set Shell "fish"
 Set Theme "Catppuccin Macchiato"
 Set FontSize 15
 Set Width 800
-Set Height 460
+Set Height 400
+Set Padding 28
 Set TypingSpeed 30ms
 Set CursorBlink false
 
