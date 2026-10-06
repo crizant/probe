@@ -115,15 +115,17 @@ impl PreparedRequest {
     pub fn into_http(mut self) -> Result<HttpExecution, GraphqlRequestError> {
         let request = self.execution.into_http()?;
         if let Some(environment) = &self.disclosure.secrets {
+            let method_controls_url = self.presentation.kind.is_graphql();
+            let presentation_method = self.presentation.method.clone();
             // Use the actual method so GraphQL GET fields become query parameters
             // even when the method itself was resolved from a secret.
             self.presentation
                 .method
                 .clone_from(&request.request().method);
             let mut presentation = self.presentation.into_http()?.request().clone();
-            // Only the protocol conversion needs the resolved method. Keep secret
-            // material out of the provenance walker as well as presentation.
-            presentation.method = None;
+            // Scan the symbolic method, since GraphQL URL construction depends on
+            // it even when the generated query parameters contain no secret values.
+            presentation.method = presentation_method;
             presentation
                 .query_parameters
                 .retain(|parameter| !parameter.disabled);
@@ -148,6 +150,7 @@ impl PreparedRequest {
                         | VariableUsage::PathParameter { .. }
                         | VariableUsage::QueryParameter { .. }
                 ) || (query_auth && matches!(usage, VariableUsage::Authentication { .. }))
+                    || (method_controls_url && matches!(usage, VariableUsage::Method))
             });
         }
         Ok(HttpExecution {
@@ -174,7 +177,7 @@ pub struct HttpExecution {
 }
 
 impl HttpExecution {
-    /// Whether the built initial URL may contain resolved secret material.
+    /// Whether the built initial URL's values or structure depend on a secret.
     #[must_use]
     pub const fn initial_url_uses_secrets(&self) -> bool {
         self.disclosure.initial_url_uses_secrets
@@ -191,7 +194,7 @@ impl HttpExecution {
     /// When a secret was used, the response cache is bypassed, the returned response
     /// is redacted, its final URL is the presentation URL, and failure diagnostics
     /// are withheld while the failure kind is kept. The initial URL is replaced
-    /// only when URL fields are secret-derived.
+    /// only when URL values or construction are secret-derived.
     pub async fn execute<C, P>(
         self,
         engine: &HttpEngine,

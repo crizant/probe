@@ -21,6 +21,99 @@ use sha2::{Digest, Sha256};
 const SECRET: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
 
 #[tokio::test]
+async fn secret_methods_hide_graphql_url_structure_but_preserve_http_urls() {
+    use probe_core::{GraphqlBody, GraphqlOperation, QueryParameter, RequestKind};
+
+    for graphql in [false, true] {
+        for method in ["GET", "POST"] {
+            for reference in ["{{method}}", "{{methodAlias}}"] {
+                let (base, server) = serve_once(http_response("", b"hello"));
+                let safe_url = format!("{base}/before/../search");
+                let mut request = get(&safe_url);
+                request.method = Some(reference.to_owned());
+                request.query_parameters.push(QueryParameter {
+                    name: "q".to_owned(),
+                    value: "hello world".to_owned(),
+                    disabled: false,
+                });
+                if graphql {
+                    request.kind = RequestKind::Graphql {
+                        body: Some(GraphqlBody::Single(GraphqlOperation {
+                            query: Some("query Viewer { viewer { id } }".to_owned()),
+                            variables: Some(
+                                serde_json::json!({"id": "public"})
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            ),
+                            ..GraphqlOperation::default()
+                        })),
+                    };
+                }
+                let mut environments = environments();
+                environments[0]
+                    .variables
+                    .extend([secret("method"), plain("methodAlias", "{{method}}")]);
+                let overrides = [("method".to_owned(), method.to_owned())];
+                let prepared = prepare_request(
+                    &request,
+                    &RequestResolution {
+                        overrides: &overrides,
+                        ..local(&environments)
+                    },
+                    &NoSecrets,
+                )
+                .unwrap();
+                assert_eq!(prepared.presentation().method.as_deref(), Some(reference));
+                let execution = prepared.into_http().unwrap();
+                assert!(execution.uses_secrets());
+                assert_eq!(
+                    execution.initial_url_uses_secrets(),
+                    graphql,
+                    "{graphql} {method} {reference}"
+                );
+                let response = execution
+                    .execute(
+                        &HttpEngine::new().unwrap(),
+                        ExecutionOptions::default(),
+                        None,
+                        std::future::pending::<()>(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap()
+                    .response;
+                let head = String::from_utf8(server.join().unwrap()).unwrap();
+                assert!(
+                    head.starts_with(&format!("{method} /search?q=hello+world")),
+                    "{head}"
+                );
+                assert_eq!(
+                    head.contains("&query="),
+                    graphql && method == "GET",
+                    "{head}"
+                );
+                assert_eq!(
+                    head.contains("&variables="),
+                    graphql && method == "GET",
+                    "{head}"
+                );
+                assert_eq!(
+                    response.initial_url,
+                    if graphql {
+                        safe_url.clone()
+                    } else {
+                        format!("{base}/search?q=hello+world")
+                    }
+                );
+                assert_eq!(response.url, safe_url);
+                assert!(!response.url_changed);
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn initial_url_disclosure_tracks_secret_provenance_and_http_placement() {
     use probe_core::{
         Authentication, AuthenticationKind, AuthenticationValue, Body, GraphqlBody,
