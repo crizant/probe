@@ -123,7 +123,7 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
                     for index in 0..40 {
                         request.headers.push(probe_core::Header {
                             name: format!("Header-{index}"),
-                            value: format!("value-{index}"),
+                            value: "x".repeat(400),
                             disabled: false,
                         });
                         request.query_parameters.push(QueryParameter {
@@ -145,58 +145,126 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
     cx.run_until_parked();
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
-    for (section, selector) in [
-        (EditorSection::Headers, "header-name-field"),
-        (EditorSection::Query, "query-name-row"),
-        (EditorSection::Path, "path-name-row"),
+    for (section, selector, value_selector) in [
+        (
+            EditorSection::Headers,
+            "header-name-field",
+            "header-value-field",
+        ),
+        (EditorSection::Query, "query-name-row", "query-name-row"),
+        (EditorSection::Path, "path-name-row", "path-name-row"),
     ] {
-        window
-            .update(cx, |view, _, cx| {
-                let key = view.shell.active_tab().unwrap();
-                view.request_editor.set_section(key, section);
-                cx.notify();
-            })
-            .unwrap();
-        visual.run_until_parked();
-        let field = visual.debug_bounds(selector).unwrap();
-        // A point within the name field, also when the selector covers its row.
-        let position = field.origin + point(field.size.width / 4.0, field.size.height / 2.0);
-        for tick in 0..48 {
-            let delta_y = if tick >= 24 && tick % 2 == 0 {
-                px(8.0)
-            } else {
-                px(-8.0)
-            };
-            let before = window
-                .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+        for value_column in [false, true] {
+            window
+                .update(cx, |view, _, cx| {
+                    let key = view.shell.active_tab().unwrap();
+                    view.request_editor.set_section(key, section);
+                    view.request_section_scroll
+                        .set_offset(point(px(0.0), px(0.0)));
+                    cx.notify();
+                })
                 .unwrap();
-            visual.simulate_event(gpui::ScrollWheelEvent {
-                position,
-                delta: gpui::ScrollDelta::Pixels(if tick % 3 == 0 {
-                    point(px(0.0), delta_y)
+            visual.run_until_parked();
+            let field = visual
+                .debug_bounds(if value_column {
+                    value_selector
                 } else {
-                    point(px(2.0), delta_y)
-                }),
-                modifiers: Modifiers::default(),
-                touch_phase: if tick == 0 {
-                    gpui::TouchPhase::Started
-                } else {
-                    gpui::TouchPhase::Moved
-                },
-            });
-            let after = window
-                .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+                    selector
+                })
                 .unwrap();
-            assert_eq!(
-                after,
-                before + delta_y,
-                "scrolling {section:?}, tick {tick}"
-            );
-            if tick % 4 == 3 {
-                visual.run_until_parked();
+            // A point within the name field, also when the selector covers its row.
+            let position = field.origin
+                + point(
+                    field.size.width
+                        * if value_column && section != EditorSection::Headers {
+                            0.6
+                        } else {
+                            0.25
+                        },
+                    field.size.height / 2.0,
+                );
+            for tick in 0..48 {
+                let delta_y = if tick >= 24 && tick % 2 == 0 {
+                    px(8.0)
+                } else {
+                    px(-8.0)
+                };
+                let before = window
+                    .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+                    .unwrap();
+                visual.simulate_event(gpui::ScrollWheelEvent {
+                    position,
+                    delta: gpui::ScrollDelta::Pixels(if tick % 3 == 0 {
+                        point(px(0.0), delta_y)
+                    } else {
+                        point(px(2.0), delta_y)
+                    }),
+                    modifiers: Modifiers::default(),
+                    touch_phase: if tick == 0 {
+                        gpui::TouchPhase::Started
+                    } else {
+                        gpui::TouchPhase::Moved
+                    },
+                });
+                let after = window
+                    .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+                    .unwrap();
+                assert_eq!(
+                    after,
+                    before + delta_y,
+                    "scrolling {section:?}, tick {tick}"
+                );
+                if tick % 4 == 3 {
+                    visual.run_until_parked();
+                }
             }
         }
     }
+    window
+        .update(cx, |view, _, cx| {
+            let key = view.shell.active_tab().unwrap();
+            view.request_editor.set_section(key, EditorSection::Headers);
+            view.request_section_scroll
+                .set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let first = visual.debug_bounds("header-value-field").unwrap().center();
+    let second = visual
+        .debug_bounds("header-value-field-1")
+        .unwrap()
+        .center();
+    visual.simulate_click(first, Modifiers::default());
+    visual.run_until_parked();
+    let distance = second.y - first.y;
+    window
+        .update(cx, |view, _, cx| {
+            view.request_section_scroll
+                .set_offset(point(px(0.0), -distance));
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    for (phase, delta_y, delta_x) in [
+        (gpui::TouchPhase::Started, distance, px(1.0)),
+        (gpui::TouchPhase::Moved, px(-3.0), px(-80.0)),
+    ] {
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position: first,
+            delta: gpui::ScrollDelta::Pixels(point(delta_x, delta_y)),
+            modifiers: Modifiers::default(),
+            touch_phase: phase,
+        });
+        visual.run_until_parked();
+    }
+    assert_eq!(
+        window
+            .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+            .unwrap(),
+        px(-3.0),
+        "vertical axis must survive a different request row moving under the pointer"
+    );
 }
 
 #[gpui::test]

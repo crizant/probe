@@ -172,7 +172,8 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
                 dialog.add_variable(EnvironmentVariable::Plain(Variable {
                     name: Some(format!("scroll-{index}")),
                     value: Some(VariableValueSet::Single(VariableValue::String(format!(
-                        "value-{index}"
+                        "value-{index}-{}",
+                        "x".repeat(400)
                     )))),
                     disabled: false,
                 }));
@@ -181,6 +182,12 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
     });
     cx.run_until_parked();
 
+    let builds = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .effective_row_builds
+    });
     let offset_y = |workspace: &EnvironmentWorkspace, cx: &mut TestAppContext| {
         workspace.update(cx, |view, _, _| {
             view.environment_variables_scroll
@@ -192,37 +199,64 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
         })
     };
     let mut visual = workspace.visual(cx);
-    let field = visual
-        .debug_bounds("environment-variable-value-host")
-        .expect("a value field should accept the pointer");
-    // Keep the pointer stationary while rows and their gaps pass underneath it.
-    for tick in 0..48 {
-        let delta_y = if tick >= 24 && tick % 2 == 0 {
-            px(8.0)
-        } else {
-            px(-8.0)
-        };
-        let before = offset_y(&workspace, cx);
-        visual.simulate_event(gpui::ScrollWheelEvent {
-            position: field.center(),
-            delta: gpui::ScrollDelta::Pixels(if tick % 3 == 0 {
-                point(px(0.0), delta_y)
-            } else {
-                point(px(2.0), delta_y)
-            }),
-            modifiers: Modifiers::default(),
-            touch_phase: if tick == 0 {
-                gpui::TouchPhase::Started
-            } else {
-                gpui::TouchPhase::Moved
-            },
+    for selector in [
+        "environment-variable-value-host",
+        "environment-variable-name-host",
+    ] {
+        workspace.update(cx, |view, _, cx| {
+            view.environment_variables_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
         });
-        assert_eq!(offset_y(&workspace, cx), before + delta_y);
-        // Burst several events between frames, including rapid reversals.
-        if tick % 4 == 3 {
-            visual.run_until_parked();
+        visual.run_until_parked();
+        let field = visual
+            .debug_bounds(selector)
+            .expect("a variable field should accept the pointer");
+        // Keep the pointer stationary while rows and their gaps pass underneath it.
+        for tick in 0..48 {
+            let delta_y = if tick >= 24 && tick % 2 == 0 {
+                px(8.0)
+            } else {
+                px(-8.0)
+            };
+            let before = offset_y(&workspace, cx);
+            visual.simulate_event(gpui::ScrollWheelEvent {
+                position: field.center(),
+                delta: gpui::ScrollDelta::Pixels(if tick % 3 == 0 {
+                    point(px(0.0), delta_y)
+                } else {
+                    point(px(2.0), delta_y)
+                }),
+                modifiers: Modifiers::default(),
+                touch_phase: if tick == 0 {
+                    gpui::TouchPhase::Started
+                } else {
+                    gpui::TouchPhase::Moved
+                },
+            });
+            assert_eq!(offset_y(&workspace, cx), before + delta_y);
+            // Burst several events between frames, including rapid reversals.
+            if tick % 4 == 3 {
+                visual.run_until_parked();
+            }
         }
+        assert_eq!(
+            workspace.update(cx, |view, _, _| {
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .effective_row_builds
+            }),
+            builds,
+            "scroll frames must reuse effective rows"
+        );
     }
+    let field = visual
+        .debug_bounds("environment-manager-variables")
+        .unwrap();
     let before = offset_y(&workspace, cx);
     visual.simulate_event(gpui::ScrollWheelEvent {
         position: field.center(),
@@ -290,6 +324,51 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
     assert_eq!(
         list_after, list_before,
         "a horizontal wheel on a focused overflowing field should leave the list in place"
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.environment_variables_scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    });
+    visual.run_until_parked();
+    let start = visual
+        .debug_bounds("environment-variable-value-host")
+        .unwrap()
+        .center();
+    let target = visual
+        .debug_bounds("environment-variable-value-scroll-1")
+        .unwrap()
+        .center();
+    visual.simulate_click(target, Modifiers::default());
+    visual.run_until_parked();
+    let before = offset_y(&workspace, cx);
+    let delta_y = start.y - target.y;
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: start,
+        delta: gpui::ScrollDelta::Pixels(point(px(1.0), delta_y)),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Started,
+    });
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("environment-variable-value-scroll-1")
+            .unwrap()
+            .contains(&start)
+    );
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: start,
+        delta: gpui::ScrollDelta::Pixels(point(px(-80.0), px(-3.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    assert_eq!(
+        offset_y(&workspace, cx),
+        before + delta_y + px(-3.0),
+        "a focused overflowing row entering the pointer must retain the list's vertical axis"
     );
 }
 
@@ -1427,6 +1506,88 @@ fn environment_manager_closes_when_the_workspace_resets(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn environment_manager_cached_rows_follow_draft_edits_and_selection(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "development");
+    let rows = |cx: &mut TestAppContext| {
+        workspace.update(cx, |view, _, _| {
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .effective_rows
+                .clone()
+                .unwrap()
+        })
+    };
+    let original = rows(cx);
+    assert!(
+        original
+            .iter()
+            .any(|row| row.variable.name() == Some("secretToken") && row.direct_index.is_none())
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.add_variable(EnvironmentVariable::Plain(Variable {
+                name: Some("baseUrl".into()),
+                value: Some(VariableValueSet::Single(VariableValue::String(
+                    "override".into(),
+                ))),
+                disabled: true,
+            }));
+        });
+    });
+    cx.run_until_parked();
+    let overridden = rows(cx);
+    assert!(!Rc::ptr_eq(&original, &overridden));
+    let overrides = overridden
+        .iter()
+        .filter(|row| row.variable.name() == Some("baseUrl"))
+        .collect::<Vec<_>>();
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(overrides[0].direct_index, Some(2));
+    assert!(
+        matches!(&overrides[0].variable, EnvironmentVariable::Plain(variable) if variable.disabled && environment_variable_text(variable).0 == "override")
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| dialog.remove_variable(2));
+    });
+    cx.run_until_parked();
+    assert!(
+        rows(cx)
+            .iter()
+            .any(|row| row.variable.name() == Some("baseUrl") && row.direct_index.is_none())
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| dialog.draft.extends = None);
+    });
+    cx.run_until_parked();
+    assert!(rows(cx).iter().all(|row| row.direct_index.is_some()));
+    assert!(
+        !rows(cx)
+            .iter()
+            .any(|row| row.variable.name() == Some("secretToken"))
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.draft.extends = Some("base".into())
+        });
+        view.select_environment_manager_environment("base", cx);
+    });
+    cx.run_until_parked();
+    let selected = rows(cx);
+    assert!(
+        selected
+            .iter()
+            .all(|row| row.defined_in == "base" && row.direct_index.is_some())
+    );
+    assert!(
+        selected
+            .iter()
+            .any(|row| matches!(row.variable, EnvironmentVariable::Secret(_)))
+    );
+}
+
+#[gpui::test]
 fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-reload");
     workspace.mark_stored(cx, &workspace.development_secret());
@@ -1467,6 +1628,54 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
         assert!(view.toasts.is_empty(), "{:?}", toast_debug(view));
     });
 
+    cx.run_until_parked();
+    let previous_rows = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .effective_rows
+            .clone()
+            .unwrap()
+    });
+    let mut parent_changed = probe_opencollection::load_workspace(&workspace.path).unwrap();
+    let mut parent = parent_changed.workspace().environments()[0].clone();
+    parent.variables.push(EnvironmentVariable::Plain(Variable {
+        name: Some("newInherited".into()),
+        value: None,
+        disabled: false,
+    }));
+    let saved = parent_changed
+        .prepare_environment_replace("base", parent)
+        .unwrap()
+        .execute()
+        .unwrap();
+    parent_changed.complete_environment_replace(saved).unwrap();
+    workspace.update(cx, |view, _, cx| {
+        view.apply_reconciled_workspace(reconciled_workspace(parent_changed), cx);
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(dialog.draft.name, "renamed-development");
+        assert!(
+            dialog.effective_rows.is_none(),
+            "parent changes must invalidate a retained dirty draft"
+        );
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        let rows = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .effective_rows
+            .as_ref()
+            .unwrap();
+        assert!(!Rc::ptr_eq(&previous_rows, rows));
+        let inherited = rows
+            .iter()
+            .find(|row| row.variable.name() == Some("newInherited"))
+            .unwrap();
+        assert_eq!(inherited.defined_in, "base");
+        assert_eq!(inherited.direct_index, None);
+    });
     let mut changed = probe_opencollection::load_workspace(&workspace.path).unwrap();
     let mut replacement = changed.workspace().environments()[1].clone();
     replacement.extends = None;

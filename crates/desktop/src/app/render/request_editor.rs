@@ -190,9 +190,18 @@ impl ProbeApp {
             self.request_section_scroll_owner
                 .set(Some((key, section_kind)));
         }
-        let section_scroll = self.request_section_scroll.clone();
-        let list_scroll = section_scrolls.then_some(&section_scroll);
+        let list_scroll = section_scrolls.then_some(&self.request_list_scroll);
         let section = self.render_request_section(key, &request, theme, list_scroll, cx);
+        let section = if section_scrolls {
+            components::list_scroll_region(
+                section,
+                &self.request_section_scroll,
+                &self.request_list_scroll,
+            )
+            .into_any_element()
+        } else {
+            section
+        };
 
         div()
             .flex_1()
@@ -356,7 +365,7 @@ impl ProbeApp {
         key: RequestKey,
         request: &Request,
         theme: Theme,
-        list_scroll: Option<&ScrollHandle>,
+        list_scroll: Option<&components::ListScroll>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         match self.request_editor.section(key) {

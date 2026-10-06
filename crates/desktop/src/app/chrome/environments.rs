@@ -313,12 +313,7 @@ impl ProbeApp {
                 } else {
                     format!("environment-variable-name-{name}")
                 };
-                let list_scroll = self
-                    .environment_variables_scroll
-                    .0
-                    .borrow()
-                    .base_handle
-                    .clone();
+                let list_scroll = self.environment_list_scroll.clone();
                 div()
                     .id(format!("environment-variable-name-{row_id}"))
                     .debug_selector({
@@ -375,12 +370,7 @@ impl ProbeApp {
             })
             .child(if editable {
                 let input_id = format!("environment-variable-value-input-{row_id}");
-                let list_scroll = self
-                    .environment_variables_scroll
-                    .0
-                    .borrow()
-                    .base_handle
-                    .clone();
+                let list_scroll = self.environment_list_scroll.clone();
                 div()
                     .id(value_selector.clone())
                     .debug_selector({
@@ -677,6 +667,19 @@ impl ProbeApp {
         // Focus-out is based on rendered ancestry and cannot observe an already offscreen editor.
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
             dialog.sync_variable_row_ids();
+            if dialog.effective_rows.is_none()
+                && let Some(loaded) = self.loaded_workspace.as_ref()
+            {
+                dialog.effective_rows = Some(Rc::new(
+                    loaded
+                        .workspace()
+                        .effective_environment_variables(&dialog.draft),
+                ));
+                #[cfg(test)]
+                {
+                    dialog.effective_row_builds += 1;
+                }
+            }
             if dialog
                 .active_field
                 .as_ref()
@@ -692,9 +695,9 @@ impl ProbeApp {
             return div().into_any_element();
         };
         let environments = loaded.workspace().environments();
-        let rows = loaded
-            .workspace()
-            .effective_environment_variables(&dialog.draft);
+        let Some(rows) = dialog.effective_rows.clone() else {
+            return div().into_any_element();
+        };
         let rows_empty = rows.is_empty();
         let busy = self.environment_save_task.is_some();
         let dirty = self.environment_manager_is_dirty();
@@ -746,7 +749,6 @@ impl ProbeApp {
             .min_h(px(0.0))
             .relative();
         let row_count = rows.len() + usize::from(rows_empty);
-        let rows = Rc::new(rows);
         let list = uniform_list("environment-manager-variable-list", row_count, {
             let rows = rows.clone();
             cx.processor(move |view, range: std::ops::Range<usize>, _, cx| {
@@ -787,6 +789,12 @@ impl ProbeApp {
         })
         .size_full()
         .track_scroll(&self.environment_variables_scroll);
+        let list = components::list_scroll_region(
+            list,
+            &self.environment_variables_scroll.0.borrow().base_handle,
+            &self.environment_list_scroll,
+        )
+        .fill_height();
         let table_body = table_body.child(list).child(
             Scrollbar::vertical(&self.environment_variables_scroll)
                 .id("environment-manager-variables-scrollbar")

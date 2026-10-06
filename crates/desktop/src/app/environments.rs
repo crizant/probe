@@ -174,7 +174,7 @@ impl ProbeApp {
         previous: Option<(EnvironmentManagerDialog, Option<Environment>)>,
         cx: &mut Context<Self>,
     ) {
-        let Some((dialog, previous_original)) = previous else {
+        let Some((mut dialog, previous_original)) = previous else {
             return;
         };
         self.transient.environment_manager_context_menu = None;
@@ -209,6 +209,7 @@ impl ProbeApp {
             );
             return;
         }
+        dialog.effective_rows = None;
         self.environment_manager_dialog = Some(dialog);
     }
 
@@ -223,6 +224,7 @@ impl ProbeApp {
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
             dialog.sync_variable_row_ids();
             update(dialog);
+            dialog.effective_rows = None;
             dialog.sync_variable_row_ids();
             cx.notify();
         }
@@ -610,6 +612,9 @@ impl ProbeApp {
             .as_mut()
             .expect("workspace was present")
             .complete_environment_delete(saved)?;
+        if let Some(dialog) = self.environment_manager_dialog.as_mut() {
+            dialog.effective_rows = None;
+        }
         if self.shell.selected_environment() == Some(name) {
             self.select_environment(None, cx);
         }

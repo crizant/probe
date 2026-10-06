@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Scrolling over text fields in Environment Manager and request-editor lists retains the trackpad gesture axis across rows. Environment Manager reuses effective variable rows during scrolling.
+
 ## [0.10.1] - 2026-10-06
 
 ### Changed

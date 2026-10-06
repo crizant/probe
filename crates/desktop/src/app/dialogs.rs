@@ -20,6 +20,10 @@ pub(crate) struct EnvironmentManagerDialog {
     pub(crate) secret_statuses: BTreeMap<String, SecretUiStatus>,
     pub(crate) variable_row_ids: Vec<u64>,
     pub(crate) next_variable_row_id: u64,
+    // Invalidated by draft edits and workspace reconciliation; secret presence is rendered separately.
+    pub(crate) effective_rows: Option<std::rc::Rc<Vec<probe_core::EffectiveEnvironmentVariable>>>,
+    #[cfg(test)]
+    pub(crate) effective_row_builds: usize,
     pub(crate) active_field: Option<(
         EnvironmentVariableRowId,
         EnvironmentFieldKind,
@@ -58,11 +62,15 @@ impl EnvironmentManagerDialog {
             secret_statuses: BTreeMap::new(),
             variable_row_ids: (0..next_variable_row_id).collect(),
             next_variable_row_id,
+            effective_rows: None,
+            #[cfg(test)]
+            effective_row_builds: 0,
             active_field: None,
         }
     }
 
     pub(crate) fn add_variable(&mut self, variable: probe_core::EnvironmentVariable) {
+        self.effective_rows = None;
         self.draft.variables.push(variable);
         self.variable_row_ids.push(self.next_variable_row_id);
         self.next_variable_row_id += 1;
@@ -77,6 +85,7 @@ impl EnvironmentManagerDialog {
 
     pub(crate) fn remove_variable(&mut self, index: usize) {
         if index < self.draft.variables.len() {
+            self.effective_rows = None;
             if self.active_field.as_ref().is_some_and(|(id, _, _)| {
                 *id == EnvironmentVariableRowId::Direct(self.variable_row_ids[index])
             }) {
