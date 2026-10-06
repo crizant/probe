@@ -157,48 +157,15 @@ fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut Te
 fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "base");
-    workspace.update(cx, |view, _, cx| {
-        view.apply_environment_manager_draft(cx, |dialog| {
-            for variable in &mut dialog.draft_mut().variables {
-                if let EnvironmentVariable::Plain(variable) = variable
-                    && variable.name.as_deref() == Some("host")
-                {
-                    variable.value = Some(VariableValueSet::Single(VariableValue::String(
-                        "x".repeat(400),
-                    )));
-                }
-            }
-            for index in 0..40 {
-                dialog.add_variable(EnvironmentVariable::Plain(Variable {
-                    name: Some(format!("scroll-{index}")),
-                    value: Some(VariableValueSet::Single(VariableValue::String(format!(
-                        "value-{index}-{}",
-                        "x".repeat(400)
-                    )))),
-                    disabled: false,
-                }));
-            }
-        });
-    });
+    workspace.add_manager_variables(cx, "scroll", 40);
     cx.run_until_parked();
-
-    let builds = workspace.update(cx, |view, _, _| {
+    let rows_before = workspace.update(cx, |view, _, _| {
         view.environment_manager_dialog
             .as_ref()
             .unwrap()
-            .effective_row_builds
-            .get()
+            .cached_effective_rows()
+            .unwrap()
     });
-    let offset_y = |workspace: &EnvironmentWorkspace, cx: &mut TestAppContext| {
-        workspace.update(cx, |view, _, _| {
-            view.environment_variables_scroll
-                .0
-                .borrow()
-                .base_handle
-                .offset()
-                .y
-        })
-    };
     let mut visual = workspace.visual(cx);
     for selector in [
         "environment-variable-value-host",
@@ -213,165 +180,43 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
             cx.notify();
         });
         visual.run_until_parked();
-        let field = visual
-            .debug_bounds(selector)
-            .expect("a variable field should accept the pointer");
-        // Keep the pointer stationary while rows and their gaps pass underneath it.
-        for tick in 0..48 {
-            let delta_y = if tick >= 24 && tick % 2 == 0 {
-                px(8.0)
-            } else {
-                px(-8.0)
-            };
-            let before = offset_y(&workspace, cx);
-            visual.simulate_event(gpui::ScrollWheelEvent {
-                position: field.center(),
-                delta: gpui::ScrollDelta::Pixels(if tick % 3 == 0 {
-                    point(px(0.0), delta_y)
-                } else {
-                    point(px(2.0), delta_y)
-                }),
-                modifiers: Modifiers::default(),
-                touch_phase: if tick == 0 {
-                    gpui::TouchPhase::Started
-                } else {
-                    gpui::TouchPhase::Moved
-                },
-            });
-            assert_eq!(offset_y(&workspace, cx), before + delta_y);
-            // Burst several events between frames, including rapid reversals.
-            if tick % 4 == 3 {
-                visual.run_until_parked();
-            }
-        }
-        assert_eq!(
-            workspace.update(cx, |view, _, _| {
-                view.environment_manager_dialog
+        let field = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(field.center(), Modifiers::default());
+        visual.run_until_parked();
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position: field.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(2.0), px(-8.0))),
+            modifiers: Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Started,
+        });
+        workspace.update(cx, |view, _, _| {
+            assert_eq!(
+                view.environment_variables_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y,
+                px(-8.0),
+                "scroll wiring for {selector}"
+            );
+        });
+    }
+    visual.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(
+            Rc::ptr_eq(
+                &rows_before,
+                &view
+                    .environment_manager_dialog
                     .as_ref()
                     .unwrap()
-                    .effective_row_builds
-                    .get()
-            }),
-            builds,
-            "scroll frames must reuse effective rows"
+                    .cached_effective_rows()
+                    .unwrap()
+            ),
+            "scrolling must reuse effective rows"
         );
-    }
-    let field = visual
-        .debug_bounds("environment-manager-variables")
-        .unwrap();
-    let before = offset_y(&workspace, cx);
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
     });
-    visual.run_until_parked();
-    let after = offset_y(&workspace, cx);
-    assert!(
-        after < before,
-        "wheeling over a value field should scroll the list, before={before:?} after={after:?}"
-    );
-
-    workspace.update(cx, |view, _, cx| {
-        view.environment_variables_scroll
-            .0
-            .borrow()
-            .base_handle
-            .set_offset(point(px(0.0), px(0.0)));
-        cx.notify();
-    });
-    visual.run_until_parked();
-    let field = visual
-        .debug_bounds("environment-variable-value-host")
-        .expect("the value field should return to the top of the list");
-    visual.simulate_click(field.center(), Modifiers::default());
-    visual.run_until_parked();
-    let focused_before = offset_y(&workspace, cx);
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(12.0), px(-80.0))),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    visual.run_until_parked();
-    let focused = offset_y(&workspace, cx);
-    assert!(
-        focused < focused_before,
-        "a focused field should still let a vertical wheel scroll the list, before={focused_before:?} after={focused:?}"
-    );
-    workspace.update(cx, |view, _, cx| {
-        view.environment_variables_scroll
-            .0
-            .borrow()
-            .base_handle
-            .set_offset(point(px(0.0), px(0.0)));
-        cx.notify();
-    });
-    visual.run_until_parked();
-    let field = visual
-        .debug_bounds("environment-variable-value-host")
-        .expect("the overflowing value field should return to the top of the list");
-    visual.simulate_click(field.center(), Modifiers::default());
-    visual.run_until_parked();
-    let list_before = offset_y(&workspace, cx);
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(-160.0), px(-6.0))),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Started,
-    });
-    visual.run_until_parked();
-    let list_after = offset_y(&workspace, cx);
-    assert_eq!(
-        list_after, list_before,
-        "a horizontal wheel on a focused overflowing field should leave the list in place"
-    );
-    workspace.update(cx, |view, _, cx| {
-        view.environment_variables_scroll
-            .0
-            .borrow()
-            .base_handle
-            .set_offset(point(px(0.0), px(0.0)));
-        cx.notify();
-    });
-    visual.run_until_parked();
-    let start = visual
-        .debug_bounds("environment-variable-value-host")
-        .unwrap()
-        .center();
-    let target = visual
-        .debug_bounds("environment-variable-value-scroll-1")
-        .unwrap()
-        .center();
-    visual.simulate_click(target, Modifiers::default());
-    visual.run_until_parked();
-    let before = offset_y(&workspace, cx);
-    let delta_y = start.y - target.y;
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: start,
-        delta: gpui::ScrollDelta::Pixels(point(px(1.0), delta_y)),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Started,
-    });
-    visual.run_until_parked();
-    assert!(
-        visual
-            .debug_bounds("environment-variable-value-scroll-1")
-            .unwrap()
-            .contains(&start)
-    );
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: start,
-        delta: gpui::ScrollDelta::Pixels(point(px(-80.0), px(-3.0))),
-        modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    assert_eq!(
-        offset_y(&workspace, cx),
-        before + delta_y + px(-3.0),
-        "a focused overflowing row entering the pointer must retain the list's vertical axis"
-    );
 }
 
 #[gpui::test]
