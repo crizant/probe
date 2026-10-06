@@ -187,6 +187,7 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
             .as_ref()
             .unwrap()
             .effective_row_builds
+            .get()
     });
     let offset_y = |workspace: &EnvironmentWorkspace, cx: &mut TestAppContext| {
         workspace.update(cx, |view, _, _| {
@@ -249,6 +250,7 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
                     .as_ref()
                     .unwrap()
                     .effective_row_builds
+                    .get()
             }),
             builds,
             "scroll frames must reuse effective rows"
@@ -1553,10 +1555,29 @@ fn environment_manager_cached_rows_follow_draft_edits_and_selection(cx: &mut Tes
                 .as_ref()
                 .unwrap()
                 .cached_effective_rows()
-                .clone()
                 .unwrap()
         })
     };
+    let builds = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .effective_row_builds
+            .get()
+    });
+    workspace.update(cx, |view, _, _| {
+        assert!(view.can_manage_secret("secretToken"));
+        view.sync_secret_statuses_from_presence();
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .effective_row_builds
+                .get(),
+            builds,
+            "secret operations must share effective rows with the manager"
+        );
+    });
     let original = rows(cx);
     assert!(
         original
@@ -1692,7 +1713,6 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
             .as_ref()
             .unwrap()
             .cached_effective_rows()
-            .clone()
             .unwrap()
     });
     let mut parent_changed = probe_opencollection::load_workspace(&workspace.path).unwrap();
@@ -1724,9 +1744,8 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
             .as_ref()
             .unwrap()
             .cached_effective_rows()
-            .as_ref()
             .unwrap();
-        assert!(!Rc::ptr_eq(&previous_rows, rows));
+        assert!(!Rc::ptr_eq(&previous_rows, &rows));
         let inherited = rows
             .iter()
             .find(|row| row.variable.name() == Some("newInherited"))

@@ -110,9 +110,8 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return false;
         };
-        loaded
-            .workspace()
-            .effective_environment_variables(dialog.draft())
+        dialog
+            .effective_rows(loaded.workspace().environments())
             .iter()
             .any(|row| row.variable.is_secret() && row.variable.name() == Some(name))
     }
@@ -130,10 +129,9 @@ impl ProbeApp {
             return;
         };
         let environment = dialog.draft().name.clone();
-        let names: Vec<String> = loaded
-            .workspace()
-            .effective_environment_variables(dialog.draft())
-            .into_iter()
+        let names: Vec<String> = dialog
+            .effective_rows(loaded.workspace().environments())
+            .iter()
             .filter(|row| row.variable.is_secret())
             .filter_map(|row| row.variable.name().map(str::to_owned))
             .collect();

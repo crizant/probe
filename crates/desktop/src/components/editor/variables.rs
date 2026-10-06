@@ -15,6 +15,8 @@ pub(in crate::components) fn variable_input_overlay(
     cx: &mut App,
 ) -> gpui::AnyElement {
     let ranges = input_variable_ranges(&value, highlight_path_variables);
+    let tooltip_ranges = variable_ranges(&value);
+    let current_scroll = state.read(cx).scroll_offset().x;
     // Input paints first so it keeps native caret, selection, and scroll.
     // The overlay sits on top and recolors supported variable spans.
     let mut wrapper = div()
@@ -31,8 +33,8 @@ pub(in crate::components) fn variable_input_overlay(
             theme.typography.body_size,
             highlight_path_variables,
             variables.clone(),
+            (!tooltip_ranges.is_empty()).then_some(current_scroll),
         ));
-    let tooltip_ranges = variable_ranges(&value);
     if tooltip_ranges.is_empty() {
         return wrapper.into_any_element();
     }
@@ -42,9 +44,6 @@ pub(in crate::components) fn variable_input_overlay(
         cx,
         VariableHoverState::new,
     );
-    let visible_width = hover.read(cx).visible_width;
-    let current_scroll = state.read(cx).scroll_offset().x;
-    let cursor = state.read(cx).cursor();
     let spans = variable_span_layout(
         window,
         &value,
@@ -52,23 +51,8 @@ pub(in crate::components) fn variable_input_overlay(
         theme.typography.monospace_family,
         theme.typography.body_size,
         current_scroll,
-        cursor,
-        visible_width,
     );
-    let mut hits = div().relative().w_full().h_full().on_prepaint({
-        let hover = hover.clone();
-        move |bounds, window, cx| {
-            let width = bounds.size.width;
-            let changed = hover.update(cx, |state, _| {
-                let changed = state.visible_width != Some(width);
-                state.visible_width = Some(width);
-                changed
-            });
-            if changed {
-                window.request_animation_frame();
-            }
-        }
-    });
+    let mut hits = div().relative().w_full().h_full();
     for (index, (name, left, width)) in spans.into_iter().enumerate() {
         hits = hits.child(
             variable_hover_hit(
@@ -302,7 +286,6 @@ fn with_variable_tooltip(
         .into_any_element()
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::components) fn variable_span_layout(
     window: &mut Window,
     value: &str,
@@ -310,8 +293,6 @@ pub(in crate::components) fn variable_span_layout(
     font_family: &'static str,
     font_size: f32,
     current_scroll_x: Pixels,
-    cursor: usize,
-    visible_width: Option<Pixels>,
 ) -> Vec<(String, Pixels, Pixels)> {
     let run = TextRun {
         len: value.len(),
@@ -325,19 +306,11 @@ pub(in crate::components) fn variable_span_layout(
         window
             .text_system()
             .shape_line(SharedString::from(value), px(font_size), &[run], None);
-    let scroll_x = visible_width.map_or(current_scroll_x, |width| {
-        input_text_scroll_offset(
-            line.x_for_index(cursor),
-            line.width,
-            width,
-            current_scroll_x,
-        )
-    });
     ranges
         .iter()
         .map(|reference| {
-            let start = line.x_for_index(reference.range.start) + scroll_x;
-            let end = line.x_for_index(reference.range.end) + scroll_x;
+            let start = line.x_for_index(reference.range.start) + current_scroll_x;
+            let end = line.x_for_index(reference.range.end) + current_scroll_x;
             (
                 reference.name(value).to_owned(),
                 start,
@@ -347,6 +320,7 @@ pub(in crate::components) fn variable_span_layout(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn variable_highlight_layer(
     theme: Theme,
     state: Entity<InputState>,
@@ -355,6 +329,7 @@ fn variable_highlight_layer(
     text_size: f32,
     highlight_path_variables: bool,
     variables: VariableContext,
+    tooltip_scroll_offset: Option<Pixels>,
 ) -> impl IntoElement {
     let base_color = if ranges_empty {
         transparent_black()
@@ -386,6 +361,7 @@ fn variable_highlight_layer(
             palette: variable_highlight_palette(theme),
             highlight_path_variables,
             variables,
+            tooltip_scroll_offset,
         })
 }
 
@@ -395,12 +371,12 @@ pub(in crate::components) struct VariableHighlightElement {
     pub(in crate::components) palette: VariableHighlightPalette,
     pub(in crate::components) highlight_path_variables: bool,
     pub(in crate::components) variables: VariableContext,
+    pub(in crate::components) tooltip_scroll_offset: Option<Pixels>,
 }
 
 pub(in crate::components) struct VariableHighlightPrepaintState {
     line: Option<ShapedLine>,
     pub(in crate::components) scroll_offset: Pixels,
-    cursor_x: Pixels,
 }
 
 impl IntoElement for VariableHighlightElement {
@@ -448,7 +424,6 @@ impl Element for VariableHighlightElement {
         let state = self.state.clone();
         let value = single_line(state.read(cx).value());
         let references = input_variable_ranges(&value, self.highlight_path_variables);
-        let cursor = state.read(cx).cursor();
         let style = window.text_style();
         let run = TextRun {
             len: value.len(),
@@ -467,11 +442,9 @@ impl Element for VariableHighlightElement {
         let line = window
             .text_system()
             .shape_line(value, font_size, &runs, None);
-        let cursor_x = line.x_for_index(cursor);
         VariableHighlightPrepaintState {
             line: Some(line),
             scroll_offset: px(0.0),
-            cursor_x,
         }
     }
 
@@ -485,26 +458,18 @@ impl Element for VariableHighlightElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        // Input is the previous sibling and paints first. gpui-base commits
-        // its finalized cursor-follow scroll offset during that paint, so read
-        // it here instead of trying to predict it during prepaint. The fallback
-        // keeps isolated element tests meaningful before an Input has laid out.
-        let visible_width = bounds.right() - bounds.left();
-        let current_scroll_offset = {
-            let input = self.state.read(cx);
-            input.scroll_offset().x
-        };
-        let line_width = prepaint
-            .line
-            .as_ref()
-            .map(|line| line.width)
-            .unwrap_or(px(0.0));
-        let scroll_offset = input_text_scroll_offset(
-            prepaint.cursor_x,
-            line_width,
-            visible_width,
-            current_scroll_offset,
-        );
+        // Native Input paints first and owns caret following and clamping. Manual
+        // scrolling may intentionally leave the caret outside the visible viewport.
+        let scroll_offset = self.state.read(cx).scroll_offset().x;
+        // Tooltip hitboxes were laid out before Input committed this offset in
+        // paint. Re-render their owner only when that finalized geometry changed.
+        if self
+            .tooltip_scroll_offset
+            .is_some_and(|offset| offset != scroll_offset)
+        {
+            let view = window.current_view();
+            cx.defer(move |cx| cx.notify(view));
+        }
         prepaint.scroll_offset = scroll_offset;
         let line = prepaint.line.take();
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
@@ -523,8 +488,7 @@ impl Element for VariableHighlightElement {
     }
 }
 
-/// Matches Longbridge gpui-base single-line input: shift the painted line left
-/// when the caret would otherwise sit past the visible width.
+/// Recolor supported variable spans while preserving the native text runs.
 pub(in crate::components) fn variable_highlight_runs(
     value: &str,
     references: &[VariableReference],
@@ -573,37 +537,6 @@ pub(in crate::components) fn variable_highlight_runs(
         runs.push(base.clone());
     }
     runs
-}
-
-/// Horizontal scroll for single-line input highlights.
-///
-/// Matches gpui-base `InputBaseState::scroll_to` for left-aligned input without
-/// line numbers (`RIGHT_MARGIN` = 10px). The overlay must reuse the input's
-/// current scroll offset; recomputing from zero desyncs highlights from text
-/// once the caret moves while the field is already scrolled.
-pub(in crate::components) fn input_text_scroll_offset(
-    cursor_x: Pixels,
-    line_width: Pixels,
-    visible_width: Pixels,
-    current_scroll_x: Pixels,
-) -> Pixels {
-    const RIGHT_MARGIN: Pixels = px(10.0);
-    let mut scroll_x = current_scroll_x;
-    if cursor_x - RIGHT_MARGIN < -scroll_x {
-        scroll_x = -cursor_x + RIGHT_MARGIN;
-    } else if cursor_x + RIGHT_MARGIN > -scroll_x + visible_width {
-        scroll_x = -(cursor_x - visible_width + RIGHT_MARGIN);
-    }
-    // gpui-base clamps the offset after shaping. This matters when deleting
-    // from the end of a scrolled value: the valid left edge moves right on
-    // every keystroke, before the updated offset is observable from state.
-    let scroll_width = if line_width + RIGHT_MARGIN > visible_width {
-        line_width + RIGHT_MARGIN
-    } else {
-        line_width
-    };
-    let minimum_scroll_x = (-scroll_width + visible_width).min(px(0.0));
-    scroll_x.clamp(minimum_scroll_x, px(0.0))
 }
 
 pub(crate) fn single_line(value: impl Into<SharedString>) -> SharedString {

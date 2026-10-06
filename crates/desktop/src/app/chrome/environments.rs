@@ -680,14 +680,10 @@ impl ProbeApp {
             return div().into_any_element();
         };
         let environments = loaded.workspace().environments();
-        let Some(dialog) = self.environment_manager_dialog.as_mut() else {
+        let Some(dialog) = self.environment_manager_dialog.as_ref() else {
             return div().into_any_element();
         };
         let rows = dialog.effective_rows(environments);
-        let dialog = self
-            .environment_manager_dialog
-            .as_ref()
-            .expect("dialog was present");
         let rows_empty = rows.is_empty();
         let busy = self.environment_save_task.is_some();
         let dirty = self.environment_manager_is_dirty();
