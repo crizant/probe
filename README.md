@@ -19,6 +19,8 @@ The project provides two first-class interfaces:
 
 Both interfaces use the same Rust application and domain layers.
 
+![Probe CLI demo](demo/demo.gif)
+
 ![Probe screenshot](docs/assets/screenshot.png)
 
 ## Goals

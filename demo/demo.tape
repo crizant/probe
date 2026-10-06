@@ -3,8 +3,8 @@ Output demo/demo.gif
 Set Shell "fish"
 Set Theme "Catppuccin Macchiato"
 Set FontSize 15
-Set Width 1300
-Set Height 650
+Set Width 800
+Set Height 460
 Set TypingSpeed 30ms
 Set CursorBlink false
 
@@ -30,7 +30,11 @@ Show
 
 Sleep 750ms
 
-Type "probe request run examples/dummyjson.yml items/7/items/1 --environment Development --var todoId=3 --expect status=200"
+Type "probe request run examples/dummyjson.yml items/7/items/1 \"
+Enter
+Type "--environment Development \"
+Enter
+Type "--var todoId=3 --expect status=200"
 
 Sleep 400ms
 Enter
