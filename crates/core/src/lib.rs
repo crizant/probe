@@ -54,8 +54,8 @@ pub use request::{
     RequestDiffError, RequestKind, RequestProtocol, RequestSettings, RequestUpdate,
 };
 pub use request_resolution::{
-    RequestVariableInfo, VariableUsage, discover_request_variables, resolve_request,
-    resolve_request_for_presentation, resolve_request_strict,
+    RequestVariableInfo, VariableUsage, discover_request_variables, request_secret_usages,
+    resolve_request, resolve_request_for_presentation, resolve_request_strict,
 };
 pub use secret::{SecretContext, SecretError, SecretProvider, SecretValue};
 pub use workspace::{

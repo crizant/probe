@@ -11,11 +11,11 @@ use serde_json::{Map, Value, json};
 
 pub(super) fn response_human(
     method: &str,
-    url: &str,
     response: &HttpResponse,
     output: Option<&Path>,
     show_headers: bool,
 ) -> String {
+    let url = &response.initial_url;
     let mut rendered = format!(
         "{method} {url}\n\n{} {}\n{} ms\n{}\n",
         response.status,
@@ -676,6 +676,7 @@ mod response_url_tests {
         for final_url in [original_url, "https://example.com/redirected"] {
             let response = HttpResponse {
                 status: 200,
+                initial_url: "https://example.com/start".to_owned(),
                 url_changed: final_url != original_url,
                 reason: "OK".to_owned(),
                 url: final_url.to_owned(),
@@ -688,7 +689,7 @@ mod response_url_tests {
                 body_retention_error: None,
             };
             for show_headers in [false, true] {
-                let human = response_human("GET", original_url, &response, None, show_headers);
+                let human = response_human("GET", &response, None, show_headers);
                 if final_url == original_url {
                     assert!(!human.contains("Final URL:"), "{human}");
                 } else {

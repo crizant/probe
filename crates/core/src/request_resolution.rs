@@ -93,6 +93,26 @@ pub fn discover_request_variables(
         .collect())
 }
 
+/// Reports locations referencing resolved secrets, including secret-derived plain variables.
+/// Uses resolution provenance without inspecting or exposing runtime values.
+pub fn request_secret_usages(
+    request: &Request,
+    environment: &ResolvedEnvironment,
+) -> Result<BTreeSet<VariableUsage>, EnvironmentResolutionError> {
+    let mut usages = BTreeSet::new();
+    let mut request = request.clone();
+    transform_request_strings(&mut request, |value, usage| {
+        if interpolation_references(value)?
+            .iter()
+            .any(|name| environment.is_resolved_secret(name))
+        {
+            usages.insert(usage.clone());
+        }
+        Ok(())
+    })?;
+    Ok(usages)
+}
+
 /// Clones a request and interpolates every currently supported request-value field.
 pub fn resolve_request(
     request: &Request,

@@ -20,6 +20,412 @@ use sha2::{Digest, Sha256};
 
 const SECRET: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
 
+#[tokio::test]
+async fn api_key_placement_secrets_hide_url_structure_in_both_branches() {
+    use probe_core::{Authentication, AuthenticationKind, AuthenticationValue, QueryParameter};
+
+    for placement in ["header", "query"] {
+        for field in ["placement", "key", "value"] {
+            for transitive in [false, true] {
+                let (base, server) = serve_once(http_response("", b"hello"));
+                let safe_url = format!("{base}/before/../search");
+                let mut request = get(&safe_url);
+                request.query_parameters.push(QueryParameter {
+                    name: "q".to_owned(),
+                    value: "hello world".to_owned(),
+                    disabled: false,
+                });
+                let alias = format!("{field}Alias");
+                let reference = format!("{{{{{}}}}}", if transitive { &alias } else { field });
+                let mut properties = std::collections::BTreeMap::from([
+                    (
+                        "key".to_owned(),
+                        AuthenticationValue::String("X-Public-Key".to_owned()),
+                    ),
+                    (
+                        "value".to_owned(),
+                        AuthenticationValue::String("public-value".to_owned()),
+                    ),
+                    (
+                        "placement".to_owned(),
+                        AuthenticationValue::String(placement.to_owned()),
+                    ),
+                ]);
+                properties.insert(field.to_owned(), AuthenticationValue::String(reference));
+                request.authentication = Some(Authentication {
+                    kind: AuthenticationKind::ApiKey,
+                    properties,
+                });
+                let mut environments = environments();
+                environments[0]
+                    .variables
+                    .extend([secret(field), plain(&alias, &format!("{{{{{field}}}}}"))]);
+                let value = match field {
+                    "placement" => placement,
+                    "key" => "X-Secret-Key",
+                    _ => "secret-value",
+                };
+                let overrides = [(field.to_owned(), value.to_owned())];
+                let execution = prepare_request(
+                    &request,
+                    &RequestResolution {
+                        overrides: &overrides,
+                        ..local(&environments)
+                    },
+                    &NoSecrets,
+                )
+                .unwrap()
+                .into_http()
+                .unwrap();
+                let response = execution
+                    .execute(
+                        &HttpEngine::new().unwrap(),
+                        ExecutionOptions::default(),
+                        None,
+                        std::future::pending::<()>(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap()
+                    .response;
+                let head = String::from_utf8(server.join().unwrap()).unwrap();
+                let key = if field == "key" {
+                    value
+                } else {
+                    "X-Public-Key"
+                };
+                let auth_value = if field == "value" {
+                    value
+                } else {
+                    "public-value"
+                };
+                if placement == "query" {
+                    assert!(
+                        head.starts_with(&format!(
+                            "GET /search?q=hello+world&{key}={auth_value} HTTP/1.1\r\n"
+                        )),
+                        "{head}"
+                    );
+                } else {
+                    assert!(
+                        head.starts_with("GET /search?q=hello+world HTTP/1.1\r\n"),
+                        "{head}"
+                    );
+                    assert!(
+                        head.contains(&format!("{}: {auth_value}\r\n", key.to_ascii_lowercase())),
+                        "{head}"
+                    );
+                }
+                assert_eq!(
+                    response.initial_url,
+                    if field == "placement" || placement == "query" {
+                        safe_url.clone()
+                    } else {
+                        format!("{base}/search?q=hello+world")
+                    },
+                    "placement={placement}, field={field}, transitive={transitive}"
+                );
+                assert_eq!(response.url, safe_url);
+                assert!(!response.url_changed);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn secret_methods_hide_graphql_url_structure_but_preserve_http_urls() {
+    use probe_core::{GraphqlBody, GraphqlOperation, QueryParameter, RequestKind};
+
+    for graphql in [false, true] {
+        for method in ["GET", "POST"] {
+            for reference in ["{{method}}", "{{methodAlias}}"] {
+                let (base, server) = serve_once(http_response("", b"hello"));
+                let safe_url = format!("{base}/before/../search");
+                let mut request = get(&safe_url);
+                request.method = Some(reference.to_owned());
+                request.query_parameters.push(QueryParameter {
+                    name: "q".to_owned(),
+                    value: "hello world".to_owned(),
+                    disabled: false,
+                });
+                if graphql {
+                    request.kind = RequestKind::Graphql {
+                        body: Some(GraphqlBody::Single(GraphqlOperation {
+                            query: Some("query Viewer { viewer { id } }".to_owned()),
+                            variables: Some(
+                                serde_json::json!({"id": "public"})
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            ),
+                            ..GraphqlOperation::default()
+                        })),
+                    };
+                }
+                let mut environments = environments();
+                environments[0]
+                    .variables
+                    .extend([secret("method"), plain("methodAlias", "{{method}}")]);
+                let overrides = [("method".to_owned(), method.to_owned())];
+                let prepared = prepare_request(
+                    &request,
+                    &RequestResolution {
+                        overrides: &overrides,
+                        ..local(&environments)
+                    },
+                    &NoSecrets,
+                )
+                .unwrap();
+                assert_eq!(prepared.presentation().method.as_deref(), Some(reference));
+                let execution = prepared.into_http().unwrap();
+                assert!(execution.uses_secrets());
+                let response = execution
+                    .execute(
+                        &HttpEngine::new().unwrap(),
+                        ExecutionOptions::default(),
+                        None,
+                        std::future::pending::<()>(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap()
+                    .response;
+                let head = String::from_utf8(server.join().unwrap()).unwrap();
+                assert!(
+                    head.starts_with(&format!("{method} /search?q=hello+world")),
+                    "{head}"
+                );
+                assert_eq!(
+                    head.contains("&query="),
+                    graphql && method == "GET",
+                    "{head}"
+                );
+                assert_eq!(
+                    head.contains("&variables="),
+                    graphql && method == "GET",
+                    "{head}"
+                );
+                assert_eq!(
+                    response.initial_url,
+                    if graphql {
+                        safe_url.clone()
+                    } else {
+                        format!("{base}/search?q=hello+world")
+                    },
+                    "graphql={graphql}, method={method}, reference={reference}"
+                );
+                assert_eq!(response.url, safe_url);
+                assert!(!response.url_changed);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn initial_url_disclosure_tracks_secret_provenance_and_http_placement() {
+    use probe_core::{
+        Authentication, AuthenticationKind, AuthenticationValue, Body, GraphqlBody,
+        GraphqlOperation, QueryParameter, RawBody, RawBodyKind, RequestBody, RequestKind,
+    };
+    for case in [
+        "header",
+        "body",
+        "bearer",
+        "api-header",
+        "api-query",
+        "url",
+        "transitive",
+        "path",
+        "query",
+        "query-name",
+        "disabled-query",
+        "graphql-post",
+        "graphql-get",
+        "graphql-variables",
+        "graphql-operation",
+        "graphql-extensions",
+        "graphql-header",
+    ] {
+        let (target, target_server) = serve_once(http_response("", b"hello"));
+        let (base, server) = serve_once(format!("HTTP/1.1 302 Found\r\nLocation: {target}/{SECRET}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_bytes());
+        let mut request = get(&format!("{base}/before/../search"));
+        request.headers.push(Header {
+            name: "X-Secret".to_owned(),
+            value: "{{token}}".to_owned(),
+            disabled: false,
+        });
+        let parameter = |name: &str, value: &str, disabled| QueryParameter {
+            name: name.to_owned(),
+            value: value.to_owned(),
+            disabled,
+        };
+        request
+            .query_parameters
+            .push(parameter("q", "hello world", false));
+        match case {
+            "header" => {}
+            "body" => {
+                request.headers.clear();
+                request.kind = RequestKind::Http {
+                    body: Some(RequestBody::Single(Body::Raw(RawBody {
+                        kind: RawBodyKind::Text,
+                        data: "{{token}}".to_owned(),
+                    }))),
+                };
+            }
+            "bearer" | "api-header" | "api-query" => {
+                request.headers.clear();
+                let mut properties = std::collections::BTreeMap::new();
+                if case == "bearer" {
+                    properties.insert(
+                        "token".to_owned(),
+                        AuthenticationValue::String("{{token}}".to_owned()),
+                    );
+                } else {
+                    for (name, value) in [
+                        ("key", "api-key"),
+                        ("value", "{{token}}"),
+                        (
+                            "placement",
+                            if case == "api-query" {
+                                "query"
+                            } else {
+                                "header"
+                            },
+                        ),
+                    ] {
+                        properties.insert(
+                            name.to_owned(),
+                            AuthenticationValue::String(value.to_owned()),
+                        );
+                    }
+                }
+                request.authentication = Some(Authentication {
+                    kind: if case == "bearer" {
+                        AuthenticationKind::Bearer
+                    } else {
+                        AuthenticationKind::ApiKey
+                    },
+                    properties,
+                });
+            }
+            "url" => request.url = Some(format!("{base}/{{{{token}}}}")),
+            "transitive" => request.url = Some(format!("{base}/{{{{authorization}}}}")),
+            "path" => {
+                request.url = Some(format!("{base}/:id"));
+                request
+                    .path_parameters
+                    .push(parameter("id", "{{authorization}}", false));
+            }
+            "query" => {
+                request
+                    .query_parameters
+                    .push(parameter("token", "{{authorization}}", false))
+            }
+            "query-name" => request
+                .query_parameters
+                .push(parameter("{{token}}", "plain", false)),
+            "disabled-query" => {
+                request
+                    .query_parameters
+                    .push(parameter("token", "{{token}}", true))
+            }
+            _ => {
+                let mut operation = GraphqlOperation {
+                    query: Some("query Viewer { viewer { id } }".to_owned()),
+                    ..GraphqlOperation::default()
+                };
+                match case {
+                    "graphql-variables" => {
+                        operation.variables = Some(
+                            serde_json::json!({"token": "{{authorization}}"})
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )
+                    }
+                    "graphql-operation" => operation.operation_name = Some("{{token}}".to_owned()),
+                    "graphql-extensions" => {
+                        operation.extensions = Some(
+                            serde_json::json!({"token": "{{token}}"})
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )
+                    }
+                    "graphql-header" => {}
+                    _ => {
+                        operation.query =
+                            Some("query Viewer { viewer(token: \"{{token}}\") { id } }".to_owned())
+                    }
+                }
+                if case == "graphql-post" {
+                    request.method = Some("POST".to_owned());
+                }
+                request.kind = RequestKind::Graphql {
+                    body: Some(GraphqlBody::Single(operation)),
+                };
+            }
+        }
+        let secret_url = matches!(
+            case,
+            "api-query"
+                | "url"
+                | "transitive"
+                | "path"
+                | "query"
+                | "query-name"
+                | "graphql-get"
+                | "graphql-variables"
+                | "graphql-operation"
+                | "graphql-extensions"
+        );
+        let environments = environments();
+        let prepared = prepare_request(
+            &request,
+            &local(&environments),
+            &RecordingProvider::default(),
+        )
+        .unwrap();
+        let safe_url = prepared.presentation().url.clone().unwrap();
+        let execution = prepared.into_http().unwrap();
+        assert!(execution.uses_secrets(), "{case}");
+        let response = execution
+            .execute(
+                &HttpEngine::new().unwrap(),
+                ExecutionOptions::default(),
+                None,
+                std::future::pending::<()>(),
+                |_| {},
+            )
+            .await
+            .unwrap()
+            .response;
+        let head = server.join().unwrap();
+        target_server.join().unwrap();
+        if secret_url {
+            assert_eq!(response.initial_url, safe_url, "{case}");
+        } else {
+            assert!(
+                response
+                    .initial_url
+                    .starts_with(&format!("{base}/search?q=hello+world")),
+                "{case}: {}",
+                response.initial_url
+            );
+        }
+        assert!(!response.initial_url.contains(SECRET), "{case}");
+        assert_eq!(response.url, safe_url, "{case}");
+        assert!(!response.url_changed, "{case}");
+        if case == "path" {
+            assert!(contains(&head, &format!("/Bearer%20{SECRET}")));
+        }
+        if case == "graphql-get" {
+            assert!(contains(&head, SECRET));
+        }
+    }
+}
+
 /// Returns `SECRET` for `token`, fails for `broken`, and records every lookup.
 #[derive(Default)]
 struct RecordingProvider {
@@ -341,6 +747,7 @@ async fn secret_bearing_response_is_redacted_and_reports_the_presentation_url() 
     assert!(contains(&head, &format!("Bearer {SECRET}")));
     let response = executed.response;
     assert_eq!(response.url, format!("{base}/{{{{token}}}}"));
+    assert_eq!(response.initial_url, format!("{base}/{{{{token}}}}"));
     assert!(!response.url_changed);
     assert_eq!(response.body, b"[REDACTED]\xff-tail");
     let echo = response

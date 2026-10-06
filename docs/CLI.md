@@ -88,7 +88,8 @@ executes the request.
 engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes the raw
 response body to the specified path using bounded streaming; response metadata remains on
 stdout. The destination is replaced only after the complete response has been written.
-Human output shows the request method and URL, status, duration, response size, and
+Human output shows the request method and effective URL from the built HTTP request
+(after path/query parameters and URL normalization), status, duration, response size, and
 response body. `Final URL:` appears only when redirects change the effective URL
 initially sent by the HTTP engine. Path/query parameters and URL normalization
 alone do not show it. Response headers are hidden by default; add `--show-headers`
@@ -182,7 +183,14 @@ in non-UTF-8 bodies. Failure messages for such a run withhold HTTP diagnostics; 
 category and exit code still reflect the failure kind. Encoded or otherwise
 transformed echoes may remain visible in CLI output. When a runtime secret is used,
 the reported final URL is the presentation request URL because redirects can encode
-or transform secret text. `--output <file>` intentionally saves the original server
+or transform secret text. The initial URL uses that safe presentation URL only when
+URL, path, or query fields are secret-derived (including GraphQL GET parameters and
+query API-key authentication), or a secret-derived native GraphQL method controls
+whether fields enter the URL. A secret-derived ordinary HTTP method does not hide
+the initial URL. Secret-derived API-key placement hides the initial URL for both
+header and query placement; secret API-key names or values hide it only for query
+placement. Secrets confined to headers, bodies, or other header authentication
+values do not hide the effective initial URL. `--output <file>` intentionally saves the original server
 response bytes; that file can contain echoed secrets and must be handled as sensitive.
 A `--var name=value` override of a declared secret also stays secret, but process
 environment injection is preferred: command-line

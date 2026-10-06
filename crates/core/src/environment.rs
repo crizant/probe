@@ -191,6 +191,10 @@ impl ResolvedEnvironment {
         }
     }
 
+    pub(crate) fn is_resolved_secret(&self, name: &str) -> bool {
+        self.secrets.contains_key(name)
+    }
+
     /// Reports whether runtime secret material was resolved.
     #[must_use]
     pub fn has_resolved_secrets(&self) -> bool {

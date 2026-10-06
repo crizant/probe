@@ -1,10 +1,10 @@
 use std::{cell::RefCell, collections::BTreeMap};
 
 use probe_core::{
-    Environment, EnvironmentVariable, Request, SecretContext, SecretError, SecretProvider,
-    SecretValue, SecretVariable, Variable, VariableValue, VariableValueSet,
-    resolve_environment_for_request_with_provider, resolve_request,
-    resolve_request_for_presentation,
+    Environment, EnvironmentVariable, Header, QueryParameter, Request, SecretContext, SecretError,
+    SecretProvider, SecretValue, SecretVariable, Variable, VariableUsage, VariableValue,
+    VariableValueSet, request_secret_usages, resolve_environment_for_request_with_provider,
+    resolve_request, resolve_request_for_presentation,
 };
 
 struct Provider {
@@ -108,6 +108,61 @@ fn only_reachable_secrets_are_read_once_and_presentation_is_safe() {
     );
     let presented = resolve_request_for_presentation(&request, &resolved, false).unwrap();
     assert!(!format!("{presented:?}").contains("SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"));
+}
+
+#[test]
+fn secret_usages_track_direct_and_transitive_provenance_without_plain_or_missing_values() {
+    let request = Request {
+        url: Some("https://example.com/{{ordinary}}/{{missing}}".into()),
+        headers: vec![Header {
+            name: "Authorization".into(),
+            value: "{{outer}}".into(),
+            disabled: false,
+        }],
+        query_parameters: vec![QueryParameter {
+            name: "token".into(),
+            value: "{{token}}".into(),
+            disabled: false,
+        }],
+        path_parameters: vec![QueryParameter {
+            name: "id".into(),
+            value: "{{authorization}}".into(),
+            disabled: false,
+        }],
+        ..Request::default()
+    };
+    let provider = Provider {
+        calls: RefCell::new(Vec::new()),
+        fail: false,
+    };
+    let resolved = resolve_environment_for_request_with_provider(
+        &request,
+        &environment(),
+        Some("production"),
+        &[],
+        &provider,
+        None,
+    )
+    .unwrap();
+    let expected = std::collections::BTreeSet::from([
+        VariableUsage::Header {
+            name: "Authorization".into(),
+        },
+        VariableUsage::QueryParameter {
+            name: "token".into(),
+        },
+        VariableUsage::PathParameter { name: "id".into() },
+    ]);
+    assert_eq!(
+        request_secret_usages(&request, &resolved).unwrap(),
+        expected
+    );
+    let presented = resolve_request_for_presentation(&request, &resolved, false).unwrap();
+    assert_eq!(
+        request_secret_usages(&presented, &resolved).unwrap(),
+        expected
+    );
+    assert_eq!(&*provider.calls.borrow(), &["token"]);
 }
 
 #[test]
