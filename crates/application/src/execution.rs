@@ -7,8 +7,9 @@
 use std::{fmt, future::Future, path::Path};
 
 use probe_core::{
-    Environment, EnvironmentResolutionError, GraphqlRequestError, PreparedHttpRequest, Request,
-    ResolvedEnvironment, SecretContext, SecretError, SecretProvider, SecretValue,
+    AuthenticationKind, AuthenticationValue, Environment, EnvironmentResolutionError,
+    GraphqlRequestError, PreparedHttpRequest, Request, ResolvedEnvironment, SecretContext,
+    SecretError, SecretProvider, SecretValue, VariableUsage, request_secret_usages,
     resolve_environment_for_request_with_provider, resolve_request,
     resolve_request_for_presentation, resolve_request_strict,
 };
@@ -111,9 +112,46 @@ impl PreparedRequest {
     }
 
     /// Converts the execution request into HTTP engine input.
-    pub fn into_http(self) -> Result<HttpExecution, GraphqlRequestError> {
+    pub fn into_http(mut self) -> Result<HttpExecution, GraphqlRequestError> {
+        let request = self.execution.into_http()?;
+        if let Some(environment) = &self.disclosure.secrets {
+            // Use the actual method so GraphQL GET fields become query parameters
+            // even when the method itself was resolved from a secret.
+            self.presentation
+                .method
+                .clone_from(&request.request().method);
+            let mut presentation = self.presentation.into_http()?.request().clone();
+            // Only the protocol conversion needs the resolved method. Keep secret
+            // material out of the provenance walker as well as presentation.
+            presentation.method = None;
+            presentation
+                .query_parameters
+                .retain(|parameter| !parameter.disabled);
+            presentation
+                .path_parameters
+                .retain(|parameter| !parameter.disabled);
+            let usages = request_secret_usages(&presentation, environment)
+                .expect("prepared presentation references were validated during resolution");
+            let query_auth = request
+                .request()
+                .authentication
+                .as_ref()
+                .is_some_and(|auth| {
+                    auth.kind == AuthenticationKind::ApiKey
+                        && auth.properties.get("placement")
+                            == Some(&AuthenticationValue::String("query".to_owned()))
+                });
+            self.disclosure.initial_url_uses_secrets = usages.iter().any(|usage| {
+                matches!(
+                    usage,
+                    VariableUsage::Url
+                        | VariableUsage::PathParameter { .. }
+                        | VariableUsage::QueryParameter { .. }
+                ) || (query_auth && matches!(usage, VariableUsage::Authentication { .. }))
+            });
+        }
         Ok(HttpExecution {
-            request: self.execution.into_http()?,
+            request,
             disclosure: self.disclosure,
         })
     }
@@ -136,6 +174,12 @@ pub struct HttpExecution {
 }
 
 impl HttpExecution {
+    /// Whether the built initial URL may contain resolved secret material.
+    #[must_use]
+    pub const fn initial_url_uses_secrets(&self) -> bool {
+        self.disclosure.initial_url_uses_secrets
+    }
+
     /// Whether runtime secret material was resolved for this request.
     #[must_use]
     pub const fn uses_secrets(&self) -> bool {
@@ -145,8 +189,9 @@ impl HttpExecution {
     /// Executes the request in memory, or streams the original response bytes to `output`.
     ///
     /// When a secret was used, the response cache is bypassed, the returned response
-    /// is redacted, its URL is the presentation URL, and failure diagnostics are
-    /// withheld while the failure kind is kept.
+    /// is redacted, its final URL is the presentation URL, and failure diagnostics
+    /// are withheld while the failure kind is kept. The initial URL is replaced
+    /// only when URL fields are secret-derived.
     pub async fn execute<C, P>(
         self,
         engine: &HttpEngine,
@@ -218,6 +263,7 @@ pub struct ExecutedResponse {
 struct SecretDisclosure {
     secrets: Option<ResolvedEnvironment>,
     presentation_url: String,
+    initial_url_uses_secrets: bool,
 }
 
 impl SecretDisclosure {
@@ -227,6 +273,7 @@ impl SecretDisclosure {
         }
         Self {
             secrets: Some(environment),
+            initial_url_uses_secrets: false,
             presentation_url: presentation_url.unwrap_or_default().to_owned(),
         }
     }
@@ -241,7 +288,9 @@ impl SecretDisclosure {
         };
         // A redirect may encode or transform secret bytes, so only the
         // reference-preserving URL is safe to present.
-        response.initial_url.clone_from(&self.presentation_url);
+        if self.initial_url_uses_secrets {
+            response.initial_url.clone_from(&self.presentation_url);
+        }
         response.url.clone_from(&self.presentation_url);
         response.url_changed = false;
         response.reason = secrets.redact_secrets(&response.reason);

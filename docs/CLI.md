@@ -182,8 +182,11 @@ values in the response reason, headers, and body are redacted, including byte se
 in non-UTF-8 bodies. Failure messages for such a run withhold HTTP diagnostics; the error
 category and exit code still reflect the failure kind. Encoded or otherwise
 transformed echoes may remain visible in CLI output. When a runtime secret is used,
-the reported initial and final URLs are the presentation request URL because redirects can encode
-or transform secret text. `--output <file>` intentionally saves the original server
+the reported final URL is the presentation request URL because redirects can encode
+or transform secret text. The initial URL uses that safe presentation URL only when
+URL, path, or query fields are secret-derived (including GraphQL GET parameters and
+query API-key authentication). Secrets confined to headers, bodies, or header
+authentication do not hide the effective initial URL. `--output <file>` intentionally saves the original server
 response bytes; that file can contain echoed secrets and must be handled as sensitive.
 A `--var name=value` override of a declared secret also stays secret, but process
 environment injection is preferred: command-line

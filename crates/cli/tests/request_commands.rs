@@ -5,6 +5,47 @@ use common::*;
 
 const TEST_SECRET: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
 
+#[test]
+fn header_only_secrets_do_not_hide_the_effective_initial_url() {
+    let (base, server) = serve_once(b"hello".to_vec(), "text/plain");
+    let workspace = run_url_fixture(
+        &format!("{base}/before/../users/:id"),
+        "      headers:\n        - name: X-Secret\n          value: '{{token}}'\n      params:\n        - name: id\n          value: '7'\n          type: path\n        - name: q\n          value: hello world\n          type: query\n",
+    );
+    let mut source = fs::read_to_string(&workspace).unwrap();
+    source.push_str("config:\n  environments:\n    - name: local\n      variables:\n        - name: token\n          secret: true\n");
+    fs::write(&workspace, source).unwrap();
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .args([
+            "items/0",
+            "--environment",
+            "local",
+            "--secret-provider",
+            "env",
+        ])
+        .env("token", TEST_SECRET)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let human = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        human.starts_with(&format!("GET {base}/users/7?q=hello+world\n")),
+        "{human}"
+    );
+    assert!(!human.contains(TEST_SECRET), "{human}");
+    assert!(!human.contains("Final URL:"), "{human}");
+    let captured = server.join().unwrap();
+    assert!(
+        captured
+            .head
+            .starts_with("GET /users/7?q=hello+world HTTP/1.1\r\n")
+    );
+    assert!(captured.head.contains(TEST_SECRET));
+    fs::remove_file(workspace).unwrap();
+}
+
 fn secret_runtime_fixture(server_url: &str) -> PathBuf {
     let path = runtime_variables_fixture(server_url);
     let source = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
