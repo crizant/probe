@@ -93,6 +93,7 @@ pub(crate) enum Command {
         output: Option<PathBuf>,
         strict_variables: bool,
         dry_run: bool,
+        show_headers: bool,
         secret_provider_env: bool,
         expectations: Vec<StatusExpectation>,
     },
@@ -293,6 +294,7 @@ struct RunOptions {
     variables: Vec<(String, String)>,
     strict_variables: bool,
     dry_run: bool,
+    show_headers: bool,
     secret_provider_env: bool,
     expectations: Vec<StatusExpectation>,
 }
@@ -305,6 +307,7 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         variables: Vec::new(),
         strict_variables: false,
         dry_run: false,
+        show_headers: false,
         secret_provider_env: false,
         expectations: Vec::new(),
     };
@@ -317,6 +320,7 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
                 parser.flag(&mut options.strict_variables, "--strict-variables")?
             }
             "--dry-run" => parser.flag(&mut options.dry_run, "--dry-run")?,
+            "--show-headers" => parser.flag(&mut options.show_headers, "--show-headers")?,
             "--secret-provider" => {
                 let value = parser.value("--secret-provider")?;
                 if value != "env" || options.secret_provider_env {
@@ -349,6 +353,7 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         output: options.output,
         strict_variables: options.strict_variables,
         dry_run: options.dry_run,
+        show_headers: options.show_headers,
         secret_provider_env: options.secret_provider_env,
         expectations: options.expectations,
     })
@@ -1224,6 +1229,7 @@ fn is_known_option(argument: &str) -> bool {
             | "--allow-partial"
             | "--var"
             | "--strict-variables"
+            | "--show-headers"
             | "--headers"
             | "--query-parameters"
             | "--path-parameters"

@@ -34,6 +34,8 @@ pub struct HttpResponse {
     pub reason: String,
     /// Final URL after redirects.
     pub url: String,
+    /// Whether redirects changed the effective URL initially sent by the engine.
+    pub url_changed: bool,
     /// Total time through receipt of the complete response body.
     pub duration: Duration,
     /// Decoded response-body size in bytes.

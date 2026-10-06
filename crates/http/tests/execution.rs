@@ -427,6 +427,7 @@ async fn follows_or_returns_redirects_according_to_request_settings() {
         .unwrap();
     assert_eq!(response.status, 200);
     assert_eq!(response.body, b"final");
+    assert!(response.url_changed);
     assert_eq!(
         redirect_server.await.unwrap().unwrap().request_line,
         "GET /final HTTP/1.1"
@@ -450,6 +451,7 @@ async fn follows_or_returns_redirects_according_to_request_settings() {
         .await
         .unwrap();
     assert_eq!(response.status, 302);
+    assert!(!response.url_changed);
     captured.await.unwrap().unwrap();
 }
 

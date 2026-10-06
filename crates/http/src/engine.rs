@@ -192,9 +192,12 @@ impl HttpEngine {
         let client = self.client_for(&request.request().settings)?;
         let builder = build_request(&client, request, options).await?;
         let started = Instant::now();
-        let mut response = builder.send().await.map_err(map_reqwest_error)?;
+        let built = builder.build().map_err(map_reqwest_error)?;
+        let initial_url = built.url().clone();
+        let mut response = client.execute(built).await.map_err(map_reqwest_error)?;
         let expected_size = response.content_length();
         let status = response.status();
+        let url_changed = response.url() != &initial_url;
         let url = response.url().to_string();
         let headers = response_headers(response.headers());
         progress(HttpProgress::ResponseStarted {
@@ -225,6 +228,7 @@ impl HttpEngine {
                 status: status.as_u16(),
                 reason: status.canonical_reason().unwrap_or_default().to_owned(),
                 url,
+                url_changed,
                 duration: started.elapsed(),
                 size: body.size,
                 headers,
