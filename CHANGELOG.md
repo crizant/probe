@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-06
+
 ### Fixed
 
 - Long environment lists in Environment Manager scroll while keeping rows and text at their normal size.
@@ -364,6 +366,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[0.10.2]: https://github.com/crizant/probe/releases/tag/v0.10.2
 [0.10.1]: https://github.com/crizant/probe/releases/tag/v0.10.1
 [0.10.0]: https://github.com/crizant/probe/releases/tag/v0.10.0
 [0.9.5]: https://github.com/crizant/probe/releases/tag/v0.9.5
