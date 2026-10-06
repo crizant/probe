@@ -21,6 +21,118 @@ use sha2::{Digest, Sha256};
 const SECRET: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
 
 #[tokio::test]
+async fn api_key_placement_secrets_hide_url_structure_in_both_branches() {
+    use probe_core::{Authentication, AuthenticationKind, AuthenticationValue, QueryParameter};
+
+    for placement in ["header", "query"] {
+        for field in ["placement", "key", "value"] {
+            for transitive in [false, true] {
+                let (base, server) = serve_once(http_response("", b"hello"));
+                let safe_url = format!("{base}/before/../search");
+                let mut request = get(&safe_url);
+                request.query_parameters.push(QueryParameter {
+                    name: "q".to_owned(),
+                    value: "hello world".to_owned(),
+                    disabled: false,
+                });
+                let alias = format!("{field}Alias");
+                let reference = format!("{{{{{}}}}}", if transitive { &alias } else { field });
+                let mut properties = std::collections::BTreeMap::from([
+                    (
+                        "key".to_owned(),
+                        AuthenticationValue::String("X-Public-Key".to_owned()),
+                    ),
+                    (
+                        "value".to_owned(),
+                        AuthenticationValue::String("public-value".to_owned()),
+                    ),
+                    (
+                        "placement".to_owned(),
+                        AuthenticationValue::String(placement.to_owned()),
+                    ),
+                ]);
+                properties.insert(field.to_owned(), AuthenticationValue::String(reference));
+                request.authentication = Some(Authentication {
+                    kind: AuthenticationKind::ApiKey,
+                    properties,
+                });
+                let mut environments = environments();
+                environments[0]
+                    .variables
+                    .extend([secret(field), plain(&alias, &format!("{{{{{field}}}}}"))]);
+                let value = match field {
+                    "placement" => placement,
+                    "key" => "X-Secret-Key",
+                    _ => "secret-value",
+                };
+                let overrides = [(field.to_owned(), value.to_owned())];
+                let execution = prepare_request(
+                    &request,
+                    &RequestResolution {
+                        overrides: &overrides,
+                        ..local(&environments)
+                    },
+                    &NoSecrets,
+                )
+                .unwrap()
+                .into_http()
+                .unwrap();
+                let response = execution
+                    .execute(
+                        &HttpEngine::new().unwrap(),
+                        ExecutionOptions::default(),
+                        None,
+                        std::future::pending::<()>(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap()
+                    .response;
+                let head = String::from_utf8(server.join().unwrap()).unwrap();
+                let key = if field == "key" {
+                    value
+                } else {
+                    "X-Public-Key"
+                };
+                let auth_value = if field == "value" {
+                    value
+                } else {
+                    "public-value"
+                };
+                if placement == "query" {
+                    assert!(
+                        head.starts_with(&format!(
+                            "GET /search?q=hello+world&{key}={auth_value} HTTP/1.1\r\n"
+                        )),
+                        "{head}"
+                    );
+                } else {
+                    assert!(
+                        head.starts_with("GET /search?q=hello+world HTTP/1.1\r\n"),
+                        "{head}"
+                    );
+                    assert!(
+                        head.contains(&format!("{}: {auth_value}\r\n", key.to_ascii_lowercase())),
+                        "{head}"
+                    );
+                }
+                assert_eq!(
+                    response.initial_url,
+                    if field == "placement" || placement == "query" {
+                        safe_url.clone()
+                    } else {
+                        format!("{base}/search?q=hello+world")
+                    },
+                    "placement={placement}, field={field}, transitive={transitive}"
+                );
+                assert_eq!(response.url, safe_url);
+                assert!(!response.url_changed);
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn secret_methods_hide_graphql_url_structure_but_preserve_http_urls() {
     use probe_core::{GraphqlBody, GraphqlOperation, QueryParameter, RequestKind};
 

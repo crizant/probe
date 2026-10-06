@@ -187,8 +187,10 @@ or transform secret text. The initial URL uses that safe presentation URL only w
 URL, path, or query fields are secret-derived (including GraphQL GET parameters and
 query API-key authentication), or a secret-derived native GraphQL method controls
 whether fields enter the URL. A secret-derived ordinary HTTP method does not hide
-the initial URL. Secrets confined to headers, bodies, or header
-authentication do not hide the effective initial URL. `--output <file>` intentionally saves the original server
+the initial URL. Secret-derived API-key placement hides the initial URL for both
+header and query placement; secret API-key names or values hide it only for query
+placement. Secrets confined to headers, bodies, or other header authentication
+values do not hide the effective initial URL. `--output <file>` intentionally saves the original server
 response bytes; that file can contain echoed secrets and must be handled as sensitive.
 A `--var name=value` override of a declared secret also stays secret, but process
 environment injection is preferred: command-line

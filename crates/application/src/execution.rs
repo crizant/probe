@@ -148,10 +148,12 @@ fn initial_url_depends_on_secret(
         .retain(|parameter| !parameter.disabled);
     let usages = request_secret_usages(&presentation, environment)
         .expect("prepared presentation references were validated during resolution");
-    let query_auth = execution.authentication.as_ref().is_some_and(|auth| {
-        auth.kind == AuthenticationKind::ApiKey
-            && auth.properties.get("placement")
-                == Some(&AuthenticationValue::String("query".to_owned()))
+    let api_key_auth = execution
+        .authentication
+        .as_ref()
+        .filter(|auth| auth.kind == AuthenticationKind::ApiKey);
+    let query_auth = api_key_auth.is_some_and(|auth| {
+        auth.properties.get("placement") == Some(&AuthenticationValue::String("query".to_owned()))
     });
     Ok(usages.iter().any(|usage| {
         matches!(
@@ -160,6 +162,8 @@ fn initial_url_depends_on_secret(
                 | VariableUsage::PathParameter { .. }
                 | VariableUsage::QueryParameter { .. }
         ) || (query_auth && matches!(usage, VariableUsage::Authentication { .. }))
+            || (api_key_auth.is_some()
+                && matches!(usage, VariableUsage::Authentication { name } if name == "placement"))
             || (method_controls_url && matches!(usage, VariableUsage::Method))
     }))
 }
