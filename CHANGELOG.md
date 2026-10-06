@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- macOS CLI and desktop release artifacts are built on macOS 26 runners.
+
 ## [0.10.3] - 2026-10-06
 
 ### Changed

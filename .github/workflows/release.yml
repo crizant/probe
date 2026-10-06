@@ -59,7 +59,7 @@ jobs:
       matrix:
         include:
           - platform: macos-arm64
-            os: macos-15
+            os: macos-26
             target: aarch64-apple-darwin
             exe: ""
             archive: tar.gz
@@ -141,7 +141,7 @@ jobs:
       matrix:
         include:
           - platform: macos-arm64
-            os: macos-15
+            os: macos-26
             target: aarch64-apple-darwin
             exe: ""
             archive: zip
