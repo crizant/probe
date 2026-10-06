@@ -274,7 +274,7 @@ impl ProbeApp {
                     let _ = toggle_view.update(cx, |view, cx| {
                         view.apply_environment_manager_draft(cx, |dialog| {
                             if let Some(index) = direct_index {
-                                dialog.draft.variables[index] = variable;
+                                dialog.draft_mut().variables[index] = variable;
                             } else {
                                 dialog.add_variable(variable);
                             }
@@ -337,7 +337,7 @@ impl ProbeApp {
                                         view.apply_environment_manager_draft(cx, |dialog| {
                                             if let EnvironmentVariableRowId::Direct(id) = name_row_id
                                                 && let Some(index) = dialog.variable_row_ids.iter().position(|row| *row == id)
-                                                && let Some(variable) = dialog.draft.variables.get_mut(index)
+                                                && let Some(variable) = dialog.draft_mut().variables.get_mut(index)
                                             {
                                                 *variable.name_mut() = Some(value.to_string());
                                             }
@@ -395,13 +395,13 @@ impl ProbeApp {
                                                 dialog.variable_row_ids.iter().position(|row| row == id)
                                             },
                                             EnvironmentVariableRowId::Inherited { name, .. } => {
-                                                dialog.draft.variables.iter().position(|variable| {
+                                                dialog.draft().variables.iter().position(|variable| {
                                                     matches!(variable, EnvironmentVariable::Plain(variable) if variable.name.as_ref() == Some(name))
                                                 })
                                             },
                                         };
                                         if let Some(index) = index {
-                                            if let EnvironmentVariable::Plain(variable) = &mut dialog.draft.variables[index] {
+                                            if let EnvironmentVariable::Plain(variable) = &mut dialog.draft_mut().variables[index] {
                                                 set_environment_variable_text(variable, value.to_string());
                                             }
                                         } else if matches!(value_row_id, EnvironmentVariableRowId::Inherited { .. })
@@ -409,7 +409,7 @@ impl ProbeApp {
                                         {
                                             set_environment_variable_text(&mut variable, value.to_string());
                                             let direct_id = dialog.next_variable_row_id;
-                                            let index = dialog.draft.variables.len();
+                                            let index = dialog.draft().variables.len();
                                             dialog.add_variable(EnvironmentVariable::Plain(variable));
                                             // The inherited row disappears when its direct override is added.
                                             // Move ownership to the new identity before the next render.
@@ -470,7 +470,7 @@ impl ProbeApp {
                     )
                     .when(secret && inherited, |cell| {
                         cell.child(
-                            components::truncated_label(format!("Value for {}", dialog.draft.name))
+                            components::truncated_label(format!("Value for {}", dialog.draft().name))
                                 .text_size(px(theme.typography.caption_size))
                                 .text_color(theme.colors.text.muted),
                         )
@@ -667,19 +667,6 @@ impl ProbeApp {
         // Focus-out is based on rendered ancestry and cannot observe an already offscreen editor.
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
             dialog.sync_variable_row_ids();
-            if dialog.effective_rows.is_none()
-                && let Some(loaded) = self.loaded_workspace.as_ref()
-            {
-                dialog.effective_rows = Some(Rc::new(
-                    loaded
-                        .workspace()
-                        .effective_environment_variables(&dialog.draft),
-                ));
-                #[cfg(test)]
-                {
-                    dialog.effective_row_builds += 1;
-                }
-            }
             if dialog
                 .active_field
                 .as_ref()
@@ -688,16 +675,18 @@ impl ProbeApp {
                 dialog.active_field = None;
             }
         }
-        let Some(dialog) = self.environment_manager_dialog.as_ref() else {
-            return div().into_any_element();
-        };
         let Some(loaded) = self.loaded_workspace.as_ref() else {
             return div().into_any_element();
         };
         let environments = loaded.workspace().environments();
-        let Some(rows) = dialog.effective_rows.clone() else {
+        let Some(dialog) = self.environment_manager_dialog.as_mut() else {
             return div().into_any_element();
         };
+        let rows = dialog.effective_rows(environments);
+        let dialog = self
+            .environment_manager_dialog
+            .as_ref()
+            .expect("dialog was present");
         let rows_empty = rows.is_empty();
         let busy = self.environment_save_task.is_some();
         let dirty = self.environment_manager_is_dirty();
@@ -722,7 +711,7 @@ impl ProbeApp {
                     .map(|environment| (environment.name.clone(), environment.name.clone())),
             )
             .collect::<Vec<_>>();
-        let selected_parent = dialog.draft.extends.clone().unwrap_or_default();
+        let selected_parent = dialog.draft().extends.clone().unwrap_or_default();
         let table_header = div()
             .h(px(30.0))
             .px(px(theme.metrics.spacing_2))
@@ -831,20 +820,20 @@ impl ProbeApp {
                             components::dialog_text_input(
                                 theme,
                                 "environment-manager-name",
-                                dialog.draft.name.clone(),
+                                dialog.draft().name.clone(),
                                 "Environment name",
                                 false,
                                 move |value, _, cx| {
                                     let _ = name_view.update(cx, |view, cx| {
                                         view.apply_environment_manager_draft(cx, |dialog| {
-                                            dialog.draft.name = value.to_string();
+                                            dialog.draft_mut().name = value.to_string();
                                         });
                                     });
                                 },
                                 move |value, _, cx| {
                                     let _ = name_enter_view.update(cx, |view, cx| {
                                         view.apply_environment_manager_draft(cx, |dialog| {
-                                            dialog.draft.name = value.to_string();
+                                            dialog.draft_mut().name = value.to_string();
                                         });
                                     });
                                 },
@@ -871,7 +860,7 @@ impl ProbeApp {
                                         let value = value.cloned().unwrap_or_default();
                                         let _ = parent_view.update(cx, |view, cx| {
                                             view.apply_environment_manager_draft(cx, |dialog| {
-                                                dialog.draft.extends =
+                                                dialog.draft_mut().extends =
                                                     (!value.is_empty()).then_some(value);
                                             });
                                         });
@@ -890,7 +879,7 @@ impl ProbeApp {
                     theme,
                     "Description",
                     crate::app::documentation::documentation_text(
-                        dialog.draft.description.as_ref(),
+                        dialog.draft().description.as_ref(),
                     ),
                     description_id,
                     "environment-manager-description",
@@ -899,7 +888,7 @@ impl ProbeApp {
                         let _ = description_view.update(cx, |view, cx| {
                             view.apply_environment_manager_draft(cx, |dialog| {
                                 crate::app::documentation::edit_documentation(
-                                    &mut dialog.draft.description,
+                                    &mut dialog.draft_mut().description,
                                     value.to_string(),
                                 );
                             });

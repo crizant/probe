@@ -93,7 +93,7 @@ impl ProbeApp {
                 self.environment_manager_dialog
                     .as_ref()
                     .is_some_and(|dialog| {
-                        dialog.draft.name == target.environment
+                        dialog.draft().name == target.environment
                             && self.can_manage_secret(&target.name)
                     })
             } else {
@@ -112,7 +112,7 @@ impl ProbeApp {
         };
         loaded
             .workspace()
-            .effective_environment_variables(&dialog.draft)
+            .effective_environment_variables(dialog.draft())
             .iter()
             .any(|row| row.variable.is_secret() && row.variable.name() == Some(name))
     }
@@ -129,10 +129,10 @@ impl ProbeApp {
         let Some(loaded) = &self.loaded_workspace else {
             return;
         };
-        let environment = dialog.draft.name.clone();
+        let environment = dialog.draft().name.clone();
         let names: Vec<String> = loaded
             .workspace()
-            .effective_environment_variables(&dialog.draft)
+            .effective_environment_variables(dialog.draft())
             .into_iter()
             .filter(|row| row.variable.is_secret())
             .filter_map(|row| row.variable.name().map(str::to_owned))
@@ -250,7 +250,7 @@ impl ProbeApp {
             .environment_manager_dialog
             .as_ref()
             .unwrap()
-            .draft
+            .draft()
             .name
             .clone();
         let Some(target) = self.saved_secret_target(&environment, &name) else {
@@ -486,7 +486,7 @@ impl ProbeApp {
                         let same_environment = view
                             .environment_manager_dialog
                             .as_ref()
-                            .is_some_and(|dialog| dialog.draft.name == environment);
+                            .is_some_and(|dialog| dialog.draft().name == environment);
                         if !from_manager || same_environment {
                             view.show_toast(
                                 ToastIntent::Error,

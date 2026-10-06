@@ -48,9 +48,9 @@ impl ProbeApp {
         self.environment_manager_dialog
             .as_ref()
             .is_some_and(|dialog| {
-                !dialog.draft.name.trim().is_empty()
+                !dialog.draft().name.trim().is_empty()
                     && dialog
-                        .draft
+                        .draft()
                         .variables
                         .iter()
                         .all(|variable| variable.name().is_some_and(|name| !name.trim().is_empty()))
@@ -191,7 +191,7 @@ impl ProbeApp {
         };
         let dirty = previous_original
             .as_ref()
-            .is_none_or(|original| original != &dialog.draft);
+            .is_none_or(|original| original != dialog.draft());
         let environment_changed_on_disk = previous_original
             .as_ref()
             .is_none_or(|original| original != &disk);
@@ -209,7 +209,7 @@ impl ProbeApp {
             );
             return;
         }
-        dialog.effective_rows = None;
+        dialog.rebind_workspace();
         self.environment_manager_dialog = Some(dialog);
     }
 
@@ -224,7 +224,6 @@ impl ProbeApp {
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
             dialog.sync_variable_row_ids();
             update(dialog);
-            dialog.effective_rows = None;
             dialog.sync_variable_row_ids();
             cx.notify();
         }
@@ -238,12 +237,12 @@ impl ProbeApp {
         let before = self
             .environment_manager_dialog
             .as_ref()
-            .map(|dialog| dialog.draft.variables.len());
+            .map(|dialog| dialog.draft().variables.len());
         self.apply_environment_manager_draft(cx, |dialog| dialog.add_variable(variable));
         let Some(after) = self
             .environment_manager_dialog
             .as_ref()
-            .map(|dialog| dialog.draft.variables.len())
+            .map(|dialog| dialog.draft().variables.len())
         else {
             return;
         };
@@ -277,7 +276,7 @@ impl ProbeApp {
         else {
             return;
         };
-        if &dialog.draft != original {
+        if dialog.draft() != original {
             self.show_environment_dialog_error(
                 "Save or cancel the current environment changes first.",
                 EnvironmentDialogErrorResolution::ManagerClean,
@@ -338,7 +337,7 @@ impl ProbeApp {
         let Some(dialog) = self.environment_manager_dialog.as_ref() else {
             return;
         };
-        let mut replacement = dialog.draft.clone();
+        let mut replacement = dialog.draft().clone();
         replacement.name = replacement.name.trim().to_owned();
         for variable in &mut replacement.variables {
             if let Some(name) = variable.name_mut().as_mut() {
@@ -613,7 +612,7 @@ impl ProbeApp {
             .expect("workspace was present")
             .complete_environment_delete(saved)?;
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
-            dialog.effective_rows = None;
+            dialog.rebind_workspace();
         }
         if self.shell.selected_environment() == Some(name) {
             self.select_environment(None, cx);
@@ -652,7 +651,7 @@ impl ProbeApp {
             .environments()
             .iter()
             .find(|environment| environment.name == dialog.original_name)
-            .is_none_or(|environment| environment != &dialog.draft)
+            .is_none_or(|environment| environment != dialog.draft())
     }
 
     pub(super) fn environment_manager_save_disabled(&self) -> bool {
