@@ -223,7 +223,9 @@ cargo test
 ## Releases
 
 Release builds are created by GitHub Actions when a version tag such as `v0.2.0`
-is pushed. Use the release helper from a clean worktree:
+is pushed. CI and release validation check compatibility with the declared Rust
+1.95 MSRV using Rust 1.95.0. Production CLI and desktop artifacts are built with
+explicitly pinned Rust 1.99.0. Use the release helper from a clean worktree:
 
 ```bash
 scripts/release.sh 0.2.0

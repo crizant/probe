@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   check:
-    name: Check (${{ matrix.os }})
+    name: MSRV check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -26,8 +26,9 @@ jobs:
       - name: Test release notes extraction
         shell: bash
         run: bash scripts/test-release-notes.sh
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.95.0
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Install GPUI Linux dependencies
@@ -53,7 +54,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
         with:
           cache-targets: "false"
@@ -68,8 +71,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.95.0
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
@@ -102,7 +106,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
       - name: Find changed behavior source
         id: diff
         shell: bash

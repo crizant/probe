@@ -3,6 +3,21 @@
 Read this document for implementation workflow, dependency changes, GPUI work, or
 test design. Project-wide architectural invariants remain in `AGENTS.md`.
 
+## Rust Toolchains
+
+The workspace declares Rust 1.95 as its minimum supported Rust version (MSRV).
+`rust-toolchain.toml` selects 1.95.0 for local development, and CI checks formatting,
+Clippy, and tests on 1.95.0 across Linux, macOS, and Windows. The other CI checks
+also use 1.95.0. Release validation runs the same formatting, Clippy, and test checks
+on 1.95.0 before building artifacts.
+
+Production CLI and desktop release artifacts use explicitly pinned Rust 1.99.0.
+The release workflow selects that compiler and each platform target in one setup
+step per build job. This build compiler is independent of the MSRV; using it does
+not raise the minimum compiler required to build Probe from source. Keep both
+versions explicit rather than selecting floating `stable`, and keep GPUI and
+dependency upgrades separate from toolchain changes.
+
 ## Rust and Async Work
 
 - Prefer normal ownership, GPUI entity ownership, message passing, task results, and
