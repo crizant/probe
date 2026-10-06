@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-06
+
 ### Changed
 
 - `probe request run` shows the effective URL sent by the HTTP engine in human output, including path/query parameters and URL normalization. Secret-derived URLs retain safe variable references; secrets used only in headers, bodies, or header authentication do not hide the effective initial URL. JSON output is unchanged.
@@ -355,6 +357,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[0.10.1]: https://github.com/crizant/probe/releases/tag/v0.10.1
 [0.10.0]: https://github.com/crizant/probe/releases/tag/v0.10.0
 [0.9.5]: https://github.com/crizant/probe/releases/tag/v0.9.5
 [0.9.4]: https://github.com/crizant/probe/releases/tag/v0.9.4
