@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-06
+
 ### Changed
 
 - Production CLI and desktop release artifacts are built with Rust 1.99.0. The minimum supported Rust version remains 1.95, with compatibility validated using Rust 1.95.0.
@@ -370,6 +372,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[0.10.3]: https://github.com/crizant/probe/releases/tag/v0.10.3
 [0.10.2]: https://github.com/crizant/probe/releases/tag/v0.10.2
 [0.10.1]: https://github.com/crizant/probe/releases/tag/v0.10.1
 [0.10.0]: https://github.com/crizant/probe/releases/tag/v0.10.0
