@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- Production CLI and desktop release artifacts are built with Rust 1.99.0. The minimum supported Rust version remains 1.95, with compatibility validated using Rust 1.95.0.
+
 ## [0.10.2] - 2026-10-06
 
 ### Fixed
