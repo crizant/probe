@@ -37,6 +37,7 @@ impl ProbeApp {
                     .selected(selected)
                     .w_full()
                     .h(px(theme.metrics.control_height))
+                    .flex_none()
                     .px(px(theme.metrics.spacing_2))
                     .flex()
                     .items_center()
