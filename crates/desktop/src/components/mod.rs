@@ -42,7 +42,12 @@ pub(crate) use controls::{
     FieldInput, ResponseBodyInputOptions, browse_file_button, compact_icon_button,
     dialog_text_input, dropdown, dropdown_with_option_colors, editor_action_button,
     editor_add_button, editor_button, editor_key_value_row, editor_subtab, icon_button,
+    list_scroll_cursor_held, list_scroll_cursor_overlay, observe_list_background_scroll,
     remove_row_button, sidebar_search_input, text_tab, url_text_input, variable_text_input,
+};
+#[cfg(test)]
+pub(crate) use controls::{
+    LIST_SCROLL_CURSOR_IDLE, ListScrollCursorTrace, list_scroll_cursor_trace,
 };
 
 mod icons;

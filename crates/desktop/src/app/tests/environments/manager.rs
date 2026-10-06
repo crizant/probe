@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::chrome::environment_variable_text;
-use gpui::ScrollStrategy;
+use gpui::{CursorStyle, ScrollStrategy};
 use std::rc::Rc;
 
 #[test]
@@ -153,6 +153,10 @@ fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut Te
         .expect("unsaved environment changes should show a dirty indicator");
 }
 
+fn cursor_trace(cx: &mut TestAppContext) -> crate::components::ListScrollCursorTrace {
+    cx.update(|cx| crate::components::list_scroll_cursor_trace(cx))
+}
+
 #[gpui::test]
 fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
@@ -236,7 +240,67 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
         after < before,
         "wheeling over a value field should scroll the list, before={before:?} after={after:?}"
     );
+    // GPUI's test platform stores the cursor in a private field and does not
+    // expose it. The hold is the state that paints over those flips.
+    let trace = cursor_trace(cx);
+    assert_eq!(
+        trace.published,
+        vec![Some(CursorStyle::IBeam)],
+        "rows passing under a stationary pointer must not republish the cursor"
+    );
+    assert!(trace.seen_during_hold.contains(&CursorStyle::IBeam));
 
+    workspace.update(cx, |view, _, cx| {
+        view.environment_variables_scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    });
+    visual.run_until_parked();
+    let field = visual
+        .debug_bounds("environment-variable-value-host")
+        .expect("the value field should return to the top of the list");
+    let seen_before = cursor_trace(cx).seen_during_hold.len();
+    let gap = point(field.center().x, field.bottom() + px(2.0));
+    let gap_before = offset_y(&workspace, cx);
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: gap,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-24.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    assert!(
+        offset_y(&workspace, cx) < gap_before,
+        "a wheel in the row gap should still scroll the list"
+    );
+    let trace = cursor_trace(cx);
+    assert!(
+        trace.seen_during_hold.len() > seen_before,
+        "the gap under the pointer should be sampled"
+    );
+    assert_eq!(trace.seen_during_hold.last(), Some(&CursorStyle::Arrow));
+    assert_eq!(
+        trace.published,
+        vec![Some(CursorStyle::IBeam)],
+        "a gap sampled mid-gesture must not replace the frozen I-beam"
+    );
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: gap,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(0.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Ended,
+    });
+    cx.executor()
+        .advance_clock(crate::components::LIST_SCROLL_CURSOR_IDLE);
+    cx.run_until_parked();
+    visual.run_until_parked();
+    assert_eq!(
+        cursor_trace(cx).published,
+        vec![Some(CursorStyle::IBeam), None],
+        "the gesture should release the cursor once, not once per row"
+    );
     workspace.update(cx, |view, _, cx| {
         view.environment_variables_scroll
             .0

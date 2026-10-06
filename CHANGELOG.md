@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Scrolling the Environment Manager or a request editor list with the pointer over a text field keeps the mouse cursor stable for that gesture, then updates it once when the gesture ends.
+
 ## [0.10.1] - 2026-10-06
 
 ### Changed

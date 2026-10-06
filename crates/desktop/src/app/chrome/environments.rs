@@ -744,7 +744,13 @@ impl ProbeApp {
             .debug_selector(|| "environment-manager-variables".into())
             .flex_1()
             .min_h(px(0.0))
-            .relative();
+            .relative()
+            .on_scroll_wheel({
+                let view = cx.entity().entity_id();
+                move |event, window, cx| {
+                    components::observe_list_background_scroll(event, view, window, cx);
+                }
+            });
         let row_count = rows.len() + usize::from(rows_empty);
         let rows = Rc::new(rows);
         let list = uniform_list("environment-manager-variable-list", row_count, {
@@ -787,11 +793,16 @@ impl ProbeApp {
         })
         .size_full()
         .track_scroll(&self.environment_variables_scroll);
-        let table_body = table_body.child(list).child(
-            Scrollbar::vertical(&self.environment_variables_scroll)
-                .id("environment-manager-variables-scrollbar")
-                .mode(ScrollbarMode::Scrolling),
-        );
+        let table_body = table_body
+            .child(list)
+            .child(
+                Scrollbar::vertical(&self.environment_variables_scroll)
+                    .id("environment-manager-variables-scrollbar")
+                    .mode(ScrollbarMode::Scrolling),
+            )
+            .when(components::list_scroll_cursor_held(cx), |body| {
+                body.child(components::list_scroll_cursor_overlay())
+            });
 
         let table = div()
             .mt(px(theme.metrics.spacing_2))

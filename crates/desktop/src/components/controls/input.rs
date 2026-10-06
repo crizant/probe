@@ -655,6 +655,21 @@ fn defer_list_scroll(
                                 cx.stop_propagation();
                             }
                             ListedFieldWheel::List { delta_y } => {
+                                let style =
+                                    if state.read(cx).input_bounds().contains(&event.position) {
+                                        gpui::CursorStyle::IBeam
+                                    } else {
+                                        gpui::CursorStyle::Arrow
+                                    };
+                                super::list_scroll_cursor::note_listed_scroll(
+                                    style,
+                                    precise,
+                                    event.touch_phase,
+                                    delta,
+                                    view,
+                                    window,
+                                    cx,
+                                );
                                 if scroll_list_vertically(&scroll, delta_y) {
                                     cx.notify(view);
                                 }

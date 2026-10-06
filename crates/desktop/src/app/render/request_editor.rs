@@ -344,10 +344,23 @@ impl ProbeApp {
                     .pb(px(theme.metrics.spacing_2))
                     .when(section_scrolls, |content| {
                         content
+                            .relative()
                             .overflow_y_scroll()
                             .track_scroll(&self.request_section_scroll)
+                            .on_scroll_wheel({
+                                let view = cx.entity().entity_id();
+                                move |event, window, cx| {
+                                    components::observe_list_background_scroll(
+                                        event, view, window, cx,
+                                    );
+                                }
+                            })
                     })
-                    .child(section),
+                    .child(section)
+                    .when(
+                        section_scrolls && components::list_scroll_cursor_held(cx),
+                        |content| content.child(components::list_scroll_cursor_overlay()),
+                    ),
             )
     }
 
