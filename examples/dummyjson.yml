@@ -1,0 +1,1602 @@
+opencollection: 1.0.0
+info:
+  name: DummyJSON
+  summary: Runnable DummyJSON collection demonstrating Probe and OpenCollection workflows
+  version: 1.0.0
+bundled: true
+docs:
+  content: |
+    # DummyJSON demo collection
+
+    A bundled OpenCollection designed to showcase Probe with real, runnable DummyJSON endpoints.
+    It covers common REST workflows, authentication, environment inheritance, secret variables, simulated CRUD, HTTP status testing, image responses, TOTP, custom responses, and temporary webhooks.
+
+    ## Try it in Probe
+
+    Choose an environment, open any folder, and run a request. The child environments inherit shared defaults from `Base` while overriding a few values so you can see inheritance in the Environment Manager.
+
+    ## Authentication
+
+    Run **Auth / Login** with DummyJSON's public demo credentials. Copy the returned `accessToken` and `refreshToken` into the matching secret variables for the environment you are using before running authenticated requests.
+
+    ## Simulated writes
+
+    DummyJSON returns realistic POST, PATCH, and DELETE responses, but changes are generally not persisted to the underlying dataset.
+
+    ## Developer tools
+
+    For webhook examples, create a webhook first and replace `webhookId`. To delete a captured request, also set `webhookRequestId` from the request listing.
+
+    Base URL: https://dummyjson.com
+  type: text/markdown
+config:
+  environments:
+    - name: Base
+      description: Shared defaults for the entire DummyJSON demo. Other environments inherit these 
+        values and override only what they need.
+      variables:
+        - name: baseUrl
+          value: https://dummyjson.com
+        - name: productId
+          value: '1'
+        - name: productCategory
+          value: smartphones
+        - name: productSearch
+          value: phone
+        - name: userId
+          value: '5'
+        - name: userSearch
+          value: John
+        - name: cartId
+          value: '1'
+        - name: postId
+          value: '6'
+        - name: postSearch
+          value: love
+        - name: postTag
+          value: life
+        - name: commentId
+          value: '1'
+        - name: todoId
+          value: '1'
+        - name: quoteId
+          value: '1'
+        - name: recipeId
+          value: '1'
+        - name: recipeSearch
+          value: Margherita
+        - name: recipeTag
+          value: Pakistani
+        - name: mealType
+          value: snack
+        - name: accessToken
+          secret: true
+          type: string
+        - name: refreshToken
+          secret: true
+          type: string
+        - name: webhookId
+          value: replace-me
+        - name: webhookRequestId
+          value: replace-me
+    - name: Development
+      extends: Base
+      description: Developer-friendly overrides for quickly exercising different records, searches, 
+        and categories.
+      variables:
+        - name: productId
+          value: '2'
+        - name: productCategory
+          value: laptops
+        - name: productSearch
+          value: laptop
+        - name: userId
+          value: '1'
+        - name: userSearch
+          value: Emily
+        - name: recipeSearch
+          value: Chicken
+        - name: mealType
+          value: dinner
+        - name: accessToken
+          secret: true
+          type: string
+        - name: refreshToken
+          secret: true
+          type: string
+    - name: Staging
+      extends: Base
+      description: QA-style overrides that keep the same public API while testing another set of 
+        IDs, tags, and filters.
+      variables:
+        - name: productId
+          value: '8'
+        - name: productCategory
+          value: groceries
+        - name: userId
+          value: '10'
+        - name: postId
+          value: '12'
+        - name: postTag
+          value: history
+        - name: recipeTag
+          value: Italian
+        - name: mealType
+          value: lunch
+        - name: accessToken
+          secret: true
+          type: string
+        - name: refreshToken
+          secret: true
+          type: string
+    - name: Production
+      extends: Base
+      description: Production-shaped demo values. It still targets DummyJSON, but shows how a real 
+        environment can inherit shared defaults and override a small subset.
+      variables:
+        - name: productId
+          value: '15'
+        - name: productSearch
+          value: phone
+        - name: userId
+          value: '20'
+        - name: userSearch
+          value: Michael
+        - name: postTag
+          value: love
+        - name: recipeSearch
+          value: Pasta
+        - name: recipeTag
+          value: Asian
+        - name: accessToken
+          secret: true
+          type: string
+        - name: refreshToken
+          secret: true
+          type: string
+items:
+  - info:
+      name: General
+      type: folder
+      seq: 1
+      description: Small utility endpoints for connectivity, client information, and request timing 
+        demos.
+    docs:
+      content: |
+        Use these endpoints for quick smoke tests before working with the larger resource folders. The delayed response is especially useful for demonstrating Probe request progress and cancellation.
+      type: text/markdown
+    items:
+      - info:
+          name: Test Route
+          type: http
+          seq: 1
+          description: Check that the DummyJSON service is reachable with a minimal test request.
+        http:
+          method: GET
+          url: '{{baseUrl}}/test'
+        docs: |
+          Check that the DummyJSON service is reachable with a minimal test request. Endpoint: GET /test. Basic health/test route. DummyJSON accepts multiple HTTP methods on this route.
+      - info:
+          name: Client IP
+          type: http
+          seq: 2
+          description: Return the caller IP address and user-agent information.
+        http:
+          method: GET
+          url: '{{baseUrl}}/ip'
+        docs: |
+          Return the caller IP address and user-agent information. Endpoint: GET /ip. Returns the client IP address and user-agent information.
+      - info:
+          name: Delayed Products Response
+          type: http
+          seq: 3
+          description: Load a small product response with an artificial delay.
+        http:
+          method: GET
+          url: '{{baseUrl}}/products'
+          params:
+            - name: limit
+              value: '3'
+              type: query
+            - name: delay
+              value: '1000'
+              type: query
+        docs: |
+          Load a small product response with an artificial delay. Endpoint: GET /products. Query parameters: limit, delay. Adds a 1000 ms artificial server delay. Useful for testing Probe loading states and cancellation.
+  - info:
+      name: Auth
+      type: folder
+      seq: 2
+      description: Authentication examples covering login, bearer-authenticated requests, and token 
+        refresh.
+    docs:
+      content: |
+        Start with Login, then store the returned access and refresh tokens in the selected environment secrets. Current Auth User and Authorized Products demonstrate bearer authentication, while Refresh Token exercises token renewal.
+      type: text/markdown
+    items:
+      - info:
+          name: Login
+          type: http
+          seq: 1
+          description: Authenticate with DummyJSON demo credentials and receive access and refresh 
+            tokens.
+        http:
+          method: POST
+          url: '{{baseUrl}}/auth/login'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"username":"emilys","password":"emilyspass","expiresInMins":30}'
+        docs: |
+          Authenticate with DummyJSON demo credentials and receive access and refresh tokens. Endpoint: POST /auth/login. Body type: json. Uses DummyJSON's public demo credentials. Copy returned tokens into the environment secrets.
+      - info:
+          name: Current Auth User
+          type: http
+          seq: 2
+          description: Return the user represented by the current bearer access token.
+        http:
+          method: GET
+          url: '{{baseUrl}}/auth/me'
+          auth:
+            type: bearer
+            token: '{{accessToken}}'
+        docs: |
+          Return the user represented by the current bearer access token. Endpoint: GET /auth/me. Authentication: bearer. Environment values: accessToken. Requires an access token returned by Login.
+      - info:
+          name: Refresh Token
+          type: http
+          seq: 3
+          description: Exchange a refresh token for a new access token.
+        http:
+          method: POST
+          url: '{{baseUrl}}/auth/refresh'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"refreshToken":"{{refreshToken}}","expiresInMins":30}'
+        docs: |
+          Exchange a refresh token for a new access token. Endpoint: POST /auth/refresh. Body type: json. Environment values: refreshToken. Refreshes the access token. Set refreshToken in the environment first.
+      - info:
+          name: Authorized Products
+          type: http
+          seq: 4
+          description: List products through an authenticated DummyJSON resource route.
+        http:
+          method: GET
+          url: '{{baseUrl}}/auth/products'
+          params:
+            - name: limit
+              value: '5'
+              type: query
+          auth:
+            type: bearer
+            token: '{{accessToken}}'
+        docs: |
+          List products through an authenticated DummyJSON resource route. Endpoint: GET /auth/products. Query parameters: limit. Authentication: bearer. Environment values: accessToken. DummyJSON supports accessing resources under /auth/RESOURCE with a bearer token.
+  - info:
+      name: Products
+      type: folder
+      seq: 3
+      description: Explore the DummyJSON product catalogue with browsing, search, filtering, 
+        categories, and simulated CRUD operations.
+    docs:
+      content: |
+        Use these requests to browse and modify the DummyJSON product catalogue.
+
+        Start with List Products or Search Products for common read operations. Category endpoints demonstrate filtering, while Add Product, Update Product, and Delete Product cover simulated write operations.
+
+        DummyJSON does not persist changes made by POST, PATCH, or DELETE. Use the productId, productCategory, and productSearch environment variables to change test values without editing individual requests.
+      type: text/markdown
+    items:
+      - info:
+          name: List Products
+          type: http
+          seq: 1
+          description: List products with the request's configured paging or field-selection 
+            options.
+        http:
+          method: GET
+          url: '{{baseUrl}}/products'
+          params:
+            - name: limit
+              value: '10'
+              type: query
+            - name: skip
+              value: '0'
+              type: query
+            - name: select
+              value: title,price,category
+              type: query
+        docs: |
+          List products with the request's configured paging or field-selection options. Endpoint: GET /products. Query parameters: limit, skip, select.
+      - info:
+          name: Get Product
+          type: http
+          seq: 2
+          description: Fetch one product by its environment-driven ID.
+        http:
+          method: GET
+          url: '{{baseUrl}}/products/:productId'
+          params:
+            - name: productId
+              value: '{{productId}}'
+              type: path
+        docs: |
+          Fetch one product by its environment-driven ID. Endpoint: GET /products/:productId. Path parameters: productId. Environment values: productId.
+      - info:
+          name: Search Products
+          type: http
+          seq: 3
+          description: Search products using the query value from the selected environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/products/search'
+          params:
+            - name: q
+              value: '{{productSearch}}'
+              type: query
+        docs: |
+          Search products using the query value from the selected environment. Endpoint: GET /products/search. Query parameters: q. Environment values: productSearch.
+      - info:
+          name: Sort Products
+          type: http
+          seq: 4
+          description: Sort the product list using explicit sort field and direction parameters.
+        http:
+          method: GET
+          url: '{{baseUrl}}/products'
+          params:
+            - name: sortBy
+              value: title
+              type: query
+            - name: order
+              value: asc
+              type: query
+        docs: |
+          Sort the product list using explicit sort field and direction parameters. Endpoint: GET /products. Query parameters: sortBy, order.
+      - info:
+          name: Filter Products by Modified Date
+          type: http
+          seq: 5
+          description: Filter products using a modified-after timestamp and a reduced field 
+            selection.
+        http:
+          method: GET
+          url: '{{baseUrl}}/products'
+          params:
+            - name: modifiedAfter
+              value: '2026-06-01T00:00:00Z'
+              type: query
+            - name: select
+              value: title,meta
+              type: query
+        docs: |
+          Filter products using a modified-after timestamp and a reduced field selection. Endpoint: GET /products. Query parameters: modifiedAfter, select.
+      - info:
+          name: Product Categories
+          type: http
+          seq: 6
+          description: Return product categories with their display metadata.
+        http:
+          method: GET
+          url: '{{baseUrl}}/products/categories'
+        docs: |
+          Return product categories with their display metadata. Endpoint: GET /products/categories.
+      - info:
+          name: Product Category List
+          type: http
+          seq: 7
+          description: Return the compact list of product category slugs.
+        http:
+          method: GET
+          url: '{{baseUrl}}/products/category-list'
+        docs: |
+          Return the compact list of product category slugs. Endpoint: GET /products/category-list.
+      - info:
+          name: Products by Category
+          type: http
+          seq: 8
+          description: List products filtered by the category selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/products/category/:category'
+          params:
+            - name: category
+              value: '{{productCategory}}'
+              type: path
+        docs: |
+          List products filtered by the category selected in the environment. Endpoint: GET /products/category/:category. Path parameters: category. Environment values: productCategory.
+      - info:
+          name: Add Product
+          type: http
+          seq: 9
+          description: Create a simulated product using a JSON request body.
+        http:
+          method: POST
+          url: '{{baseUrl}}/products/add'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"title":"Probe Test Product","price":19.99,"category":"test"}'
+        docs: |
+          Create a simulated product using a JSON request body. Endpoint: POST /products/add. Body type: json. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Update Product
+          type: http
+          seq: 10
+          description: Update a simulated product selected by its environment-driven ID.
+        http:
+          method: PATCH
+          url: '{{baseUrl}}/products/:productId'
+          headers:
+            - name: Content-Type
+              value: application/json
+          params:
+            - name: productId
+              value: '{{productId}}'
+              type: path
+          body:
+            type: json
+            data: '{"title":"Probe Updated Product"}'
+        docs: |
+          Update a simulated product selected by its environment-driven ID. Endpoint: PATCH /products/:productId. Path parameters: productId. Body type: json. Environment values: productId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Delete Product
+          type: http
+          seq: 11
+          description: Delete a simulated product selected by its environment-driven ID.
+        http:
+          method: DELETE
+          url: '{{baseUrl}}/products/:productId'
+          params:
+            - name: productId
+              value: '{{productId}}'
+              type: path
+        docs: |
+          Delete a simulated product selected by its environment-driven ID. Endpoint: DELETE /products/:productId. Path parameters: productId. Environment values: productId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+  - info:
+      name: Users
+      type: folder
+      seq: 4
+      description: Browse, search, filter, and modify users, including their related carts, posts, 
+        and todos.
+    docs:
+      content: |
+        This folder demonstrates a typical user resource with list/detail views, search and filtering, nested related-resource routes, and simulated CRUD. Change userId and userSearch in the selected environment to explore different records.
+      type: text/markdown
+    items:
+      - info:
+          name: List Users
+          type: http
+          seq: 1
+          description: List users with the request's configured paging or field-selection options.
+        http:
+          method: GET
+          url: '{{baseUrl}}/users'
+          params:
+            - name: limit
+              value: '10'
+              type: query
+            - name: skip
+              value: '0'
+              type: query
+            - name: select
+              value: firstName,lastName,email
+              type: query
+        docs: |
+          List users with the request's configured paging or field-selection options. Endpoint: GET /users. Query parameters: limit, skip, select.
+      - info:
+          name: Get User
+          type: http
+          seq: 2
+          description: Fetch one user by its environment-driven ID.
+        http:
+          method: GET
+          url: '{{baseUrl}}/users/:userId'
+          params:
+            - name: userId
+              value: '{{userId}}'
+              type: path
+        docs: |
+          Fetch one user by its environment-driven ID. Endpoint: GET /users/:userId. Path parameters: userId. Environment values: userId.
+      - info:
+          name: Search Users
+          type: http
+          seq: 3
+          description: Search users using the query value from the selected environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/users/search'
+          params:
+            - name: q
+              value: '{{userSearch}}'
+              type: query
+        docs: |
+          Search users using the query value from the selected environment. Endpoint: GET /users/search. Query parameters: q. Environment values: userSearch.
+      - info:
+          name: Filter Users
+          type: http
+          seq: 4
+          description: Filter users by a nested field and value.
+        http:
+          method: GET
+          url: '{{baseUrl}}/users/filter'
+          params:
+            - name: key
+              value: hair.color
+              type: query
+            - name: value
+              value: Brown
+              type: query
+        docs: |
+          Filter users by a nested field and value. Endpoint: GET /users/filter. Query parameters: key, value.
+      - info:
+          name: User Carts
+          type: http
+          seq: 5
+          description: List carts related to the user selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/users/:userId/carts'
+          params:
+            - name: userId
+              value: '{{userId}}'
+              type: path
+        docs: |
+          List carts related to the user selected in the environment. Endpoint: GET /users/:userId/carts. Path parameters: userId. Environment values: userId.
+      - info:
+          name: User Posts
+          type: http
+          seq: 6
+          description: List posts related to the user selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/users/:userId/posts'
+          params:
+            - name: userId
+              value: '{{userId}}'
+              type: path
+        docs: |
+          List posts related to the user selected in the environment. Endpoint: GET /users/:userId/posts. Path parameters: userId. Environment values: userId.
+      - info:
+          name: User Todos
+          type: http
+          seq: 7
+          description: List todos related to the user selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/users/:userId/todos'
+          params:
+            - name: userId
+              value: '{{userId}}'
+              type: path
+        docs: |
+          List todos related to the user selected in the environment. Endpoint: GET /users/:userId/todos. Path parameters: userId. Environment values: userId.
+      - info:
+          name: Add User
+          type: http
+          seq: 8
+          description: Create a simulated user using a JSON request body.
+        http:
+          method: POST
+          url: '{{baseUrl}}/users/add'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"firstName":"Probe","lastName":"Tester","age":30}'
+        docs: |
+          Create a simulated user using a JSON request body. Endpoint: POST /users/add. Body type: json. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Update User
+          type: http
+          seq: 9
+          description: Update a simulated user selected by its environment-driven ID.
+        http:
+          method: PATCH
+          url: '{{baseUrl}}/users/:userId'
+          headers:
+            - name: Content-Type
+              value: application/json
+          params:
+            - name: userId
+              value: '{{userId}}'
+              type: path
+          body:
+            type: json
+            data: '{"lastName":"Updated by Probe"}'
+        docs: |
+          Update a simulated user selected by its environment-driven ID. Endpoint: PATCH /users/:userId. Path parameters: userId. Body type: json. Environment values: userId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Delete User
+          type: http
+          seq: 10
+          description: Delete a simulated user selected by its environment-driven ID.
+        http:
+          method: DELETE
+          url: '{{baseUrl}}/users/:userId'
+          params:
+            - name: userId
+              value: '{{userId}}'
+              type: path
+        docs: |
+          Delete a simulated user selected by its environment-driven ID. Endpoint: DELETE /users/:userId. Path parameters: userId. Environment values: userId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+  - info:
+      name: Carts
+      type: folder
+      seq: 5
+      description: Work with shopping carts, user-specific cart queries, and simulated cart 
+        mutations.
+    docs:
+      content: |
+        Use the read requests to inspect carts and relationships to users and products. Add, Update, and Delete demonstrate request bodies and simulated mutations without permanently changing DummyJSON data.
+      type: text/markdown
+    items:
+      - info:
+          name: List Carts
+          type: http
+          seq: 1
+          description: List carts with the request's configured paging or field-selection options.
+        http:
+          method: GET
+          url: '{{baseUrl}}/carts'
+          params:
+            - name: limit
+              value: '10'
+              type: query
+            - name: skip
+              value: '0'
+              type: query
+        docs: |
+          List carts with the request's configured paging or field-selection options. Endpoint: GET /carts. Query parameters: limit, skip.
+      - info:
+          name: Get Cart
+          type: http
+          seq: 2
+          description: Fetch one cart by its environment-driven ID.
+        http:
+          method: GET
+          url: '{{baseUrl}}/carts/:cartId'
+          params:
+            - name: cartId
+              value: '{{cartId}}'
+              type: path
+        docs: |
+          Fetch one cart by its environment-driven ID. Endpoint: GET /carts/:cartId. Path parameters: cartId. Environment values: cartId.
+      - info:
+          name: Carts by User
+          type: http
+          seq: 3
+          description: List carts belonging to the user selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/carts/user/:userId'
+          params:
+            - name: userId
+              value: '{{userId}}'
+              type: path
+        docs: |
+          List carts belonging to the user selected in the environment. Endpoint: GET /carts/user/:userId. Path parameters: userId. Environment values: userId.
+      - info:
+          name: Add Cart
+          type: http
+          seq: 4
+          description: Create a simulated cart using a JSON request body.
+        http:
+          method: POST
+          url: '{{baseUrl}}/carts/add'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"userId":1,"products":[{"id":1,"quantity":2},{"id":2,"quantity":1}]}'
+        docs: |
+          Create a simulated cart using a JSON request body. Endpoint: POST /carts/add. Body type: json. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Update Cart
+          type: http
+          seq: 5
+          description: Update a simulated cart selected by its environment-driven ID.
+        http:
+          method: PATCH
+          url: '{{baseUrl}}/carts/:cartId'
+          headers:
+            - name: Content-Type
+              value: application/json
+          params:
+            - name: cartId
+              value: '{{cartId}}'
+              type: path
+          body:
+            type: json
+            data: '{"merge":true,"products":[{"id":1,"quantity":1}]}'
+        docs: |
+          Update a simulated cart selected by its environment-driven ID. Endpoint: PATCH /carts/:cartId. Path parameters: cartId. Body type: json. Environment values: cartId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Delete Cart
+          type: http
+          seq: 6
+          description: Delete a simulated cart selected by its environment-driven ID.
+        http:
+          method: DELETE
+          url: '{{baseUrl}}/carts/:cartId'
+          params:
+            - name: cartId
+              value: '{{cartId}}'
+              type: path
+        docs: |
+          Delete a simulated cart selected by its environment-driven ID. Endpoint: DELETE /carts/:cartId. Path parameters: cartId. Environment values: cartId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+  - info:
+      name: Posts
+      type: folder
+      seq: 6
+      description: Browse and search posts, explore tags and user relationships, and try simulated 
+        CRUD.
+    docs:
+      content: |
+        The post endpoints demonstrate pagination, free-text search, tag filtering, user relationships, and write operations. postId, postSearch, postTag, and userId are environment-driven so the same requests can be reused across demo environments.
+      type: text/markdown
+    items:
+      - info:
+          name: List Posts
+          type: http
+          seq: 1
+          description: List posts with the request's configured paging or field-selection options.
+        http:
+          method: GET
+          url: '{{baseUrl}}/posts'
+          params:
+            - name: limit
+              value: '10'
+              type: query
+            - name: skip
+              value: '0'
+              type: query
+            - name: select
+              value: title,reactions,userId
+              type: query
+        docs: |
+          List posts with the request's configured paging or field-selection options. Endpoint: GET /posts. Query parameters: limit, skip, select.
+      - info:
+          name: Get Post
+          type: http
+          seq: 2
+          description: Fetch one post by its environment-driven ID.
+        http:
+          method: GET
+          url: '{{baseUrl}}/posts/:postId'
+          params:
+            - name: postId
+              value: '{{postId}}'
+              type: path
+        docs: |
+          Fetch one post by its environment-driven ID. Endpoint: GET /posts/:postId. Path parameters: postId. Environment values: postId.
+      - info:
+          name: Search Posts
+          type: http
+          seq: 3
+          description: Search posts using the query value from the selected environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/posts/search'
+          params:
+            - name: q
+              value: '{{postSearch}}'
+              type: query
+        docs: |
+          Search posts using the query value from the selected environment. Endpoint: GET /posts/search. Query parameters: q. Environment values: postSearch.
+      - info:
+          name: Post Tags
+          type: http
+          seq: 4
+          description: Return post tags with their associated metadata.
+        http:
+          method: GET
+          url: '{{baseUrl}}/posts/tags'
+        docs: |
+          Return post tags with their associated metadata. Endpoint: GET /posts/tags.
+      - info:
+          name: Post Tag List
+          type: http
+          seq: 5
+          description: Return the compact list of post tag names.
+        http:
+          method: GET
+          url: '{{baseUrl}}/posts/tag-list'
+        docs: |
+          Return the compact list of post tag names. Endpoint: GET /posts/tag-list.
+      - info:
+          name: Posts by Tag
+          type: http
+          seq: 6
+          description: List posts filtered by the tag selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/posts/tag/:tag'
+          params:
+            - name: tag
+              value: '{{postTag}}'
+              type: path
+        docs: |
+          List posts filtered by the tag selected in the environment. Endpoint: GET /posts/tag/:tag. Path parameters: tag. Environment values: postTag.
+      - info:
+          name: Posts by User
+          type: http
+          seq: 7
+          description: List posts belonging to the user selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/posts/user/:userId'
+          params:
+            - name: userId
+              value: '{{userId}}'
+              type: path
+        docs: |
+          List posts belonging to the user selected in the environment. Endpoint: GET /posts/user/:userId. Path parameters: userId. Environment values: userId.
+      - info:
+          name: Add Post
+          type: http
+          seq: 8
+          description: Create a simulated post using a JSON request body.
+        http:
+          method: POST
+          url: '{{baseUrl}}/posts/add'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"title":"Testing Probe with DummyJSON","body":"OpenCollection request","userId":5}'
+        docs: |
+          Create a simulated post using a JSON request body. Endpoint: POST /posts/add. Body type: json. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Update Post
+          type: http
+          seq: 9
+          description: Update a simulated post selected by its environment-driven ID.
+        http:
+          method: PATCH
+          url: '{{baseUrl}}/posts/:postId'
+          headers:
+            - name: Content-Type
+              value: application/json
+          params:
+            - name: postId
+              value: '{{postId}}'
+              type: path
+          body:
+            type: json
+            data: '{"title":"Updated with Probe"}'
+        docs: |
+          Update a simulated post selected by its environment-driven ID. Endpoint: PATCH /posts/:postId. Path parameters: postId. Body type: json. Environment values: postId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Delete Post
+          type: http
+          seq: 10
+          description: Delete a simulated post selected by its environment-driven ID.
+        http:
+          method: DELETE
+          url: '{{baseUrl}}/posts/:postId'
+          params:
+            - name: postId
+              value: '{{postId}}'
+              type: path
+        docs: |
+          Delete a simulated post selected by its environment-driven ID. Endpoint: DELETE /posts/:postId. Path parameters: postId. Environment values: postId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+  - info:
+      name: Comments
+      type: folder
+      seq: 7
+      description: Inspect, sort, and modify comments, including comments linked to a specific post.
+    docs:
+      content: |
+        Use this folder to demonstrate list/detail requests, relation-based filtering, sorting, and JSON write bodies. Mutating operations are simulated by DummyJSON and are not persisted.
+      type: text/markdown
+    items:
+      - info:
+          name: List Comments
+          type: http
+          seq: 1
+          description: List comments with the request's configured paging or field-selection 
+            options.
+        http:
+          method: GET
+          url: '{{baseUrl}}/comments'
+          params:
+            - name: limit
+              value: '10'
+              type: query
+            - name: skip
+              value: '0'
+              type: query
+            - name: select
+              value: body,postId
+              type: query
+        docs: |
+          List comments with the request's configured paging or field-selection options. Endpoint: GET /comments. Query parameters: limit, skip, select.
+      - info:
+          name: Get Comment
+          type: http
+          seq: 2
+          description: Fetch one comment by its environment-driven ID.
+        http:
+          method: GET
+          url: '{{baseUrl}}/comments/:commentId'
+          params:
+            - name: commentId
+              value: '{{commentId}}'
+              type: path
+        docs: |
+          Fetch one comment by its environment-driven ID. Endpoint: GET /comments/:commentId. Path parameters: commentId. Environment values: commentId.
+      - info:
+          name: Comments by Post
+          type: http
+          seq: 3
+          description: List comments belonging to the post selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/comments/post/:postId'
+          params:
+            - name: postId
+              value: '{{postId}}'
+              type: path
+        docs: |
+          List comments belonging to the post selected in the environment. Endpoint: GET /comments/post/:postId. Path parameters: postId. Environment values: postId.
+      - info:
+          name: Sort Comments
+          type: http
+          seq: 4
+          description: Sort comments using explicit sort field and direction parameters.
+        http:
+          method: GET
+          url: '{{baseUrl}}/comments'
+          params:
+            - name: sortBy
+              value: likes
+              type: query
+            - name: order
+              value: desc
+              type: query
+        docs: |
+          Sort comments using explicit sort field and direction parameters. Endpoint: GET /comments. Query parameters: sortBy, order.
+      - info:
+          name: Add Comment
+          type: http
+          seq: 5
+          description: Create a simulated comment using a JSON request body.
+        http:
+          method: POST
+          url: '{{baseUrl}}/comments/add'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"body":"Created from Probe","postId":6,"userId":5}'
+        docs: |
+          Create a simulated comment using a JSON request body. Endpoint: POST /comments/add. Body type: json. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Update Comment
+          type: http
+          seq: 6
+          description: Update a simulated comment selected by its environment-driven ID.
+        http:
+          method: PATCH
+          url: '{{baseUrl}}/comments/:commentId'
+          headers:
+            - name: Content-Type
+              value: application/json
+          params:
+            - name: commentId
+              value: '{{commentId}}'
+              type: path
+          body:
+            type: json
+            data: '{"body":"Updated from Probe"}'
+        docs: |
+          Update a simulated comment selected by its environment-driven ID. Endpoint: PATCH /comments/:commentId. Path parameters: commentId. Body type: json. Environment values: commentId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Delete Comment
+          type: http
+          seq: 7
+          description: Delete a simulated comment selected by its environment-driven ID.
+        http:
+          method: DELETE
+          url: '{{baseUrl}}/comments/:commentId'
+          params:
+            - name: commentId
+              value: '{{commentId}}'
+              type: path
+        docs: |
+          Delete a simulated comment selected by its environment-driven ID. Endpoint: DELETE /comments/:commentId. Path parameters: commentId. Environment values: commentId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+  - info:
+      name: Todos
+      type: folder
+      seq: 8
+      description: Explore todo lists, random todo endpoints, user filtering, and simulated updates.
+    docs:
+      content: |
+        The todo API is useful for demonstrating normal resource requests alongside random-data endpoints. todoId and userId come from the selected environment, while write requests show common create, update, and delete flows.
+      type: text/markdown
+    items:
+      - info:
+          name: List Todos
+          type: http
+          seq: 1
+          description: List todos with the request's configured paging or field-selection options.
+        http:
+          method: GET
+          url: '{{baseUrl}}/todos'
+          params:
+            - name: limit
+              value: '10'
+              type: query
+            - name: skip
+              value: '0'
+              type: query
+        docs: |
+          List todos with the request's configured paging or field-selection options. Endpoint: GET /todos. Query parameters: limit, skip.
+      - info:
+          name: Get Todo
+          type: http
+          seq: 2
+          description: Fetch one todo by its environment-driven ID.
+        http:
+          method: GET
+          url: '{{baseUrl}}/todos/:todoId'
+          params:
+            - name: todoId
+              value: '{{todoId}}'
+              type: path
+        docs: |
+          Fetch one todo by its environment-driven ID. Endpoint: GET /todos/:todoId. Path parameters: todoId. Environment values: todoId.
+      - info:
+          name: Random Todo
+          type: http
+          seq: 3
+          description: Return one random todo item.
+        http:
+          method: GET
+          url: '{{baseUrl}}/todos/random'
+        docs: |
+          Return one random todo item. Endpoint: GET /todos/random.
+      - info:
+          name: Random Todos
+          type: http
+          seq: 4
+          description: Return a requested number of random todo items.
+        http:
+          method: GET
+          url: '{{baseUrl}}/todos/random/:count'
+          params:
+            - name: count
+              value: '5'
+              type: path
+        docs: |
+          Return a requested number of random todo items. Endpoint: GET /todos/random/:count. Path parameters: count.
+      - info:
+          name: Todos by User
+          type: http
+          seq: 5
+          description: List todos belonging to the user selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/todos/user/:userId'
+          params:
+            - name: userId
+              value: '{{userId}}'
+              type: path
+        docs: |
+          List todos belonging to the user selected in the environment. Endpoint: GET /todos/user/:userId. Path parameters: userId. Environment values: userId.
+      - info:
+          name: Add Todo
+          type: http
+          seq: 6
+          description: Create a simulated todo using a JSON request body.
+        http:
+          method: POST
+          url: '{{baseUrl}}/todos/add'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"todo":"Test DummyJSON with Probe","completed":false,"userId":5}'
+        docs: |
+          Create a simulated todo using a JSON request body. Endpoint: POST /todos/add. Body type: json. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Update Todo
+          type: http
+          seq: 7
+          description: Update a simulated todo selected by its environment-driven ID.
+        http:
+          method: PATCH
+          url: '{{baseUrl}}/todos/:todoId'
+          headers:
+            - name: Content-Type
+              value: application/json
+          params:
+            - name: todoId
+              value: '{{todoId}}'
+              type: path
+          body:
+            type: json
+            data: '{"completed":false}'
+        docs: |
+          Update a simulated todo selected by its environment-driven ID. Endpoint: PATCH /todos/:todoId. Path parameters: todoId. Body type: json. Environment values: todoId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Delete Todo
+          type: http
+          seq: 8
+          description: Delete a simulated todo selected by its environment-driven ID.
+        http:
+          method: DELETE
+          url: '{{baseUrl}}/todos/:todoId'
+          params:
+            - name: todoId
+              value: '{{todoId}}'
+              type: path
+        docs: |
+          Delete a simulated todo selected by its environment-driven ID. Endpoint: DELETE /todos/:todoId. Path parameters: todoId. Environment values: todoId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+  - info:
+      name: Quotes
+      type: folder
+      seq: 9
+      description: Retrieve quote collections, individual quotes, and random quote samples.
+    docs:
+      content: |
+        These lightweight read-only endpoints are useful for quick request demos. Use quoteId for a deterministic detail request, or the random endpoints when you want changing response data.
+      type: text/markdown
+    items:
+      - info:
+          name: List Quotes
+          type: http
+          seq: 1
+          description: List quotes with the request's configured paging or field-selection options.
+        http:
+          method: GET
+          url: '{{baseUrl}}/quotes'
+          params:
+            - name: limit
+              value: '10'
+              type: query
+            - name: skip
+              value: '0'
+              type: query
+            - name: select
+              value: quote,author
+              type: query
+        docs: |
+          List quotes with the request's configured paging or field-selection options. Endpoint: GET /quotes. Query parameters: limit, skip, select.
+      - info:
+          name: Get Quote
+          type: http
+          seq: 2
+          description: Fetch one quote by its environment-driven ID.
+        http:
+          method: GET
+          url: '{{baseUrl}}/quotes/:quoteId'
+          params:
+            - name: quoteId
+              value: '{{quoteId}}'
+              type: path
+        docs: |
+          Fetch one quote by its environment-driven ID. Endpoint: GET /quotes/:quoteId. Path parameters: quoteId. Environment values: quoteId.
+      - info:
+          name: Random Quote
+          type: http
+          seq: 3
+          description: Return one random quote.
+        http:
+          method: GET
+          url: '{{baseUrl}}/quotes/random'
+        docs: |
+          Return one random quote. Endpoint: GET /quotes/random.
+      - info:
+          name: Random Quotes
+          type: http
+          seq: 4
+          description: Return a requested number of random quotes.
+        http:
+          method: GET
+          url: '{{baseUrl}}/quotes/random/:count'
+          params:
+            - name: count
+              value: '5'
+              type: path
+        docs: |
+          Return a requested number of random quotes. Endpoint: GET /quotes/random/:count. Path parameters: count.
+  - info:
+      name: Recipes
+      type: folder
+      seq: 10
+      description: Browse, search, filter, and modify recipes by ID, tag, and meal type.
+    docs:
+      content: |
+        Recipe requests demonstrate search, taxonomy-style tag endpoints, path parameters, environment-driven filters, and simulated CRUD. Switch environments to immediately exercise different recipe searches and tags.
+      type: text/markdown
+    items:
+      - info:
+          name: List Recipes
+          type: http
+          seq: 1
+          description: List recipes with the request's configured paging or field-selection options.
+        http:
+          method: GET
+          url: '{{baseUrl}}/recipes'
+          params:
+            - name: limit
+              value: '10'
+              type: query
+            - name: skip
+              value: '0'
+              type: query
+        docs: |
+          List recipes with the request's configured paging or field-selection options. Endpoint: GET /recipes. Query parameters: limit, skip.
+      - info:
+          name: Get Recipe
+          type: http
+          seq: 2
+          description: Fetch one recipe by its environment-driven ID.
+        http:
+          method: GET
+          url: '{{baseUrl}}/recipes/:recipeId'
+          params:
+            - name: recipeId
+              value: '{{recipeId}}'
+              type: path
+        docs: |
+          Fetch one recipe by its environment-driven ID. Endpoint: GET /recipes/:recipeId. Path parameters: recipeId. Environment values: recipeId.
+      - info:
+          name: Search Recipes
+          type: http
+          seq: 3
+          description: Search recipes using the query value from the selected environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/recipes/search'
+          params:
+            - name: q
+              value: '{{recipeSearch}}'
+              type: query
+        docs: |
+          Search recipes using the query value from the selected environment. Endpoint: GET /recipes/search. Query parameters: q. Environment values: recipeSearch.
+      - info:
+          name: Recipe Tags
+          type: http
+          seq: 4
+          description: Return the available recipe tags.
+        http:
+          method: GET
+          url: '{{baseUrl}}/recipes/tags'
+        docs: |
+          Return the available recipe tags. Endpoint: GET /recipes/tags.
+      - info:
+          name: Recipes by Tag
+          type: http
+          seq: 5
+          description: List recipes filtered by the tag selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/recipes/tag/:tag'
+          params:
+            - name: tag
+              value: '{{recipeTag}}'
+              type: path
+        docs: |
+          List recipes filtered by the tag selected in the environment. Endpoint: GET /recipes/tag/:tag. Path parameters: tag. Environment values: recipeTag.
+      - info:
+          name: Recipes by Meal Type
+          type: http
+          seq: 6
+          description: List recipes filtered by the meal type selected in the environment.
+        http:
+          method: GET
+          url: '{{baseUrl}}/recipes/meal-type/:mealType'
+          params:
+            - name: mealType
+              value: '{{mealType}}'
+              type: path
+        docs: |
+          List recipes filtered by the meal type selected in the environment. Endpoint: GET /recipes/meal-type/:mealType. Path parameters: mealType. Environment values: mealType.
+      - info:
+          name: Add Recipe
+          type: http
+          seq: 7
+          description: Create a simulated recipe using a JSON request body.
+        http:
+          method: POST
+          url: '{{baseUrl}}/recipes/add'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"name":"Probe Test Recipe","ingredients":["API","YAML"],"instructions":["Send request","Inspect
+              response"],"prepTimeMinutes":5,"cookTimeMinutes":0,"servings":1}'
+        docs: |
+          Create a simulated recipe using a JSON request body. Endpoint: POST /recipes/add. Body type: json. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Update Recipe
+          type: http
+          seq: 8
+          description: Update a simulated recipe selected by its environment-driven ID.
+        http:
+          method: PATCH
+          url: '{{baseUrl}}/recipes/:recipeId'
+          headers:
+            - name: Content-Type
+              value: application/json
+          params:
+            - name: recipeId
+              value: '{{recipeId}}'
+              type: path
+          body:
+            type: json
+            data: '{"name":"Updated with Probe"}'
+        docs: |
+          Update a simulated recipe selected by its environment-driven ID. Endpoint: PATCH /recipes/:recipeId. Path parameters: recipeId. Body type: json. Environment values: recipeId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+      - info:
+          name: Delete Recipe
+          type: http
+          seq: 9
+          description: Delete a simulated recipe selected by its environment-driven ID.
+        http:
+          method: DELETE
+          url: '{{baseUrl}}/recipes/:recipeId'
+          params:
+            - name: recipeId
+              value: '{{recipeId}}'
+              type: path
+        docs: |
+          Delete a simulated recipe selected by its environment-driven ID. Endpoint: DELETE /recipes/:recipeId. Path parameters: recipeId. Environment values: recipeId. DummyJSON simulates this write; the underlying dataset is not permanently changed.
+  - info:
+      name: HTTP Responses
+      type: folder
+      seq: 11
+      description: Return predictable HTTP status codes for testing error handling and response 
+        presentation.
+    docs:
+      content: |
+        Use these endpoints to see how Probe displays successful and error responses without changing the request structure. The custom 404 route also includes a message in the response.
+      type: text/markdown
+    items:
+      - info:
+          name: HTTP 200
+          type: http
+          seq: 1
+          description: Return a predictable HTTP 200 response.
+        http:
+          method: GET
+          url: '{{baseUrl}}/http/200'
+        docs: |
+          Return a predictable HTTP 200 response. Endpoint: GET /http/200. Returns a controlled 200 response.
+      - info:
+          name: HTTP 404
+          type: http
+          seq: 2
+          description: Return a predictable HTTP 404 response.
+        http:
+          method: GET
+          url: '{{baseUrl}}/http/404'
+        docs: |
+          Return a predictable HTTP 404 response. Endpoint: GET /http/404. Useful for testing non-2xx handling.
+      - info:
+          name: HTTP 404 with Message
+          type: http
+          seq: 3
+          description: Return a 404 response containing a custom message.
+        http:
+          method: GET
+          url: '{{baseUrl}}/http/404/Hello_Probe'
+        docs: |
+          Return a 404 response containing a custom message. Endpoint: GET /http/404/Hello_Probe. Returns status 404 with a custom response message.
+      - info:
+          name: HTTP 500
+          type: http
+          seq: 4
+          description: Return a predictable HTTP 500 response.
+        http:
+          method: GET
+          url: '{{baseUrl}}/http/500'
+        docs: |
+          Return a predictable HTTP 500 response. Endpoint: GET /http/500. Useful for testing server-error handling.
+  - info:
+      name: Images
+      type: folder
+      seq: 12
+      description: Generate image responses in different sizes, formats, colors, and styles.
+    docs:
+      content: |
+        These endpoints are designed to exercise Probe image response preview. Try square and custom dimensions, rendered text, WebP output, and an identicon generated from a stable seed.
+      type: text/markdown
+    items:
+      - info:
+          name: Square PNG
+          type: http
+          seq: 1
+          description: Generate a square PNG image response.
+        http:
+          method: GET
+          url: '{{baseUrl}}/image/150'
+        docs: |
+          Generate a square PNG image response. Endpoint: GET /image/150. Returns a 150×150 PNG binary response.
+      - info:
+          name: Custom Size PNG
+          type: http
+          seq: 2
+          description: Generate a PNG image with custom width and height.
+        http:
+          method: GET
+          url: '{{baseUrl}}/image/200x100'
+        docs: |
+          Generate a PNG image with custom width and height. Endpoint: GET /image/200x100. Returns a 200×100 PNG binary response.
+      - info:
+          name: Image with Text
+          type: http
+          seq: 3
+          description: Generate an image with custom colors and rendered text.
+        http:
+          method: GET
+          url: '{{baseUrl}}/image/400x200/008080/ffffff'
+          params:
+            - name: text
+              value: Hello Probe
+              type: query
+            - name: fontSize
+              value: '16'
+              type: query
+        docs: |
+          Generate an image with custom colors and rendered text. Endpoint: GET /image/400x200/008080/ffffff. Query parameters: text, fontSize. Custom image dimensions, colors, text, and font size.
+      - info:
+          name: WebP Image
+          type: http
+          seq: 4
+          description: Generate a WebP image response for image-preview testing.
+        http:
+          method: GET
+          url: '{{baseUrl}}/image/400x200'
+          params:
+            - name: type
+              value: webp
+              type: query
+            - name: text
+              value: Probe WebP
+              type: query
+        docs: |
+          Generate a WebP image response for image-preview testing. Endpoint: GET /image/400x200. Query parameters: type, text. Useful for testing a non-JSON image/webp response.
+      - info:
+          name: Identicon
+          type: http
+          seq: 5
+          description: Generate a deterministic identicon from the seed “probe”.
+        http:
+          method: GET
+          url: '{{baseUrl}}/icon/probe/150'
+        docs: |
+          Generate a deterministic identicon from the seed “probe”. Endpoint: GET /icon/probe/150. Returns a deterministic placeholder identicon.
+  - info:
+      name: Developer Tools
+      type: folder
+      seq: 13
+      description: Exercise TOTP generation, custom responses, and temporary webhook workflows.
+    docs:
+      content: |
+        These utility APIs are useful for demos beyond normal CRUD. Generate a TOTP, build a custom response, or create a temporary webhook and capture requests against it. webhookId and webhookRequestId are stored as environment variables so the workflow can be reused.
+      type: text/markdown
+    items:
+      - info:
+          name: Generate TOTP (GET)
+          type: http
+          seq: 1
+          description: Generate a TOTP code using query parameters.
+        http:
+          method: GET
+          url: '{{baseUrl}}/2fa'
+          params:
+            - name: key
+              value: JBSWY3DPEHPK3PXP
+              type: query
+        docs: |
+          Generate a TOTP code using query parameters. Endpoint: GET /2fa. Query parameters: key. Uses DummyJSON's sample Base32 secret. POST is preferable for real secrets.
+      - info:
+          name: Generate TOTP (POST)
+          type: http
+          seq: 2
+          description: Generate a TOTP code from a JSON request body.
+        http:
+          method: POST
+          url: '{{baseUrl}}/2fa'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"key":"JBSWY3DPEHPK3PXP"}'
+        docs: |
+          Generate a TOTP code from a JSON request body. Endpoint: POST /2fa. Body type: json. Keeps the TOTP secret out of the URL.
+      - info:
+          name: Generate Custom Response API
+          type: http
+          seq: 3
+          description: Create a custom response definition using DummyJSON developer tools.
+        http:
+          method: POST
+          url: '{{baseUrl}}/c/generate'
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            type: json
+            data: '{"json":{"message":"Hello from Probe"},"method":"GET"}'
+        docs: |
+          Create a custom response definition using DummyJSON developer tools. Endpoint: POST /c/generate. Body type: json. Returns a temporary custom API URL. DummyJSON says generated responses expire after 90 days.
+      - info:
+          name: Create Webhook
+          type: http
+          seq: 4
+          description: Create a temporary webhook endpoint for request-capture demos.
+        http:
+          method: POST
+          url: '{{baseUrl}}/webhook/create'
+        docs: |
+          Create a temporary webhook endpoint for request-capture demos. Endpoint: POST /webhook/create. Creates a temporary webhook endpoint. Copy the returned identifier into webhookId.
+      - info:
+          name: Capture Webhook Request
+          type: http
+          seq: 5
+          description: Send a sample request to the currently selected temporary webhook.
+        http:
+          method: POST
+          url: '{{baseUrl}}/webhook/:webhookId'
+          headers:
+            - name: Content-Type
+              value: application/json
+          params:
+            - name: webhookId
+              value: '{{webhookId}}'
+              type: path
+          body:
+            type: json
+            data: '{"event":"order.created","source":"Probe"}'
+        docs: |
+          Send a sample request to the currently selected temporary webhook. Endpoint: POST /webhook/:webhookId. Path parameters: webhookId. Body type: json. Environment values: webhookId. Set webhookId from Create Webhook before running.
+      - info:
+          name: List Webhook Requests
+          type: http
+          seq: 6
+          description: List requests captured by the selected temporary webhook.
+        http:
+          method: GET
+          url: '{{baseUrl}}/webhook/:webhookId/requests'
+          params:
+            - name: webhookId
+              value: '{{webhookId}}'
+              type: path
+        docs: |
+          List requests captured by the selected temporary webhook. Endpoint: GET /webhook/:webhookId/requests. Path parameters: webhookId. Environment values: webhookId. Lists requests captured by the temporary webhook.
+      - info:
+          name: Delete Webhook Request
+          type: http
+          seq: 7
+          description: Delete one captured webhook request by ID.
+        http:
+          method: DELETE
+          url: '{{baseUrl}}/webhook/:webhookId/requests/:webhookRequestId'
+          params:
+            - name: webhookId
+              value: '{{webhookId}}'
+              type: path
+            - name: webhookRequestId
+              value: '{{webhookRequestId}}'
+              type: path
+        docs: |
+          Delete one captured webhook request by ID. Endpoint: DELETE /webhook/:webhookId/requests/:webhookRequestId. Path parameters: webhookId, webhookRequestId. Environment values: webhookId, webhookRequestId. DummyJSON simulates this write; the underlying dataset is not permanently changed. Set webhookId and webhookRequestId before running.
