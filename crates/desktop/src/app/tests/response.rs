@@ -377,6 +377,7 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
                 generation,
                 Ok(HttpResponse {
                     status: 201,
+                    url_changed: false,
                     reason: "Created".to_owned(),
                     url: "https://api.example.test/users".to_owned(),
                     duration: Duration::from_millis(42),
@@ -626,6 +627,7 @@ fn image_response_replaces_pretty_with_scrollable_preview(cx: &mut TestAppContex
                 generation,
                 Ok(HttpResponse {
                     status: 200,
+                    url_changed: false,
                     reason: "OK".to_owned(),
                     url: "https://api.example.test/avatar".to_owned(),
                     duration: Duration::from_millis(12),
@@ -725,6 +727,7 @@ fn xml_response_inspects_values_and_keeps_syntax_after_visiting_raw(cx: &mut Tes
                 generation,
                 Ok(HttpResponse {
                     status: 200,
+                    url_changed: false,
                     reason: "OK".to_owned(),
                     url: "https://api.example.test/data.xml".to_owned(),
                     duration: Duration::from_millis(12),
@@ -832,6 +835,7 @@ fn large_response_body_only_renders_visible_rows(cx: &mut TestAppContext) {
                 generation,
                 Ok(HttpResponse {
                     status: 200,
+                    url_changed: false,
                     reason: "OK".to_owned(),
                     url: "https://api.example.test/lines".to_owned(),
                     duration: Duration::from_millis(12),

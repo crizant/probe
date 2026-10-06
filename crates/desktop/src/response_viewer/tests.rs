@@ -14,6 +14,7 @@ use super::{
 fn response(body: &[u8], content_type: &str) -> HttpResponse {
     HttpResponse {
         status: 200,
+        url_changed: false,
         reason: "OK".to_owned(),
         url: String::new(),
         duration: Duration::ZERO,

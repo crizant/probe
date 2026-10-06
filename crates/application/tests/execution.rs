@@ -320,7 +320,11 @@ fn runtime_overrides_resolve_without_an_environment_and_stay_secret_for_secret_d
 async fn secret_bearing_response_is_redacted_and_reports_the_presentation_url() {
     let mut body = SECRET.as_bytes().to_vec();
     body.extend_from_slice(b"\xff-tail");
-    let (base, server) = serve_once(http_response(&format!("X-Echo: {SECRET}\r\n"), &body));
+    let (target, target_server) =
+        serve_once(http_response(&format!("X-Echo: {SECRET}\r\n"), &body));
+    let (base, server) = serve_once(
+        format!("HTTP/1.1 302 Found\r\nLocation: {target}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_bytes(),
+    );
     let executed = prepare_secret_execution(&base)
         .execute(
             &HttpEngine::new().unwrap(),
@@ -332,10 +336,12 @@ async fn secret_bearing_response_is_redacted_and_reports_the_presentation_url() 
         .await
         .unwrap();
     let head = server.join().unwrap();
+    target_server.join().unwrap();
     assert!(contains(&head, &format!("/{SECRET}")));
     assert!(contains(&head, &format!("Bearer {SECRET}")));
     let response = executed.response;
     assert_eq!(response.url, format!("{base}/{{{{token}}}}"));
+    assert!(!response.url_changed);
     assert_eq!(response.body, b"[REDACTED]\xff-tail");
     let echo = response
         .headers

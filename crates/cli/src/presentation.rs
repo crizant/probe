@@ -14,20 +14,26 @@ pub(super) fn response_human(
     url: &str,
     response: &HttpResponse,
     output: Option<&Path>,
+    show_headers: bool,
 ) -> String {
     let mut rendered = format!(
-        "{method} {url}\n\n{} {}\n{} ms\n{}\nFinal URL: {}\nHeaders:\n",
+        "{method} {url}\n\n{} {}\n{} ms\n{}\n",
         response.status,
         response.reason,
         response.duration.as_millis(),
         human_size(response.size),
-        response.url,
     );
-    if response.headers.is_empty() {
-        rendered.push_str("  (none)\n");
-    } else {
-        for header in &response.headers {
-            rendered.push_str(&format!("  {}: {}\n", header.name, header.value));
+    if response.url_changed {
+        rendered.push_str(&format!("Final URL: {}\n", response.url));
+    }
+    if show_headers {
+        rendered.push_str("Headers:\n");
+        if response.headers.is_empty() {
+            rendered.push_str("  (none)\n");
+        } else {
+            for header in &response.headers {
+                rendered.push_str(&format!("  {}: {}\n", header.name, header.value));
+            }
         }
     }
     rendered.push('\n');
@@ -654,5 +660,48 @@ mod size_tests {
         assert_eq!(human_size(1024), "1.0 KiB");
         assert_eq!(human_size(2048), "2.0 KiB");
         assert_eq!(human_size(1024 * 1024), "1.0 MiB");
+    }
+}
+
+#[cfg(test)]
+mod response_url_tests {
+    use super::{response_human, response_json};
+    use probe_http::HttpResponse;
+    use serde_json::json;
+    use std::time::Duration;
+
+    #[test]
+    fn final_url_is_shown_only_when_changed_and_always_retained_in_json() {
+        let original_url = "https://example.com/start";
+        for final_url in [original_url, "https://example.com/redirected"] {
+            let response = HttpResponse {
+                status: 200,
+                url_changed: final_url != original_url,
+                reason: "OK".to_owned(),
+                url: final_url.to_owned(),
+                duration: Duration::ZERO,
+                size: 5,
+                headers: Vec::new(),
+                body: b"hello".to_vec(),
+                body_complete: true,
+                body_file: None,
+                body_retention_error: None,
+            };
+            for show_headers in [false, true] {
+                let human = response_human("GET", original_url, &response, None, show_headers);
+                if final_url == original_url {
+                    assert!(!human.contains("Final URL:"), "{human}");
+                } else {
+                    assert!(
+                        human.contains(&format!("Final URL: {final_url}\n")),
+                        "{human}"
+                    );
+                }
+                assert!(human.starts_with(&format!("GET {original_url}\n")));
+                assert!(human.ends_with("\n\nhello\n"));
+            }
+            let structured = response_json(json!({ "url": original_url }), &response, None);
+            assert_eq!(structured["response"]["url"], final_url);
+        }
     }
 }

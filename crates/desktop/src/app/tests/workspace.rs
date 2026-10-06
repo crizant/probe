@@ -2452,6 +2452,7 @@ fn discarding_a_dirty_tab_restores_the_workspace_request(cx: &mut TestAppContext
                 generation,
                 Ok(HttpResponse {
                     status: 200,
+                    url_changed: false,
                     reason: "OK".to_owned(),
                     url: "https://discarded.example".to_owned(),
                     duration: Duration::from_millis(12),

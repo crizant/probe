@@ -1414,6 +1414,7 @@ mod tests {
     fn response(status: u16) -> HttpResponse {
         HttpResponse {
             status,
+            url_changed: false,
             reason: String::new(),
             url: String::new(),
             duration: Duration::ZERO,

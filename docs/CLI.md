@@ -16,7 +16,7 @@ probe collection unset <path> [--summary] [--docs] [--json]
 probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--strict-variables] [--json]
 probe request variables <path> <selector> [--environment <name>] [--json]
-probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--secret-provider env] [--output <file>] [--dry-run] [--expect <expr>]... [--json]
+probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--expect <expr>]... [--json]
 probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request unset <path> <selector> [--description] [--docs] [--json]
 probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
@@ -88,6 +88,12 @@ executes the request.
 engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes the raw
 response body to the specified path using bounded streaming; response metadata remains on
 stdout. The destination is replaced only after the complete response has been written.
+Human output shows the request method and URL, status, duration, response size, and
+response body. `Final URL:` appears only when redirects change the effective URL
+initially sent by the HTTP engine. Path/query parameters and URL normalization
+alone do not show it. Response headers are hidden by default; add `--show-headers`
+to include them. `--json` always includes response headers and is unaffected by this
+flag. `--show-headers` does not change dry-run output.
 
 `--dry-run` uses the same selector, environment, `--var`, and `--strict-variables`
 resolution as a live run, including GraphQL-over-HTTP preparation, then exits without

@@ -246,7 +246,7 @@ fn secret_provider_accepts_only_one_supported_backend() {
 }
 
 #[test]
-fn secret_provider_and_environment_options_require_values_before_another_option() {
+fn run_value_options_require_values_before_another_option() {
     let workspace = runtime_variables_fixture("http://example.invalid");
     for (arguments, message) in [
         (
@@ -260,6 +260,18 @@ fn secret_provider_and_environment_options_require_values_before_another_option(
         (
             vec!["--secret-provider"],
             "--secret-provider requires a non-empty value",
+        ),
+        (
+            vec!["--environment", "--show-headers"],
+            "--environment requires a non-empty value",
+        ),
+        (
+            vec!["--secret-provider", "--show-headers"],
+            "--secret-provider requires a non-empty value",
+        ),
+        (
+            vec!["--output", "--show-headers"],
+            "--output requires a non-empty value",
         ),
     ] {
         let output = probe()
@@ -1345,6 +1357,162 @@ fn run_rejects_malformed_runtime_variables_without_exposing_the_value() {
 }
 
 #[test]
+fn effective_request_urls_do_not_look_like_redirects() {
+    for (path, parameters, expected_path) in [
+        (
+            "/users/:id",
+            "      params:\n        - name: id\n          value: '7'\n          type: path\n",
+            "/users/7",
+        ),
+        (
+            "/search",
+            "      params:\n        - name: q\n          value: 'hello world'\n          type: query\n",
+            "/search?q=hello+world",
+        ),
+        ("/before/../normalized", "", "/normalized"),
+    ] {
+        let (base_url, server) = serve_once(b"hello".to_vec(), "text/plain");
+        let url = format!("{}{path}", base_url.replacen("http:", "HTTP:", 1));
+        let workspace = run_url_fixture(&url, parameters);
+        let output = probe()
+            .args(["request", "run"])
+            .arg(&workspace)
+            .arg("items/0")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let human = String::from_utf8(output.stdout).unwrap();
+        assert!(!human.contains("Final URL:"), "{human}");
+        assert!(human.ends_with("\n\nhello\n"));
+        let captured = server.join().unwrap();
+        assert!(
+            captured
+                .head
+                .starts_with(&format!("GET {expected_path} HTTP/1.1\r\n")),
+            "{captured:?}"
+        );
+        fs::remove_file(workspace).unwrap();
+    }
+}
+
+#[test]
+fn real_redirects_show_the_final_url_and_keep_json_unchanged() {
+    for json in [false, true] {
+        let (target_url, target) = serve_once(b"hello".to_vec(), "text/plain");
+        let final_url = format!("{target_url}/final");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let initial_url = format!("http://{}/start", listener.local_addr().unwrap());
+        let location = final_url.clone();
+        let redirect = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(&mut stream);
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            write!(stream, "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let workspace = run_url_fixture(&initial_url, "");
+        let mut command = probe();
+        command
+            .args(["request", "run"])
+            .arg(&workspace)
+            .arg("items/0");
+        if json {
+            command.arg("--json");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let rendered = String::from_utf8(output.stdout).unwrap();
+        if json {
+            let value: Value = serde_json::from_str(&rendered).unwrap();
+            assert_eq!(value["response"]["url"], final_url);
+            assert!(value["response"].get("urlChanged").is_none());
+            assert!(value["response"].get("url_changed").is_none());
+        } else {
+            assert!(
+                rendered.contains(&format!("Final URL: {final_url}\n")),
+                "{rendered}"
+            );
+        }
+        redirect.join().unwrap();
+        assert!(
+            target
+                .join()
+                .unwrap()
+                .head
+                .starts_with("GET /final HTTP/1.1\r\n")
+        );
+        fs::remove_file(workspace).unwrap();
+    }
+}
+
+fn run_url_fixture(url: &str, parameters: &str) -> PathBuf {
+    let workspace = temporary_path("effective-url.yml");
+    fs::write(&workspace, format!("opencollection: 1.0.0\ninfo:\n  name: Effective URL\nbundled: true\nitems:\n  - info:\n      name: Request\n      type: http\n    http:\n      method: GET\n      url: '{url}'\n{parameters}")).unwrap();
+    workspace
+}
+
+#[test]
+fn human_response_headers_are_opt_in() {
+    for flags in [&[][..], &["--show-headers"][..]] {
+        let output = run_response_with_flags("hello", "text/plain", flags);
+        assert!(output.starts_with("POST http://127.0.0.1:"), "{output}");
+        assert!(output.contains("\n200 OK\n"), "{output}");
+        assert!(output.contains(" ms\n5 B\n"), "{output}");
+        assert!(!output.contains("Final URL:"), "{output}");
+        assert!(output.ends_with("\n\nhello\n"), "{output}");
+        assert_eq!(output.contains("Headers:\n"), !flags.is_empty());
+        assert_eq!(
+            output.contains("  content-type: text/plain\n"),
+            !flags.is_empty()
+        );
+        assert_eq!(output.contains("  content-length: 5\n"), !flags.is_empty());
+    }
+}
+
+#[test]
+fn json_response_includes_headers_with_or_without_show_headers() {
+    for flags in [&["--json"][..], &["--json", "--show-headers"][..]] {
+        let output = run_response_with_flags("hello", "text/plain", flags);
+        let value: Value = serde_json::from_str(&output).unwrap();
+        let headers = value["response"]["headers"].as_array().unwrap();
+        assert!(
+            headers
+                .iter()
+                .any(|header| header["name"] == "content-type" && header["value"] == "text/plain")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|header| header["name"] == "content-length" && header["value"] == "5")
+        );
+        assert_eq!(value["response"]["body"]["content"], "hello");
+    }
+}
+
+#[test]
+fn show_headers_uses_standard_flag_validation_and_help() {
+    let output = probe()
+        .args(["request", "run", "--show-headers", "--show-headers"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--show-headers may only be specified once")
+    );
+    for args in [&["--help"][..], &["request", "run", "--help"][..]] {
+        let output = probe().args(args).output().unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("--show-headers"));
+    }
+}
+
+#[test]
 fn human_response_pretty_prints_json_without_colors() {
     for content_type in [
         "application/json",
@@ -1402,6 +1570,10 @@ fn structured_response_preserves_original_json_body() {
 }
 
 fn run_response_output(body: &str, content_type: &'static str, json: bool) -> String {
+    run_response_with_flags(body, content_type, if json { &["--json"] } else { &[] })
+}
+
+fn run_response_with_flags(body: &str, content_type: &'static str, flags: &[&str]) -> String {
     let (server_url, server) = serve_once(body.as_bytes().to_vec(), content_type);
     let workspace = runtime_fixture(&server_url);
     let mut command = probe();
@@ -1409,9 +1581,7 @@ fn run_response_output(body: &str, content_type: &'static str, json: bool) -> St
         .args(["request", "run"])
         .arg(&workspace)
         .args(["items/0", "--environment", "local"]);
-    if json {
-        command.arg("--json");
-    }
+    command.args(flags);
     let output = command.output().expect("request should run");
     server.join().unwrap();
     fs::remove_file(workspace).unwrap();

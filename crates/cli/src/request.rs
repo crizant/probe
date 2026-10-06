@@ -224,6 +224,7 @@ pub(crate) struct RunOptions<'a> {
     pub(crate) output: Option<&'a PathBuf>,
     pub(crate) strict_variables: bool,
     pub(crate) dry_run: bool,
+    pub(crate) show_headers: bool,
     pub(crate) secret_provider_env: bool,
     pub(crate) expectations: &'a [StatusExpectation],
     pub(crate) human_output: bool,
@@ -311,6 +312,7 @@ pub(crate) fn run(
                 &url,
                 &response,
                 options.output.map(PathBuf::as_path),
+                options.show_headers,
             )
         },
         options.human_output,
@@ -423,6 +425,7 @@ mod response_output_tests {
         let body = br#"{"message":"hello"}"#.to_vec();
         let response = HttpResponse {
             status: 200,
+            url_changed: false,
             reason: "OK".to_owned(),
             url: "https://example.com".to_owned(),
             duration: std::time::Duration::ZERO,
