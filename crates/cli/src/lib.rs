@@ -338,10 +338,16 @@ where
         return RunOutput::success(output.render(json_output, quiet));
     }
 
-    match parse_command(args).and_then(|command| execute(command, stdin)) {
+    match parse_command(args)
+        .and_then(|command| execute(command, stdin, human_output_requested(json_output, quiet)))
+    {
         Ok(output) => RunOutput::success(output.render(json_output, quiet)),
         Err(error) => RunOutput::failure(error, json_output),
     }
+}
+
+fn human_output_requested(json_output: bool, quiet: bool) -> bool {
+    !json_output && !quiet
 }
 
 fn remove_flags(args: &mut Vec<String>, flags: &[&str]) -> usize {
@@ -353,7 +359,11 @@ fn remove_flags(args: &mut Vec<String>, flags: &[&str]) -> usize {
     count
 }
 
-fn execute(command: Command, stdin: &mut impl Read) -> Result<CommandOutput, CliError> {
+fn execute(
+    command: Command,
+    stdin: &mut impl Read,
+    human_output: bool,
+) -> Result<CommandOutput, CliError> {
     match command {
         Command::CreateCollection { path, name } => collection::create(path, name),
         Command::ImportYaak {
@@ -428,6 +438,7 @@ fn execute(command: Command, stdin: &mut impl Read) -> Result<CommandOutput, Cli
                 dry_run,
                 secret_provider_env,
                 expectations: &expectations,
+                human_output,
             },
             stdin,
         ),

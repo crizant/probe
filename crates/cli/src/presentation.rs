@@ -39,6 +39,8 @@ pub(super) fn response_human(
             MAX_IN_MEMORY_RESPONSE_BYTES
         ));
     } else if let Ok(body) = std::str::from_utf8(&response.body) {
+        let pretty = pretty_json_body(response, body);
+        let body = pretty.as_deref().unwrap_or(body);
         rendered.push_str(body);
         if !body.ends_with('\n') {
             rendered.push('\n');
@@ -47,6 +49,95 @@ pub(super) fn response_human(
         rendered.push_str("Binary response body omitted; use --output <file>.\n");
     }
     rendered
+}
+
+fn pretty_json_body(response: &HttpResponse, body: &str) -> Option<String> {
+    let content_type = response
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("content-type"))?
+        .value
+        .split(';')
+        .next()?
+        .trim()
+        .to_ascii_lowercase();
+    let (_, subtype) = content_type.split_once('/')?;
+    if subtype != "json" && !subtype.ends_with("+json") {
+        return None;
+    }
+    pretty_json_text(body)
+}
+
+fn pretty_json_text(body: &str) -> Option<String> {
+    // Validate without interpreting values: preserve duplicate keys, key order,
+    // number spelling/precision, and string escapes exactly as received.
+    let raw: &serde_json::value::RawValue = serde_json::from_str(body).ok()?;
+    let mut chars = raw.get().chars().peekable();
+    let mut pretty = String::with_capacity(body.len().min(MAX_IN_MEMORY_RESPONSE_BYTES));
+    let mut depth = 0;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                json_char(&mut pretty, ch)?;
+                let mut escaped = false;
+                for ch in chars.by_ref() {
+                    json_char(&mut pretty, ch)?;
+                    if ch == '"' && !escaped {
+                        break;
+                    }
+                    escaped = ch == '\\' && !escaped;
+                }
+            }
+            '{' | '[' => {
+                json_char(&mut pretty, ch)?;
+                depth += 1;
+                // Bound indentation expansion for deeply nested response bodies.
+                if depth > 128 {
+                    return None;
+                }
+                while chars.next_if(|ch| ch.is_ascii_whitespace()).is_some() {}
+                if !matches!(chars.peek(), Some('}' | ']')) {
+                    json_newline(&mut pretty, depth)?;
+                }
+            }
+            '}' | ']' => {
+                depth -= 1;
+                if !pretty.ends_with(['{', '[']) {
+                    json_newline(&mut pretty, depth)?;
+                }
+                json_char(&mut pretty, ch)?;
+            }
+            ',' => {
+                json_char(&mut pretty, ch)?;
+                json_newline(&mut pretty, depth)?;
+            }
+            ':' => {
+                json_char(&mut pretty, ':')?;
+                json_char(&mut pretty, ' ')?;
+            }
+            ch if ch.is_ascii_whitespace() => {}
+            ch => json_char(&mut pretty, ch)?,
+        }
+    }
+    Some(pretty)
+}
+
+// Apply the response retention limit to formatted output too, before growing it.
+fn json_char(pretty: &mut String, ch: char) -> Option<()> {
+    if ch.len_utf8() > MAX_IN_MEMORY_RESPONSE_BYTES - pretty.len() {
+        return None;
+    }
+    pretty.push(ch);
+    Some(())
+}
+
+fn json_newline(pretty: &mut String, depth: usize) -> Option<()> {
+    if 1 + depth * 2 > MAX_IN_MEMORY_RESPONSE_BYTES - pretty.len() {
+        return None;
+    }
+    pretty.push('\n');
+    pretty.extend(std::iter::repeat_n(' ', depth * 2));
+    Some(())
 }
 
 pub(super) fn response_json(
@@ -464,6 +555,92 @@ fn authentication_value(value: &AuthenticationValue) -> Value {
                 .map(|(name, value)| (name.clone(), authentication_value(value)))
                 .collect(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod json_format_tests {
+    use super::{MAX_IN_MEMORY_RESPONSE_BYTES, json_newline, pretty_json_text};
+
+    #[test]
+    fn changes_only_whitespace_outside_strings() {
+        for (body, expected) in [
+            (
+                " \r\n { \"z\" : [ { }, [ ], { \"a\" : false } ], \"a\":null } \t",
+                "{\n  \"z\": [\n    {},\n    [],\n    {\n      \"a\": false\n    }\n  ],\n  \"a\": null\n}",
+            ),
+            (
+                r#"{"s":"雪 \u0061 \/ \" \\ \\\",:{}[] \n\t","end\\":"\\"}"#,
+                "{\n  \"s\": \"雪 \\u0061 \\/ \\\" \\\\ \\\\\\\",:{}[] \\n\\t\",\n  \"end\\\\\": \"\\\\\"\n}",
+            ),
+            ("{ \n }", "{}"),
+            ("[ \t ]", "[]"),
+            (" true \r\n", "true"),
+            ("null", "null"),
+            (" -0.00e+9999 ", "-0.00e+9999"),
+            (r#""  string  ""#, r#""  string  ""#),
+        ] {
+            let pretty = pretty_json_text(body).unwrap();
+            assert_eq!(pretty, expected, "{body}");
+            assert_eq!(pretty_json_text(&pretty).as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_json_instead_of_formatting_a_prefix() {
+        for body in [
+            "",
+            "{\"a\":",
+            "{} trailing",
+            "{} []",
+            "[1,]",
+            "{unquoted:1}",
+            r#""\q""#,
+            "\"unterminated",
+            "[01]",
+            "[NaN]",
+        ] {
+            assert_eq!(pretty_json_text(body), None, "{body}");
+        }
+    }
+
+    #[test]
+    fn bounds_indentation_for_deeply_nested_bodies() {
+        let body = format!("{}0{}", "[".repeat(128), "]".repeat(128));
+        assert!(pretty_json_text(&body).is_some());
+        assert_eq!(pretty_json_text(&format!("[{body}]")), None);
+    }
+
+    #[test]
+    fn bounds_output_bytes_for_indentation_and_utf8() {
+        let depth = 128;
+        let siblings = MAX_IN_MEMORY_RESPONSE_BYTES / (depth * 2) + 1;
+        let body = format!(
+            "{}{}0{}",
+            "[".repeat(depth),
+            "0,".repeat(siblings),
+            "]".repeat(depth)
+        );
+        assert!(body.len() < MAX_IN_MEMORY_RESPONSE_BYTES);
+        assert_eq!(pretty_json_text(&body), None);
+        assert_eq!(
+            pretty_json_text("[[0,0,0]]").as_deref(),
+            Some("[\n  [\n    0,\n    0,\n    0\n  ]\n]")
+        );
+        // Check pre-append boundaries that a later character's fallback can hide.
+        for (remaining, depth, fits) in [(3, 1, true), (6, 3, false)] {
+            let mut pretty = " ".repeat(MAX_IN_MEMORY_RESPONSE_BYTES - remaining);
+            assert_eq!(json_newline(&mut pretty, depth), fits.then_some(()));
+            assert!(pretty.len() <= MAX_IN_MEMORY_RESPONSE_BYTES);
+        }
+        for extra_bytes in 0..=2 {
+            let bytes = MAX_IN_MEMORY_RESPONSE_BYTES + extra_bytes;
+            let body = format!("\"{}雪\"", "x".repeat(bytes - 5));
+            assert_eq!(
+                pretty_json_text(&body).map(|pretty| pretty.len()),
+                (extra_bytes == 0).then_some(bytes)
+            );
+        }
     }
 }
 
