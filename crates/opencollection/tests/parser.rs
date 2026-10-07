@@ -590,18 +590,47 @@ fn loads_documentation_without_flattening_objects_or_request_docs() {
 }
 
 #[test]
-fn rejects_request_docs_that_are_not_strings() {
-    for docs in [
-        "    docs: null\n",
-        "    docs:\n      content: nope\n      type: text/plain\n",
-    ] {
-        let source = format!(
-            "opencollection: 1.0.0\ninfo:\n  name: Docs\nbundled: true\nitems:\n  - info:\n      name: Create\n      type: http\n{docs}    http:\n      method: GET\n      url: https://example.com\n"
-        );
-        let error = parse(&source).expect_err("invalid request docs should be rejected");
-        assert!(
-            error.to_string().contains("request docs must be a string"),
-            "{error}\n{source}"
-        );
+fn request_docs_are_strings_for_http_and_graphql() {
+    for protocol in ["http", "graphql"] {
+        let source = fixture("documentation.yml")
+            .replace("type: http", &format!("type: {protocol}"))
+            .replace("        http:", &format!("        {protocol}:"));
+        for (docs, expected) in [
+            ("null", Documentation::Null),
+            (
+                "{content: Guide, type: text/plain}",
+                Documentation::Content {
+                    content: "Guide".into(),
+                    media_type: "text/plain".into(),
+                },
+            ),
+        ] {
+            let docs: serde_yaml_ng::Value = serde_yaml_ng::from_str(docs).unwrap();
+            let mut document: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source).unwrap();
+            document["docs"] = docs.clone();
+            document["items"][0]["docs"] = docs.clone();
+            let valid_source = serde_yaml_ng::to_string(&document).unwrap();
+            let parsed = parse(&valid_source)
+                .expect("collection and folder docs should accept Documentation");
+            let collection = parsed.collection();
+            assert_eq!(collection.metadata.docs.as_ref(), Some(&expected));
+            let CollectionItem::Folder(folder) = &collection.items[0] else {
+                panic!("first item should be a folder");
+            };
+            assert_eq!(folder.docs.as_ref(), Some(&expected));
+            let CollectionItem::Request(request) = &folder.items[0] else {
+                panic!("folder child should be a request");
+            };
+            assert_eq!(request.docs.as_deref(), Some("request docs stay a string"));
+
+            document["items"][0]["items"][0]["docs"] = docs;
+            let invalid_source = serde_yaml_ng::to_string(&document).unwrap();
+            let error = parse(&invalid_source)
+                .expect_err("request docs must reject object and null values");
+            assert!(
+                error.to_string().contains("request docs must be a string"),
+                "{error}\n{invalid_source}"
+            );
+        }
     }
 }

@@ -225,10 +225,14 @@ remove fields from the file. At least one field flag is required.
 folder and request unset, and `--description` on environment unset, take no value
 and omit that key. They do not write YAML null. `set` remains set-only.
 
-Request `info.description` uses the same documentation value. Request `docs` is a
-plain string: `--docs <text>` writes that string, and `--docs-json` is rejected
-because an object or null is not valid request docs. `request list` and
-`folder list` omit description and docs. `request get`, `folder get`, and
+Request `info.description` uses the schema's `Description` type, which accepts the
+same string, object, and null representations as collection/folder `Documentation`.
+The [OpenCollection 1.0.0 schema](https://schema.opencollection.com/opencollection/v1.0.0.json)
+defines HTTP and GraphQL request `docs` as a plain string, rather than `Documentation`.
+`--docs <text>` writes that string; `request set --docs-json` is always rejected,
+including for JSON strings. Objects and null are invalid request `docs` values;
+use `request unset --docs` to remove the field. This distinction follows the schema.
+`request list` and `folder list` omit description and docs. `request get`, `folder get`, and
 `collection get` include them. Documentation writes are not applied by rename,
 move, create, or other field updates unless that command is given the
 documentation flag.
