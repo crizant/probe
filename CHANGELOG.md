@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- The app icon now uses clean vector artwork on a light porcelain grid background,
+  with orange colors drawn from the app themes and a brighter dark variant.
+
 ## [0.10.5] - 2026-10-07
 
 ### Changed
