@@ -32,15 +32,31 @@ need the project's Developer ID signing and notarization workflow. The icon path
 in Cargo metadata are workspace-root-relative because cargo-bundle 0.11 expands
 its resource globs from the process working directory.
 
-The current artwork is a flattened sRGB icon. Apple accepts flattened app icons,
+The current artwork is a fully opaque square sRGB raster icon with an edge-to-edge
+graphite grid background. Apple accepts flattened app icons,
 but an Icon Composer project with independently reactive Liquid Glass layers would
 require separate background, cable, probe, and collar artwork.
 
+## Documentation preview
+
+`docs/assets/probe-app-icon.png` (relative to the workspace root) is a 512px
+README-only preview with rounded corners and transparent corner cutouts.
+Packaged icons remain fully opaque.
+
+## Regeneration
+
+From the workspace root, run:
+
+```sh
+python3 scripts/generate-app-icons.py
+```
+
+The script requires Pillow (`python3 -m pip install Pillow` if missing). It validates
+that the canonical source is 1024px and opaque, rebuilds all platform assets, and
+applies an antialiased rounded-corner mask only to the README preview. The preview's
+corner radius is 112px at 512px resolution.
+
 ## Design source
 
-The selected concept was generated with the built-in image tool and refined as a
-clean, softly dimensional cartoon illustration: a compact dark cabled test probe
-with a sturdy blunt steel sensor, a peach collar, recessed grip details on its
-cylindrical graphite housing, a cable continuing beyond the frame, and a warm-white
-background. It intentionally contains no text, monogram, abstract emblem, sharp tip,
-or weapon-like detail.
+The artwork was generated from a reference illustration: a golden-orange test
+probe on a graphite grid background.

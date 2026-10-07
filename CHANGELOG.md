@@ -8,6 +8,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
+- Redesigned the app icon with a golden-orange test probe, contact rings, and a graphite grid background.
 - CLI `--description <text>` edits the content of an existing structured OpenCollection description without losing its `type`. Use `--description-json` to replace the representation explicitly.
 
 ## [0.10.4] - 2026-10-06
