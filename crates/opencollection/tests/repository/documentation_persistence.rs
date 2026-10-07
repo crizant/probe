@@ -111,6 +111,40 @@ fn documentation_edits_round_trip_without_flattening_objects() {
 
     let mut loaded = load_workspace(&path).unwrap();
     loaded
+        .update_folder(
+            "items/0",
+            &FolderUpdate {
+                description: FieldPatch::Set(Documentation::Text("Plain folder".into())),
+                ..FolderUpdate::default()
+            },
+        )
+        .unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    assert_eq!(
+        folder_at(&loaded, "items/0").metadata.description,
+        Some(Documentation::Text("Plain folder".into()))
+    );
+    loaded
+        .update_folder(
+            "items/0",
+            &FolderUpdate {
+                description: FieldPatch::Set(Documentation::Text("Edited plain folder".into())),
+                ..FolderUpdate::default()
+            },
+        )
+        .unwrap();
+    let saved: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        saved["items"][0]["info"]["description"].as_str(),
+        Some("Edited plain folder")
+    );
+    let mut loaded = load_workspace(&path).unwrap();
+    assert_eq!(
+        folder_at(&loaded, "items/0").metadata.description,
+        Some(Documentation::Text("Edited plain folder".into()))
+    );
+    loaded
         .update_request(
             "items/0/items/0",
             &RequestUpdate {
