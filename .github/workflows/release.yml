@@ -198,9 +198,17 @@ jobs:
       - name: Build macOS app bundle
         if: runner.os == 'macOS'
         run: cargo bundle --release -p probe-desktop --format osx --target ${{ matrix.target }}
+      - name: Compile native macOS icon
+        if: runner.os == 'macOS'
+        run: python3 scripts/compile-macos-icon.py "target/${{ matrix.target }}/release/bundle/osx/Probe.app"
       - name: Ad-hoc sign macOS app bundle
         if: runner.os == 'macOS'
         run: codesign --force --deep --sign - "target/${{ matrix.target }}/release/bundle/osx/Probe.app"
+      - name: Verify signed macOS app bundle
+        if: runner.os == 'macOS'
+        run: |
+          python3 scripts/compile-macos-icon.py --verify-only "target/${{ matrix.target }}/release/bundle/osx/Probe.app"
+          codesign --verify --deep --strict "target/${{ matrix.target }}/release/bundle/osx/Probe.app"
       - name: Package macOS app bundle
         if: runner.os == 'macOS'
         run: |

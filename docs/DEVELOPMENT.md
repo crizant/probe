@@ -20,6 +20,14 @@ the MSRV; using it does not raise the minimum compiler required to build Probe f
 source. Keep both versions explicit rather than selecting floating `stable`, and
 keep GPUI and dependency upgrades separate from toolchain changes.
 
+## macOS Packaging Tools
+
+Native app icon packaging requires full Xcode 26 or later (`actool` and
+`assetutil`), Python 3.9 or later, and cargo-bundle 0.11.0. Compile the icon after
+bundling and before signing; see the [app-icon workflow](../crates/desktop/assets/app-icon/README.md).
+CairoSVG, Pillow, and system Cairo are needed only when regenerating artwork.
+Windows and Linux packaging continue to use the existing generated icons.
+
 ## Rust and Async Work
 
 - Prefer normal ownership, GPUI entity ownership, message passing, task results, and

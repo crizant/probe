@@ -1,0 +1,148 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "solid": "srgb:0.97255,0.96471,0.94902,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "srgb:0.14118,0.14510,0.16078,1.00000"
+      }
+    },
+    {
+      "appearance": "tinted",
+      "value": {
+        "solid": "srgb:0.14118,0.14510,0.16078,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "blur-material": null,
+      "layers": [
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name-specializations": [
+            {
+              "value": "04-target-default.svg"
+            },
+            {
+              "appearance": "dark",
+              "value": "04-target-dark.svg"
+            }
+          ],
+          "name": "04-target"
+        }
+      ],
+      "name": "04-target",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "blur-material": null,
+      "layers": [
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name-specializations": [
+            {
+              "value": "03-probe-default.svg"
+            },
+            {
+              "appearance": "dark",
+              "value": "03-probe-dark.svg"
+            }
+          ],
+          "name": "03-probe"
+        }
+      ],
+      "name": "03-probe",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "blur-material": null,
+      "layers": [
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name-specializations": [
+            {
+              "value": "02-cable-default.svg"
+            },
+            {
+              "appearance": "dark",
+              "value": "02-cable-dark.svg"
+            }
+          ],
+          "name": "02-cable"
+        }
+      ],
+      "name": "02-cable",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "blur-material": null,
+      "layers": [
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name-specializations": [
+            {
+              "value": "01-background-grid-default.png"
+            },
+            {
+              "appearance": "dark",
+              "value": "01-background-grid-dark.png"
+            },
+            {
+              "appearance": "tinted",
+              "value": "01-background-grid-dark.png"
+            }
+          ],
+          "name": "01-background-grid"
+        }
+      ],
+      "name": "01-background-grid",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Render SVG sources and rebuild platform icons (requires CairoSVG and Pillow)."""
 
+import argparse
+from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
 import struct
+import xml.etree.ElementTree as ET
 
 import cairosvg
 from PIL import Image, ImageDraw
@@ -25,6 +28,55 @@ MACOS_IMAGES = (
 )
 
 
+def composer_layers():
+    """Extract depth planes from #106 without redrawing or recoloring artwork.
+
+    Effects/highlights stay with the object they describe; separating those into
+    floating planes would change occlusion and the original geometry.
+    """
+    namespace = "{http://www.w3.org/2000/svg}"
+    ET.register_namespace("", namespace[1:-1])
+    destination = ASSETS / "macos/Probe.icon/Assets"
+    destination.mkdir(parents=True, exist_ok=True)
+    for appearance, source in (("default", LIGHT_SOURCE), ("dark", DARK_SOURCE)):
+        root = ET.parse(source).getroot()
+        shapes = list(root)[3:]  # title, description, defs precede the artwork.
+        if [node.tag.removeprefix(namespace) for node in shapes] != [
+            "rect", "rect", *(["path"] * 5),
+            "g", "g", "path", "path", "g", "path", *(["circle"] * 4),
+        ]:
+            raise ValueError(f"Update the depth split for changed SVG structure: {source}")
+        for name, nodes in (
+            ("01-background-grid", shapes[:2]),
+            ("02-cable", shapes[2:7]),
+            ("03-probe", shapes[7:-4]),
+            ("04-target", shapes[-4:]),
+        ):
+            layer = ET.Element(namespace + "svg", {
+                "width": "1024", "height": "1024", "viewBox": "0 0 1024 1024",
+            })
+            definitions = deepcopy(root.find(namespace + "defs"))
+            # Unused pattern definitions also break Apple's SVG importer.
+            required = {"grid"} if name == "01-background-grid" else (
+                {"metal", "guard-fill", "handle-clip", "bands-clip", "guard-clip"}
+                if name == "03-probe" else set()
+            )
+            for definition in list(definitions):
+                if definition.get("id") not in required:
+                    definitions.remove(definition)
+            if len(definitions):
+                layer.append(definitions)
+            layer.extend(deepcopy(nodes))
+            path = destination / f"{name}-{appearance}.svg"
+            ET.indent(layer, space="  ")
+            ET.ElementTree(layer).write(path, encoding="utf-8", xml_declaration=True)
+            if name == "01-background-grid":
+                # Icon Composer's SVG importer does not support pattern fills.
+                # Rasterize only this depth plane, directly from its SVG.
+                cairosvg.svg2png(url=str(path), write_to=str(path.with_suffix(".png")))
+                path.unlink()
+
+
 def render_svg(path, size):
     data = cairosvg.svg2png(url=str(path), output_width=size, output_height=size)
     with Image.open(BytesIO(data)) as source:
@@ -34,6 +86,13 @@ def render_svg(path, size):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--composer-only", action="store_true",
+                        help="rebuild only the Icon Composer depth artwork")
+    args = parser.parse_args()
+    composer_layers()
+    if args.composer_only:
+        return
     icons = {1024: render_svg(LIGHT_SOURCE, 1024)}
     icons[1024].save(ASSETS / "source/probe-app-icon-1024.png")
     render_svg(DARK_SOURCE, 1024).save(ASSETS / "source/probe-app-icon-dark-1024.png")

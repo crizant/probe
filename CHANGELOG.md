@@ -9,7 +9,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 ### Changed
 
 - The app icon now uses clean vector artwork on a light porcelain grid background,
-  with orange colors drawn from the app themes and a brighter dark variant.
+  with vivid golden-orange colors and a brighter dark variant.
+- macOS packages now include a layered native app icon with Default and Dark
+  appearances selected by macOS, a graphite background for Mono/Clear styles,
+  and a light fallback for older macOS versions.
 
 ## [0.10.5] - 2026-10-07
 

@@ -14,9 +14,9 @@
       <stop offset="1" stop-color="#939B95"/>
     </linearGradient>
     <linearGradient id="guard-fill" x1="441" y1="550" x2="528" y2="638" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFBD5C"/>
-      <stop offset=".55" stop-color="#F0A338"/>
-      <stop offset="1" stop-color="#C78324"/>
+      <stop offset="0" stop-color="#FFB21A"/>
+      <stop offset=".55" stop-color="#FF9800"/>
+      <stop offset="1" stop-color="#E98100"/>
     </linearGradient>
     <clipPath id="handle-clip">
       <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z"/>
@@ -32,12 +32,6 @@
   <!-- Keep the original graphite field and 64px grid cadence. -->
   <rect width="1024" height="1024" fill="#242529"/>
   <rect width="1024" height="1024" fill="url(#grid)"/>
-
-  <!-- Contact target centered on the shared needle/grip axis (x + y = 1082.5). -->
-  <circle cx="290.25" cy="792.25" r="113" fill="none" stroke="#D98E26" stroke-width="7"/>
-  <circle cx="290.25" cy="792.25" r="73" fill="#F0A338" fill-opacity=".16" stroke="#FFBD5C" stroke-width="7"/>
-  <circle cx="290.25" cy="792.25" r="29" fill="#F0A338"/>
-  <circle cx="290.25" cy="792.25" r="11" fill="#FFF3DE"/>
 
   <!-- Contours traced in original image coordinates, not an idealized capsule. -->
   <path d="M889 171C928 130 975 94 1024 61V99C982 129 944 162 913 196Z" fill="#494A4B"/>
@@ -57,24 +51,30 @@
 
   <!-- Clean color faces follow the original highlight and shadow boundaries. -->
   <g clip-path="url(#handle-clip)">
-    <rect x="475" y="195" width="410" height="415" fill="#F0A338"/>
-    <path d="M350 664L950 64V78L350 678Z" fill="#FFBD5C"/>
-    <path d="M350 678L950 78V101L350 701Z" fill="#FFD18A"/>
-    <path d="M350 770L950 170V215L350 815Z" fill="#C78324"/>
+    <rect x="475" y="195" width="410" height="415" fill="#FF9800"/>
+    <path d="M350 664L950 64V78L350 678Z" fill="#FFB21A"/>
+    <path d="M350 678L950 78V101L350 701Z" fill="#FFC43D"/>
+    <path d="M350 770L950 170V215L350 815Z" fill="#E98100"/>
     <!-- The three original grip rings, measured along the diagonal axis. -->
     <g clip-path="url(#bands-clip)">
-      <rect x="475" y="195" width="410" height="415" fill="#B97620"/>
-      <path d="M350 664L950 64V101L350 701Z" fill="#D98E26"/>
-      <path d="M350 770L950 170V215L350 815Z" fill="#A9691B"/>
+      <rect x="475" y="195" width="410" height="415" fill="#C96201"/>
+      <path d="M350 664L950 64V101L350 701Z" fill="#E78A00"/>
+      <path d="M350 770L950 170V215L350 815Z" fill="#AF5000"/>
     </g>
   </g>
-  <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z" fill="none" stroke="#C78324" stroke-width="1"/>
+  <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z" fill="none" stroke="#E98100" stroke-width="1"/>
 
   <!-- Preserve the narrower, slightly asymmetric original finger guard. -->
   <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="url(#guard-fill)"/>
   <g clip-path="url(#guard-clip)">
-    <path d="M404 496L579 671L593 657L418 482Z" fill="#C78324"/>
-    <path d="M429 553L438 544C446 537 457 537 465 544L469 548Q461 546 454 551L438 568L428 558Q426 556 429 553Z" fill="#FFD18A"/>
+    <path d="M404 496L579 671L593 657L418 482Z" fill="#E98100"/>
+    <path d="M429 553L438 544C446 537 457 537 465 544L469 548Q461 546 454 551L438 568L428 558Q426 556 429 553Z" fill="#FFC43D"/>
   </g>
-  <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="none" stroke="#C78324" stroke-width="1"/>
+  <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="none" stroke="#E98100" stroke-width="1"/>
+
+  <!-- Contact target centered on the shared needle/grip axis (x + y = 1082.5). -->
+  <circle cx="290.25" cy="792.25" r="113" fill="none" stroke="#A96500" stroke-width="7"/>
+  <circle cx="290.25" cy="792.25" r="73" fill="#FF9800" fill-opacity=".16" stroke="#FFB21A" stroke-width="7"/>
+  <circle cx="290.25" cy="792.25" r="29" fill="#FFAA00"/>
+  <circle cx="290.25" cy="792.25" r="11" fill="#FFF3DE"/>
 </svg>
