@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-10-07
+
 ### Changed
 
 - The app icon now uses clean vector artwork on a light porcelain grid background,
@@ -393,6 +395,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[0.10.6]: https://github.com/crizant/probe/releases/tag/v0.10.6
 [0.10.5]: https://github.com/crizant/probe/releases/tag/v0.10.5
 [0.10.4]: https://github.com/crizant/probe/releases/tag/v0.10.4
 [0.10.3]: https://github.com/crizant/probe/releases/tag/v0.10.3
