@@ -73,9 +73,8 @@
   <!-- Preserve the narrower, slightly asymmetric original finger guard. -->
   <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="url(#guard-fill)"/>
   <g clip-path="url(#guard-clip)">
-    <path d="M380 520L555 695L566 684L391 509Z" fill="#FFA912"/>
     <path d="M404 496L579 671L593 657L418 482Z" fill="#E48706"/>
-    <path d="M400 500H500L400 600Z" fill="#FFC031"/>
+    <path d="M429 553L438 544C446 537 457 537 465 544L469 548Q461 546 454 551L438 568L428 558Q426 556 429 553Z" fill="#FFC031"/>
   </g>
   <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="none" stroke="#D48108" stroke-width="1"/>
 </svg>
