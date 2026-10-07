@@ -6,6 +6,12 @@ including the aligned needle and collar, with different color palettes. Platform
 assets are rendered directly from the light SVG at each required size. The dark
 variant is retained for a future appearance switch.
 
+The main orange fills match the app's accent colors: `#E7821B` for Porcelain Honey
+and `#D98E26` for Graphite Honey. Highlights and shadows use shades of those accents
+and the theme's hover/pressed colors. The needle and lower collar share the grip's
+exact -45° centerline (`x + y = 1082.5`), which also passes through the contact
+target's center.
+
 The `source/probe-app-icon-1024.png` and `source/probe-app-icon-dark-1024.png` files
 are generated previews of the SVGs; edit the SVGs and regenerate rather than
 editing or resizing those PNGs.

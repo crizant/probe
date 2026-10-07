@@ -14,9 +14,9 @@
       <stop offset="1" stop-color="#939B95"/>
     </linearGradient>
     <linearGradient id="guard-fill" x1="441" y1="550" x2="528" y2="638" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFA814"/>
-      <stop offset=".55" stop-color="#F29308"/>
-      <stop offset="1" stop-color="#E57E02"/>
+      <stop offset="0" stop-color="#F0A338"/>
+      <stop offset=".55" stop-color="#D98E26"/>
+      <stop offset="1" stop-color="#B97620"/>
     </linearGradient>
     <clipPath id="handle-clip">
       <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z"/>
@@ -33,11 +33,11 @@
   <rect width="1024" height="1024" fill="#242529"/>
   <rect width="1024" height="1024" fill="url(#grid)"/>
 
-  <!-- Original target location, radii and fine stroke weights. -->
-  <circle cx="286" cy="788" r="113" fill="none" stroke="#9B6309" stroke-width="7"/>
-  <circle cx="286" cy="788" r="73" fill="#AA6308" fill-opacity=".30" stroke="#FAA31C" stroke-width="7"/>
-  <circle cx="286" cy="788" r="29" fill="#FFB820"/>
-  <circle cx="286" cy="788" r="11" fill="#FFF3DE"/>
+  <!-- Contact target centered on the shared needle/grip axis (x + y = 1082.5). -->
+  <circle cx="290.25" cy="792.25" r="113" fill="none" stroke="#9F6C27" stroke-width="7"/>
+  <circle cx="290.25" cy="792.25" r="73" fill="#D98E26" fill-opacity=".16" stroke="#F0A338" stroke-width="7"/>
+  <circle cx="290.25" cy="792.25" r="29" fill="#D98E26"/>
+  <circle cx="290.25" cy="792.25" r="11" fill="#FFF3DE"/>
 
   <!-- Contours traced in original image coordinates, not an idealized capsule. -->
   <path d="M889 171C928 130 975 94 1024 61V99C982 129 944 162 913 196Z" fill="#494A4B"/>
@@ -47,7 +47,7 @@
   <path d="M878 235L913 188Q920 193 918 200L872 271L857 253Z" fill="#343537"/>
 
   <!-- One shared axis aligns the steel tip and collar with the grip and target. -->
-  <g transform="translate(286 788) rotate(-44.465546)">
+  <g transform="translate(290.25 792.25) rotate(-45)">
     <path d="M0 0Q0-1.25 3-1.8L174-10V10L3 1.8Q0 1.25 0 0Z" fill="url(#metal)" stroke="#ADB4AE" stroke-width="1" stroke-linejoin="round"/>
     <path d="M3-.4L174-3" fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
     <path d="M168-13L251-31V31L168 13Z" fill="#434548"/>
@@ -57,24 +57,24 @@
 
   <!-- Clean color faces follow the original highlight and shadow boundaries. -->
   <g clip-path="url(#handle-clip)">
-    <rect x="475" y="195" width="410" height="415" fill="#F59A12"/>
-    <path d="M350 664L950 64V78L350 678Z" fill="#FFB820"/>
-    <path d="M350 678L950 78V101L350 701Z" fill="#FFCB45"/>
-    <path d="M350 770L950 170V215L350 815Z" fill="#EA870B"/>
+    <rect x="475" y="195" width="410" height="415" fill="#D98E26"/>
+    <path d="M350 664L950 64V78L350 678Z" fill="#F0A338"/>
+    <path d="M350 678L950 78V101L350 701Z" fill="#E4B167"/>
+    <path d="M350 770L950 170V215L350 815Z" fill="#B97620"/>
     <!-- The three original grip rings, measured along the diagonal axis. -->
     <g clip-path="url(#bands-clip)">
-      <rect x="475" y="195" width="410" height="415" fill="#CC6903"/>
-      <path d="M350 664L950 64V101L350 701Z" fill="#E98408"/>
-      <path d="M350 770L950 170V215L350 815Z" fill="#BD5C02"/>
+      <rect x="475" y="195" width="410" height="415" fill="#A9691B"/>
+      <path d="M350 664L950 64V101L350 701Z" fill="#C98222"/>
+      <path d="M350 770L950 170V215L350 815Z" fill="#945D17"/>
     </g>
   </g>
-  <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z" fill="none" stroke="#DB8A10" stroke-width="1"/>
+  <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z" fill="none" stroke="#B97620" stroke-width="1"/>
 
   <!-- Preserve the narrower, slightly asymmetric original finger guard. -->
   <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="url(#guard-fill)"/>
   <g clip-path="url(#guard-clip)">
-    <path d="M404 496L579 671L593 657L418 482Z" fill="#E48706"/>
-    <path d="M429 553L438 544C446 537 457 537 465 544L469 548Q461 546 454 551L438 568L428 558Q426 556 429 553Z" fill="#FFC031"/>
+    <path d="M404 496L579 671L593 657L418 482Z" fill="#B97620"/>
+    <path d="M429 553L438 544C446 537 457 537 465 544L469 548Q461 546 454 551L438 568L428 558Q426 556 429 553Z" fill="#E4B167"/>
   </g>
-  <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="none" stroke="#D48108" stroke-width="1"/>
+  <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="none" stroke="#B97620" stroke-width="1"/>
 </svg>
