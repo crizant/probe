@@ -176,7 +176,7 @@ pub(crate) fn update(
     input: &WorkspaceInput,
     selector: &str,
     update: &RequestUpdate,
-    preserve_description_type: bool,
+    description: &crate::command::DescriptionEdit,
     stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
     let mut loaded = load(input, stdin)?;
@@ -185,8 +185,7 @@ pub(crate) fn update(
         .request_key(selector)
         .and_then(|key| loaded.workspace().request(key))
         .and_then(|request| request.metadata.description.as_ref());
-    update.description =
-        crate::description_edit(&update.description, existing, preserve_description_type);
+    update.description = description.resolve(existing);
     loaded
         .update_request(selector, &update)
         .map_err(CliError::persistence)?;

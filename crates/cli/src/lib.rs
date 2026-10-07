@@ -4,7 +4,6 @@
 
 use std::io::{self, Read};
 
-use probe_core::{Documentation, FieldPatch};
 use serde_json::json;
 
 mod collection;
@@ -153,7 +152,7 @@ pub const fn help() -> &'static str {
         "      --expect <expr>         Assert a completed response; may be repeated\n",
         "      --name <name>          Set a request, folder, collection, environment, or variable name\n",
         "      --summary <text>       Set a collection summary\n",
-        "      --description <text>   Set a folder, request, or environment description string\n",
+        "      --description <text>   Edit description content; preserve existing type\n",
         "      --description-json <json>  Set description as a JSON string, null, or {content,type} object\n",
         "      --docs <text>          Set documentation as a string\n",
         "      --docs-json <json>     Set collection or folder docs as JSON; invalid for request docs\n",
@@ -388,8 +387,8 @@ fn execute(
             input,
             selector,
             update,
-            preserve_description_type,
-        } => structure::set_folder(&input, &selector, &update, preserve_description_type, stdin),
+            description,
+        } => structure::set_folder(&input, &selector, &update, &description, stdin),
         Command::UnsetFolder {
             input,
             selector,
@@ -451,8 +450,8 @@ fn execute(
             input,
             selector,
             update,
-            preserve_description_type,
-        } => request::update(&input, &selector, &update, preserve_description_type, stdin),
+            description,
+        } => request::update(&input, &selector, &update, &description, stdin),
         Command::Structure {
             input,
             operation_name,
@@ -463,18 +462,11 @@ fn execute(
             environment,
             variable,
             description,
-            preserve_description_type,
         } => match variable {
             Some((name, value)) => {
                 environment::set_variable(&input, &environment, &name, value, stdin)
             }
-            None => environment::set_description(
-                &input,
-                &environment,
-                &description,
-                preserve_description_type,
-                stdin,
-            ),
+            None => environment::set_description(&input, &environment, &description, stdin),
         },
         Command::EnvironmentUnset {
             input,
@@ -508,19 +500,6 @@ fn execute(
             environment,
             name,
         } => environment::rename(&input, &environment, &name, stdin),
-    }
-}
-
-fn description_edit(
-    patch: &FieldPatch<Documentation>,
-    existing: Option<&Documentation>,
-    preserve_type: bool,
-) -> FieldPatch<Documentation> {
-    match patch {
-        FieldPatch::Set(Documentation::Text(content)) if preserve_type => {
-            FieldPatch::Set(Documentation::edited_content(existing, content.clone()))
-        }
-        _ => patch.clone(),
     }
 }
 

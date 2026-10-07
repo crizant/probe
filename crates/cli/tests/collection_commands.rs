@@ -12,6 +12,10 @@ fn help_starts_successfully() {
 
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("collection validate"));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("--description <text>   Edit description content; preserve existing type")
+    );
     assert!(output.stderr.is_empty());
 }
 

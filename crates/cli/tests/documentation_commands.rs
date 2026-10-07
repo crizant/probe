@@ -199,6 +199,22 @@ fn reads_and_writes_documentation_without_listing_docs_or_flattening_objects() {
     assert!(saved.contains("docs: Collection text"));
     assert!(!saved.contains("content: Updated request docs"));
 
+    let folder = run_json(&[
+        "folder",
+        "set",
+        path_arg,
+        "items/0",
+        "--description-json",
+        r#""Explicit folder string""#,
+    ]);
+    assert_eq!(folder["description"], "Explicit folder string");
+    let saved: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        saved["items"][0]["info"]["description"].as_str(),
+        Some("Explicit folder string")
+    );
+
     let rejected = probe()
         .args([
             "request",
