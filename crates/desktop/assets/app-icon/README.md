@@ -1,7 +1,14 @@
 # Probe application icon
 
-The source artwork is `source/probe-app-icon-1024.png`. Derive platform assets
-from that file rather than resizing an already reduced image.
+The canonical artwork is editable SVG: `source/probe-app-icon.svg` (light) and
+`source/probe-app-icon-dark.svg` (dark). Both variants share the same geometry,
+including the aligned needle and collar, with different color palettes. Platform
+assets are rendered directly from the light SVG at each required size. The dark
+variant is retained for a future appearance switch.
+
+The `source/probe-app-icon-1024.png` and `source/probe-app-icon-dark-1024.png` files
+are generated previews of the SVGs; edit the SVGs and regenerate rather than
+editing or resizing those PNGs.
 
 ## Platform assets
 
@@ -32,8 +39,9 @@ need the project's Developer ID signing and notarization workflow. The icon path
 in Cargo metadata are workspace-root-relative because cargo-bundle 0.11 expands
 its resource globs from the process working directory.
 
-The current artwork is a fully opaque square sRGB raster icon with an edge-to-edge
-graphite grid background. Apple accepts flattened app icons,
+The light artwork has an opaque, edge-to-edge porcelain grid background; the dark
+variant uses a graphite grid. Platform exports are fully opaque square raster
+icons. Apple accepts flattened app icons,
 but an Icon Composer project with independently reactive Liquid Glass layers would
 require separate background, cable, probe, and collar artwork.
 
@@ -45,18 +53,22 @@ Packaged icons remain fully opaque.
 
 ## Regeneration
 
-From the workspace root, run:
+Install [CairoSVG](https://cairosvg.org/documentation/) and Pillow. CairoSVG also
+requires the system Cairo library (for example, `brew install cairo` on macOS or
+`sudo apt-get install libcairo2` on Debian/Ubuntu). From the workspace root, run:
 
 ```sh
+python3 -m pip install CairoSVG Pillow
 python3 scripts/generate-app-icons.py
 ```
 
-The script requires Pillow (`python3 -m pip install Pillow` if missing). It validates
-that the canonical source is 1024px and opaque, rebuilds all platform assets, and
-applies an antialiased rounded-corner mask only to the README preview. The preview's
-corner radius is 112px at 512px resolution.
+The script renders both SVGs to 1024px source previews, validates that rendered
+icons are opaque, and rebuilds all platform assets from the light SVG at their
+native sizes. It applies an antialiased rounded-corner mask only to the README
+preview. The preview's corner radius is 112px at 512px resolution.
 
 ## Design source
 
-The artwork was generated from a reference illustration: a golden-orange test
-probe on a graphite grid background.
+The artwork is a vector redraw of the original golden-orange test probe and
+contact rings on a subtle grid background. Clean color faces replace the original
+raster texture while retaining the composition in light and dark variants.

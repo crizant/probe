@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Rebuild platform icons and the rounded README preview (requires Pillow)."""
+"""Render SVG sources and rebuild platform icons (requires CairoSVG and Pillow)."""
 
+from io import BytesIO
 from pathlib import Path
 import struct
 
+import cairosvg
 from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "crates/desktop/assets/app-icon"
+LIGHT_SOURCE = ASSETS / "source/probe-app-icon.svg"
+DARK_SOURCE = ASSETS / "source/probe-app-icon-dark.svg"
 WINDOWS_SIZES = (16, 24, 32, 48, 64, 128, 256)
 MACOS_IMAGES = (
     (b"icp4", "icon_16x16.png", 16),
@@ -21,16 +25,23 @@ MACOS_IMAGES = (
 )
 
 
-def main():
-    with Image.open(ASSETS / "source/probe-app-icon-1024.png") as source:
-        if source.size != (1024, 1024):
-            raise ValueError("The source icon must be 1024 x 1024 pixels")
+def render_svg(path, size):
+    data = cairosvg.svg2png(url=str(path), output_width=size, output_height=size)
+    with Image.open(BytesIO(data)) as source:
         if source.convert("RGBA").getchannel("A").getextrema() != (255, 255):
-            raise ValueError("The source icon must be fully opaque")
-        icon = source.convert("RGB")
+            raise ValueError(f"The rendered icon must be fully opaque: {path}")
+        return source.convert("RGB")
+
+
+def main():
+    icons = {1024: render_svg(LIGHT_SOURCE, 1024)}
+    icons[1024].save(ASSETS / "source/probe-app-icon-1024.png")
+    render_svg(DARK_SOURCE, 1024).save(ASSETS / "source/probe-app-icon-dark-1024.png")
 
     def png(path, size):
-        icon.resize((size, size), Image.Resampling.LANCZOS).save(path)
+        if size not in icons:
+            icons[size] = render_svg(LIGHT_SOURCE, size)
+        icons[size].save(path)
         return path.read_bytes()
 
     iconset = ASSETS / "macos/Probe.iconset"
@@ -70,7 +81,7 @@ def main():
         png(ASSETS / f"linux/hicolor/{size}x{size}/apps/dev.probe.desktop.png", size)
 
     # Supersample the corner mask for smooth edges in the 128px README display.
-    preview = icon.resize((512, 512), Image.Resampling.LANCZOS).convert("RGBA")
+    preview = icons[512].convert("RGBA")
     mask = Image.new("L", (2048, 2048))
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, 2047, 2047), radius=448, fill=255)
     preview.putalpha(mask.resize(preview.size, Image.Resampling.LANCZOS))
