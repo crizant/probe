@@ -36,6 +36,7 @@ assets = [
     { source = "assets/app-icon/linux/hicolor/128x128/apps/dev.probe.desktop.png", dest = "/usr/share/icons/hicolor/128x128/apps/dev.probe.desktop.png", mode = "644" },
     { source = "assets/app-icon/linux/hicolor/256x256/apps/dev.probe.desktop.png", dest = "/usr/share/icons/hicolor/256x256/apps/dev.probe.desktop.png", mode = "644" },
     { source = "assets/app-icon/linux/hicolor/512x512/apps/dev.probe.desktop.png", dest = "/usr/share/icons/hicolor/512x512/apps/dev.probe.desktop.png", mode = "644" },
+    { source = "../../LICENSE", dest = "/usr/share/licenses/probe-desktop/LICENSE", mode = "644" },
 ]
 
 [dependencies]

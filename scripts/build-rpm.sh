@@ -70,6 +70,20 @@ if [[ -z "$OUTPUT_DIR" ]]; then
 fi
 mkdir -p "$OUTPUT_DIR"
 
+get_version() {
+  local ver=""
+  if command -v cargo >/dev/null 2>&1; then
+    ver="$(cargo pkgid -p probe-cli 2>/dev/null | sed 's/.*@//' || true)"
+  fi
+  if [[ -z "$ver" && -f Cargo.toml ]]; then
+    ver="$(sed -n '/^\[workspace\.package\]/,/^\[/p' Cargo.toml | grep -E '^version\s*=' | head -n1 | sed -E 's/version\s*=\s*"([^"]+)"/\1/')"
+  fi
+  echo "$ver"
+}
+
+VERSION="$(get_version)"
+[[ -n "$VERSION" ]] || die "Failed to determine package version from Cargo.toml"
+
 if [[ "$BUILDER" == "auto" ]]; then
   if command -v cargo-generate-rpm >/dev/null 2>&1; then
     BUILDER="cargo"
@@ -87,6 +101,9 @@ if [[ "$BUILDER" == "cargo" ]]; then
   cargo build --release -p probe-cli --bin probe
   cargo build --release -p probe-desktop --bin probe-desktop
 
+  # Clear staging directory to prevent picking up stale packages
+  rm -rf "${REPO_ROOT}/target/generate-rpm"
+
   echo "==> Generating RPM packages with cargo-generate-rpm..."
   (cd crates/cli && cargo generate-rpm --target-dir "${REPO_ROOT}/target")
   (cd crates/desktop && cargo generate-rpm --target-dir "${REPO_ROOT}/target")
@@ -99,11 +116,11 @@ elif [[ "$BUILDER" == "rpmbuild" ]]; then
   command -v desktop-file-validate >/dev/null 2>&1 || die "desktop-file-validate is required"
   command -v tar >/dev/null 2>&1 || die "tar is required"
 
-  VERSION="$(cargo pkgid -p probe-cli | sed 's/.*@//')"
   SPEC_FILE="${REPO_ROOT}/packaging/rpm/probe.spec"
   [[ -f "$SPEC_FILE" ]] || die "Spec file not found at ${SPEC_FILE}"
 
   RPM_TOPDIR="${REPO_ROOT}/target/rpmbuild"
+  rm -rf "${RPM_TOPDIR}/RPMS" "${RPM_TOPDIR}/SRPMS"
   mkdir -p "${RPM_TOPDIR}/"{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
   echo "==> Preparing source archive for probe-${VERSION}..."
@@ -148,6 +165,24 @@ elif [[ "$BUILDER" == "rpmbuild" ]]; then
   find "${RPM_TOPDIR}/RPMS" -type f -name '*.rpm' -exec cp -p {} "$OUTPUT_DIR" \;
 else
   die "Unknown builder: ${BUILDER}. Choose 'cargo' or 'rpmbuild'."
+fi
+
+# Verify expected RPMs are present in output directory
+FOUND_CLI_RPM=false
+FOUND_DESKTOP_RPM=false
+for rpm_file in "${OUTPUT_DIR}"/probe*-"${VERSION}"*.rpm; do
+  if [[ -f "$rpm_file" ]]; then
+    base_name="$(basename "$rpm_file")"
+    if [[ "$base_name" =~ ^probe-desktop- ]]; then
+      FOUND_DESKTOP_RPM=true
+    elif [[ "$base_name" =~ ^probe-[0-9] ]]; then
+      FOUND_CLI_RPM=true
+    fi
+  fi
+done
+
+if [[ "$FOUND_CLI_RPM" != "true" || "$FOUND_DESKTOP_RPM" != "true" ]]; then
+  die "RPM build did not produce both probe and probe-desktop RPMs in ${OUTPUT_DIR}"
 fi
 
 echo "==> Successfully built RPM packages in ${OUTPUT_DIR}:"

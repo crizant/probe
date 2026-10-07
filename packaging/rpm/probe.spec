@@ -10,13 +10,19 @@ License:        MIT OR Apache-2.0
 URL:            https://github.com/crizant/probe
 Source0:        %{name}-%{version}.tar.gz
 
+%if !%{with prebuilt}
 BuildRequires:  cargo >= 1.95.0
 BuildRequires:  rust >= 1.95.0
+%endif
 BuildRequires:  clang
 BuildRequires:  alsa-lib-devel
 BuildRequires:  fontconfig-devel
 BuildRequires:  glib2-devel
+%if 0%{?suse_version}
+BuildRequires:  pkgconfig(vulkan)
+%else
 BuildRequires:  vulkan-loader-devel
+%endif
 BuildRequires:  wayland-devel
 BuildRequires:  libX11-devel
 BuildRequires:  libX11-xcb
@@ -34,7 +40,11 @@ This package provides the 'probe' command-line interface.
 %package desktop
 Summary:        Native desktop GUI client for Probe
 Recommends:     %{name}%{?_isa} = %{version}-%{release}
+%if 0%{?suse_version}
+Requires:       libvulkan1
+%else
 Requires:       vulkan-loader%{?_isa}
+%endif
 Requires:       hicolor-icon-theme
 
 %description desktop
@@ -81,6 +91,7 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/dev.probe.desktop.des
 %{_bindir}/probe
 
 %files desktop
+%license LICENSE
 %{_bindir}/probe-desktop
 %{_datadir}/applications/dev.probe.desktop.desktop
 %{_datadir}/icons/hicolor/*/apps/dev.probe.desktop.png
