@@ -9,6 +9,15 @@ rust-version.workspace = true
 name = "probe"
 path = "src/main.rs"
 
+[package.metadata.generate-rpm]
+name = "probe"
+summary = "A fast, native, local-first API client"
+assets = [
+    { source = "../../target/release/probe", dest = "/usr/bin/probe", mode = "755" },
+    { source = "../../README.md", dest = "/usr/share/doc/probe/README.md", mode = "644", doc = true },
+    { source = "../../LICENSE", dest = "/usr/share/licenses/probe/LICENSE", mode = "644" },
+]
+
 [[bench]]
 name = "performance"
 harness = false
