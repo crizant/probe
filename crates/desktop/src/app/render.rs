@@ -102,6 +102,7 @@ impl Render for ProbeApp {
                 if view.application_dialog.is_some()
                     || view.structure_dialog.is_some()
                     || view.environment_manager_dialog.is_some()
+                    || view.create_environment_dialog.is_some()
                 {
                     return;
                 }

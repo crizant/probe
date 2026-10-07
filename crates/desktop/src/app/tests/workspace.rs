@@ -4094,6 +4094,40 @@ fn send_request_shortcut_does_nothing_when_dialog_is_open(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn send_request_shortcut_does_nothing_when_create_environment_dialog_is_open(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            view.open_create_environment_dialog(window, cx);
+            assert!(view.create_environment_dialog.is_some());
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes(window.into(), super::send_shortcut());
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.execution.response(request_key).is_none());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn send_request_shortcut_does_not_duplicate_when_already_running(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
