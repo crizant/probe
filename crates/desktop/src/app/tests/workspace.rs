@@ -3939,3 +3939,202 @@ fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAp
     );
     fs::remove_file(path).unwrap();
 }
+
+#[gpui::test]
+fn send_request_shortcut_sends_the_active_request(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            view.edit_request(
+                request_key,
+                |request| request.url = Some("http://127.0.0.1:1/test".into()),
+                cx,
+            );
+            assert_eq!(view.shell.active_tab(), Some(request_key));
+            assert!(view.execution.response(request_key).is_none());
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes(window.into(), super::send_shortcut());
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, cx| {
+            assert!(view.execution.response(request_key).is_some());
+            view.cancel_request(request_key, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn send_request_shortcut_works_when_input_focused(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            view.edit_request(
+                request_key,
+                |request| request.url = Some("http://127.0.0.1:1/test".into()),
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let url_input = visual
+        .debug_bounds("request-url-input")
+        .expect("url input should exist");
+    visual.simulate_click(url_input.center(), Modifiers::default());
+    visual.run_until_parked();
+
+    visual.simulate_keystrokes(super::send_shortcut());
+    visual.run_until_parked();
+
+    window
+        .update(cx, |view, _, cx| {
+            assert!(view.execution.response(request_key).is_some());
+            view.cancel_request(request_key, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn send_request_shortcut_does_nothing_on_overview_tab(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let requests = workspace.requests().to_vec();
+
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_open_tab(crate::shell::OverviewTab::Collection.into(), cx);
+            assert!(view.shell.active_tab().is_none());
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes(window.into(), super::send_shortcut());
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            for located in &requests {
+                assert!(view.execution.response(located.key()).is_none());
+            }
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn send_request_shortcut_does_nothing_when_dialog_is_open(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            window.dispatch_action(Box::new(NewRequest), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.structure_dialog.is_some());
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes(window.into(), super::send_shortcut());
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.execution.response(request_key).is_none());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn send_request_shortcut_does_not_duplicate_when_already_running(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request_key = workspace.requests()[0].key();
+    let (cancellation_sender, _cancellation_receiver) = oneshot::channel();
+
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(request_key, cx);
+            view.edit_request(
+                request_key,
+                |request| request.url = Some("http://127.0.0.1:1/test".into()),
+                cx,
+            );
+            view.execution.begin(request_key, cancellation_sender);
+            assert!(
+                view.execution
+                    .response(request_key)
+                    .is_some_and(crate::execution::ResponseState::is_running)
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes(window.into(), super::send_shortcut());
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert!(
+                view.execution
+                    .response(request_key)
+                    .is_some_and(crate::execution::ResponseState::is_running)
+            );
+        })
+        .unwrap();
+}

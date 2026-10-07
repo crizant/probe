@@ -98,6 +98,25 @@ impl Render for ProbeApp {
                 }
                 view.save_active_editor(window, cx);
             }))
+            .on_action(cx.listener(|view, _: &SendRequest, _, cx| {
+                if view.application_dialog.is_some()
+                    || view.structure_dialog.is_some()
+                    || view.environment_manager_dialog.is_some()
+                {
+                    return;
+                }
+                let Some(key) = view.shell.active_tab() else {
+                    return;
+                };
+                if view
+                    .execution
+                    .response(key)
+                    .is_some_and(ResponseState::is_running)
+                {
+                    return;
+                }
+                view.send_request(key, cx);
+            }))
             .on_action(cx.listener(|view, _: &OpenFileMenu, _, cx| {
                 view.open_desktop_menu(DesktopMenu::File, cx);
             }))

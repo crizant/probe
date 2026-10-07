@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Send requests from the desktop editor using Ctrl+Enter (Cmd+Enter on macOS).
+
 ### Changed
 
 - The app icon now uses clean vector artwork on a light porcelain grid background,

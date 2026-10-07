@@ -319,6 +319,11 @@ impl ProbeApp {
                                                 .update(cx, |view, cx| view.copy_as_curl(key, cx));
                                         },
                                     ));
+                                    let send_shortcut = if cfg!(target_os = "macos") {
+                                        "⌘⏎"
+                                    } else {
+                                        "Ctrl+Enter"
+                                    };
                                     components::DropdownButton::new(
                                         theme,
                                         "request-execution",
@@ -329,6 +334,14 @@ impl ProbeApp {
                                             });
                                         },
                                     )
+                                    .tooltip(move |_, cx| {
+                                        cx.new(|_| ActionTooltip {
+                                            id: "request-send-tooltip",
+                                            theme,
+                                            label: format!("Send ({send_shortcut})"),
+                                        })
+                                        .into()
+                                    })
                                     .menu_trigger("request-execution-menu-trigger", "Send options")
                                     .open(self.transient.request_execution_menu_open)
                                     .on_open_change(move |open, _, cx| {
@@ -447,14 +460,15 @@ impl ProbeApp {
     }
 }
 
-struct SaveTooltip {
+struct ActionTooltip {
+    id: &'static str,
     theme: Theme,
     label: String,
 }
 
-impl Render for SaveTooltip {
+impl Render for ActionTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui_base::Tooltip::new("editor-save-tooltip")
+        gpui_base::Tooltip::new(self.id)
             .px(px(self.theme.metrics.spacing_2))
             .py(px(self.theme.metrics.spacing_1))
             .rounded(px(self.theme.metrics.radius_small))
@@ -488,7 +502,8 @@ impl ProbeApp {
                 } else {
                     "Ctrl+S"
                 };
-                cx.new(|_| SaveTooltip {
+                cx.new(|_| ActionTooltip {
+                    id: "editor-save-tooltip",
                     theme,
                     label: format!("{label} ({shortcut})"),
                 })

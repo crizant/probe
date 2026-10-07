@@ -26,6 +26,7 @@ pub(crate) fn primary_button(
 
 type DropdownButtonClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type DropdownButtonOpenHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
+type DropdownButtonTooltipBuilder = Rc<dyn Fn(&mut Window, &mut App) -> gpui::AnyView>;
 
 /// A primary action with an attached menu trigger, presented as one control.
 #[derive(IntoElement)]
@@ -40,6 +41,7 @@ pub(crate) struct DropdownButton {
     open: bool,
     on_open_change: DropdownButtonOpenHandler,
     menu: Option<AnyElement>,
+    tooltip: Option<DropdownButtonTooltipBuilder>,
 }
 
 impl DropdownButton {
@@ -60,7 +62,16 @@ impl DropdownButton {
             open: false,
             on_open_change: Rc::new(|_, _, _| {}),
             menu: None,
+            tooltip: None,
         }
+    }
+
+    pub(crate) fn tooltip(
+        mut self,
+        builder: impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static,
+    ) -> Self {
+        self.tooltip = Some(Rc::new(builder));
+        self
     }
 
     pub(crate) fn menu_trigger(mut self, id: &'static str, label: impl Into<SharedString>) -> Self {
@@ -95,7 +106,7 @@ impl RenderOnce for DropdownButton {
         let radius = theme.metrics.radius_small;
         let on_click = self.on_click;
         let on_open_change = self.on_open_change;
-        let action = style_primary_split_segment(
+        let mut action = style_primary_split_segment(
             Button::new(self.id)
                 .debug_selector(|| self.id.into())
                 .min_w(px(COMPACT_ACTION_BUTTON_WIDTH))
@@ -110,6 +121,9 @@ impl RenderOnce for DropdownButton {
             false,
         )
         .border_r_0();
+        if let Some(tooltip) = self.tooltip {
+            action = action.tooltip(move |window, cx| tooltip(window, cx));
+        }
         let trigger = style_primary_split_segment(
             Button::new(self.trigger_id)
                 .debug_selector(|| self.trigger_id.into())
