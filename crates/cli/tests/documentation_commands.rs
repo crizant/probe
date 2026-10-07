@@ -215,19 +215,33 @@ fn reads_and_writes_documentation_without_listing_docs_or_flattening_objects() {
         Some("Explicit folder string")
     );
 
-    let rejected = probe()
-        .args([
-            "request",
-            "set",
-            path_arg,
-            "items/0/items/0",
-            "--docs-json",
-            r#"{"content":"nope","type":"text/plain"}"#,
-        ])
-        .output()
-        .unwrap();
-    assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("request docs must be a string"));
+    let saved = fs::read_to_string(&path).unwrap();
+    for docs in [
+        r#"{"content":"nope","type":"text/plain"}"#,
+        "null",
+        r#""text""#,
+        "true",
+        "42",
+        "[]",
+    ] {
+        let rejected = probe()
+            .args([
+                "request",
+                "set",
+                path_arg,
+                "items/0/items/0",
+                "--docs-json",
+                docs,
+            ])
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr)
+                .contains("--docs-json is not supported for request docs; use --docs <text>")
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), saved);
+    }
 
     let rejected = probe()
         .args([

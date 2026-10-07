@@ -411,7 +411,7 @@ fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
             "--docs" => parser.once(&mut docs, "--docs")?,
             "--docs-json" => {
                 return Err(CliError::invalid_arguments(
-                    "request docs must be a string; an object or null is invalid",
+                    "--docs-json is not supported for request docs; use --docs <text>",
                 ));
             }
             other => push_positional(&mut positionals, other, 2)?,
