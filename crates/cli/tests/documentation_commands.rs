@@ -81,6 +81,45 @@ fn reads_and_writes_documentation_without_listing_docs_or_flattening_objects() {
     assert_eq!(folder["description"], "plain folder");
     assert_eq!(folder["docs"], "FOLDER-DOCS-SHOULD-NOT-APPEAR-IN-LIST");
 
+    let request = run_json(&[
+        "request",
+        "set",
+        path_arg,
+        "items/0/items/0",
+        "--description",
+        "**Edited pet**",
+    ]);
+    assert_eq!(request["description"]["content"], "**Edited pet**");
+    assert_eq!(request["description"]["type"], "text/markdown");
+    let folder = run_json(&[
+        "folder",
+        "set",
+        path_arg,
+        "items/0",
+        "--description",
+        "Edited plain folder",
+    ]);
+    assert_eq!(folder["description"], "Edited plain folder");
+    let saved: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        saved["items"][0]["items"][0]["info"]["description"]["type"].as_str(),
+        Some("text/markdown")
+    );
+    assert_eq!(
+        saved["items"][0]["info"]["description"].as_str(),
+        Some("Edited plain folder")
+    );
+    let request = run_json(&[
+        "request",
+        "set",
+        path_arg,
+        "items/0/items/0",
+        "--description-json",
+        r#""Explicit plain text""#,
+    ]);
+    assert_eq!(request["description"], "Explicit plain text");
+
     run_json(&[
         "request",
         "set",

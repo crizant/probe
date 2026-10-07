@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- CLI `--description <text>` edits the content of an existing structured OpenCollection description without losing its `type`. Use `--description-json` to replace the representation explicitly.
+
 ## [0.10.4] - 2026-10-06
 
 ### Changed

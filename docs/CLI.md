@@ -210,11 +210,14 @@ atomically replaces the source file. It is unavailable for stdin workspaces.
 writes those fields only. OpenCollection collections have no `description` field,
 and `--description` and `--description-json` are rejected. `folder get` reads one folder's `info.description`
 and `docs`. `folder set` writes those fields only. Folder and collection
-documentation accepts a plain string via `--description` or `--docs`, or a JSON
+documentation accepts text via `--description` or `--docs`, or a JSON
 string, `null`, or `{"content","type"}` object via `--description-json` or
 `--docs-json`. An object is stored as `{content, type}` and is not flattened to
 its content string. Explicit JSON `null` is stored as YAML null. `null` does not
-remove the field.
+remove the field. For folder and request descriptions, `--description <text>`
+edits the content of an existing `{content, type}` value without changing its
+type; an existing string remains a string, and an absent or null description
+becomes a string. Use `--description-json` to replace the representation explicitly.
 
 `collection unset`, `folder unset`, `request unset`, and `environment unset --description`
 remove fields from the file. At least one field flag is required.
@@ -239,7 +242,8 @@ value currently comes from a parent. `unset --name <var>` removes the variable e
 from that environment only, so a parent value can show through. Both variable commands
 reject secrets, empty names, and stdin workspaces.
 
-`set --description <text>` writes a plain string at that environment's `description`.
+`set --description <text>` edits the environment description's content, retaining
+an existing `{content, type}` representation and type. Otherwise it writes a string.
 `set --description-json <json>` writes a JSON string, YAML null, or a `{content, type}`
 object, using the same documentation value as folder and request descriptions. An
 object is stored as `{content, type}` and is not flattened to its content string.

@@ -54,6 +54,7 @@ pub(crate) enum Command {
         input: WorkspaceInput,
         selector: String,
         update: FolderUpdate,
+        preserve_description_type: bool,
     },
     UnsetFolder {
         input: WorkspaceInput,
@@ -101,6 +102,7 @@ pub(crate) enum Command {
         input: WorkspaceInput,
         selector: String,
         update: Box<RequestUpdate>,
+        preserve_description_type: bool,
     },
     Structure {
         input: WorkspaceInput,
@@ -112,6 +114,7 @@ pub(crate) enum Command {
         environment: String,
         variable: Option<(String, String)>,
         description: FieldPatch<Documentation>,
+        preserve_description_type: bool,
     },
     EnvironmentUnset {
         input: WorkspaceInput,
@@ -394,6 +397,7 @@ fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
     }
     let (path, selector) = two_paths(&positionals)?;
     let mut update = fields.update()?;
+    let preserve_description_type = description.is_some();
     update.description = documentation_patch(description, description_json, "description")?;
     update.docs = docs.map(FieldPatch::Set).unwrap_or_default();
     if update.is_empty() {
@@ -403,6 +407,7 @@ fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
         input: input(&path),
         selector,
         update: Box::new(update),
+        preserve_description_type,
     })
 }
 
@@ -470,6 +475,7 @@ fn parse_folder_set(mut parser: Parser) -> Result<Command, CliError> {
         }
     }
     let (path, selector) = two_paths(&positionals)?;
+    let preserve_description_type = description.is_some();
     let update = FolderUpdate {
         description: documentation_patch(description, description_json, "description")?,
         docs: documentation_patch(docs, docs_json, "docs")?,
@@ -481,6 +487,7 @@ fn parse_folder_set(mut parser: Parser) -> Result<Command, CliError> {
         input: input(&path),
         selector,
         update,
+        preserve_description_type,
     })
 }
 
@@ -825,6 +832,7 @@ fn parse_environment_set(mut parser: Parser) -> Result<Command, CliError> {
             other => push_positional(&mut path, other, 1)?,
         }
     }
+    let preserve_description_type = options.description.is_some();
     let description =
         documentation_patch(options.description, options.description_json, "description")?;
     let variable = match (options.name, options.value) {
@@ -845,6 +853,7 @@ fn parse_environment_set(mut parser: Parser) -> Result<Command, CliError> {
         environment: options.environment.ok_or_else(invalid_command)?,
         variable,
         description,
+        preserve_description_type,
     })
 }
 

@@ -60,11 +60,19 @@ pub(crate) fn set_folder(
     input: &WorkspaceInput,
     selector: &str,
     update: &FolderUpdate,
+    preserve_description_type: bool,
     stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
     let mut loaded = load(input, stdin)?;
+    let mut update = update.clone();
+    let existing = loaded
+        .folder_key(selector)
+        .and_then(|key| loaded.workspace().folder(key))
+        .and_then(|folder| folder.metadata.description.as_ref());
+    update.description =
+        crate::description_edit(&update.description, existing, preserve_description_type);
     loaded
-        .update_folder(selector, update)
+        .update_folder(selector, &update)
         .map_err(CliError::persistence)?;
     let key = loaded
         .folder_key(selector)

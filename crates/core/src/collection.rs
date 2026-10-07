@@ -193,6 +193,27 @@ mod tests {
             }
             .is_empty()
         );
+        assert_eq!(
+            Documentation::edited_content(Some(&Documentation::Text("old".into())), "new".into()),
+            Documentation::Text("new".into())
+        );
+        assert_eq!(
+            Documentation::edited_content(
+                Some(&Documentation::Content {
+                    content: "old".into(),
+                    media_type: "text/markdown".into(),
+                }),
+                "new".into()
+            ),
+            Documentation::Content {
+                content: "new".into(),
+                media_type: "text/markdown".into(),
+            }
+        );
+        assert_eq!(
+            Documentation::edited_content(Some(&Documentation::Null), "new".into()),
+            Documentation::Text("new".into())
+        );
     }
 }
 
@@ -213,6 +234,24 @@ pub enum Documentation {
     },
     /// Explicit null, which is distinct from an omitted field.
     Null,
+}
+
+impl Documentation {
+    /// Replaces description content without changing an existing structured MIME type.
+    ///
+    /// An absent or null description has no content representation to retain, so
+    /// editing its content creates a plain string. Use an explicit `Content`
+    /// replacement when changing the representation or media type intentionally.
+    #[must_use]
+    pub fn edited_content(existing: Option<&Self>, content: String) -> Self {
+        match existing {
+            Some(Self::Content { media_type, .. }) => Self::Content {
+                content,
+                media_type: media_type.clone(),
+            },
+            None | Some(Self::Text(_) | Self::Null) => Self::Text(content),
+        }
+    }
 }
 
 /// A non-interactive partial update to collection summary and docs.

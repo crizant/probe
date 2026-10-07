@@ -176,11 +176,19 @@ pub(crate) fn update(
     input: &WorkspaceInput,
     selector: &str,
     update: &RequestUpdate,
+    preserve_description_type: bool,
     stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
     let mut loaded = load(input, stdin)?;
+    let mut update = update.clone();
+    let existing = loaded
+        .request_key(selector)
+        .and_then(|key| loaded.workspace().request(key))
+        .and_then(|request| request.metadata.description.as_ref());
+    update.description =
+        crate::description_edit(&update.description, existing, preserve_description_type);
     loaded
-        .update_request(selector, update)
+        .update_request(selector, &update)
         .map_err(CliError::persistence)?;
     let key = loaded
         .request_key(selector)

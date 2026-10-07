@@ -4,6 +4,7 @@
 
 use std::io::{self, Read};
 
+use probe_core::{Documentation, FieldPatch};
 use serde_json::json;
 
 mod collection;
@@ -387,7 +388,8 @@ fn execute(
             input,
             selector,
             update,
-        } => structure::set_folder(&input, &selector, &update, stdin),
+            preserve_description_type,
+        } => structure::set_folder(&input, &selector, &update, preserve_description_type, stdin),
         Command::UnsetFolder {
             input,
             selector,
@@ -449,7 +451,8 @@ fn execute(
             input,
             selector,
             update,
-        } => request::update(&input, &selector, &update, stdin),
+            preserve_description_type,
+        } => request::update(&input, &selector, &update, preserve_description_type, stdin),
         Command::Structure {
             input,
             operation_name,
@@ -460,11 +463,18 @@ fn execute(
             environment,
             variable,
             description,
+            preserve_description_type,
         } => match variable {
             Some((name, value)) => {
                 environment::set_variable(&input, &environment, &name, value, stdin)
             }
-            None => environment::set_description(&input, &environment, &description, stdin),
+            None => environment::set_description(
+                &input,
+                &environment,
+                &description,
+                preserve_description_type,
+                stdin,
+            ),
         },
         Command::EnvironmentUnset {
             input,
@@ -498,6 +508,19 @@ fn execute(
             environment,
             name,
         } => environment::rename(&input, &environment, &name, stdin),
+    }
+}
+
+fn description_edit(
+    patch: &FieldPatch<Documentation>,
+    existing: Option<&Documentation>,
+    preserve_type: bool,
+) -> FieldPatch<Documentation> {
+    match patch {
+        FieldPatch::Set(Documentation::Text(content)) if preserve_type => {
+            FieldPatch::Set(Documentation::edited_content(existing, content.clone()))
+        }
+        _ => patch.clone(),
     }
 }
 
