@@ -129,20 +129,34 @@ pub(crate) fn unset_variable(
 pub(crate) fn set_description(
     input: &WorkspaceInput,
     environment: &str,
-    description: &FieldPatch<Documentation>,
+    description: &crate::command::DescriptionEdit,
     stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
-    let FieldPatch::Set(description) = description else {
+    if description.is_unchanged() {
         return Err(CliError::invalid_arguments(
             "invalid command; run 'probe --help' for usage",
         ));
-    };
-    let output = description_output("set", "Set", environment, Some(description));
+    }
     let mut loaded = load(input, stdin)?;
+    let existing = loaded
+        .workspace()
+        .environments()
+        .iter()
+        .find(|candidate| candidate.name == environment)
+        .and_then(|candidate| candidate.description.as_ref());
+    let patch = description.resolve(existing);
+    let FieldPatch::Set(description) = &patch else {
+        unreachable!("a description replacement stays a replacement");
+    };
     loaded
-        .update_environment_description(environment, &FieldPatch::Set(description.clone()))
+        .update_environment_description(environment, &patch)
         .map_err(CliError::persistence)?;
-    Ok(output)
+    Ok(description_output(
+        "set",
+        "Set",
+        environment,
+        Some(description),
+    ))
 }
 
 pub(crate) fn unset_description(

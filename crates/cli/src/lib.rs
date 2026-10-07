@@ -152,7 +152,7 @@ pub const fn help() -> &'static str {
         "      --expect <expr>         Assert a completed response; may be repeated\n",
         "      --name <name>          Set a request, folder, collection, environment, or variable name\n",
         "      --summary <text>       Set a collection summary\n",
-        "      --description <text>   Set a folder, request, or environment description string\n",
+        "      --description <text>   Edit description content; preserve existing type\n",
         "      --description-json <json>  Set description as a JSON string, null, or {content,type} object\n",
         "      --docs <text>          Set documentation as a string\n",
         "      --docs-json <json>     Set collection or folder docs as JSON; invalid for request docs\n",
@@ -387,7 +387,8 @@ fn execute(
             input,
             selector,
             update,
-        } => structure::set_folder(&input, &selector, &update, stdin),
+            description,
+        } => structure::set_folder(&input, &selector, &update, &description, stdin),
         Command::UnsetFolder {
             input,
             selector,
@@ -449,7 +450,8 @@ fn execute(
             input,
             selector,
             update,
-        } => request::update(&input, &selector, &update, stdin),
+            description,
+        } => request::update(&input, &selector, &update, &description, stdin),
         Command::Structure {
             input,
             operation_name,

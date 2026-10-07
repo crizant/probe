@@ -616,6 +616,44 @@ fn sets_and_unsets_environment_description() {
         "text/markdown"
     );
 
+    let edited = run_environment(
+        &workspace,
+        &[
+            "set",
+            "--environment",
+            "development",
+            "--description",
+            "**Updated development**",
+        ],
+    );
+    assert_eq!(edited["description"]["content"], "**Updated development**");
+    assert_eq!(edited["description"]["type"], "text/markdown");
+    let environment = &yaml_document(&workspace)["config"]["environments"][1];
+    assert_eq!(
+        environment["description"]["content"].as_str(),
+        Some("**Updated development**")
+    );
+    assert_eq!(
+        environment["description"]["type"].as_str(),
+        Some("text/markdown")
+    );
+
+    let explicit = run_environment(
+        &workspace,
+        &[
+            "set",
+            "--environment",
+            "development",
+            "--description-json",
+            r#""Explicit environment string""#,
+        ],
+    );
+    assert_eq!(explicit["description"], "Explicit environment string");
+    assert_eq!(
+        yaml_document(&workspace)["config"]["environments"][1]["description"].as_str(),
+        Some("Explicit environment string")
+    );
+
     let null = run_environment(
         &workspace,
         &[

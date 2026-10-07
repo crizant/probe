@@ -54,6 +54,7 @@ pub(crate) enum Command {
         input: WorkspaceInput,
         selector: String,
         update: FolderUpdate,
+        description: DescriptionEdit,
     },
     UnsetFolder {
         input: WorkspaceInput,
@@ -101,6 +102,7 @@ pub(crate) enum Command {
         input: WorkspaceInput,
         selector: String,
         update: Box<RequestUpdate>,
+        description: DescriptionEdit,
     },
     Structure {
         input: WorkspaceInput,
@@ -111,7 +113,7 @@ pub(crate) enum Command {
         input: WorkspaceInput,
         environment: String,
         variable: Option<(String, String)>,
-        description: FieldPatch<Documentation>,
+        description: DescriptionEdit,
     },
     EnvironmentUnset {
         input: WorkspaceInput,
@@ -133,6 +135,29 @@ pub(crate) enum Command {
         environment: String,
         name: String,
     },
+}
+
+#[derive(Debug)]
+pub(crate) enum DescriptionEdit {
+    Unchanged,
+    Content(String),
+    Replace(Documentation),
+}
+
+impl DescriptionEdit {
+    pub(crate) fn is_unchanged(&self) -> bool {
+        matches!(self, Self::Unchanged)
+    }
+
+    pub(crate) fn resolve(&self, existing: Option<&Documentation>) -> FieldPatch<Documentation> {
+        match self {
+            Self::Unchanged => FieldPatch::Unchanged,
+            Self::Content(text) => {
+                FieldPatch::Set(Documentation::edited_content(existing, text.clone()))
+            }
+            Self::Replace(value) => FieldPatch::Set(value.clone()),
+        }
+    }
 }
 
 pub(crate) fn parse(args: Vec<String>) -> Result<Command, CliError> {
@@ -394,15 +419,16 @@ fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
     }
     let (path, selector) = two_paths(&positionals)?;
     let mut update = fields.update()?;
-    update.description = documentation_patch(description, description_json, "description")?;
+    let description = description_edit(description, description_json)?;
     update.docs = docs.map(FieldPatch::Set).unwrap_or_default();
-    if update.is_empty() {
+    if update.is_empty() && description.is_unchanged() {
         return Err(invalid_command());
     }
     Ok(Command::Set {
         input: input(&path),
         selector,
         update: Box::new(update),
+        description,
     })
 }
 
@@ -470,17 +496,19 @@ fn parse_folder_set(mut parser: Parser) -> Result<Command, CliError> {
         }
     }
     let (path, selector) = two_paths(&positionals)?;
+    let description = description_edit(description, description_json)?;
     let update = FolderUpdate {
-        description: documentation_patch(description, description_json, "description")?,
+        description: FieldPatch::Unchanged,
         docs: documentation_patch(docs, docs_json, "docs")?,
     };
-    if update.is_empty() {
+    if update.is_empty() && description.is_unchanged() {
         return Err(invalid_command());
     }
     Ok(Command::SetFolder {
         input: input(&path),
         selector,
         update,
+        description,
     })
 }
 
@@ -607,6 +635,23 @@ fn documentation_patch(
         ))),
         (Some(text), None) => Ok(FieldPatch::Set(Documentation::Text(text))),
         (None, Some(source)) => Ok(FieldPatch::Set(parse_documentation_json(&source, flag)?)),
+    }
+}
+
+fn description_edit(
+    text: Option<String>,
+    json: Option<String>,
+) -> Result<DescriptionEdit, CliError> {
+    match (text, json) {
+        (None, None) => Ok(DescriptionEdit::Unchanged),
+        (Some(_), Some(_)) => Err(CliError::invalid_arguments(
+            "--description and --description-json cannot be combined",
+        )),
+        (Some(content), None) => Ok(DescriptionEdit::Content(content)),
+        (None, Some(source)) => Ok(DescriptionEdit::Replace(parse_documentation_json(
+            &source,
+            "description",
+        )?)),
     }
 }
 
@@ -825,8 +870,7 @@ fn parse_environment_set(mut parser: Parser) -> Result<Command, CliError> {
             other => push_positional(&mut path, other, 1)?,
         }
     }
-    let description =
-        documentation_patch(options.description, options.description_json, "description")?;
+    let description = description_edit(options.description, options.description_json)?;
     let variable = match (options.name, options.value) {
         (Some(name), Some(value)) => Some((name, value)),
         (None, None) => None,
