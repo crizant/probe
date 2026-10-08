@@ -94,7 +94,27 @@ Probe does not require installation and can be run directly from the extracted f
 
 ### Linux
 
-Download the Linux release and extract the archive:
+Download the Linux `.rpm` or `.tar.gz` assets from the release.
+
+The RPM assets are upstream x86_64 packages for current Fedora, RHEL 10 and
+newer, and current openSUSE Tumbleweed and Leap 15.6 or newer. Install either
+or both:
+
+```bash
+sudo dnf install ./probe-cli-*-linux-x64.rpm ./probe-desktop-*-linux-x64.rpm
+```
+
+On openSUSE, install the same files with `zypper`:
+
+```bash
+sudo zypper install ./probe-cli-*-linux-x64.rpm ./probe-desktop-*-linux-x64.rpm
+```
+
+These packages are unsigned upstream builds, so the package manager may ask for
+confirmation. After installation, `probe` and `probe-desktop` are on `PATH`.
+
+The `.tar.gz` archives remain available. Extract one and run the binary from
+the extracted directory:
 
 ```bash
 tar -xzf probe-*.tar.gz
@@ -234,7 +254,8 @@ scripts/release.sh 0.2.0
 The script updates the workspace version in `Cargo.toml`, moves unreleased
 changelog notes under the new version and Australia/Brisbane date, runs the
 release checks, commits those updates, creates an annotated tag, and pushes the
-branch and tag to `origin`. The tag then triggers CLI and desktop release artifacts.
+branch and tag to `origin`. The tag then triggers CLI and desktop release
+artifacts, including Linux RPM packages built from those release binaries.
 
 Core performance baselines cover parsing, workspace construction, request lookup,
 CLI startup, and practical peak-memory profiling at 100, 1,000, and 10,000 requests.

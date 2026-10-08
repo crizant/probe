@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Linux x86_64 releases include CLI and desktop RPM packages alongside the
+  existing tarballs.
+
 ## [0.10.6] - 2026-10-07
 
 ### Changed

@@ -1,4 +1,5 @@
 target/
+dist/
 .DS_Store
 .tmp-gpui-component/
 **/mutants.out*/

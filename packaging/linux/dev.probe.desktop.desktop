@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Probe
+GenericName=API Client
+Comment=A fast, native, local-first API client
+Exec=probe-desktop
+Icon=dev.probe.desktop
+Terminal=false
+Categories=Development;
+Keywords=api;http;graphql;rest;client;opencollection;
+StartupWMClass=dev.probe.desktop

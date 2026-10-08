@@ -28,6 +28,18 @@ bundling and before signing; see the [app-icon workflow](../crates/desktop/asset
 CairoSVG, Pillow, and system Cairo are needed only when regenerating artwork.
 Windows and Linux packaging continue to use the existing generated icons.
 
+## Linux RPM Packages
+
+Tagged releases publish upstream binary RPMs next to the Linux `.tar.gz`
+archives. Packaging reuses the x86_64 binaries already built for those archives.
+`scripts/build-rpm.sh` reads the version from `Cargo.toml`. A prerelease such
+as `0.11.0-beta.1` uses `~` in the RPM `Version` field (`0.11.0~beta.1`).
+This is not a mock or COPR source build: Probe's GPUI dependencies are git
+crates, and the spec does not compile them. `scripts/test-rpm.sh` checks
+packaging with stand-in binaries.
+`scripts/build-rpm.sh` runs `scripts/verify-rpm.sh` before copying packages
+into the release output.
+
 ## Rust and Async Work
 
 - Prefer normal ownership, GPUI entity ownership, message passing, task results, and
