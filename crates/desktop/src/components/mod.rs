@@ -95,8 +95,10 @@ pub(crate) use menus::{
 pub(crate) use splitter::pane_splitter;
 pub(crate) use toasts::{TOAST_STACK_WIDTH, toast};
 
-/// Fixed width for compact primary actions such as Send.
+/// Minimum width for compact standalone action buttons.
 pub(crate) const COMPACT_ACTION_BUTTON_WIDTH: f32 = 72.0;
+/// Minimum width for the primary segment of a compact split button.
+pub(crate) const COMPACT_SPLIT_ACTION_BUTTON_WIDTH: f32 = 60.0;
 pub(crate) const COMPACT_DIALOG_WIDTH: f32 = 420.0;
 pub(crate) const WIDE_DIALOG_WIDTH: f32 = 520.0;
 

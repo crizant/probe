@@ -87,7 +87,12 @@ impl ProbeApp {
         path
     }
 
-    pub(super) fn render_request_editor(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn render_request_editor(
+        &self,
+        theme: Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let Some(key) = self.shell.active_tab() else {
             return div()
                 .flex_1()
@@ -285,6 +290,9 @@ impl ProbeApp {
                                             });
                                         },
                                     )
+                                    .w(px(components::COMPACT_SPLIT_ACTION_BUTTON_WIDTH
+                                        + theme.metrics.control_height
+                                        + 1.0))
                                     .into_any_element()
                                 } else {
                                     let send_view = execution_view.clone();
@@ -319,6 +327,16 @@ impl ProbeApp {
                                                 .update(cx, |view, cx| view.copy_as_curl(key, cx));
                                         },
                                     ));
+                                    let send_shortcut =
+                                        components::shortcut_label_for_action_in_context(
+                                            window,
+                                            &SendRequest,
+                                            "Input",
+                                        );
+                                    let send_tooltip = send_shortcut.as_ref().map_or_else(
+                                        || "Send".to_owned(),
+                                        |shortcut| format!("Send ({shortcut})"),
+                                    );
                                     components::DropdownButton::new(
                                         theme,
                                         "request-execution",
@@ -329,6 +347,14 @@ impl ProbeApp {
                                             });
                                         },
                                     )
+                                    .tooltip(move |_, cx| {
+                                        cx.new(|_| ActionTooltip {
+                                            id: "request-send-tooltip",
+                                            theme,
+                                            label: send_tooltip.clone(),
+                                        })
+                                        .into()
+                                    })
                                     .menu_trigger("request-execution-menu-trigger", "Send options")
                                     .open(self.transient.request_execution_menu_open)
                                     .on_open_change(move |open, _, cx| {
@@ -447,14 +473,15 @@ impl ProbeApp {
     }
 }
 
-struct SaveTooltip {
+struct ActionTooltip {
+    id: &'static str,
     theme: Theme,
     label: String,
 }
 
-impl Render for SaveTooltip {
+impl Render for ActionTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui_base::Tooltip::new("editor-save-tooltip")
+        gpui_base::Tooltip::new(self.id)
             .px(px(self.theme.metrics.spacing_2))
             .py(px(self.theme.metrics.spacing_1))
             .rounded(px(self.theme.metrics.radius_small))
@@ -488,7 +515,8 @@ impl ProbeApp {
                 } else {
                     "Ctrl+S"
                 };
-                cx.new(|_| SaveTooltip {
+                cx.new(|_| ActionTooltip {
+                    id: "editor-save-tooltip",
                     theme,
                     label: format!("{label} ({shortcut})"),
                 })
