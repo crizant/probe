@@ -1443,7 +1443,6 @@ impl Render for DropdownButtonHarness {
                     cx.notify();
                 });
             })
-            .shortcut_hint(Some("Ctrl+⏎".into()))
             .menu_trigger("dropdown-button-trigger", "Send options")
             .open(self.open)
             .on_open_change(move |open, _, cx| {

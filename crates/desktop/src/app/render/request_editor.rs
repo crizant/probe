@@ -344,7 +344,6 @@ impl ProbeApp {
                                             });
                                         },
                                     )
-                                    .shortcut_hint(send_shortcut)
                                     .tooltip(move |_, cx| {
                                         cx.new(|_| ActionTooltip {
                                             id: "request-send-tooltip",

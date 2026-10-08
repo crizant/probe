@@ -42,7 +42,6 @@ pub(crate) struct DropdownButton {
     on_open_change: DropdownButtonOpenHandler,
     menu: Option<AnyElement>,
     tooltip: Option<DropdownButtonTooltipBuilder>,
-    shortcut_hint: Option<String>,
 }
 
 impl DropdownButton {
@@ -64,13 +63,7 @@ impl DropdownButton {
             on_open_change: Rc::new(|_, _, _| {}),
             menu: None,
             tooltip: None,
-            shortcut_hint: None,
         }
-    }
-
-    pub(crate) fn shortcut_hint(mut self, hint: Option<String>) -> Self {
-        self.shortcut_hint = hint;
-        self
     }
 
     pub(crate) fn tooltip(
@@ -118,23 +111,12 @@ impl RenderOnce for DropdownButton {
                 .debug_selector(|| self.id.into())
                 .min_w(px(COMPACT_ACTION_BUTTON_WIDTH))
                 .px(px(theme.metrics.spacing_3))
-                .when(self.shortcut_hint.is_some(), |button| {
-                    button
-                        .pl(px(theme.metrics.spacing_2))
-                        .pr(px(theme.metrics.spacing_1))
-                })
                 .rounded_tl(px(radius))
                 .rounded_bl(px(radius))
                 .rounded_tr(px(0.0))
                 .rounded_br(px(0.0))
                 .on_click(move |event, window, cx| on_click(event, window, cx))
-                .child(action_button_label(
-                    theme,
-                    self.label,
-                    ActionButtonKind::Primary,
-                    self.shortcut_hint,
-                    false,
-                )),
+                .child(self.label),
             theme,
             false,
         )
