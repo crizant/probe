@@ -55,6 +55,8 @@ JSON includes `installed: true`, `changed`, `path`, and `version` alongside
 when the existing files already match.
 Home resolution failures use `home_directory_unavailable` (exit 5); filesystem
 failures use `persistence_error` (exit 7). Symlinked destinations are refused.
+If an owned file changes during installation, the command returns
+`agent_skill_modified` (exit 7).
 
 `<path>` may be a bundled OpenCollection YAML file or an unbundled collection
 directory containing `opencollection.yml` or `opencollection.yaml`.
