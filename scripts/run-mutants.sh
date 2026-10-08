@@ -71,5 +71,14 @@ else
   fi
 fi
 
-exec cargo mutants --workspace --in-diff "$diff_file" -j "$mutant_jobs" \
-  --jobserver-tasks "$tasks" -- -- --test-threads "$test_threads"
+echo "Mutation resources: jobs=$mutant_jobs jobserver_tasks=$tasks test_threads=$test_threads"
+started=$(date +%s)
+report_duration() {
+  status=$?
+  echo "Mutation gate duration: $(($(date +%s) - started))s (exit $status)"
+  exit "$status"
+}
+trap report_duration 0
+
+cargo mutants --workspace --in-diff "$diff_file" -j "$mutant_jobs" \
+  --jobserver-tasks "$tasks" --caught -- -- --test-threads "$test_threads"

@@ -162,6 +162,13 @@ Set `MUTANTS_JOBSERVER_TASKS` or `MUTANTS_TEST_THREADS` to override either
 count. These conservative concurrency limits reduce sustained CPU saturation,
 heat, and fan noise during local mutation runs; they are not a hard CPU cap.
 
+CI uses the same wrapper and resource limits, with incremental compilation
+explicitly enabled for repeated builds. The wrapper reports resource counts,
+caught-mutant timings, and total gate duration. CI uploads `mutants.out/` and
+PR diff inputs even on failure. Superseded CI runs are cancelled only within
+the same PR; main runs are independent. Cargo downloads remain cached, while
+mutant builds retain separate temporary target directories.
+
 For a PR branch, use `git diff --unified=0 origin/main...HEAD` to include
 committed changes. CI runs this gate only on PRs that change Rust source in the
 seven behavior crates. A survivor needs investigation: it may expose a missing
