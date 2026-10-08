@@ -14,6 +14,8 @@ name = "performance"
 harness = false
 
 [dependencies]
+atomic-write-file = "0.3.1"
+directories = "6.0.0"
 probe-application = { path = "../application" }
 probe-core = { path = "../core" }
 probe-http = { path = "../http" }

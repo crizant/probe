@@ -76,7 +76,10 @@ fn sets_and_unsets_environment_variables_as_json() {
 
 #[test]
 fn environment_values_may_start_with_a_dash() {
-    for (index, expected) in ["-1", "--literal-looking-value"].into_iter().enumerate() {
+    for (index, expected) in ["-1", "--literal-looking-value", "--force"]
+        .into_iter()
+        .enumerate()
+    {
         let workspace = temporary_path(&format!("dash-value-{index}.yml"));
         fs::copy(fixture("phase4-environments.yml"), &workspace).unwrap();
 

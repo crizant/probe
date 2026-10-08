@@ -17,6 +17,9 @@ use crate::{
 
 #[derive(Debug)]
 pub(crate) enum Command {
+    InstallAgentSkill {
+        force: bool,
+    },
     CreateCollection {
         path: PathBuf,
         name: Option<String>,
@@ -165,6 +168,7 @@ pub(crate) fn parse(args: Vec<String>) -> Result<Command, CliError> {
     let group = parser.command_word()?;
     let action = parser.command_word()?;
     match (group.as_str(), action.as_str()) {
+        ("agent", "skill") => parse_agent_skill(parser),
         ("collection", "create") => parse_collection_create(parser),
         ("collection", "import") => parse_import(parser),
         ("collection", "validate") => Ok(Command::Validate {
@@ -207,6 +211,28 @@ pub(crate) fn parse(args: Vec<String>) -> Result<Command, CliError> {
         ("environment", "rename") => parse_environment_rename(parser),
         _ => Err(invalid_command()),
     }
+}
+
+fn parse_agent_skill(mut parser: Parser) -> Result<Command, CliError> {
+    match parser.command_word()?.as_str() {
+        "install" => parse_agent_skill_install(parser),
+        _ => Err(invalid_command()),
+    }
+}
+
+fn parse_agent_skill_install(mut parser: Parser) -> Result<Command, CliError> {
+    let mut force = false;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--force" => parser.flag(&mut force, "--force")?,
+            other => {
+                return Err(CliError::invalid_arguments(format!(
+                    "unexpected argument: {other}"
+                )));
+            }
+        }
+    }
+    Ok(Command::InstallAgentSkill { force })
 }
 
 fn parse_collection_create(mut parser: Parser) -> Result<Command, CliError> {
@@ -1354,6 +1380,37 @@ fn invalid_command() -> CliError {
 #[cfg(test)]
 mod tests {
     use super::parse;
+
+    #[test]
+    fn agent_skill_install_parses_force_and_rejects_unsupported_arguments() {
+        for (args, expected) in [
+            (vec!["agent", "skill", "install"], false),
+            (vec!["agent", "skill", "install", "--force"], true),
+        ] {
+            assert!(
+                matches!(parse(args.into_iter().map(str::to_owned).collect()).unwrap(),
+                super::Command::InstallAgentSkill { force } if force == expected)
+            );
+        }
+        for args in [
+            vec!["agent"],
+            vec!["agent", "status"],
+            vec!["agent", "install"],
+            vec!["agent", "skill"],
+            vec!["agent", "skill", "status"],
+            vec!["agent", "skill", "install", "extra"],
+            vec!["agent", "skill", "install", "--unknown"],
+            vec!["agent", "skill", "install", "--force", "--force"],
+            vec!["agent", "skill", "install", "--name", "probe"],
+        ] {
+            assert_eq!(
+                parse(args.into_iter().map(str::to_owned).collect())
+                    .unwrap_err()
+                    .category,
+                "invalid_arguments"
+            );
+        }
+    }
 
     #[test]
     fn duplicate_index_is_reported_before_the_second_value_is_parsed() {

@@ -4957,7 +4957,9 @@ dependencies = [
 name = "probe-cli"
 version = "0.10.7"
 dependencies = [
+ "atomic-write-file",
  "criterion",
+ "directories",
  "probe-application",
  "probe-core",
  "probe-http",
