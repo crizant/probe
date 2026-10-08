@@ -109,7 +109,7 @@ impl RenderOnce for DropdownButton {
         let mut action = style_primary_split_segment(
             Button::new(self.id)
                 .debug_selector(|| self.id.into())
-                .min_w(px(COMPACT_ACTION_BUTTON_WIDTH))
+                .min_w(px(COMPACT_SPLIT_ACTION_BUTTON_WIDTH))
                 .px(px(theme.metrics.spacing_3))
                 .rounded_tl(px(radius))
                 .rounded_bl(px(radius))
