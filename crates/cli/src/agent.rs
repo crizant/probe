@@ -191,7 +191,7 @@ mod tests {
         }
 
         fn skill(&self) -> PathBuf {
-            self.0.join(".agents/skills/probe")
+            self.0.join(".agents").join("skills").join("probe")
         }
 
         fn install(&self, force: bool) -> Result<CommandOutput, CliError> {
@@ -307,8 +307,9 @@ mod tests {
         }
         let home = Home::new();
         fs::write(home.0.join(".agents"), "blocked").unwrap();
-        // A failed metadata lookup through a non-directory is an I/O error,
-        // not evidence that the requested file is missing.
+        // Unix reports a non-directory parent as an I/O error; Windows reports
+        // NotFound. The installer rejects the blocked parent on both platforms.
+        #[cfg(unix)]
         assert_eq!(
             read_owned_file(&home.0.join(".agents/SKILL.md"))
                 .unwrap_err()
