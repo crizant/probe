@@ -752,8 +752,9 @@ fn editor_secret_tooltip_sets_replaces_and_deletes_in_effective_environment(
     cx: &mut TestAppContext,
 ) {
     let workspace = EnvironmentWorkspace::open(cx);
+    cx.update(bind_platform_hotkeys);
     let id = workspace.development_secret();
-    workspace.update(cx, |view, _, cx| {
+    let request_key = workspace.update(cx, |view, _, cx| {
         let request_key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
         view.select_request(request_key, cx);
         view.select_environment(Some("development".into()), cx);
@@ -763,6 +764,7 @@ fn editor_secret_tooltip_sets_replaces_and_deletes_in_effective_environment(
             cx,
         );
         assert_unknown_secret(&view.variable_context(cx), "secretToken");
+        request_key
     });
     cx.run_until_parked();
 
@@ -796,6 +798,19 @@ fn editor_secret_tooltip_sets_replaces_and_deletes_in_effective_environment(
         assert_eq!(dialog.target.workspace, workspace.path);
         assert!(view.environment_manager_dialog.is_none());
         type_secret(view, window, cx, SECRET_SENTINEL);
+        assert!(secret_input_is_focused(view, window, cx));
+        assert!(view.execution.response(request_key).is_none());
+    });
+    workspace
+        .visual(cx)
+        .simulate_keystrokes(super::super::send_shortcut());
+    workspace.update(cx, |view, window, cx| {
+        assert!(
+            view.execution.response(request_key).is_none(),
+            "Send must be blocked while editing a secret outside Environment Manager"
+        );
+        assert!(secret_input_is_focused(view, window, cx));
+        assert!(!secret_input_is_empty(view, cx));
         view.save_secret_value(window, cx);
     });
     cx.run_until_parked();
