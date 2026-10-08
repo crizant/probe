@@ -6,6 +6,7 @@ diagnostics on stderr. Add `--json` to commands that return data or structured e
 ## Commands
 
 ```text
+probe agent skill install [--force] [--json]
 probe collection create <path> [--name <name>] [--json]
 probe collection import postman <source.json> <destination> [--allow-partial] [--json]
 probe collection import yaak <source> <destination> [--workspace <id>] [--allow-partial] [--json]
@@ -40,6 +41,18 @@ probe environment unset <path> --environment <name> (--name <var> | --descriptio
 probe environment delete <path> --environment <name> [--json]
 probe environment rename <path> --environment <name> --name <new> [--json]
 ```
+
+`agent skill install` installs the Probe agent skill in the current user's
+`~/.agents/skills/probe/`, with `SKILL.md` and `references/cli.md`. Both the
+canonical skill and this CLI reference are embedded in the executable, so the
+installed files match that Probe CLI version without network access or a repository.
+Identical installations succeed without writing files (`installed: false` in JSON).
+Differing or incomplete existing installations return `agent_skill_exists` (exit 7);
+use `--force` to replace only the two owned files, preserving other content.
+Reinstall with `--force` after upgrading Probe to update the installed skill.
+JSON includes `installed`, `path`, and `version` alongside `schemaVersion`.
+Home resolution failures use `home_directory_unavailable` (exit 5); filesystem
+failures use `persistence_error` (exit 7). Symlinked destinations are refused.
 
 `<path>` may be a bundled OpenCollection YAML file or an unbundled collection
 directory containing `opencollection.yml` or `opencollection.yaml`.

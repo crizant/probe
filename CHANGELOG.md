@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- `probe agent skill install` installs the bundled Probe agent skill and matching CLI
+  reference locally; `--force` updates an existing installation.
+
 ## [0.10.7] - 2026-10-08
 
 ### Added

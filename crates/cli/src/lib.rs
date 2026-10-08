@@ -6,6 +6,7 @@ use std::io::{self, Read};
 
 use serde_json::json;
 
+mod agent;
 mod collection;
 mod command;
 mod environment;
@@ -114,6 +115,7 @@ pub const fn help() -> &'static str {
         "Usage: probe [OPTIONS] <COMMAND>\n",
         "\n",
         "Commands:\n",
+        "  agent skill install [--force]            Install the bundled Probe agent skill\n",
         "  collection create <path>            Create an empty bundled collection\n",
         "  collection import postman <source> <destination>  Import a Postman collection\n",
         "  collection import yaak <source> <destination>     Import a Yaak workspace\n",
@@ -173,6 +175,7 @@ pub const fn help() -> &'static str {
         "      --index <index>        Zero-based insertion position (omit to append)\n",
         "      --workspace <id>       Select a workspace from a multi-workspace import\n",
         "      --allow-partial        Explicitly allow lossy import conversion\n",
+        "      --force               Replace existing Probe agent skill files\n",
         "      --json                Emit versioned deterministic JSON\n",
         "  -q, --quiet               Suppress successful command output\n",
         "  -h, --help                Print help\n",
@@ -185,6 +188,15 @@ pub const fn help() -> &'static str {
 pub const fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
+
+const AGENT_HELP: &str = concat!(
+    "Usage: probe agent <COMMAND>\n",
+    "\n",
+    "Commands:\n",
+    "  skill install [--force] [--json]  Install the bundled skill in ~/.agents/skills/probe\n",
+    "\n",
+    "Identical files are left unchanged. Use --force to update differing files.\n",
+);
 
 const COLLECTION_HELP: &str = concat!(
     "Usage: probe collection <COMMAND>\n",
@@ -320,6 +332,7 @@ where
         .any(|argument| matches!(argument.as_str(), "-h" | "--help"))
     {
         let help = match args.first().map(String::as_str) {
+            Some("agent") => AGENT_HELP,
             Some("collection") => COLLECTION_HELP,
             Some("request") => REQUEST_HELP,
             Some("folder") => FOLDER_HELP,
@@ -366,6 +379,7 @@ fn execute(
     human_output: bool,
 ) -> Result<CommandOutput, CliError> {
     match command {
+        Command::InstallAgentSkill { force } => agent::install(force),
         Command::CreateCollection { path, name } => collection::create(path, name),
         Command::ImportYaak {
             source,
@@ -523,6 +537,28 @@ mod tests {
     use std::io::Cursor;
 
     use super::{INVALID_WORKSPACE_EXIT_CODE, run_with_stdin};
+
+    #[test]
+    fn agent_help_and_invalid_commands_follow_cli_output_contracts() {
+        assert!(super::help().contains("agent skill install"));
+        for args in [
+            vec!["agent", "--help"],
+            vec!["agent", "skill", "--help"],
+            vec!["agent", "skill", "install", "-h"],
+        ] {
+            let output = super::run(args);
+            assert_eq!(output.exit_code, 0);
+            assert!(output.stderr.is_empty());
+            assert!(output.stdout.contains("Usage: probe agent <COMMAND>"));
+            assert!(output.stdout.contains("install [--force] [--json]"));
+        }
+        let output = super::run(["agent", "skill", "install", "--unknown", "--json"]);
+        assert_eq!(output.exit_code, super::INVALID_ARGUMENTS_EXIT_CODE);
+        assert!(output.stderr.is_empty());
+        let json: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(json["schemaVersion"], super::JSON_SCHEMA_VERSION);
+        assert_eq!(json["error"]["category"], "invalid_arguments");
+    }
 
     #[test]
     fn validate_rejects_yaml_without_opencollection_headers() {
