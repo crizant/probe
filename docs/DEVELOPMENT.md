@@ -30,29 +30,15 @@ Windows and Linux packaging continue to use the existing generated icons.
 
 ## Linux RPM Packages
 
-Tagged releases publish `probe-cli-<version>-linux-x64.rpm` and
-`probe-desktop-<version>-linux-x64.rpm` next to the existing Linux `.tar.gz`
-archives. `scripts/build-rpm.sh` reads the workspace version from `Cargo.toml`
-and packages the existing Linux x86_64 binaries. Release filenames keep that
-SemVer, including a prerelease such as `0.11.0-beta.1`. The RPM `Version`
-field replaces each prerelease hyphen with `~` (`0.11.0~beta.1`) because an
-RPM version cannot contain a hyphen. The release workflow reuses the Linux
-binaries already built for those archives; it does not compile Probe a second
-time. `scripts/release.sh` updates only the workspace version, so the RPM spec
-has no version of its own to keep in sync.
-
-These are upstream binary packages. Install them on current Fedora, RHEL 10 or
-newer, and current openSUSE Tumbleweed or Leap 15.6 or newer. The binaries are
-built on Ubuntu 22.04, so older RPM distributions such as RHEL 9 do not meet
-their glibc baseline. Shared-library dependencies are the RPM SONAME
-requirements generated from the binaries, which Fedora, RHEL, and openSUSE
-satisfy with their own package names. The desktop package also requires
-`hicolor-icon-theme`.
-
-Do not rebuild this spec in a network-disabled source environment. Probe's
-GPUI dependencies are git crates, and the spec does not vendor or compile them.
-`scripts/test-rpm.sh` checks the packaging flow with stand-in binaries, and the
-release job runs `scripts/verify-rpm.sh` on the published packages.
+Tagged releases publish upstream binary RPMs next to the Linux `.tar.gz`
+archives. Packaging reuses the x86_64 binaries already built for those archives.
+`scripts/build-rpm.sh` reads the version from `Cargo.toml`. A prerelease such
+as `0.11.0-beta.1` uses `~` in the RPM `Version` field (`0.11.0~beta.1`).
+This is not a mock or COPR source build: Probe's GPUI dependencies are git
+crates, and the spec does not compile them. `scripts/test-rpm.sh` checks
+packaging with stand-in binaries.
+`scripts/build-rpm.sh` runs `scripts/verify-rpm.sh` before copying packages
+into the release output.
 
 ## Rust and Async Work
 

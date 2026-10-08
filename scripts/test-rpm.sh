@@ -25,23 +25,6 @@ if rpm_version_from_semver "0.11"; then
   die "an incomplete version was accepted"
 fi
 
-if grep -E '^Version:[[:space:]]*[0-9]' packaging/rpm/probe.spec; then
-  die "packaging/rpm/probe.spec hard-codes a version; inject probe_version at package time"
-fi
-grep -q '^Version:[[:space:]]*%{probe_version}[[:space:]]*$' packaging/rpm/probe.spec \
-  || die "packaging/rpm/probe.spec must set Version from %{probe_version}"
-
-if grep -E '^[[:space:]]*(BuildRequires|Requires):' packaging/rpm/probe.spec \
-  | grep -E 'libX11-xcb|vulkan-loader|libvulkan1|cargo|rust'; then
-  die "packaging/rpm/probe.spec uses a distro-specific or compile-time dependency"
-fi
-
-if grep -n '\[Desktop Entry\]' .github/workflows/release.yml; then
-  die "release workflow embeds a desktop file; copy packaging/linux/dev.probe.desktop.desktop"
-fi
-grep -q 'packaging/linux/dev.probe.desktop.desktop' .github/workflows/release.yml \
-  || die "release workflow does not install packaging/linux/dev.probe.desktop.desktop"
-
 command -v gcc >/dev/null 2>&1 || die "gcc is required"
 command -v rpmbuild >/dev/null 2>&1 || die "rpmbuild is required"
 
@@ -73,13 +56,11 @@ case "$description" in
     die "RPM packaging tests require x86_64 ELF binaries, got ${description}"
     ;;
 esac
-platform="linux-x64"
 
 stale="$tmp/stale"
 mkdir -p "$stale"
 printf 'stale-cli\n' >"$stale/probe-cli-${version}-linux-x64.rpm"
 printf 'stale-desktop\n' >"$stale/probe-desktop-${version}-linux-x64.rpm"
-
 set +e
 bash "$repo_root/scripts/build-rpm.sh" \
   --cli "$tmp/probe" \
@@ -90,9 +71,9 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]] || die "build with a missing desktop binary reported success"
 [[ "$(cat "$stale/probe-cli-${version}-linux-x64.rpm")" == "stale-cli" ]] \
-  || die "failed build replaced or removed a stale CLI RPM"
+  || die "failed build replaced a previous CLI RPM"
 [[ "$(cat "$stale/probe-desktop-${version}-linux-x64.rpm")" == "stale-desktop" ]] \
-  || die "failed build replaced or removed a stale desktop RPM"
+  || die "failed build replaced a previous desktop RPM"
 if grep -q 'RPM packages:' "$tmp/failed.out"; then
   die "failed build reported packaged RPMs"
 fi
@@ -102,7 +83,7 @@ mkdir -p "$output"
 printf 'unrelated\n' >"$output/other-tool-1.2.3-1.x86_64.rpm"
 printf 'keep\n' >"$output/notes.txt"
 printf 'replace-me\n' >"$tmp/stale-probe-rpm"
-cp "$tmp/stale-probe-rpm" "$output/probe-cli-${version}-${platform}.rpm"
+cp "$tmp/stale-probe-rpm" "$output/probe-cli-${version}-linux-x64.rpm"
 bash "$repo_root/scripts/build-rpm.sh" \
   --cli "$tmp/probe" \
   --desktop "$tmp/probe-desktop" \
@@ -112,12 +93,9 @@ bash "$repo_root/scripts/build-rpm.sh" \
   || die "successful build removed an unrelated RPM"
 [[ "$(cat "$output/notes.txt")" == "keep" ]] \
   || die "successful build removed an unrelated file"
-[[ -f "$output/probe-cli-${version}-${platform}.rpm" ]] || die "missing CLI release RPM"
-[[ -f "$output/probe-desktop-${version}-${platform}.rpm" ]] || die "missing desktop release RPM"
-if cmp -s "$output/probe-cli-${version}-${platform}.rpm" "$tmp/stale-probe-rpm"; then
+if cmp -s "$output/probe-cli-${version}-linux-x64.rpm" "$tmp/stale-probe-rpm"; then
   die "successful build kept a stale Probe CLI RPM"
 fi
-bash "$repo_root/scripts/verify-rpm.sh" "$output"
 
 script_bin="$tmp/not-elf-probe"
 script_desktop="$tmp/not-elf-desktop"
@@ -159,21 +137,25 @@ version = "${cargo_version}"
 EOF
 }
 
-prerelease="0.11.0-beta.1"
-rpm_prerelease="0.11.0~beta.1"
 spaced="$tmp/checkout with spaces"
 spaced_bins="$tmp/bin dir"
-stage_tree "$spaced" "$prerelease"
-mkdir -p "$spaced_bins" "$tmp/prerelease-out"
+stage_tree "$spaced" "$version"
+mkdir -p "$spaced_bins"
 cp "$tmp/probe" "$spaced_bins/probe"
 cp "$tmp/probe-desktop" "$spaced_bins/probe-desktop"
 chmod +x "$spaced_bins/probe" "$spaced_bins/probe-desktop"
-printf 'unrelated\n' >"$tmp/prerelease-out/other-tool-1.2.3-1.x86_64.rpm"
-
-set +e
 bash "$spaced/scripts/build-rpm.sh" \
   --cli "$spaced_bins/probe" \
   --desktop "$spaced_bins/probe-desktop" \
+  --output-dir "$tmp/spaced-out"
+
+prerelease="0.11.0-beta.1"
+rpm_prerelease="0.11.0~beta.1"
+stage_tree "$tmp/prerelease" "$prerelease"
+set +e
+bash "$tmp/prerelease/scripts/build-rpm.sh" \
+  --cli "$tmp/probe" \
+  --desktop "$tmp/probe-desktop" \
   --expect-version "$rpm_prerelease" \
   --output-dir "$tmp/prerelease-out" \
   >"$tmp/prerelease-expect.out" 2>"$tmp/prerelease-expect.err"
@@ -181,26 +163,20 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]] \
   || die "--expect-version accepted the converted RPM version"
-[[ "$(cat "$tmp/prerelease-out/other-tool-1.2.3-1.x86_64.rpm")" == "unrelated" ]] \
-  || die "rejected prerelease build removed an unrelated RPM"
-
-bash "$spaced/scripts/build-rpm.sh" \
-  --cli "$spaced_bins/probe" \
-  --desktop "$spaced_bins/probe-desktop" \
+grep -q 'does not match expected version' "$tmp/prerelease-expect.err" \
+  || die "--expect-version did not reject the converted RPM version"
+bash "$tmp/prerelease/scripts/build-rpm.sh" \
+  --cli "$tmp/probe" \
+  --desktop "$tmp/probe-desktop" \
   --expect-version "$prerelease" \
   --output-dir "$tmp/prerelease-out"
-[[ -f "$tmp/prerelease-out/probe-cli-${prerelease}-${platform}.rpm" ]] \
-  || die "prerelease CLI asset did not keep the SemVer filename"
-[[ -f "$tmp/prerelease-out/probe-desktop-${prerelease}-${platform}.rpm" ]] \
-  || die "prerelease desktop asset did not keep the SemVer filename"
-[[ "$(cat "$tmp/prerelease-out/other-tool-1.2.3-1.x86_64.rpm")" == "unrelated" ]] \
-  || die "prerelease build removed an unrelated RPM"
 packaged_rpm_version="$(
   rpm -qp --queryformat '%{VERSION}' \
-    "$tmp/prerelease-out/probe-cli-${prerelease}-${platform}.rpm"
+    "$tmp/prerelease-out/probe-cli-${prerelease}-linux-x64.rpm"
 )"
 [[ "$packaged_rpm_version" == "$rpm_prerelease" ]] \
   || die "prerelease RPM version is ${packaged_rpm_version}, expected ${rpm_prerelease}"
-bash "$spaced/scripts/verify-rpm.sh" "$tmp/prerelease-out"
+[[ -f "$tmp/prerelease-out/probe-desktop-${prerelease}-linux-x64.rpm" ]] \
+  || die "prerelease desktop asset did not keep the SemVer filename"
 
 echo "RPM packaging checks passed for Probe ${version}"

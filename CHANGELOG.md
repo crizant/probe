@@ -8,12 +8,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
-- Linux x86_64 releases include `probe-cli-<version>-linux-x64.rpm` and
-  `probe-desktop-<version>-linux-x64.rpm` in addition to the existing `.tar.gz`
-  archives. A prerelease keeps that SemVer in the filename, for example
-  `probe-cli-0.11.0-beta.1-linux-x64.rpm`. The packages are upstream binaries
-  for current Fedora, RHEL 10 and newer, and current openSUSE Tumbleweed and
-  Leap 15.6 or newer.
+- Linux x86_64 releases include CLI and desktop RPM packages alongside the
+  existing tarballs.
 
 ## [0.10.6] - 2026-10-07
 

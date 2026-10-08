@@ -1,15 +1,9 @@
-# Upstream binary packages for the Probe CLI and desktop app.
-#
-# scripts/build-rpm.sh reads the version from Cargo.toml [workspace.package]
-# and passes it as probe_version. Do not hard-code a version in this file.
-# scripts/release.sh updates only Cargo.toml, which keeps this spec current.
-#
-# The release workflow supplies prebuilt Linux binaries. This spec does not
-# compile Probe.
+# Upstream binary packages. scripts/build-rpm.sh injects probe_version from
+# Cargo.toml. Do not hard-code a version here.
 
-%global debug_package %{nil}
+# brp-strip and brp-strip-comment-note rewrite packaged ELF files. Leave the
+# prebuilt release binaries byte-identical to the tarball binaries.
 %global __os_install_post %{nil}
-%undefine _debugsource_packages
 
 Name:           probe
 Version:        %{probe_version}
