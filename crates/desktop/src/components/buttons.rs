@@ -515,7 +515,7 @@ fn action_button_label(
     div()
         .flex()
         .items_center()
-        .gap(px(theme.metrics.spacing_2))
+        .gap(px(theme.metrics.spacing_1))
         .child(div().child(label))
         .child(
             div()
