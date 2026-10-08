@@ -39,11 +39,13 @@ fn install_at(home: Option<&Path>, force: bool) -> Result<CommandOutput, CliErro
     // both considering the destination new and overwriting one another.
     let existed = match fs::create_dir(&destination) {
         Ok(()) => false,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            check_directory(&destination)?;
-            true
-        }
-        Err(error) => return Err(filesystem_error(&destination, error)),
+        Err(error) => match error.kind() {
+            io::ErrorKind::AlreadyExists => {
+                check_directory(&destination)?;
+                true
+            }
+            _ => return Err(filesystem_error(&destination, error)),
+        },
     };
     let references = destination.join("references");
     if references
@@ -127,8 +129,10 @@ fn output(path: PathBuf, changed: bool) -> CommandOutput {
 fn ensure_directory(path: &Path) -> Result<(), CliError> {
     match fs::create_dir(path) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => check_directory(path),
-        Err(error) => Err(filesystem_error(path, error)),
+        Err(error) => match error.kind() {
+            io::ErrorKind::AlreadyExists => check_directory(path),
+            _ => Err(filesystem_error(path, error)),
+        },
     }
 }
 
