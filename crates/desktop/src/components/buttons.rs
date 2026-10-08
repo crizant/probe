@@ -118,6 +118,11 @@ impl RenderOnce for DropdownButton {
                 .debug_selector(|| self.id.into())
                 .min_w(px(COMPACT_ACTION_BUTTON_WIDTH))
                 .px(px(theme.metrics.spacing_3))
+                .when(self.shortcut_hint.is_some(), |button| {
+                    button
+                        .pl(px(theme.metrics.spacing_2))
+                        .pr(px(theme.metrics.spacing_1))
+                })
                 .rounded_tl(px(radius))
                 .rounded_bl(px(radius))
                 .rounded_tr(px(0.0))
