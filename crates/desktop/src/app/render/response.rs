@@ -381,7 +381,7 @@ impl ProbeApp {
 
         let mut banners = div()
             .px(px(theme.metrics.spacing_2))
-            .pt(px(theme.metrics.spacing_1))
+            .pb(px(theme.metrics.spacing_1))
             .flex()
             .flex_col()
             .gap(px(theme.metrics.spacing_1));
