@@ -46,11 +46,13 @@ probe environment rename <path> --environment <name> --name <new> [--json]
 `~/.agents/skills/probe/`, with `SKILL.md` and `references/cli.md`. Both the
 canonical skill and this CLI reference are embedded in the executable, so the
 installed files match that Probe CLI version without network access or a repository.
-Identical installations succeed without writing files (`installed: false` in JSON).
+Identical installations succeed without writing files (`changed: false` in JSON).
 Differing or incomplete existing installations return `agent_skill_exists` (exit 7);
 use `--force` to replace only the two owned files, preserving other content.
 Reinstall with `--force` after upgrading Probe to update the installed skill.
-JSON includes `installed`, `path`, and `version` alongside `schemaVersion`.
+JSON includes `installed: true`, `changed`, `path`, and `version` alongside
+`schemaVersion`. `changed` is true for a new or updated installation and false
+when the existing files already match.
 Home resolution failures use `home_directory_unavailable` (exit 5); filesystem
 failures use `persistence_error` (exit 7). Symlinked destinations are refused.
 

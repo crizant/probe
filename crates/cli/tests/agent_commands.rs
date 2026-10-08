@@ -47,7 +47,7 @@ fn moved_binary_installs_offline_without_a_repository_or_working_directory_depen
         command.output().unwrap()
     };
     let skill = home.join(".agents/skills/probe");
-    for installed in [true, false] {
+    for changed in [true, false] {
         let output = invoke(false);
         assert!(
             output.status.success(),
@@ -60,7 +60,8 @@ fn moved_binary_installs_offline_without_a_repository_or_working_directory_depen
             json,
             serde_json::json!({
                 "schemaVersion": 1,
-                "installed": installed,
+                "installed": true,
+                "changed": changed,
                 "path": skill,
                 "version": env!("CARGO_PKG_VERSION"),
             })
@@ -79,7 +80,16 @@ fn moved_binary_installs_offline_without_a_repository_or_working_directory_depen
     assert_eq!(output.status.code(), Some(7));
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["error"]["category"], "agent_skill_exists");
-    assert!(invoke(true).status.success());
+    let output = invoke(true);
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["installed"], true);
+    assert_eq!(json["changed"], true);
+    let output = invoke(true);
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["installed"], true);
+    assert_eq!(json["changed"], false);
     assert_eq!(
         fs::read(skill.join("SKILL.md")).unwrap(),
         include_bytes!("../../../.agents/skills/probe/SKILL.md")

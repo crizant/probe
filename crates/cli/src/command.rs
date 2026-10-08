@@ -1297,7 +1297,6 @@ fn is_known_option(argument: &str) -> bool {
             | "--extends"
             | "--workspace"
             | "--allow-partial"
-            | "--force"
             | "--var"
             | "--strict-variables"
             | "--show-headers"

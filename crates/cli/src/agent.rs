@@ -112,15 +112,15 @@ fn install_at(home: Option<&Path>, force: bool) -> Result<CommandOutput, CliErro
     Ok(output(destination, true))
 }
 
-fn output(path: PathBuf, installed: bool) -> CommandOutput {
-    let action = if installed {
+fn output(path: PathBuf, changed: bool) -> CommandOutput {
+    let action = if changed {
         "Installed"
     } else {
         "Already installed"
     };
     CommandOutput {
         human: format!("{action} Probe agent skill\nPath: {}\n", path.display()),
-        json: json!({ "installed": installed, "path": path, "version": version() }),
+        json: json!({ "installed": true, "changed": changed, "path": path, "version": version() }),
     }
 }
 
@@ -226,6 +226,7 @@ mod tests {
             json!({
                 "schemaVersion": JSON_SCHEMA_VERSION,
                 "installed": true,
+                "changed": true,
                 "path": home.skill(),
                 "version": version(),
             })
@@ -241,10 +242,19 @@ mod tests {
             fs::read(home.skill().join("references/cli.md")).unwrap(),
             fs::read(repository.join("docs/CLI.md")).unwrap()
         );
-        let output = home.install(false).unwrap();
-        assert_eq!(output.json["installed"], false);
-        assert!(output.human.contains(&home.skill().display().to_string()));
-        assert_eq!(home.install(true).unwrap().json["installed"], false);
+        for force in [false, true] {
+            let output = home.install(force).unwrap();
+            assert_eq!(
+                output.json,
+                json!({
+                    "installed": true,
+                    "changed": false,
+                    "path": home.skill(),
+                    "version": version(),
+                })
+            );
+            assert!(output.human.contains(&home.skill().display().to_string()));
+        }
     }
 
     #[test]
@@ -263,7 +273,9 @@ mod tests {
             assert_eq!(error.exit_code, PERSISTENCE_EXIT_CODE);
             assert!(error.message.contains("probe agent skill install --force"));
             assert_eq!(fs::read_to_string(&path).unwrap(), "modified");
-            assert_eq!(home.install(true).unwrap().json["installed"], true);
+            let output = home.install(true).unwrap();
+            assert_eq!(output.json["installed"], true);
+            assert_eq!(output.json["changed"], true);
             home.assert_resources();
             fs::remove_file(&path).unwrap();
             assert_eq!(
