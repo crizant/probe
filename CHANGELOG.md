@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-10-08
+
 ### Added
 
 - Send requests with Cmd+Enter on macOS or Ctrl+Enter on Windows and Linux,
@@ -403,6 +405,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[0.10.7]: https://github.com/crizant/probe/releases/tag/v0.10.7
 [0.10.6]: https://github.com/crizant/probe/releases/tag/v0.10.6
 [0.10.5]: https://github.com/crizant/probe/releases/tag/v0.10.5
 [0.10.4]: https://github.com/crizant/probe/releases/tag/v0.10.4
