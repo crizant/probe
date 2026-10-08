@@ -8,6 +8,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- Send requests with Cmd+Enter on macOS or Ctrl+Enter on Windows and Linux,
+  with a shortcut hint on the Send button.
+
 - Linux x86_64 releases include CLI and desktop RPM packages alongside the
   existing tarballs.
 

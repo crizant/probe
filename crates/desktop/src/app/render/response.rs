@@ -1024,6 +1024,7 @@ impl ProbeApp {
     pub(super) fn render_editor_response(
         &self,
         theme: Theme,
+        window: &Window,
         window_height: f32,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -1056,7 +1057,7 @@ impl ProbeApp {
             .flex()
             .when(horizontal, |work_area| work_area.flex_row())
             .when(!horizontal, |work_area| work_area.flex_col())
-            .child(self.render_request_editor(theme, cx))
+            .child(self.render_request_editor(theme, window, cx))
             .child(
                 self.render_response_panel(theme, window_height, cx)
                     .relative()

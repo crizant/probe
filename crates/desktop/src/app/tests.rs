@@ -573,6 +573,16 @@ fn find_shortcut() -> &'static str {
     "ctrl-f"
 }
 
+#[cfg(target_os = "macos")]
+fn send_shortcut() -> &'static str {
+    "cmd-enter"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn send_shortcut() -> &'static str {
+    "ctrl-enter"
+}
+
 fn assert_save_shortcut_after_clicking_remove_row_persists_removal(
     cx: &mut TestAppContext,
     fixture_name: &str,
