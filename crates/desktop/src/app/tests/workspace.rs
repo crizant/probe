@@ -3940,8 +3940,36 @@ fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAp
     fs::remove_file(path).unwrap();
 }
 
+fn wait_for_shortcut_request(
+    window: gpui::WindowHandle<ProbeApp>,
+    key: probe_core::RequestKey,
+    cx: &mut TestAppContext,
+) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        cx.run_until_parked();
+        let finished = window
+            .update(cx, |view, _, _| {
+                view.execution
+                    .response(key)
+                    .is_some_and(|state| !state.is_running())
+            })
+            .unwrap();
+        if finished {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "shortcut request did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[gpui::test]
 fn send_request_shortcut_sends_the_active_request(cx: &mut TestAppContext) {
+    // Real HTTP runs on Tokio; permit external wakes before dispatching Send.
+    cx.executor().allow_parking();
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3968,12 +3996,14 @@ fn send_request_shortcut_sends_the_active_request(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     cx.simulate_keystrokes(window.into(), super::send_shortcut());
-    cx.run_until_parked();
+    wait_for_shortcut_request(window, request_key, cx);
 
     window
-        .update(cx, |view, _, cx| {
-            assert!(view.execution.response(request_key).is_some());
-            view.cancel_request(request_key, cx);
+        .update(cx, |view, _, _| {
+            assert!(matches!(
+                view.execution.response(request_key),
+                Some(crate::execution::ResponseState::Failed(_))
+            ));
         })
         .unwrap();
     cx.run_until_parked();
@@ -3981,6 +4011,8 @@ fn send_request_shortcut_sends_the_active_request(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn send_request_shortcut_works_when_input_focused(cx: &mut TestAppContext) {
+    // Real HTTP runs on Tokio; permit external wakes before dispatching Send.
+    cx.executor().allow_parking();
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -4012,12 +4044,15 @@ fn send_request_shortcut_works_when_input_focused(cx: &mut TestAppContext) {
     visual.run_until_parked();
 
     visual.simulate_keystrokes(super::send_shortcut());
-    visual.run_until_parked();
+    drop(visual);
+    wait_for_shortcut_request(window, request_key, cx);
 
     window
-        .update(cx, |view, _, cx| {
-            assert!(view.execution.response(request_key).is_some());
-            view.cancel_request(request_key, cx);
+        .update(cx, |view, _, _| {
+            assert!(matches!(
+                view.execution.response(request_key),
+                Some(crate::execution::ResponseState::Failed(_))
+            ));
         })
         .unwrap();
     cx.run_until_parked();
@@ -4192,6 +4227,8 @@ fn send_request_shortcut_from_body_editor_preserves_multiline_body(cx: &mut Test
         };
         raw.data.clone()
     };
+    // Real HTTP runs on Tokio; permit external wakes before dispatching Send.
+    cx.executor().allow_parking();
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
     let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
@@ -4238,12 +4275,15 @@ fn send_request_shortcut_from_body_editor_preserves_multiline_body(cx: &mut Test
         })
         .unwrap();
     visual.simulate_keystrokes(super::send_shortcut());
-    visual.run_until_parked();
+    drop(visual);
+    wait_for_shortcut_request(window, request_key, cx);
     window
-        .update(cx, |view, _, cx| {
-            assert!(view.execution.response(request_key).is_some());
+        .update(cx, |view, _, _| {
+            assert!(matches!(
+                view.execution.response(request_key),
+                Some(crate::execution::ResponseState::Failed(_))
+            ));
             assert_eq!(body_text(view), "first line\nsecond line");
-            view.cancel_request(request_key, cx);
         })
         .unwrap();
     cx.run_until_parked();
