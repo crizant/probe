@@ -290,6 +290,9 @@ impl ProbeApp {
                                             });
                                         },
                                     )
+                                    .w(px(components::COMPACT_SPLIT_ACTION_BUTTON_WIDTH
+                                        + theme.metrics.control_height
+                                        + 1.0))
                                     .into_any_element()
                                 } else {
                                     let send_view = execution_view.clone();
