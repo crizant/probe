@@ -5,8 +5,10 @@ usage() {
   cat <<'EOF'
 Usage: scripts/build-rpm.sh [OPTIONS]
 
-Package prebuilt Probe binaries as CLI and desktop RPMs.
+Package prebuilt Linux x86_64 Probe binaries as CLI and desktop RPMs.
 The package version is the workspace version in Cargo.toml.
+Release filenames keep that SemVer. The RPM Version field uses tilde
+prerelease syntax, so 0.11.0-beta.1 is packaged as 0.11.0~beta.1.
 
 Options:
   --cli PATH           Prebuilt probe binary (default: target/release/probe)
@@ -66,8 +68,8 @@ done
 
 version="$(workspace_version "$repo_root/Cargo.toml")" \
   || die "failed to read the workspace version from Cargo.toml"
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-  || die "RPM packaging supports a numeric workspace version such as 0.10.6, got ${version}"
+rpm_version="$(rpm_version_from_semver "$version")" \
+  || die "RPM packaging supports workspace versions such as 0.10.6 or 0.11.0-beta.1, got ${version}"
 
 if [[ -n "$expect_version" && "$expect_version" != "$version" ]]; then
   die "workspace version ${version} does not match expected version ${expect_version}"
@@ -97,35 +99,21 @@ absolute_path() {
 cli_bin="$(absolute_path "$cli_bin")"
 desktop_bin="$(absolute_path "$desktop_bin")"
 
-elf_arch() {
+require_linux_x86_64() {
   local description
-  description="$(file -b "$1")"
+  description="$(file -b "$1")" || die "could not read the binary type of $1"
   case "$description" in
     *"ELF "*x86-64* | *"ELF "*x86_64*)
-      printf 'x86_64\n'
-      ;;
-    *"ELF "*aarch64*)
-      printf 'aarch64\n'
       ;;
     *)
-      die "unsupported ELF binary $1 (${description})"
+      die "RPM packages support only Linux x86_64 binaries; $1 is ${description}"
       ;;
   esac
 }
 
-rpm_arch="$(elf_arch "$cli_bin")"
-desktop_arch="$(elf_arch "$desktop_bin")"
-[[ "$rpm_arch" == "$desktop_arch" ]] \
-  || die "CLI architecture ${rpm_arch} does not match desktop architecture ${desktop_arch}"
-
-case "$rpm_arch" in
-  x86_64)
-    platform="linux-x64"
-    ;;
-  aarch64)
-    platform="linux-arm64"
-    ;;
-esac
+require_linux_x86_64 "$cli_bin"
+require_linux_x86_64 "$desktop_bin"
+platform="linux-x64"
 
 for tool_path in \
   "$repo_root/packaging/rpm/probe.spec" \
@@ -145,10 +133,10 @@ changelog_date="$(LC_ALL=C date +"%a %b %e %Y")"
 echo "Packaging Probe ${version} RPMs from the supplied binaries"
 
 if ! rpmbuild -bb \
-  --target "$rpm_arch" \
+  --target x86_64 \
   --define "_topdir ${topdir}" \
   --define "_tmppath ${topdir}/TMP" \
-  --define "probe_version ${version}" \
+  --define "probe_version ${rpm_version}" \
   --define "probe_changelog_date ${changelog_date}" \
   --define "probe_cli ${cli_bin}" \
   --define "probe_desktop ${desktop_bin}" \
@@ -180,8 +168,8 @@ while IFS= read -r rpm_path; do
   [[ -n "$rpm_path" ]] || continue
   name="$(rpm -qp --queryformat '%{NAME}' "$rpm_path")"
   packaged_version="$(rpm -qp --queryformat '%{VERSION}' "$rpm_path")"
-  [[ "$packaged_version" == "$version" ]] \
-    || die "${name} RPM version ${packaged_version} does not match workspace version ${version}"
+  [[ "$packaged_version" == "$rpm_version" ]] \
+    || die "${name} RPM version ${packaged_version} does not match ${rpm_version} for workspace version ${version}"
   case "$name" in
     probe)
       [[ -z "$cli_rpm" ]] || die "this build produced more than one probe RPM"
@@ -208,8 +196,13 @@ cp -p "$desktop_rpm" "$release_dir/probe-desktop-${version}-${platform}.rpm"
 "$repo_root/scripts/verify-rpm.sh" "$release_dir"
 
 mkdir -p "$output_dir"
-find "$output_dir" -mindepth 1 -maxdepth 1 -type f -name '*.rpm' -delete
-cp -p "$release_dir"/*.rpm "$output_dir/"
+rm -f \
+  "$output_dir/probe-cli-${version}-${platform}.rpm" \
+  "$output_dir/probe-desktop-${version}-${platform}.rpm"
+cp -p "$release_dir/probe-cli-${version}-${platform}.rpm" \
+  "$output_dir/probe-cli-${version}-${platform}.rpm"
+cp -p "$release_dir/probe-desktop-${version}-${platform}.rpm" \
+  "$output_dir/probe-desktop-${version}-${platform}.rpm"
 "$repo_root/scripts/verify-rpm.sh" "$output_dir"
 
 echo "RPM packages:"

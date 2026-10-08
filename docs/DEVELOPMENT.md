@@ -33,7 +33,10 @@ Windows and Linux packaging continue to use the existing generated icons.
 Tagged releases publish `probe-cli-<version>-linux-x64.rpm` and
 `probe-desktop-<version>-linux-x64.rpm` next to the existing Linux `.tar.gz`
 archives. `scripts/build-rpm.sh` reads the workspace version from `Cargo.toml`
-and packages binaries it is given. The release workflow reuses the Linux
+and packages the existing Linux x86_64 binaries. Release filenames keep that
+SemVer, including a prerelease such as `0.11.0-beta.1`. The RPM `Version`
+field replaces each prerelease hyphen with `~` (`0.11.0~beta.1`) because an
+RPM version cannot contain a hyphen. The release workflow reuses the Linux
 binaries already built for those archives; it does not compile Probe a second
 time. `scripts/release.sh` updates only the workspace version, so the RPM spec
 has no version of its own to keep in sync.

@@ -5,8 +5,10 @@ usage() {
   cat <<'EOF'
 Usage: scripts/verify-rpm.sh OUTPUT_DIR
 
-Check the CLI and desktop RPMs in OUTPUT_DIR.
-The expected version is the workspace version in Cargo.toml.
+Check the Probe CLI and desktop RPMs for the workspace version in OUTPUT_DIR.
+Other files in that directory are ignored.
+Release filenames use the workspace SemVer. The RPM Version field uses the
+tilde form of a prerelease, so 0.11.0-beta.1 is 0.11.0~beta.1.
 EOF
 }
 
@@ -32,41 +34,32 @@ command -v cpio >/dev/null 2>&1 || die "cpio is required"
 
 version="$(workspace_version "$repo_root/Cargo.toml")" \
   || die "failed to read the workspace version from Cargo.toml"
+rpm_version="$(rpm_version_from_semver "$version")" \
+  || die "workspace version ${version} cannot be packaged as an RPM"
 
-shopt -s nullglob
-rpm_files=("$output_dir"/*.rpm)
-shopt -u nullglob
-[[ ${#rpm_files[@]} -eq 2 ]] \
-  || die "expected 2 RPMs in ${output_dir}, found ${#rpm_files[@]}"
+cli_rpm="${output_dir}/probe-cli-${version}-linux-x64.rpm"
+desktop_rpm="${output_dir}/probe-desktop-${version}-linux-x64.rpm"
+[[ -f "$cli_rpm" ]] || die "missing CLI RPM ${cli_rpm}"
+[[ -f "$desktop_rpm" ]] || die "missing desktop RPM ${desktop_rpm}"
 
-cli_rpm=""
-desktop_rpm=""
-for rpm_path in "${rpm_files[@]}"; do
+check_rpm_identity() {
+  local rpm_path="$1"
+  local expected_name="$2"
+  local name packaged_version arch
   name="$(rpm -qp --queryformat '%{NAME}' "$rpm_path")"
   packaged_version="$(rpm -qp --queryformat '%{VERSION}' "$rpm_path")"
   arch="$(rpm -qp --queryformat '%{ARCH}' "$rpm_path")"
   rpm -qp --info "$rpm_path" >/dev/null
-  [[ "$packaged_version" == "$version" ]] \
-    || die "$(basename "$rpm_path") version ${packaged_version} does not match workspace version ${version}"
-  [[ "$arch" == "x86_64" || "$arch" == "aarch64" ]] \
-    || die "$(basename "$rpm_path") has unsupported architecture ${arch}"
-  case "$name" in
-    probe)
-      [[ -z "$cli_rpm" ]] || die "found more than one probe RPM"
-      cli_rpm="$rpm_path"
-      ;;
-    probe-desktop)
-      [[ -z "$desktop_rpm" ]] || die "found more than one probe-desktop RPM"
-      desktop_rpm="$rpm_path"
-      ;;
-    *)
-      die "unexpected RPM package ${name} ($(basename "$rpm_path"))"
-      ;;
-  esac
-done
+  [[ "$name" == "$expected_name" ]] \
+    || die "$(basename "$rpm_path") package name is ${name}, expected ${expected_name}"
+  [[ "$packaged_version" == "$rpm_version" ]] \
+    || die "$(basename "$rpm_path") RPM version ${packaged_version} does not match ${rpm_version} for workspace version ${version}"
+  [[ "$arch" == "x86_64" ]] \
+    || die "$(basename "$rpm_path") architecture is ${arch}; RPM packages support only x86_64"
+}
 
-[[ -n "$cli_rpm" && -n "$desktop_rpm" ]] \
-  || die "expected probe and probe-desktop RPMs in ${output_dir}"
+check_rpm_identity "$cli_rpm" probe
+check_rpm_identity "$desktop_rpm" probe-desktop
 
 package_requires() {
   local rpm_path="$1"

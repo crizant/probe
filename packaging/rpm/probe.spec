@@ -34,19 +34,19 @@ This package installs independently and includes its own license.
 The command-line package is recommended alongside it.
 
 %prep
-cp -a %{probe_readme} README.md
+cp -a "%{probe_readme}" README.md
 
 %build
 :
 
 %install
-install -D -p -m 0755 %{probe_cli} %{buildroot}%{_bindir}/probe
-install -D -p -m 0755 %{probe_desktop} %{buildroot}%{_bindir}/probe-desktop
-install -D -p -m 0644 %{probe_license} %{buildroot}%{_datadir}/licenses/probe/LICENSE
-install -D -p -m 0644 %{probe_license} \
-    %{buildroot}%{_datadir}/licenses/probe-desktop/LICENSE
-install -D -p -m 0644 %{probe_desktop_file} \
-    %{buildroot}%{_datadir}/applications/dev.probe.desktop.desktop
+install -D -p -m 0755 "%{probe_cli}" "%{buildroot}%{_bindir}/probe"
+install -D -p -m 0755 "%{probe_desktop}" "%{buildroot}%{_bindir}/probe-desktop"
+install -D -p -m 0644 "%{probe_license}" "%{buildroot}%{_datadir}/licenses/probe/LICENSE"
+install -D -p -m 0644 "%{probe_license}" \
+    "%{buildroot}%{_datadir}/licenses/probe-desktop/LICENSE"
+install -D -p -m 0644 "%{probe_desktop_file}" \
+    "%{buildroot}%{_datadir}/applications/dev.probe.desktop.desktop"
 for size in 16 24 32 48 64 128 256 512; do
     src="%{probe_icon_root}/${size}x${size}/apps/dev.probe.desktop.png"
     test -f "${src}"

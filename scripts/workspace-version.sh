@@ -23,3 +23,15 @@ workspace_version() {
   [[ -n "$version" ]] || return 1
   printf '%s\n' "$version"
 }
+
+# RPM versions cannot contain a hyphen. SemVer prerelease hyphens become tildes:
+# 0.11.0-beta.1 -> 0.11.0~beta.1. The workspace SemVer itself is unchanged.
+rpm_version_from_semver() {
+  local semver="$1"
+  local tilde="~"
+
+  [[ "$semver" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || return 1
+  # Store the tilde in a variable. A bare ~ in this replacement is expanded
+  # to a home directory by Bash 4 and newer.
+  printf '%s\n' "${semver//-/$tilde}"
+}
