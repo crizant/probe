@@ -28,6 +28,29 @@ bundling and before signing; see the [app-icon workflow](../crates/desktop/asset
 CairoSVG, Pillow, and system Cairo are needed only when regenerating artwork.
 Windows and Linux packaging continue to use the existing generated icons.
 
+## Linux RPM Packages
+
+Tagged releases publish `probe-cli-<version>-linux-x64.rpm` and
+`probe-desktop-<version>-linux-x64.rpm` next to the existing Linux `.tar.gz`
+archives. `scripts/build-rpm.sh` reads the workspace version from `Cargo.toml`
+and packages binaries it is given. The release workflow reuses the Linux
+binaries already built for those archives; it does not compile Probe a second
+time. `scripts/release.sh` updates only the workspace version, so the RPM spec
+has no version of its own to keep in sync.
+
+These are upstream binary packages. Install them on current Fedora, RHEL 10 or
+newer, and current openSUSE Tumbleweed or Leap 15.6 or newer. The binaries are
+built on Ubuntu 22.04, so older RPM distributions such as RHEL 9 do not meet
+their glibc baseline. Shared-library dependencies are the RPM SONAME
+requirements generated from the binaries, which Fedora, RHEL, and openSUSE
+satisfy with their own package names. The desktop package also requires
+`hicolor-icon-theme`.
+
+Do not rebuild this spec in a network-disabled source environment. Probe's
+GPUI dependencies are git crates, and the spec does not vendor or compile them.
+`scripts/test-rpm.sh` checks the packaging flow with stand-in binaries, and the
+release job runs `scripts/verify-rpm.sh` on the published packages.
+
 ## Rust and Async Work
 
 - Prefer normal ownership, GPUI entity ownership, message passing, task results, and

@@ -6,6 +6,13 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Linux x86_64 releases include `probe-cli-<version>-linux-x64.rpm` and
+  `probe-desktop-<version>-linux-x64.rpm` in addition to the existing `.tar.gz`
+  archives. The packages are upstream binaries for current Fedora, RHEL 10 and
+  newer, and current openSUSE Tumbleweed and Leap 15.6 or newer.
+
 ## [0.10.6] - 2026-10-07
 
 ### Changed

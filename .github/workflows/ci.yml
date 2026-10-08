@@ -49,6 +49,24 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-targets --all-features
 
+  rpm:
+    name: RPM packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install RPM packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            cpio \
+            desktop-file-utils \
+            file \
+            gcc \
+            libc6-dev \
+            rpm
+      - name: Validate RPM packages
+        run: bash scripts/test-rpm.sh
+
   advisories:
     name: Dependency advisories
     runs-on: ubuntu-latest

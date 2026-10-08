@@ -128,6 +128,8 @@ release_date="$(TZ=Australia/Brisbane date +%Y-%m-%d)"
 
 stamp_changelog "$version" "$release_date"
 
+# RPM metadata takes this workspace version when the release binaries are
+# packaged. Do not add a second version under packaging/.
 VERSION="$version" perl -0pi -e '
   BEGIN { $version = $ENV{"VERSION"}; }
   $count = s/(\[workspace\.package\]\s*.*?^version = ")[^"]+(")/$1$version$2/ms;
