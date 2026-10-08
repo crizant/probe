@@ -6,6 +6,11 @@ on:
       - main
   pull_request:
 
+# Only superseded runs of the same PR share a group. Push runs stay independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -150,15 +155,26 @@ jobs:
       - if: steps.diff.outputs.changed == 'true'
         uses: Swatinem/rust-cache@v2
         with:
-          # Mutant builds use temporary directories, so only cache Cargo downloads.
+          # 27.1.0's copied target seed rebuilt dependencies in the measured trial.
+          # Keep downloads cached; do not share writable targets between workers.
           cache-targets: "false"
       - if: steps.diff.outputs.changed == 'true'
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants@27.1.0
           fallback: none
-      - if: steps.diff.outputs.changed == 'true'
+      - name: Run diff mutation gate
+        if: steps.diff.outputs.changed == 'true'
         env:
-          # Override rust-cache's default for repeated builds of mutated source.
           CARGO_INCREMENTAL: "1"
-        run: cargo mutants --workspace --in-diff "$RUNNER_TEMP/mutants.diff" -j 2
+        run: scripts/run-mutants.sh "$RUNNER_TEMP/mutants.diff"
+      - name: Upload mutation reports
+        if: always() && steps.diff.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-reports
+          path: |
+            mutants.out/
+            ${{ runner.temp }}/mutants.diff
+            ${{ runner.temp }}/mutants-files.txt
+          if-no-files-found: warn
