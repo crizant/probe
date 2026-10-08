@@ -3,6 +3,9 @@
 The canonical artwork is editable SVG: `source/probe-app-icon.svg` (light) and
 `source/probe-app-icon-dark.svg` (dark). Both variants share the same geometry,
 including the aligned needle and collar, with different color palettes.
+The close-up framing shows the tip, contact target, finger guard, and three grip
+rings, with equal left and bottom target margins. The rest of the handle and
+cable are outside the composition.
 Windows, Linux, and loose legacy macOS assets are rendered directly from the
 light SVG at each required size. The native macOS icon uses both palettes, selected
 by macOS; Probe does not switch its icon in Rust or GPUI.
@@ -98,11 +101,12 @@ uses Apple's normal compiler output rather than depending on that flag.
 
 ### Depth and artwork
 
-Back to front: **01 background/grid → 02 cable → 03 probe → 04 target**. Icon
+Back to front: **01 background/grid → 02 probe → 03 target**. Icon
 Composer stores this as the reverse array order in `icon.json` (front to back).
 The target is above the needle. Highlights, grip bands, collar and finger guard
 remain with their object; floating highlight planes would change occlusion.
-The existing path coordinates, clips, transforms and gradient stops are preserved.
+The source framing transform is preserved in both foreground layers, along with
+the path coordinates, clips, and gradient stops.
 
 Each group has Default and Dark image specializations, using the light and dark SVG palettes respectively. SVG foreground layers remain vector artwork.
 The background/grid alone is a 1024px PNG rendered from its canonical SVG shapes,
@@ -125,7 +129,7 @@ system's **Icon & widget style** is set to Default.
 
 ### Verification
 
-The packaging verifier checks all four Default/Dark/Mono groups, their artwork
+The packaging verifier checks all three Default/Dark/Mono groups, their artwork
 references, native stacks, generated legacy renditions, and exact preservation of
 the loose `.icns`. It also rejects uncompiled `.icon` resources. Signature
 verification runs separately after signing. These checks do not prove visual
@@ -144,14 +148,15 @@ running Probe instance first so Launch Services does not activate that copy).
 In System Settings → Appearance → Icon & widget style, check Default, Dark →
 Always, Clear → Light/Dark, and Tinted. Inspect the Dock icon; Finder may continue
 to display Default. Restore the initial system setting afterward. Check small
-and large sizes, the target above the needle, grid, grip rings and cable. Copy
+and large sizes, the target above the needle, grid, and grip rings. Copy
 the same signed bundle to a pre-Tahoe macOS machine and check its light fallback.
 
 ## Documentation preview
 
-`docs/assets/probe-app-icon.png` (relative to the workspace root) is a 512px
-README-only preview with rounded corners and transparent corner cutouts.
-Packaged icons remain fully opaque.
+`docs/assets/probe-app-icon.png` and `docs/assets/probe-app-icon-dark.png`
+(relative to the workspace root) are 512px documentation previews with rounded
+corners and transparent corner cutouts. Both are generated; README currently
+uses only the light preview. Packaged icons remain fully opaque.
 
 ## Regeneration
 
@@ -175,8 +180,8 @@ untouched. If the source structure changes, update its explicit depth split.
 
 The script renders both SVGs to 1024px source previews, validates that rendered
 icons are opaque, and rebuilds all platform assets from the light SVG at their
-native sizes. It applies an antialiased rounded-corner mask only to the README
-preview. The preview's corner radius is 112px at 512px resolution.
+native sizes. It applies the same antialiased rounded-corner mask to the light
+and dark documentation previews. Their corner radius is 112px at 512px resolution.
 
 ## Design source
 

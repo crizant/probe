@@ -30,8 +30,8 @@ def verify_catalog(path):
     for appearance in ("NSAppearanceNameAqua", "NSAppearanceNameDarkAqua", "ISAppearanceTintable"):
         groups = [e for e in entries if e.get("AssetType") == "IconGroup"
                   and e.get("Appearance") == appearance]
-        if len(groups) != 4 or any(e.get("LayerCount") != 1 for e in groups):
-            raise ValueError(f"Missing four independent depth groups for {appearance}")
+        if len(groups) != 3 or any(e.get("LayerCount") != 1 for e in groups):
+            raise ValueError(f"Missing three independent depth groups for {appearance}")
         suffix = "dark" if appearance == "NSAppearanceNameDarkAqua" else "default"
         for group in groups:
             layer = group["Layers"][0]
@@ -45,7 +45,7 @@ def verify_catalog(path):
             raise ValueError(f"Missing native icon stack for {appearance}")
         depth = list(dict.fromkeys(layer["Name"] for layer in stack["Layers"]
                                   if layer.get("AssetType") == "IconGroup"))
-        if depth != ["Probe/01-background-grid", "Probe/02-cable", "Probe/03-probe", "Probe/04-target"]:
+        if depth != ["Probe/01-background-grid", "Probe/02-probe", "Probe/03-target"]:
             raise ValueError(f"Incorrect native depth order for {appearance}")
 
 

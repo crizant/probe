@@ -27,17 +27,17 @@
           "glass": false,
           "image-name-specializations": [
             {
-              "value": "04-target-default.svg"
+              "value": "03-target-default.svg"
             },
             {
               "appearance": "dark",
-              "value": "04-target-dark.svg"
+              "value": "03-target-dark.svg"
             }
           ],
-          "name": "04-target"
+          "name": "03-target"
         }
       ],
-      "name": "04-target",
+      "name": "03-target",
       "shadow": {
         "kind": "neutral",
         "opacity": 0
@@ -56,46 +56,17 @@
           "glass": false,
           "image-name-specializations": [
             {
-              "value": "03-probe-default.svg"
+              "value": "02-probe-default.svg"
             },
             {
               "appearance": "dark",
-              "value": "03-probe-dark.svg"
+              "value": "02-probe-dark.svg"
             }
           ],
-          "name": "03-probe"
+          "name": "02-probe"
         }
       ],
-      "name": "03-probe",
-      "shadow": {
-        "kind": "neutral",
-        "opacity": 0
-      },
-      "specular": false,
-      "translucency": {
-        "enabled": false,
-        "value": 0
-      }
-    },
-    {
-      "blur-material": null,
-      "layers": [
-        {
-          "fill": "none",
-          "glass": false,
-          "image-name-specializations": [
-            {
-              "value": "02-cable-default.svg"
-            },
-            {
-              "appearance": "dark",
-              "value": "02-cable-dark.svg"
-            }
-          ],
-          "name": "02-cable"
-        }
-      ],
-      "name": "02-cable",
+      "name": "02-probe",
       "shadow": {
         "kind": "neutral",
         "opacity": 0

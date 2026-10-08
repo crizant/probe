@@ -29,7 +29,7 @@ MACOS_IMAGES = (
 
 
 def composer_layers():
-    """Extract depth planes from #106 without redrawing or recoloring artwork.
+    """Extract the close-up depth planes without redrawing or recoloring artwork.
 
     Effects/highlights stay with the object they describe; separating those into
     floating planes would change occlusion and the original geometry.
@@ -41,16 +41,24 @@ def composer_layers():
     for appearance, source in (("default", LIGHT_SOURCE), ("dark", DARK_SOURCE)):
         root = ET.parse(source).getroot()
         shapes = list(root)[3:]  # title, description, defs precede the artwork.
-        if [node.tag.removeprefix(namespace) for node in shapes] != [
-            "rect", "rect", *(["path"] * 5),
+        if [node.tag.removeprefix(namespace) for node in shapes] != ["rect", "rect", "g"]:
+            raise ValueError(f"Update the depth split for changed SVG structure: {source}")
+        foreground = shapes[2]
+        objects = list(foreground)
+        if [node.tag.removeprefix(namespace) for node in objects] != [
             "g", "g", "path", "path", "g", "path", *(["circle"] * 4),
         ]:
             raise ValueError(f"Update the depth split for changed SVG structure: {source}")
+
+        def framed(nodes):
+            group = ET.Element(namespace + "g", foreground.attrib)
+            group.extend(deepcopy(nodes))
+            return [group]
+
         for name, nodes in (
             ("01-background-grid", shapes[:2]),
-            ("02-cable", shapes[2:7]),
-            ("03-probe", shapes[7:-4]),
-            ("04-target", shapes[-4:]),
+            ("02-probe", framed(objects[:-4])),
+            ("03-target", framed(objects[-4:])),
         ):
             layer = ET.Element(namespace + "svg", {
                 "width": "1024", "height": "1024", "viewBox": "0 0 1024 1024",
@@ -59,7 +67,7 @@ def composer_layers():
             # Unused pattern definitions also break Apple's SVG importer.
             required = {"grid"} if name == "01-background-grid" else (
                 {"metal", "guard-fill", "handle-clip", "bands-clip", "guard-clip"}
-                if name == "03-probe" else set()
+                if name == "02-probe" else set()
             )
             for definition in list(definitions):
                 if definition.get("id") not in required:
@@ -140,11 +148,16 @@ def main():
         png(ASSETS / f"linux/hicolor/{size}x{size}/apps/dev.probe.desktop.png", size)
 
     # Supersample the corner mask for smooth edges in the 128px README display.
-    preview = icons[512].convert("RGBA")
     mask = Image.new("L", (2048, 2048))
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, 2047, 2047), radius=448, fill=255)
-    preview.putalpha(mask.resize(preview.size, Image.Resampling.LANCZOS))
-    preview.save(ROOT / "docs/assets/probe-app-icon.png")
+    mask = mask.resize((512, 512), Image.Resampling.LANCZOS)
+    for name, image in (
+        ("probe-app-icon.png", icons[512]),
+        ("probe-app-icon-dark.png", render_svg(DARK_SOURCE, 512)),
+    ):
+        preview = image.convert("RGBA")
+        preview.putalpha(mask)
+        preview.save(ROOT / "docs/assets" / name)
 
 
 if __name__ == "__main__":
