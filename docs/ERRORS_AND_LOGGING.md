@@ -18,9 +18,7 @@ library errors. Persistence distinguishes stale-source conflicts, read-only in-m
 sources, invalid retained documents, serialization failures, and filesystem failures.
 Interfaces map these types without requiring callers to parse diagnostic messages.
 
-Desktop user configuration is separate from those library errors. `probe-desktop`
-defines the failure for a missing home or config directory variable, a file that
-cannot be read, and TOML that cannot be parsed. The read happens off the UI
-thread. A missing file is the default configuration, not an error. Read and
-parse failures include the config path and are shown in a persistent desktop
-error toast. Location rules are in [Architecture](ARCHITECTURE.md#user-configuration).
+Desktop user configuration failures stay in `probe-desktop`. A missing file is
+the default configuration. A read or parse failure includes the config path and
+is shown in a persistent error toast. The location is in
+[Architecture](ARCHITECTURE.md#user-configuration).
