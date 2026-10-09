@@ -74,7 +74,9 @@ pub(crate) enum ConfigError {
         /// Config file that could not be parsed.
         path: PathBuf,
         /// TOML or schema failure.
-        source: toml::de::Error,
+        ///
+        /// Boxed so `ConfigError` stays small enough for `result_large_err`.
+        source: Box<toml::de::Error>,
     },
 }
 
@@ -89,7 +91,7 @@ impl ConfigError {
     fn invalid(path: &Path, source: toml::de::Error) -> Self {
         Self::Invalid {
             path: path.to_path_buf(),
-            source,
+            source: Box::new(source),
         }
     }
 }
@@ -120,7 +122,7 @@ impl std::error::Error for ConfigError {
         match self {
             Self::Location(_) => None,
             Self::Read { source, .. } => Some(source),
-            Self::Invalid { source, .. } => Some(source),
+            Self::Invalid { source, .. } => Some(source.as_ref()),
         }
     }
 }
