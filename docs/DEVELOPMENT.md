@@ -155,12 +155,31 @@ git diff --unified=0 HEAD > target/mutants.diff
 scripts/run-mutants.sh target/mutants.diff
 ```
 
-The wrapper gives cargo-mutants' jobserver about half of the detected logical
+By default, the wrapper gives cargo-mutants' jobserver half of the detected logical
 CPUs for Cargo/rustc builds, then divides that budget across its two mutant
 jobs for Rust test-framework threads (both counts have a minimum of one).
 Set `MUTANTS_JOBSERVER_TASKS` or `MUTANTS_TEST_THREADS` to override either
 count. These conservative concurrency limits reduce sustained CPU saturation,
 heat, and fan noise during local mutation runs; they are not a hard CPU cap.
+
+For small local diffs in a quiet checkout with an already-warm `target/`, use:
+
+```bash
+scripts/run-mutants.sh --in-place target/mutants.diff
+```
+
+This keeps baseline verification, mutant selection, and the same compiler and
+test-thread budgets. It enables incremental compilation by default while honoring
+an explicit `CARGO_INCREMENTAL` value. cargo-mutants 27.1.0 requires serial mutant
+execution in this mode, so the wrapper omits `-j`. Source files are temporarily
+mutated: do not edit or run watchers or other Cargo commands in that checkout
+during the gate. Prefer a dedicated checkout with its own persistent target, and
+check source restoration after an interrupted run. The restored source may need
+a rebuild after the last mutant. Use the default scratch mode when the checkout
+must remain editable or when parallel mutants benefit a larger diff.
+
+Reuse a target already warmed by ordinary development. Building a cache solely
+for one gate does not provide the same benefit.
 
 CI uses the same wrapper and resource limits, with incremental compilation
 explicitly enabled for repeated builds. The wrapper reports resource counts,

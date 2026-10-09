@@ -2,8 +2,14 @@
 set -eu
 
 usage() {
-  echo "Usage: scripts/run-mutants.sh <diff-file>" >&2
+  echo "Usage: scripts/run-mutants.sh [--in-place] <diff-file>" >&2
 }
+
+mode=scratch
+if [ "${1:-}" = "--in-place" ]; then
+  mode=in-place
+  shift
+fi
 
 if [ "$#" -ne 1 ] || [ -z "$1" ]; then
   usage
@@ -12,6 +18,12 @@ fi
 
 diff_file=$1
 mutant_jobs=2
+if [ "$mode" = "in-place" ]; then
+  mutant_jobs=1
+  # Reuse incremental artifacts in a quiet local checkout.
+  CARGO_INCREMENTAL=${CARGO_INCREMENTAL:-1}
+  export CARGO_INCREMENTAL
+fi
 
 if [ -n "${MUTANTS_JOBSERVER_TASKS:-}" ]; then
   case "$MUTANTS_JOBSERVER_TASKS" in
@@ -65,13 +77,14 @@ if [ -n "${MUTANTS_TEST_THREADS:-}" ]; then
     exit 2
   fi
 else
-  test_threads=$((tasks / mutant_jobs))
+  # Keep the existing test-thread budget in both modes.
+  test_threads=$((tasks / 2))
   if [ "$test_threads" -lt 1 ]; then
     test_threads=1
   fi
 fi
 
-echo "Mutation resources: jobs=$mutant_jobs jobserver_tasks=$tasks test_threads=$test_threads"
+echo "Mutation resources: mode=$mode jobs=$mutant_jobs jobserver_tasks=$tasks test_threads=$test_threads"
 started=$(date +%s)
 report_duration() {
   status=$?
@@ -80,5 +93,12 @@ report_duration() {
 }
 trap report_duration 0
 
-cargo mutants --workspace --in-diff "$diff_file" -j "$mutant_jobs" \
+if [ "$mode" = "in-place" ]; then
+  # cargo-mutants 27.1.0 rejects --in-place combined with any -j value.
+  set -- --in-place
+else
+  set -- -j "$mutant_jobs"
+fi
+
+cargo mutants --workspace --in-diff "$diff_file" "$@" \
   --jobserver-tasks "$tasks" --caught -- -- --test-threads "$test_threads"
