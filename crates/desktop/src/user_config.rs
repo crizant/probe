@@ -81,18 +81,39 @@ impl UserConfig {
     /// Loads `path`.
     ///
     /// A missing file returns [`UserConfig::default`] and does not create a file
-    /// or its parent directory. Any other filesystem failure, and invalid TOML,
-    /// include `path` in the error.
+    /// or its parent directory. A symlink to a regular file is followed.
+    /// A dangling symlink, a path that is not a regular file, a file larger
+    /// than [`MAX_CONFIG_BYTES`], and invalid TOML include `path` in the error.
     pub(crate) fn load_from(path: &Path) -> Result<Self, ConfigError> {
-        match fs::symlink_metadata(path) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(ConfigError::read(path, error)),
-            Ok(_) => {
-                let text =
-                    fs::read_to_string(path).map_err(|error| ConfigError::read(path, error))?;
-                toml::from_str(&text).map_err(|source| ConfigError::invalid(path, source))
+        // `metadata` follows symlinks, so a dotfiles link to a normal TOML file
+        // is accepted. A dangling link looks missing here and is distinguished below.
+        let metadata = match fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return missing_or_dangling(path, error);
             }
+            Err(error) => return Err(ConfigError::read(path, error)),
+        };
+        if !metadata.is_file() {
+            return Err(ConfigError::not_a_file(path));
         }
+        let len = metadata.len();
+        if len > MAX_CONFIG_BYTES {
+            return Err(ConfigError::too_large(path, len));
+        }
+        let text = fs::read_to_string(path).map_err(|error| ConfigError::read(path, error))?;
+        toml::from_str(&text).map_err(|source| ConfigError::invalid(path, source))
+    }
+}
+
+/// Largest config file read before the window is created.
+const MAX_CONFIG_BYTES: u64 = 64 * 1024;
+
+fn missing_or_dangling(path: &Path, metadata_error: io::Error) -> Result<UserConfig, ConfigError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(UserConfig::default()),
+        Err(error) => Err(ConfigError::read(path, error)),
+        Ok(_) => Err(ConfigError::read(path, metadata_error)),
     }
 }
 
@@ -117,6 +138,18 @@ pub(crate) enum ConfigError {
         /// Boxed so `ConfigError` stays small enough for `result_large_err`.
         source: Box<toml::de::Error>,
     },
+    /// The path exists and is not a regular file.
+    NotAFile {
+        /// Config path that is a directory or other non-file.
+        path: PathBuf,
+    },
+    /// The regular file is larger than [`MAX_CONFIG_BYTES`].
+    TooLarge {
+        /// Config file that was not read.
+        path: PathBuf,
+        /// Size reported by metadata, in bytes.
+        len: u64,
+    },
 }
 
 impl ConfigError {
@@ -131,6 +164,19 @@ impl ConfigError {
         Self::Invalid {
             path: path.to_path_buf(),
             source: Box::new(source),
+        }
+    }
+
+    fn not_a_file(path: &Path) -> Self {
+        Self::NotAFile {
+            path: path.to_path_buf(),
+        }
+    }
+
+    fn too_large(path: &Path, len: u64) -> Self {
+        Self::TooLarge {
+            path: path.to_path_buf(),
+            len,
         }
     }
 }
@@ -152,6 +198,16 @@ impl fmt::Display for ConfigError {
                 "Probe's user configuration at {} is invalid: {source}",
                 path.display()
             ),
+            Self::NotAFile { path } => write!(
+                formatter,
+                "Probe's user configuration at {} is not a regular file",
+                path.display()
+            ),
+            Self::TooLarge { path, len } => write!(
+                formatter,
+                "Probe's user configuration at {} is too large ({len} bytes; limit is {MAX_CONFIG_BYTES} bytes)",
+                path.display()
+            ),
         }
     }
 }
@@ -159,7 +215,7 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Location(_) => None,
+            Self::Location(_) | Self::NotAFile { .. } | Self::TooLarge { .. } => None,
             Self::Read { source, .. } => Some(source),
             Self::Invalid { source, .. } => Some(source.as_ref()),
         }
@@ -290,6 +346,51 @@ mod tests {
         fs::write(&path, "renderer = \"gpu\"\n\n[window]\nwidth = 1200\n").unwrap();
 
         assert_eq!(UserConfig::load_from(&path).unwrap(), UserConfig::default());
+    }
+
+    #[test]
+    fn directory_config_path_is_not_a_regular_file() {
+        let root = TempDir::new();
+        let path = root.0.join("config.toml");
+        fs::create_dir(&path).unwrap();
+
+        let error = UserConfig::load_from(&path).unwrap_err();
+        let message = error.to_string();
+        assert!(matches!(error, ConfigError::NotAFile { .. }), "{message}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+
+    #[test]
+    fn oversized_config_file_is_rejected() {
+        let root = TempDir::new();
+        let path = root.0.join("config.toml");
+        fs::write(&path, vec![b' '; MAX_CONFIG_BYTES as usize]).unwrap();
+        assert_eq!(UserConfig::load_from(&path).unwrap(), UserConfig::default());
+
+        fs::write(&path, vec![b'a'; MAX_CONFIG_BYTES as usize + 1]).unwrap();
+        let error = UserConfig::load_from(&path).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            matches!(error, ConfigError::TooLarge { len, .. } if len == MAX_CONFIG_BYTES + 1),
+            "{message}"
+        );
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        assert!(message.contains(&MAX_CONFIG_BYTES.to_string()), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_to_a_regular_file_loads() {
+        let root = TempDir::new();
+        let target = root.0.join("real.toml");
+        fs::write(&target, "theme = \"light\"\n").unwrap();
+        let path = root.0.join("config.toml");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        assert_eq!(
+            UserConfig::load_from(&path).unwrap().theme,
+            ThemeMode::Light
+        );
     }
 
     fn load_theme(contents: &str) -> ThemeMode {

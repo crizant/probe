@@ -15,13 +15,15 @@ Release dates use Australia/Brisbane time (UTC+10).
   `~/.config/probe/config.toml` when `HOME` is an absolute path. Windows uses
   `%APPDATA%\probe\config.toml` when `APPDATA` is an absolute path. A relative
   `HOME` or `APPDATA` is reported instead of a path under the working directory.
-  A missing file keeps the built-in defaults and is not created. Invalid TOML
-  and filesystem errors are shown with the config path, and the window still
-  opens using those defaults.
+  A missing file keeps the built-in defaults and is not created. A symlink to a
+  regular file is followed. A dangling symlink, a directory or other non-file,
+  a file larger than 64 KiB, and invalid TOML are shown with the config path,
+  and the window still opens using those defaults.
 
 - The desktop `theme` setting is `system` (the default), `light`, or `dark`.
-  `system` follows the OS appearance. `light` keeps the light theme and `dark`
-  keeps the dark theme when the OS appearance changes.
+  `system` follows the OS appearance, including the macOS titlebar. `light`
+  keeps the light theme and `dark` keeps the dark theme when the OS appearance
+  changes, and on macOS the native window chrome follows that choice.
 
 - `probe agent skill install` installs the bundled Probe agent skill and matching CLI
   reference locally; `--force` updates an existing installation.

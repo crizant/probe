@@ -361,6 +361,20 @@ impl Theme {
     }
 }
 
+/// Native window-chrome override for a theme preference.
+///
+/// `None` clears the override so macOS chrome follows the OS appearance.
+/// Light and dark force that appearance on every window. Other platforms
+/// ignore the value.
+#[must_use]
+pub(crate) fn appearance_override(mode: ThemeMode) -> Option<WindowAppearance> {
+    match mode {
+        ThemeMode::System => None,
+        ThemeMode::Light => Some(WindowAppearance::Light),
+        ThemeMode::Dark => Some(WindowAppearance::Dark),
+    }
+}
+
 /// Porcelain Honey — Probe's light theme based on the creamy app icon background.
 fn porcelain_honey() -> Colors {
     Colors {
@@ -593,7 +607,7 @@ const fn default_motion() -> Motion {
 
 #[cfg(test)]
 mod tests {
-    use super::{Theme, ThemeAppearance};
+    use super::{Theme, ThemeAppearance, appearance_override};
     use crate::user_config::ThemeMode;
     use gpui::WindowAppearance;
 
@@ -668,5 +682,18 @@ mod tests {
                 "{mode:?} with {appearance:?}"
             );
         }
+    }
+
+    #[test]
+    fn appearance_override_maps_each_theme_mode() {
+        assert_eq!(appearance_override(ThemeMode::System), None);
+        assert_eq!(
+            appearance_override(ThemeMode::Light),
+            Some(WindowAppearance::Light)
+        );
+        assert_eq!(
+            appearance_override(ThemeMode::Dark),
+            Some(WindowAppearance::Dark)
+        );
     }
 }

@@ -117,7 +117,7 @@ use crate::{
     synchronization::{
         LocalRequestState, ReconcileResult, ReconciledWorkspace, SynchronizationConflict, reconcile,
     },
-    theme::Theme,
+    theme::{Theme, appearance_override},
     toast::{ToastCenter, ToastId, ToastIntent, toast_stack_motion},
     tree_search::{TreeSearchMatches, matching_tree_items},
     user_config::{LoadedUserConfig, ThemeMode, UserConfig},
@@ -670,8 +670,9 @@ pub fn run() {
 
 fn open_probe_window(startup: LoadedUserConfig, cx: &mut App) {
     let LoadedUserConfig { config, error } = startup;
-    // Explicit preferences are known before the window exists. System appearance
-    // is applied when the window reports the OS theme.
+    // Set native chrome before the window exists. On macOS this controls the
+    // titlebar; other platforms ignore it. Content tokens are applied below.
+    cx.set_window_appearance(appearance_override(config.theme));
     match config.theme {
         ThemeMode::Light => Theme::sync_theme(Theme::light(), cx),
         ThemeMode::Dark => Theme::sync_theme(Theme::dark(), cx),

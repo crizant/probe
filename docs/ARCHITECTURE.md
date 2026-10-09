@@ -320,6 +320,8 @@ theme = "system"
 - `dark` uses Graphite Honey.
 
 `light` and `dark` stay on that built-in theme when the OS appearance changes.
+On macOS they also set the native window appearance, so the titlebar matches
+the theme. `system` clears that override and macOS chrome follows the OS.
 Any other value fails config parsing.
 
 - macOS and Linux: `$XDG_CONFIG_HOME/probe/config.toml` when `XDG_CONFIG_HOME`
@@ -329,13 +331,15 @@ Any other value fails config parsing.
 - Windows: `%APPDATA%\probe\config.toml` when `APPDATA` is an absolute path.
   Otherwise startup reports that the config path could not be resolved.
 
-A missing file loads the built-in defaults and is not created. Invalid TOML and
-filesystem errors include the config path. Startup reads this small file once,
-before the GPUI event loop and before the main window is created, so the
-effective theme is applied as the window is created. The same result is reused
-when the process opens another window later. The view does not parse TOML or
-touch the filesystem. A failure is shown as a persistent error toast once the
-window exists, and the window keeps the defaults.
+A missing file loads the built-in defaults and is not created. A symlink to a
+regular file is followed. A dangling symlink is a read error. A directory or
+other non-file, and a regular file larger than 64 KiB, are configuration
+errors. Invalid TOML and these filesystem failures include the config path.
+Startup reads this small file once, before the GPUI event loop and before the
+main window is created, so the effective theme is applied as the window is
+created. The same result is reused when the process opens another window later.
+The view does not parse TOML or touch the filesystem. A failure is shown as a
+persistent error toast once the window exists, and the window keeps the defaults.
 
 ### Runtime Identity and Persistence Locators
 
