@@ -310,7 +310,8 @@ file yet. Omitted keys use defaults, and unknown keys are ignored. The desktop
 does not write the file.
 
 - macOS and Linux: `$XDG_CONFIG_HOME/probe/config.toml` when `XDG_CONFIG_HOME`
-  is set, otherwise `~/.config/probe/config.toml`.
+  is an absolute path. An empty or relative value is ignored, and the file is
+  `~/.config/probe/config.toml`.
 - Windows: `%APPDATA%\probe\config.toml`.
 
 A missing file loads the built-in defaults and is not created. Invalid TOML and

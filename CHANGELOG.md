@@ -10,8 +10,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 - The desktop app loads an optional TOML user configuration file at startup
   without blocking the window. macOS and Linux use
-  `$XDG_CONFIG_HOME/probe/config.toml` when that variable is set, and
-  `~/.config/probe/config.toml` otherwise. Windows uses
+  `$XDG_CONFIG_HOME/probe/config.toml` when that variable is an absolute path.
+  An empty or relative value is ignored, and the file is
+  `~/.config/probe/config.toml`. Windows uses
   `%APPDATA%\probe\config.toml`. A missing file keeps the built-in defaults and
   is not created. Invalid TOML and filesystem errors are shown with the config
   path.

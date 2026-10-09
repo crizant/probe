@@ -129,7 +129,7 @@ fn config_path() -> Result<PathBuf, ConfigError> {
 
 #[cfg(unix)]
 fn unix_config_path(xdg: Option<&Path>, home: Option<&Path>) -> Result<PathBuf, ConfigError> {
-    if let Some(dir) = non_empty(xdg) {
+    if let Some(dir) = xdg.filter(|path| path.is_absolute()) {
         return Ok(dir.join("probe").join("config.toml"));
     }
     let Some(home) = non_empty(home) else {
@@ -225,7 +225,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn xdg_config_home_overrides_the_home_fallback() {
+    fn absolute_xdg_config_home_overrides_the_home_fallback() {
         let path = unix_config_path(
             Some(Path::new("/tmp/probe-xdg")),
             Some(Path::new("/home/ada")),
@@ -236,9 +236,18 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn home_fallback_uses_dot_config_when_xdg_is_unset() {
-        let path = unix_config_path(None, Some(Path::new("/home/ada"))).unwrap();
-        assert_eq!(path, PathBuf::from("/home/ada/.config/probe/config.toml"));
+    fn relative_or_empty_xdg_config_home_falls_back_to_home() {
+        let home = Path::new("/home/ada");
+        let expected = PathBuf::from("/home/ada/.config/probe/config.toml");
+        assert_eq!(
+            unix_config_path(Some(Path::new("config")), Some(home)).unwrap(),
+            expected
+        );
+        assert_eq!(
+            unix_config_path(Some(Path::new("")), Some(home)).unwrap(),
+            expected
+        );
+        assert_eq!(unix_config_path(None, Some(home)).unwrap(), expected);
     }
 
     #[cfg(windows)]
