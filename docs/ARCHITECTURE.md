@@ -311,8 +311,10 @@ does not write the file.
 
 - macOS and Linux: `$XDG_CONFIG_HOME/probe/config.toml` when `XDG_CONFIG_HOME`
   is an absolute path. An empty or relative value is ignored, and the file is
-  `~/.config/probe/config.toml`.
-- Windows: `%APPDATA%\probe\config.toml`.
+  `$HOME/.config/probe/config.toml` when `HOME` is an absolute path. Otherwise
+  startup reports that the config path could not be resolved.
+- Windows: `%APPDATA%\probe\config.toml` when `APPDATA` is an absolute path.
+  Otherwise startup reports that the config path could not be resolved.
 
 A missing file loads the built-in defaults and is not created. Invalid TOML and
 filesystem errors include the config path. Startup reads the file on a

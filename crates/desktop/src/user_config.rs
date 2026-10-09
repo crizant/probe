@@ -132,9 +132,9 @@ fn unix_config_path(xdg: Option<&Path>, home: Option<&Path>) -> Result<PathBuf, 
     if let Some(dir) = xdg.filter(|path| path.is_absolute()) {
         return Ok(dir.join("probe").join("config.toml"));
     }
-    let Some(home) = non_empty(home) else {
+    let Some(home) = absolute(home) else {
         return Err(ConfigError::Location(
-            "HOME is not set; Probe looks for ~/.config/probe/config.toml".to_owned(),
+            "HOME is not an absolute path; Probe looks for ~/.config/probe/config.toml".to_owned(),
         ));
     };
     Ok(home.join(".config").join("probe").join("config.toml"))
@@ -142,16 +142,17 @@ fn unix_config_path(xdg: Option<&Path>, home: Option<&Path>) -> Result<PathBuf, 
 
 #[cfg(windows)]
 fn windows_config_path(appdata: Option<&Path>) -> Result<PathBuf, ConfigError> {
-    let Some(dir) = non_empty(appdata) else {
+    let Some(dir) = absolute(appdata) else {
         return Err(ConfigError::Location(
-            "APPDATA is not set; Probe looks for %APPDATA%\\probe\\config.toml".to_owned(),
+            "APPDATA is not an absolute path; Probe looks for %APPDATA%\\probe\\config.toml"
+                .to_owned(),
         ));
     };
     Ok(dir.join("probe").join("config.toml"))
 }
 
-fn non_empty(path: Option<&Path>) -> Option<&Path> {
-    path.filter(|path| !path.as_os_str().is_empty())
+fn absolute(path: Option<&Path>) -> Option<&Path> {
+    path.filter(|path| path.is_absolute())
 }
 
 #[cfg(test)]
@@ -250,6 +251,13 @@ mod tests {
         assert_eq!(unix_config_path(None, Some(home)).unwrap(), expected);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn relative_home_is_a_location_error() {
+        let error = unix_config_path(None, Some(Path::new("ada"))).unwrap_err();
+        assert!(matches!(error, ConfigError::Location(_)), "{error}");
+    }
+
     #[cfg(windows)]
     #[test]
     fn appdata_config_path() {
@@ -260,5 +268,12 @@ mod tests {
                 .join("probe")
                 .join("config.toml")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn relative_appdata_is_a_location_error() {
+        let error = windows_config_path(Some(Path::new(r"AppData\Roaming"))).unwrap_err();
+        assert!(matches!(error, ConfigError::Location(_)), "{error}");
     }
 }

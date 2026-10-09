@@ -12,8 +12,10 @@ Release dates use Australia/Brisbane time (UTC+10).
   without blocking the window. macOS and Linux use
   `$XDG_CONFIG_HOME/probe/config.toml` when that variable is an absolute path.
   An empty or relative value is ignored, and the file is
-  `~/.config/probe/config.toml`. Windows uses
-  `%APPDATA%\probe\config.toml`. A missing file keeps the built-in defaults and
+  `~/.config/probe/config.toml` when `HOME` is an absolute path. Windows uses
+  `%APPDATA%\probe\config.toml` when `APPDATA` is an absolute path. A relative
+  `HOME` or `APPDATA` is reported instead of a path under the working directory.
+  A missing file keeps the built-in defaults and
   is not created. Invalid TOML and filesystem errors are shown with the config
   path.
 
