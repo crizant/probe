@@ -5,7 +5,7 @@ apply to every code change and routes task-specific work here.
 
 | Document | Canonical subject | Read when |
 | --- | --- | --- |
-| [Architecture](ARCHITECTURE.md) | Crate boundaries, data flow, workspace identity, persistence, synchronization, HTTP, imports, desktop runtime behavior, and secret storage, credential identity, and presence metadata | Changing shared behavior, boundaries, or secret handling |
+| [Architecture](ARCHITECTURE.md) | Crate boundaries, data flow, workspace identity, persistence, synchronization, HTTP, imports, desktop runtime behavior, desktop user configuration, and secret storage, credential identity, and presence metadata | Changing shared behavior, boundaries, secret handling, or desktop user configuration |
 | [CLI](CLI.md) | Commands, selectors, JSON schemas, secret providers, error categories, and exit codes | Changing or consuming the CLI contract |
 | [Desktop design](DESIGN.md) | Platform behavior, components, semantic tokens, themes, accessibility, variable placeholder presentation, and secret value interaction | Changing desktop presentation or interaction |
 | [Development](DEVELOPMENT.md) | Rust ownership, async work, dependencies, pinned GPUI guidance, test design, completion checks, and coverage, CRAP, and mutation review | Implementing code or changing dependencies |

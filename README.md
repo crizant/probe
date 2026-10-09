@@ -171,6 +171,11 @@ In Desktop, choose **Open Collection…** to open an OpenCollection YAML file or
 collection directory, select a request, and send it. Choose an environment when
 requests use variables.
 
+The desktop app reads an optional user configuration file at startup. A missing
+file uses the built-in defaults and is not created. The location and loading
+behavior are described in
+[Architecture](docs/ARCHITECTURE.md#user-configuration).
+
 ### CLI
 
 The CLI is a first-class, non-interactive interface for developers, AI agents,

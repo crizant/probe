@@ -24,5 +24,6 @@ mod syntax;
 mod theme;
 mod toast;
 mod tree_search;
+mod user_config;
 
 pub use app::run;

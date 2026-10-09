@@ -17,3 +17,8 @@ Repository loading and saving, environment resolution, and HTTP execution expose
 library errors. Persistence distinguishes stale-source conflicts, read-only in-memory
 sources, invalid retained documents, serialization failures, and filesystem failures.
 Interfaces map these types without requiring callers to parse diagnostic messages.
+
+Desktop user configuration failures stay in `probe-desktop`. A missing file is
+the default configuration. A read or parse failure includes the config path and
+is shown in a persistent error toast. The location is in
+[Architecture](ARCHITECTURE.md#user-configuration).

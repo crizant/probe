@@ -5028,6 +5028,7 @@ dependencies = [
  "sha2 0.11.0",
  "syntect",
  "tokio",
+ "toml 0.8.23",
  "winresource",
 ]
 

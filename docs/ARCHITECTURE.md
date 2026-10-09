@@ -301,6 +301,27 @@ rebuilds runtime keys, and resolves persisted repository selectors. Missing coll
 items, or environments produce recoverable state rather than preventing startup.
 Closing a collection clears active session state without deleting collection files.
 
+### User Configuration
+
+The desktop reads an optional TOML file for user settings. It is not an
+OpenCollection document, and it does not store collection variables, secrets, or
+desktop session state. The CLI does not load it. There are no settings in the
+file yet. Omitted keys use defaults, and unknown keys are ignored. The desktop
+does not write the file.
+
+- macOS and Linux: `$XDG_CONFIG_HOME/probe/config.toml` when `XDG_CONFIG_HOME`
+  is an absolute path. An empty or relative value is ignored, and the file is
+  `$HOME/.config/probe/config.toml` when `HOME` is an absolute path. Otherwise
+  startup reports that the config path could not be resolved.
+- Windows: `%APPDATA%\probe\config.toml` when `APPDATA` is an absolute path.
+  Otherwise startup reports that the config path could not be resolved.
+
+A missing file loads the built-in defaults and is not created. Invalid TOML and
+filesystem errors include the config path. Startup reads the file on a
+background executor after the window opens. The view does not parse TOML or
+touch the filesystem. A failure is shown as a persistent error toast, and the
+window keeps the defaults.
+
 ### Runtime Identity and Persistence Locators
 
 OpenCollection does not define durable request or folder IDs. Each loaded workspace
