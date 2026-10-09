@@ -54,6 +54,7 @@ mod structure;
 mod tabs;
 mod transient;
 mod tree;
+mod user_config;
 mod workspace;
 mod workspace_writes;
 
@@ -119,6 +120,7 @@ use crate::{
     theme::Theme,
     toast::{ToastCenter, ToastId, ToastIntent, toast_stack_motion},
     tree_search::{TreeSearchMatches, matching_tree_items},
+    user_config::UserConfig,
 };
 
 const APPLICATION_ID: &str = "dev.probe.desktop";
@@ -264,6 +266,8 @@ pub(crate) struct ProbeApp {
     shell: ShellState,
     loading: bool,
     session_store: Option<SessionStore>,
+    #[allow(dead_code)] // Read when desktop settings are applied.
+    user_config: UserConfig,
     session: SessionState,
     session_save_task: Option<Task<()>>,
     request_save_task: Option<Task<()>>,
@@ -391,6 +395,7 @@ impl ProbeApp {
             shell: ShellState::default(),
             loading: false,
             session_store: SessionStore::for_application(),
+            user_config: UserConfig::default(),
             session: SessionState::default(),
             session_save_task: None,
             request_save_task: None,
@@ -667,7 +672,10 @@ fn open_probe_window(cx: &mut App) {
         },
         |window, cx| {
             let view = cx.new(|cx| ProbeApp::new(window, cx));
-            view.update(cx, |view, cx| view.restore_session(window, cx));
+            view.update(cx, |view, cx| {
+                view.load_user_config(window, cx);
+                view.restore_session(window, cx);
+            });
             view
         },
     )

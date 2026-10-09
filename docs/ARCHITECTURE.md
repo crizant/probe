@@ -301,6 +301,42 @@ rebuilds runtime keys, and resolves persisted repository selectors. Missing coll
 items, or environments produce recoverable state rather than preventing startup.
 Closing a collection clears active session state without deleting collection files.
 
+### User Configuration
+
+The desktop reads an optional TOML file for user settings. The file is not an
+OpenCollection document, and it does not store collection variables, secrets, or
+desktop session state. The CLI does not load it. The desktop crate owns the
+typed `UserConfig`, path resolution, and file read so a new crate is not
+introduced for this file. There are no settings in the file yet. New fields use
+`Default` so a file that omits them keeps working, and unknown keys are ignored
+so a newer file can still be read. The desktop does not write the file.
+
+Path resolution uses the process environment directly. It does not ask for a
+folder through a file dialog, and it does not use the macOS Application Support
+directory or the app bundle:
+
+- macOS: `~/.config/probe/config.toml`. When `XDG_CONFIG_HOME` is set to an
+  absolute path, the file is `$XDG_CONFIG_HOME/probe/config.toml`. An empty
+  value uses the `~/.config` fallback. A relative value is an error.
+- Linux and other Unix platforms: `$XDG_CONFIG_HOME/probe/config.toml` when
+  `XDG_CONFIG_HOME` is an absolute path. Otherwise the file is
+  `~/.config/probe/config.toml`. An empty value uses that fallback. A relative
+  value is an error.
+- Windows: `%APPDATA%\probe\config.toml`. `XDG_CONFIG_HOME` and the home
+  directory are not consulted. A missing, empty, or relative `APPDATA` is an
+  error.
+
+A missing home directory is an error when the macOS or Linux fallback needs it.
+The desktop does not create the file or its parent directory. A path that is
+absent loads the built-in defaults. Invalid TOML and other filesystem failures
+include the config path in the error.
+
+Startup opens the window first and reads the file on the background executor.
+The GPUI view does not parse TOML or touch the filesystem. When the read
+finishes, a valid file replaces the in-memory defaults. A failure is shown as a
+persistent error toast, and the window keeps those defaults so rendering is not
+blocked and the file is not discarded silently.
+
 ### Runtime Identity and Persistence Locators
 
 OpenCollection does not define durable request or folder IDs. Each loaded workspace

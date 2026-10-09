@@ -8,6 +8,14 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- The desktop app loads an optional TOML user configuration file at startup
+  without blocking the window. macOS uses `~/.config/probe/config.toml`, or
+  `$XDG_CONFIG_HOME/probe/config.toml` when that variable is set to an absolute
+  path. Linux uses `$XDG_CONFIG_HOME/probe/config.toml` or
+  `~/.config/probe/config.toml`. Windows uses `%APPDATA%\probe\config.toml`.
+  A missing file keeps the built-in defaults and is not created. Invalid TOML
+  and filesystem errors are shown with the config path.
+
 - `probe agent skill install` installs the bundled Probe agent skill and matching CLI
   reference locally; `--force` updates an existing installation.
 
