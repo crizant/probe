@@ -181,7 +181,8 @@ must remain editable or when parallel mutants benefit a larger diff.
 Reuse a target already warmed by ordinary development. Building a cache solely
 for one gate does not provide the same benefit.
 
-CI uses the same wrapper and resource limits, with incremental compilation
+CI uses the same wrapper with all detected logical CPUs for the jobserver and
+the unchanged local-default test-thread budget, with incremental compilation
 explicitly enabled for repeated builds. The wrapper reports resource counts,
 caught-mutant timings, and total gate duration. CI uploads `mutants.out/` and
 PR diff inputs even on failure. Superseded CI runs are cancelled only within

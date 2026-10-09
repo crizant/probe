@@ -167,7 +167,26 @@ jobs:
         if: steps.diff.outputs.changed == 'true'
         env:
           CARGO_INCREMENTAL: "1"
-        run: scripts/run-mutants.sh "$RUNNER_TEMP/mutants.diff"
+        run: |
+          cpus=$(getconf _NPROCESSORS_ONLN)
+          export MUTANTS_JOBSERVER_TASKS="$cpus"
+          # Preserve the test-thread budget from the wrapper's half-CPU default.
+          test_threads=$((cpus / 2 / 2))
+          export MUTANTS_TEST_THREADS=$((test_threads > 0 ? test_threads : 1))
+          echo "Mutation runner logical CPUs: $cpus"
+          # Benchmark-only telemetry; excluded from the proposed CI change.
+          (
+            while true; do
+              date -u
+              top -l 1 -n 0 | head -n 12
+              memory_pressure -Q
+              sysctl vm.swapusage
+              sleep 15
+            done
+          ) > "$RUNNER_TEMP/mutation-resources.log" 2>&1 &
+          monitor=$!
+          trap 'kill "$monitor" 2>/dev/null || true' EXIT
+          scripts/run-mutants.sh "$RUNNER_TEMP/mutants.diff"
       - name: Upload mutation reports
         if: always() && steps.diff.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
@@ -175,6 +194,7 @@ jobs:
           name: mutation-reports
           path: |
             mutants.out/
+            ${{ runner.temp }}/mutation-resources.log
             ${{ runner.temp }}/mutants.diff
             ${{ runner.temp }}/mutants-files.txt
           if-no-files-found: warn
