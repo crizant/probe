@@ -1003,3 +1003,52 @@ fn http_body_content_refuses_ambiguous_yaml_selection_without_writing() {
     assert!(error.to_string().contains("multiple selected values"));
     assert_eq!(fs::read_to_string(&path).unwrap(), source);
 }
+
+#[test]
+fn locator_lookup_preserves_traversal_and_rejects_foreign_and_detached_keys() {
+    for fixture_name in ["phase1-bundled.yml", "breadcrumbs.yml", "unbundled"] {
+        let older = load_workspace(fixture(fixture_name)).unwrap();
+        let mut loaded = load_workspace(fixture(fixture_name)).unwrap();
+        let newer = load_workspace(fixture(fixture_name)).unwrap();
+        for located in loaded.requests() {
+            assert_eq!(loaded.request_key(located.selector()), Some(located.key()));
+            assert_eq!(
+                loaded.request_selector(located.key()),
+                Some(located.selector())
+            );
+            assert!(loaded.folder_key(located.selector()).is_none());
+        }
+        for located in loaded.folders() {
+            assert_eq!(loaded.folder_key(located.selector()), Some(located.key()));
+            assert_eq!(
+                loaded.folder_selector(located.key()),
+                Some(located.selector())
+            );
+            assert!(loaded.request_key(located.selector()).is_none());
+        }
+        for foreign in [&older, &newer] {
+            for located in foreign.requests() {
+                assert!(loaded.request_selector(located.key()).is_none());
+                assert!(loaded.remove_detached_request(located.key()).is_none());
+            }
+            for located in foreign.folders() {
+                assert!(loaded.folder_selector(located.key()).is_none());
+            }
+        }
+        assert!(loaded.request_key("missing").is_none());
+        assert!(loaded.folder_key("missing").is_none());
+        let repository_key = loaded.requests()[0].key();
+        assert!(loaded.remove_detached_request(repository_key).is_none());
+        let draft = loaded.add_detached_request(Request::default());
+        assert!(loaded.request_selector(draft).is_none());
+        assert!(loaded.remove_detached_request(draft).is_some());
+        let replacement = loaded.add_detached_request(Request::default());
+        assert_eq!(draft.slot(), replacement.slot());
+        assert_ne!(draft.generation(), replacement.generation());
+        assert!(loaded.request_selector(draft).is_none());
+        assert!(loaded.request_selector(replacement).is_none());
+        assert!(loaded.remove_detached_request(draft).is_none());
+        assert!(loaded.remove_detached_request(replacement).is_some());
+        assert!(loaded.request_selector(repository_key).is_some());
+    }
+}

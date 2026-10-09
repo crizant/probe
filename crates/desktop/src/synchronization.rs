@@ -654,3 +654,58 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod performance {
+    use super::*;
+    mod fixtures {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cli/benches/support/fixtures.rs"
+        ));
+    }
+    mod timing {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cli/benches/support/timing.rs"
+        ));
+    }
+
+    #[test]
+    #[ignore = "release-mode performance measurement; run serially with --nocapture"]
+    fn workspace_reconcile_10k() {
+        let source = fixtures::bundled_workspace(fixtures::WORKSPACE_SIZES[2]);
+        let old = probe_opencollection::load_workspace_from_str(&source).unwrap();
+        let local: Vec<_> = old
+            .requests()
+            .iter()
+            .map(|located| {
+                let request = old.workspace().request(located.key()).unwrap();
+                LocalRequestState {
+                    selector: located.selector(),
+                    baseline: request,
+                    local: request,
+                }
+            })
+            .collect();
+        let shifted = source.replacen(
+            "items:\n",
+            "items:\n  - info:\n      name: Inserted folder\n      type: folder\n    items: []\n",
+            1,
+        );
+        for (name, source) in [
+            ("normal_reconcile/10000", &source),
+            ("shifted_reconcile/10000", &shifted),
+        ] {
+            timing::measure(
+                name,
+                || probe_opencollection::load_workspace_from_str(source).unwrap(),
+                |fresh| {
+                    let result = reconcile(&local, fresh, &BTreeMap::new());
+                    assert!(matches!(result, ReconcileResult::Applied(_)));
+                    result
+                },
+            );
+        }
+    }
+}

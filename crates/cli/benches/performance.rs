@@ -81,6 +81,61 @@ fn request_lookup(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn repository_lookup(criterion: &mut Criterion) {
+    let loaded = load_workspace_from_str(&bundled_workspace(10_000)).unwrap();
+    let requests = loaded.requests();
+    let folders = loaded.folders();
+    let mut group = criterion.benchmark_group("repository_lookup");
+    for (name, count) in [
+        ("request_selector", requests.len()),
+        ("request_key", requests.len()),
+        ("folder_selector", folders.len()),
+        ("folder_key", folders.len()),
+    ] {
+        let mut index = 0usize;
+        group.bench_function(name, |bencher| {
+            bencher.iter(|| {
+                index = index.wrapping_add(997);
+                let i = index % count;
+                match name {
+                    "request_selector" => {
+                        black_box(loaded.request_key(black_box(requests[i].selector())));
+                    }
+                    "request_key" => {
+                        black_box(loaded.request_selector(black_box(requests[i].key())));
+                    }
+                    "folder_selector" => {
+                        black_box(loaded.folder_key(black_box(folders[i].selector())));
+                    }
+                    _ => {
+                        black_box(loaded.folder_selector(black_box(folders[i].key())));
+                    }
+                }
+            })
+        });
+    }
+    group.finish();
+}
+
+fn structural_preparation(criterion: &mut Criterion) {
+    let path =
+        std::env::temp_dir().join(format!("probe-structure-bench-{}.yml", std::process::id()));
+    std::fs::write(&path, bundled_workspace(10_000)).unwrap();
+    let loaded = probe_opencollection::load_workspace(&path).unwrap();
+    let operation = probe_opencollection::StructureOperation::Reorder {
+        target: probe_opencollection::ItemLocator::new(probe_core::ItemKind::Folder, "items/99"),
+        index: 0,
+    };
+    criterion.bench_function("structural_preparation/10000", |bencher| {
+        bencher.iter(|| {
+            loaded
+                .prepare_structure(black_box(operation.clone()))
+                .unwrap()
+        });
+    });
+    std::fs::remove_file(path).unwrap();
+}
+
 fn cli_startup(criterion: &mut Criterion) {
     let probe = env!("CARGO_BIN_EXE_probe");
     criterion.bench_function("cli_startup/help", |bencher| {
@@ -196,6 +251,8 @@ criterion_group!(
     parsing,
     workspace_construction,
     request_lookup,
+    repository_lookup,
+    structural_preparation,
     cli_startup,
     environment_resolution,
     environment_variable_status
