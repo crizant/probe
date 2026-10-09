@@ -419,16 +419,6 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
         .enumerate()
         .map(|(index, folder)| (folder.selector.clone(), index))
         .collect();
-    let request_indices_by_key = requests
-        .iter()
-        .enumerate()
-        .map(|(index, request)| (request.key, index))
-        .collect();
-    let folder_indices_by_key = folders
-        .iter()
-        .enumerate()
-        .map(|(index, folder)| (folder.key, index))
-        .collect();
     let baseline = WorkspaceBaseline::fresh();
     LoadedWorkspace {
         workspace,
@@ -437,8 +427,6 @@ fn index_locators(workspace: Workspace, nodes: &[LocatorNode]) -> LoadedWorkspac
         folders,
         request_indices_by_selector,
         folder_indices_by_selector,
-        request_indices_by_key,
-        folder_indices_by_key,
         environment_persistence: BTreeMap::new(),
         documents: BTreeMap::new(),
         source: WorkspaceSource::Memory,
@@ -482,8 +470,11 @@ fn index_locator_nodes(
                     persistence,
                 },
             ) => {
+                // Fresh arena slots and repository traversal share insertion order.
+                // Enforce this before relying on direct slot lookup with full-key validation.
+                assert_eq!(key.slot(), requests.len());
                 requests.push(LocatedRequest {
-                    selector: selector.clone(),
+                    selector: Arc::from(selector.as_str()),
                     key: *key,
                     persistence: persistence.clone(),
                 });
@@ -496,8 +487,9 @@ fn index_locator_nodes(
                     children,
                 },
             ) => {
+                assert_eq!(key.slot(), folders.len());
                 folders.push(LocatedFolder {
-                    selector: selector.clone(),
+                    selector: Arc::from(selector.as_str()),
                     key: *key,
                     persistence: persistence.clone(),
                 });
@@ -552,4 +544,66 @@ pub(crate) fn relative_selector(root: &Path, path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+#[cfg(test)]
+mod performance {
+    use super::*;
+    mod fixtures {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cli/benches/support/fixtures.rs"
+        ));
+    }
+    mod timing {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cli/benches/support/timing.rs"
+        ));
+    }
+
+    #[test]
+    #[ignore = "release-mode performance measurement; run serially with --nocapture"]
+    fn loaded_workspace_construction_10k() {
+        let parsed = parse(&fixtures::bundled_workspace(fixtures::WORKSPACE_SIZES[2])).unwrap();
+        let nodes = bundled_locator_nodes(parsed.document(), "items", None);
+        timing::measure(
+            "loaded_workspace_construction/10000",
+            || parsed.collection().clone(),
+            |collection| index_locators(Workspace::from_collection(collection), &nodes),
+        );
+        let workspace = Workspace::from_collection(parsed.into_collection());
+        timing::measure(
+            "locator_index_construction/10000",
+            || workspace.clone(),
+            |workspace| index_locators(workspace, &nodes),
+        );
+    }
+}
+
+#[cfg(test)]
+mod selector_storage_tests {
+    use super::*;
+
+    #[test]
+    fn located_items_share_selector_allocations_with_indexes() {
+        let loaded = load_workspace_from_str(include_str!(
+            "../../../../tests/fixtures/opencollection/phase1-bundled.yml"
+        ))
+        .unwrap();
+        for located in &loaded.requests {
+            let (selector, _) = loaded
+                .request_indices_by_selector
+                .get_key_value(located.selector())
+                .unwrap();
+            assert!(Arc::ptr_eq(selector, &located.selector));
+        }
+        for located in &loaded.folders {
+            let (selector, _) = loaded
+                .folder_indices_by_selector
+                .get_key_value(located.selector())
+                .unwrap();
+            assert!(Arc::ptr_eq(selector, &located.selector));
+        }
+    }
 }

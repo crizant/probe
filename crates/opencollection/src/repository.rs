@@ -45,7 +45,7 @@ use yaml::*;
 /// A request and its repository-backed selector.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocatedRequest {
-    selector: String,
+    selector: Arc<str>,
     key: RequestKey,
     persistence: Option<RequestPersistence>,
 }
@@ -67,7 +67,7 @@ impl LocatedRequest {
 /// A folder and its repository-backed selector.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocatedFolder {
-    selector: String,
+    selector: Arc<str>,
     key: FolderKey,
     persistence: Option<FolderPersistence>,
 }
@@ -93,12 +93,12 @@ impl LocatedFolder {
 pub struct LoadedWorkspace {
     workspace: Workspace,
     diagnostics: Vec<super::ProjectionDiagnostic>,
+    // Loaded records are in fresh arena slot order. Structural edits reload the
+    // repository; detached drafts occupy later slots and never enter these vectors.
     requests: Vec<LocatedRequest>,
     folders: Vec<LocatedFolder>,
-    request_indices_by_selector: BTreeMap<String, usize>,
-    folder_indices_by_selector: BTreeMap<String, usize>,
-    request_indices_by_key: BTreeMap<RequestKey, usize>,
-    folder_indices_by_key: BTreeMap<FolderKey, usize>,
+    request_indices_by_selector: BTreeMap<Arc<str>, usize>,
+    folder_indices_by_selector: BTreeMap<Arc<str>, usize>,
     environment_persistence: BTreeMap<String, EnvironmentPersistence>,
     pub(crate) documents: BTreeMap<PathBuf, SourceDocument>,
     pub(crate) source: WorkspaceSource,
@@ -752,17 +752,19 @@ impl LoadedWorkspace {
     /// Returns the stable selector for a request key.
     #[must_use]
     pub fn request_selector(&self, key: RequestKey) -> Option<&str> {
-        self.request_indices_by_key
-            .get(&key)
-            .map(|index| self.requests[*index].selector.as_str())
+        self.requests
+            .get(key.slot())
+            .filter(|located| located.key == key)
+            .map(LocatedRequest::selector)
     }
 
     /// Returns the stable selector for a folder key.
     #[must_use]
     pub fn folder_selector(&self, key: FolderKey) -> Option<&str> {
-        self.folder_indices_by_key
-            .get(&key)
-            .map(|index| self.folders[*index].selector.as_str())
+        self.folders
+            .get(key.slot())
+            .filter(|located| located.key == key)
+            .map(LocatedFolder::selector)
     }
 
     /// Resolves a session item to its persistent selector.
@@ -802,7 +804,7 @@ impl LoadedWorkspace {
         let located = self
             .requests
             .iter()
-            .find(|request| request.selector == selector)
+            .find(|request| request.selector.as_ref() == selector)
             .cloned()
             .ok_or_else(|| SaveError::RequestNotFound(selector.to_owned()))?;
         let request = self
@@ -886,7 +888,7 @@ impl LoadedWorkspace {
         let located = self
             .folders
             .iter()
-            .find(|folder| folder.selector == selector)
+            .find(|folder| folder.selector.as_ref() == selector)
             .cloned()
             .ok_or_else(|| SaveError::FolderNotFound(selector.to_owned()))?;
         let folder = self
@@ -948,7 +950,7 @@ impl LoadedWorkspace {
         let located = self
             .folders
             .iter()
-            .find(|folder| folder.selector == selector)
+            .find(|folder| folder.selector.as_ref() == selector)
             .ok_or_else(|| SaveError::FolderNotFound(selector.to_owned()))?;
         let persistence = located
             .persistence
@@ -1025,7 +1027,7 @@ impl LoadedWorkspace {
         let persistence = self
             .requests
             .iter()
-            .find(|request| request.selector == selector)
+            .find(|request| request.selector.as_ref() == selector)
             .ok_or_else(|| SaveError::RequestNotFound(selector.to_owned()))?
             .persistence
             .clone()

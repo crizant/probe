@@ -30,4 +30,5 @@ workspace = true
 
 [dev-dependencies]
 criterion = "0.7.0"
+dhat = "0.3.3"
 serde_yaml_ng = "0.10"
