@@ -305,9 +305,22 @@ Closing a collection clears active session state without deleting collection fil
 
 The desktop reads an optional TOML file for user settings. It is not an
 OpenCollection document, and it does not store collection variables, secrets, or
-desktop session state. The CLI does not load it. There are no settings in the
-file yet. Omitted keys use defaults, and unknown keys are ignored. The desktop
-does not write the file.
+desktop session state. The CLI does not load it. Omitted keys use defaults, and
+unknown keys are ignored. The desktop does not write the file.
+
+```toml
+theme = "system"
+```
+
+`theme` selects the desktop appearance:
+
+- `system` is the default. Probe uses Porcelain Honey or Graphite Honey to match
+  the OS appearance, and keeps following later OS appearance changes.
+- `light` uses Porcelain Honey.
+- `dark` uses Graphite Honey.
+
+`light` and `dark` stay on that built-in theme when the OS appearance changes.
+Any other value fails config parsing.
 
 - macOS and Linux: `$XDG_CONFIG_HOME/probe/config.toml` when `XDG_CONFIG_HOME`
   is an absolute path. An empty or relative value is ignored, and the file is
@@ -317,10 +330,12 @@ does not write the file.
   Otherwise startup reports that the config path could not be resolved.
 
 A missing file loads the built-in defaults and is not created. Invalid TOML and
-filesystem errors include the config path. Startup reads the file on a
-background executor after the window opens. The view does not parse TOML or
-touch the filesystem. A failure is shown as a persistent error toast, and the
-window keeps the defaults.
+filesystem errors include the config path. Startup reads this small file once,
+before the GPUI event loop and before the main window is created, so the
+effective theme is applied as the window is created. The same result is reused
+when the process opens another window later. The view does not parse TOML or
+touch the filesystem. A failure is shown as a persistent error toast once the
+window exists, and the window keeps the defaults.
 
 ### Runtime Identity and Persistence Locators
 

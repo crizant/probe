@@ -11,13 +11,64 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+/// How the desktop chooses its built-in appearance.
+///
+/// This is the user preference. The rendered appearance is [`crate::theme::Theme`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ThemeMode {
+    /// Follow the operating system appearance.
+    #[default]
+    System,
+    /// Always use the light built-in theme.
+    Light,
+    /// Always use the dark built-in theme.
+    Dark,
+}
+
 /// Desktop user settings loaded from the platform config file.
 ///
-/// There are no settings yet. Add fields with [`Default`] and `#[serde(default)]`
-/// so an existing file that omits them keeps working. Unknown keys are ignored.
+/// Add fields with [`Default`] and `#[serde(default)]` so an existing file that
+/// omits them keeps working. Unknown keys are ignored.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct UserConfig {}
+pub(crate) struct UserConfig {
+    /// `system` follows the OS appearance. `light` and `dark` stay fixed.
+    #[serde(default)]
+    pub(crate) theme: ThemeMode,
+}
+
+/// User config resolved before the desktop window is created.
+///
+/// A load failure keeps [`UserConfig::default`] and records the message shown
+/// after the window exists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LoadedUserConfig {
+    /// Settings to apply. Defaults when loading failed.
+    pub(crate) config: UserConfig,
+    /// Config error to show once the window exists.
+    pub(crate) error: Option<String>,
+}
+
+impl LoadedUserConfig {
+    /// Reads the platform config file.
+    pub(crate) fn load() -> Self {
+        Self::from_load_result(UserConfig::load())
+    }
+
+    fn from_load_result(result: Result<UserConfig, ConfigError>) -> Self {
+        match result {
+            Ok(config) => Self {
+                config,
+                error: None,
+            },
+            Err(error) => Self {
+                config: UserConfig::default(),
+                error: Some(error.to_string()),
+            },
+        }
+    }
+}
 
 impl UserConfig {
     /// Loads the config file for this process.
@@ -239,6 +290,66 @@ mod tests {
         fs::write(&path, "renderer = \"gpu\"\n\n[window]\nwidth = 1200\n").unwrap();
 
         assert_eq!(UserConfig::load_from(&path).unwrap(), UserConfig::default());
+    }
+
+    fn load_theme(contents: &str) -> ThemeMode {
+        let root = TempDir::new();
+        let path = root.0.join("config.toml");
+        fs::write(&path, contents).unwrap();
+        UserConfig::load_from(&path).unwrap().theme
+    }
+
+    #[test]
+    fn missing_theme_defaults_to_system() {
+        assert_eq!(
+            load_theme("# Probe user configuration\n"),
+            ThemeMode::System
+        );
+        assert_eq!(UserConfig::default().theme, ThemeMode::System);
+    }
+
+    #[test]
+    fn theme_system_loads() {
+        assert_eq!(load_theme("theme = \"system\"\n"), ThemeMode::System);
+    }
+
+    #[test]
+    fn theme_light_loads() {
+        assert_eq!(load_theme("theme = \"light\"\n"), ThemeMode::Light);
+    }
+
+    #[test]
+    fn theme_dark_loads() {
+        assert_eq!(load_theme("theme = \"dark\"\n"), ThemeMode::Dark);
+    }
+
+    #[test]
+    fn invalid_theme_is_a_config_parse_error() {
+        let root = TempDir::new();
+        let path = root.0.join("config.toml");
+        fs::write(&path, "theme = \"blue\"\n").unwrap();
+
+        let error = UserConfig::load_from(&path).unwrap_err();
+        let message = error.to_string();
+        assert!(matches!(error, ConfigError::Invalid { .. }), "{message}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+
+    #[test]
+    fn startup_keeps_a_parsed_theme_and_defaults_after_a_parse_error() {
+        let root = TempDir::new();
+        let path = root.0.join("config.toml");
+        fs::write(&path, "theme = \"dark\"\n").unwrap();
+
+        let loaded = LoadedUserConfig::from_load_result(UserConfig::load_from(&path));
+        assert_eq!(loaded.config.theme, ThemeMode::Dark);
+        assert_eq!(loaded.error, None);
+
+        fs::write(&path, "theme = \"blue\"\n").unwrap();
+        let loaded = LoadedUserConfig::from_load_result(UserConfig::load_from(&path));
+        assert_eq!(loaded.config, UserConfig::default());
+        let message = loaded.error.expect("parse error is recorded for startup");
+        assert!(message.contains(&path.display().to_string()), "{message}");
     }
 
     #[cfg(unix)]

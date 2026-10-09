@@ -8,9 +8,9 @@ use gpui::{AppContext as _, Context, FocusHandle, Window};
 use gpui_base::input::{InputEvent, InputState};
 
 use super::{ApplicationDialog, ProbeApp, SecretUiStatus, ToastIntent};
+use crate::components;
 use crate::credentials::{CredentialId, CredentialStore, CredentialStoreError};
 use crate::execution::SecretPresenceReconciliation;
-use crate::{components, theme::Theme};
 
 pub(super) fn default_credential_store() -> Arc<dyn CredentialStore> {
     #[cfg(test)]
@@ -303,7 +303,7 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let theme = Theme::for_window_appearance(window.appearance());
+        let theme = self.theme(window);
         let input = cx.new(|cx| {
             let mut input = InputState::new(window, cx)
                 .placeholder("Secret value")

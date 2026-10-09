@@ -5,11 +5,12 @@ pub(super) struct TabDrag {
     pub(super) key: crate::shell::OpenTab,
     pub(super) label: String,
     pub(super) active: bool,
+    pub(super) theme_mode: ThemeMode,
 }
 
 impl Render for TabDrag {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::for_window_appearance(window.appearance());
+        let theme = Theme::for_preference(self.theme_mode, window.appearance());
         div()
             .px(px(theme.metrics.spacing_2))
             .py(px(theme.metrics.spacing_1))

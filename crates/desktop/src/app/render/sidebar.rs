@@ -494,15 +494,23 @@ impl ProbeApp {
             WorkspaceItemRef::Folder(key) => ("tree-drop-folder", key.slot()),
         };
         let button = if can_edit {
-            button.on_drag(TreeDrag { item, label, icon }, move |drag, _, _, cx| {
-                let preview = drag.clone();
-                let item = drag.item;
-                let _ = drag_view.update(cx, |view, cx| {
-                    view.tree_drag_source = Some(item);
-                    view.select_tree_item(item, cx);
-                });
-                cx.new(|_| preview)
-            })
+            button.on_drag(
+                TreeDrag {
+                    item,
+                    label,
+                    icon,
+                    theme_mode: self.user_config.theme,
+                },
+                move |drag, _, _, cx| {
+                    let preview = drag.clone();
+                    let item = drag.item;
+                    let _ = drag_view.update(cx, |view, cx| {
+                        view.tree_drag_source = Some(item);
+                        view.select_tree_item(item, cx);
+                    });
+                    cx.new(|_| preview)
+                },
+            )
         } else {
             button
         };

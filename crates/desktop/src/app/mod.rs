@@ -120,7 +120,7 @@ use crate::{
     theme::Theme,
     toast::{ToastCenter, ToastId, ToastIntent, toast_stack_motion},
     tree_search::{TreeSearchMatches, matching_tree_items},
-    user_config::UserConfig,
+    user_config::{LoadedUserConfig, ThemeMode, UserConfig},
 };
 
 const APPLICATION_ID: &str = "dev.probe.desktop";
@@ -266,7 +266,6 @@ pub(crate) struct ProbeApp {
     shell: ShellState,
     loading: bool,
     session_store: Option<SessionStore>,
-    #[allow(dead_code)] // Read when desktop settings are applied.
     user_config: UserConfig,
     session: SessionState,
     session_save_task: Option<Task<()>>,
@@ -340,13 +339,27 @@ pub(crate) struct ProbeApp {
 }
 
 impl ProbeApp {
+    #[cfg(test)]
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        cx.observe_window_appearance(window, |_, window, cx| {
-            Theme::sync_gpui_base(window.appearance(), cx);
-            window.refresh();
+        Self::with_user_config(UserConfig::default(), window, cx)
+    }
+
+    fn with_user_config(
+        user_config: UserConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        cx.observe_window_appearance(window, |this, window, cx| {
+            if this.user_config.theme == ThemeMode::System {
+                Theme::sync_theme(this.theme(window), cx);
+                window.refresh();
+            }
         })
         .detach();
-        Theme::sync_gpui_base(window.appearance(), cx);
+        Theme::sync_theme(
+            Theme::for_preference(user_config.theme, window.appearance()),
+            cx,
+        );
         let quit_subscription = cx.on_app_quit(|view, cx| {
             view.capture_session();
             let store = view.session_store.clone();
@@ -395,7 +408,7 @@ impl ProbeApp {
             shell: ShellState::default(),
             loading: false,
             session_store: SessionStore::for_application(),
-            user_config: UserConfig::default(),
+            user_config,
             session: SessionState::default(),
             session_save_task: None,
             request_save_task: None,
@@ -632,26 +645,38 @@ fn render_windows_controls(_: Theme) -> gpui::Div {
 }
 
 pub fn run() {
+    // The theme has to be known before the window exists. This file is small,
+    // so read it once here instead of after the first frame on a background task.
+    let startup = LoadedUserConfig::load();
     let app = gpui_platform::application();
-    app.on_reopen(|cx| {
+    let reopen_startup = startup.clone();
+    app.on_reopen(move |cx| {
         if cx.windows().is_empty() {
-            open_probe_window(cx);
+            open_probe_window(reopen_startup.clone(), cx);
         } else if let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied()) {
             let _ = window.update(cx, |_, window, _| window.activate_window());
         }
     });
-    app.run(|cx: &mut App| {
+    app.run(move |cx: &mut App| {
         cx.set_app_identity(APPLICATION_ID, APPLICATION_NAME);
         Theme::init(cx);
         bind_platform_hotkeys(cx);
         install_system_menu(cx);
 
-        open_probe_window(cx);
+        open_probe_window(startup, cx);
         cx.activate(true);
     });
 }
 
-fn open_probe_window(cx: &mut App) {
+fn open_probe_window(startup: LoadedUserConfig, cx: &mut App) {
+    let LoadedUserConfig { config, error } = startup;
+    // Explicit preferences are known before the window exists. System appearance
+    // is applied when the window reports the OS theme.
+    match config.theme {
+        ThemeMode::Light => Theme::sync_theme(Theme::light(), cx),
+        ThemeMode::Dark => Theme::sync_theme(Theme::dark(), cx),
+        ThemeMode::System => {}
+    }
     let bounds = Bounds::centered(None, size(px(1180.0), px(780.0)), cx);
     cx.open_window(
         WindowOptions {
@@ -670,10 +695,12 @@ fn open_probe_window(cx: &mut App) {
             app_id: Some(APPLICATION_ID.to_owned()),
             ..Default::default()
         },
-        |window, cx| {
-            let view = cx.new(|cx| ProbeApp::new(window, cx));
+        move |window, cx| {
+            let view = cx.new(|cx| ProbeApp::with_user_config(config, window, cx));
             view.update(cx, |view, cx| {
-                view.load_user_config(window, cx);
+                if let Some(message) = error {
+                    view.show_toast(ToastIntent::Error, message, cx);
+                }
                 view.restore_session(window, cx);
             });
             view

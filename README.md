@@ -171,9 +171,16 @@ In Desktop, choose **Open Collection…** to open an OpenCollection YAML file or
 collection directory, select a request, and send it. Choose an environment when
 requests use variables.
 
-The desktop app reads an optional user configuration file at startup. A missing
-file uses the built-in defaults and is not created. The location and loading
-behavior are described in
+The desktop app reads an optional user configuration file before it opens the
+main window. A missing file uses the built-in defaults and is not created. Set
+`theme` to `system`, `light`, or `dark`:
+
+```toml
+theme = "system"
+```
+
+`system` follows the OS appearance. `light` and `dark` stay fixed. The file
+location and loading behavior are described in
 [Architecture](docs/ARCHITECTURE.md#user-configuration).
 
 ### CLI

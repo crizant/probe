@@ -134,9 +134,7 @@ impl ProbeApp {
         self.tree_drag_source = Some(source);
         self.tree_list_bounds = Some(event.bounds);
         self.tree_auto_scroll.last_drag_position = Some(event.event.position);
-        self.tree_row_height = Theme::for_window_appearance(window.appearance())
-            .metrics
-            .tree_row_height;
+        self.tree_row_height = self.theme(window).metrics.tree_row_height;
         let in_x = event.event.position.x >= event.bounds.left()
             && event.event.position.x <= event.bounds.right();
         let delta = in_x

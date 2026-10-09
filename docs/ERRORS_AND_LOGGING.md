@@ -19,6 +19,7 @@ sources, invalid retained documents, serialization failures, and filesystem fail
 Interfaces map these types without requiring callers to parse diagnostic messages.
 
 Desktop user configuration failures stay in `probe-desktop`. A missing file is
-the default configuration. A read or parse failure includes the config path and
-is shown in a persistent error toast. The location is in
-[Architecture](ARCHITECTURE.md#user-configuration).
+the default configuration. A read or parse failure, including an unrecognized
+`theme` value, includes the config path and is shown in a persistent error
+toast after the window opens. The window still uses the default configuration.
+The location is in [Architecture](ARCHITECTURE.md#user-configuration).

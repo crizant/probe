@@ -13,6 +13,8 @@ use gpui_base::{
     TextStyleToken, TypographyTokens,
 };
 
+use crate::user_config::ThemeMode;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThemeAppearance {
     Light,
@@ -180,6 +182,19 @@ impl Theme {
         }
     }
 
+    /// Selects the built-in theme for a user preference.
+    ///
+    /// [`ThemeMode::System`] follows `appearance`, including vibrant variants.
+    /// [`ThemeMode::Light`] and [`ThemeMode::Dark`] keep that built-in theme.
+    #[must_use]
+    pub fn for_preference(mode: ThemeMode, appearance: WindowAppearance) -> Self {
+        match mode {
+            ThemeMode::System => Self::for_window_appearance(appearance),
+            ThemeMode::Light => Self::light(),
+            ThemeMode::Dark => Self::dark(),
+        }
+    }
+
     /// Install gpui-base infrastructure and the library's default semantic tokens.
     pub fn init(cx: &mut gpui::App) {
         gpui_base::init(cx);
@@ -187,10 +202,14 @@ impl Theme {
         Self::sync_gpui_base(WindowAppearance::Light, cx);
     }
 
+    /// Project the theme for `appearance` into gpui-base's global `Theme`.
+    pub fn sync_gpui_base(appearance: WindowAppearance, cx: &mut gpui::App) {
+        Self::sync_theme(Self::for_window_appearance(appearance), cx);
+    }
+
     /// Project this theme into gpui-base's global `Theme` so primitives and
     /// infrastructure (scrollbars, resize handles) share the same tokens.
-    pub fn sync_gpui_base(appearance: WindowAppearance, cx: &mut gpui::App) {
-        let theme = Self::for_window_appearance(appearance);
+    pub(crate) fn sync_theme(theme: Self, cx: &mut gpui::App) {
         let gpui_theme = gpui_base::Theme::global_mut(cx);
         gpui_theme.tokens = theme.semantic_tokens();
         let muted: Hsla = theme.colors.text.muted.into();
@@ -575,6 +594,7 @@ const fn default_motion() -> Motion {
 #[cfg(test)]
 mod tests {
     use super::{Theme, ThemeAppearance};
+    use crate::user_config::ThemeMode;
     use gpui::WindowAppearance;
 
     #[test]
@@ -595,5 +615,58 @@ mod tests {
             Theme::for_window_appearance(WindowAppearance::VibrantDark).appearance,
             ThemeAppearance::Dark
         );
+    }
+
+    #[test]
+    fn theme_mode_selects_the_effective_built_in_theme() {
+        let cases = [
+            (
+                ThemeMode::System,
+                WindowAppearance::Light,
+                ThemeAppearance::Light,
+            ),
+            (
+                ThemeMode::System,
+                WindowAppearance::VibrantLight,
+                ThemeAppearance::Light,
+            ),
+            (
+                ThemeMode::System,
+                WindowAppearance::Dark,
+                ThemeAppearance::Dark,
+            ),
+            (
+                ThemeMode::System,
+                WindowAppearance::VibrantDark,
+                ThemeAppearance::Dark,
+            ),
+            (
+                ThemeMode::Light,
+                WindowAppearance::Dark,
+                ThemeAppearance::Light,
+            ),
+            (
+                ThemeMode::Light,
+                WindowAppearance::VibrantDark,
+                ThemeAppearance::Light,
+            ),
+            (
+                ThemeMode::Dark,
+                WindowAppearance::Light,
+                ThemeAppearance::Dark,
+            ),
+            (
+                ThemeMode::Dark,
+                WindowAppearance::VibrantLight,
+                ThemeAppearance::Dark,
+            ),
+        ];
+        for (mode, appearance, expected) in cases {
+            assert_eq!(
+                Theme::for_preference(mode, appearance).appearance,
+                expected,
+                "{mode:?} with {appearance:?}"
+            );
+        }
     }
 }
