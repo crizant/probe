@@ -5,7 +5,10 @@ use gpui::{
 use gpui_base::Button;
 use probe_core::{ItemKind, Workspace, WorkspaceItemRef};
 
-use crate::{components, shell::ShellState, theme::Theme, tree_search::TreeSearchMatches};
+use crate::{
+    components, shell::ShellState, theme::Theme, tree_search::TreeSearchMatches,
+    user_config::ThemeMode,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TreeRow {
@@ -18,6 +21,7 @@ pub(crate) struct TreeDrag {
     pub(crate) item: WorkspaceItemRef,
     pub(crate) label: String,
     pub(crate) icon: Option<components::RequestIcon>,
+    pub(crate) theme_mode: ThemeMode,
 }
 
 pub(crate) struct TreeRowSpec {
@@ -31,7 +35,7 @@ pub(crate) struct TreeRowSpec {
 
 impl Render for TreeDrag {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::for_window_appearance(window.appearance());
+        let theme = Theme::for_preference(self.theme_mode, window.appearance());
         let mut preview = div()
             .px(px(theme.metrics.spacing_2))
             .py(px(theme.metrics.spacing_1))

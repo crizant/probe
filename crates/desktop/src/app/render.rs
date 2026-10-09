@@ -59,7 +59,7 @@ impl Render for ProbeApp {
                 cx.notify();
             });
         }
-        let theme = Theme::for_window_appearance(window.appearance());
+        let theme = self.theme(window);
         let sidebar_view = cx.weak_entity();
         if self.toasts.pause_pending() {
             self.schedule_toast_lifecycle(cx);

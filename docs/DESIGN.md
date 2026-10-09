@@ -138,8 +138,13 @@ focused, selected, inactive, and disabled behavior where relevant.
 The desktop foundation ships with Porcelain Honey (light), based on Probe's
 creamy app icon background, and Graphite Honey (dark), a graphite companion theme
 with the same golden-orange accent system, as complete semantic theme models.
-Built-in themes follow system appearance changes and provide fallback values for
-every token. HTTP method, status, and syntax colors remain distinct from chrome.
+With the user configuration `theme` set to `system` (the default), built-in
+themes follow OS appearance changes. `light` keeps Porcelain Honey and `dark`
+keeps Graphite Honey when the OS appearance changes. On macOS, `light` and
+`dark` also set the native window appearance so the titlebar matches; `system`
+leaves that appearance to the OS. Every token has a fallback value. HTTP
+method, status, and syntax colors remain distinct from chrome. See
+[user configuration](ARCHITECTURE.md#user-configuration).
 
 Theme changes must not alter application semantics, hide required state, move commands
 unexpectedly, or replace platform-standard interaction behavior. Selection, focus,

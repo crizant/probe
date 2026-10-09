@@ -180,6 +180,7 @@ impl ProbeApp {
                             key: tab,
                             label: label.to_owned(),
                             active,
+                            theme_mode: self.user_config.theme,
                         },
                         move |drag, _, _, cx| {
                             let preview = drag.clone();
