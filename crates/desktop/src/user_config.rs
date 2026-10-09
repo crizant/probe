@@ -33,10 +33,14 @@ impl UserConfig {
     /// or its parent directory. Any other filesystem failure, and invalid TOML,
     /// include `path` in the error.
     pub(crate) fn load_from(path: &Path) -> Result<Self, ConfigError> {
-        match fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).map_err(|source| ConfigError::invalid(path, source)),
+        match fs::symlink_metadata(path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(ConfigError::read(path, error)),
+            Ok(_) => {
+                let text =
+                    fs::read_to_string(path).map_err(|error| ConfigError::read(path, error))?;
+                toml::from_str(&text).map_err(|source| ConfigError::invalid(path, source))
+            }
         }
     }
 }
@@ -194,6 +198,19 @@ mod tests {
         assert_eq!(UserConfig::load_from(&path).unwrap(), UserConfig::default());
         assert!(!path.exists());
         assert!(!root.0.join("probe").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlink_is_a_read_error() {
+        let root = TempDir::new();
+        let path = root.0.join("config.toml");
+        std::os::unix::fs::symlink(root.0.join("missing.toml"), &path).unwrap();
+
+        let error = UserConfig::load_from(&path).unwrap_err();
+        let message = error.to_string();
+        assert!(matches!(error, ConfigError::Read { .. }), "{message}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
     }
 
     #[test]
