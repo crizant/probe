@@ -4965,7 +4965,7 @@ dependencies = [
 
 [[package]]
 name = "probe-application"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "probe-core",
  "probe-http",
@@ -4977,7 +4977,7 @@ dependencies = [
 
 [[package]]
 name = "probe-cli"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "atomic-write-file",
  "criterion",
@@ -4996,14 +4996,14 @@ dependencies = [
 
 [[package]]
 name = "probe-core"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "probe-desktop"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "atomic-write-file",
  "chrono",
@@ -5034,7 +5034,7 @@ dependencies = [
 
 [[package]]
 name = "probe-http"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "probe-core",
  "reqwest",
@@ -5044,7 +5044,7 @@ dependencies = [
 
 [[package]]
 name = "probe-opencollection"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "atomic-write-file",
  "fs4",
@@ -5056,7 +5056,7 @@ dependencies = [
 
 [[package]]
 name = "probe-postman"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "probe-core",
  "probe-opencollection",
@@ -5066,7 +5066,7 @@ dependencies = [
 
 [[package]]
 name = "probe-yaak"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "probe-core",
  "probe-opencollection",
