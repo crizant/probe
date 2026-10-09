@@ -221,7 +221,7 @@ The original and optimized implementations were rebuilt serially with the same
 Raw before samples: 222232576, 222560256, 222298112, 222281728, 222248960.
 Raw after samples: 224509952, 224444416, 220512256, 222248960, 220577792.
 Peak RSS is effectively unchanged: the 32 KiB median difference is much smaller
-than the run-to-run variation. This change reduces retained locator bookkeeping
+than the run-to-run variation. This change reduces additional `LoadedWorkspace` bookkeeping
 rather than the earlier parsing peak; do not claim a peak-RSS improvement. Preliminary
 runs using the benchmark-produced binary also fluctuated by several MiB and were
 superseded by the explicitly rebuilt comparison above.
@@ -236,7 +236,7 @@ This example alone installs the dev-only `dhat` allocator. It generates the fixt
 before profiling, constructs and drops a domain `Workspace`, then loads the same
 source into a `LoadedWorkspace`. It records live requested allocation bytes after
 each completed construction, excluding the shared input source. Their difference
-isolates retained repository locator/index bookkeeping, not parsing temporaries or
+isolates additional `LoadedWorkspace` bookkeeping, not parsing temporaries or
 request payloads. Both loads are in memory, so file persistence locators and retained
 source bytes are excluded. This is a focused ownership measurement, not malloc size
 classes, process RSS, or a file-backed workspace's complete memory cost. DHAT's
@@ -247,12 +247,12 @@ example for timing or RSS. No production allocator or profiling dependency chang
 | --- | ---: | ---: |
 | Domain workspace | 19,050,875 | 19,050,875 |
 | Loaded workspace | 21,666,463 | 21,156,523 |
-| Locator/index bookkeeping (difference) | 2,615,588 | 2,105,648 |
+| Additional `LoadedWorkspace` bookkeeping (difference) | 2,615,588 | 2,105,648 |
 
-Bookkeeping saves 509,940 bytes (498 KiB, 19.5%); total retained in-memory workspace
-allocations save 2.35%. Measurements use requested allocation sizes from the same
-allocator and compiler; they should be deterministic on repeated runs with those
-inputs.
+Additional `LoadedWorkspace` bookkeeping saves 509,940 bytes (498 KiB, 19.5%);
+total retained in-memory workspace allocations save 2.35%. Measurements use
+requested allocation sizes from the same allocator and compiler; they should be
+deterministic on repeated runs with those inputs.
 
 ### Design and trade-offs
 

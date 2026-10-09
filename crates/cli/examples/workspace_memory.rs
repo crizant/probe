@@ -20,7 +20,7 @@ fn main() {
     assert_eq!(loaded.requests().len(), 10_000);
     drop(loaded);
     println!(
-        "domain_workspace_bytes={domain_bytes}\nloaded_workspace_bytes={loaded_bytes}\nlocator_bookkeeping_bytes={}",
+        "domain_workspace_bytes={domain_bytes}\nloaded_workspace_bytes={loaded_bytes}\nadditional_loaded_workspace_bookkeeping_bytes={}",
         loaded_bytes - domain_bytes
     );
 }
