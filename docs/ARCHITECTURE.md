@@ -253,7 +253,7 @@ non-string `data` is reported as an `unsupported_body_type` diagnostic, left out
 model, and kept unchanged in the YAML. Settings add the WebSocket `keepAliveInterval`;
 `timeout` is the connection timeout. WebSocket requests load, edit, and save natively,
 and execute through the application streaming boundary. Preparing one for the HTTP
-engine is rejected. CLI and desktop WebSocket execution integration is pending.
+engine is rejected. CLI WebSocket execution uses the Session boundary; desktop integration is pending.
 
 
 ## Desktop Runtime
@@ -526,6 +526,17 @@ The command and data-event queues each hold at most 16 items; backpressure pause
 network reads. A separate bounded terminal slot permits socket/task cleanup even
 when the event queue is full. Close and drop interrupt backpressure and initiate a
 close handshake; a nonresponsive peer has a five-second shutdown bound.
+
+The CLI is a thin Session adapter through the existing `request run` command.
+`run_with_io` injects writers and a lazy bounded stdin channel; the binary reads
+terminal lines on a detached input thread so waiting input cannot block inbound
+output or runtime shutdown. Existing capture helpers reuse this writer-backed path.
+A concurrent command producer uses SessionSender while the event consumer writes
+and flushes human output or compact NDJSON in SessionEvent order. Quiet mode consumes
+the same events without successful output. The CLI owns only live-run bounds,
+inbound message counts, and Ctrl-C adaptation; close handshake, authentication,
+keep-alive, transport, and redaction remain application responsibilities. Session
+errors map structurally to existing CLI categories, with no transport diagnostics.
 
 Only native WebSocket requests enter this execution path. A selected text, JSON,
 or XML message is sent as a text frame after opening; no configured message leaves

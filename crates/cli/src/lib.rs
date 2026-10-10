@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 
 use serde_json::json;
 
@@ -14,6 +14,7 @@ mod error;
 mod presentation;
 mod request;
 mod request_input;
+mod streaming;
 mod structure;
 mod workspace;
 
@@ -145,13 +146,16 @@ pub const fn help() -> &'static str {
         "Options:\n",
         "      --environment <name>  Environment used to resolve or mutate variables\n",
         "      --extends <name>       Parent environment for environment create\n",
-        "      --output <file>        Write the response body to a file\n",
-        "      --show-headers         Include response headers in human request run output\n",
+        "      --output <file>        Write an HTTP/GraphQL response body to a file\n",
+        "      --send <text>          Send literal WebSocket text; may be repeated\n",
+        "      --max-messages <n>     Close after n inbound WebSocket messages\n",
+        "      --timeout <seconds>    Bound a live WebSocket run (positive integer)\n",
+        "      --show-headers         Include HTTP/GraphQL response headers in human output\n",
         "      --var <NAME=VALUE>     Override a variable for this request execution; may be repeated\n",
         "      --secret-provider env  Resolve declared secrets from process environment\n",
         "      --strict-variables      Reject request variables without an available value\n",
         "      --dry-run               Resolve a request without sending it\n",
-        "      --expect <expr>         Assert a completed response; may be repeated\n",
+        "      --expect <expr>         Assert HTTP/GraphQL status; may be repeated\n",
         "      --name <name>          Set a request, folder, collection, environment, or variable name\n",
         "      --summary <text>       Set a collection summary\n",
         "      --description <text>   Edit description content; preserve existing type\n",
@@ -176,7 +180,7 @@ pub const fn help() -> &'static str {
         "      --workspace <id>       Select a workspace from a multi-workspace import\n",
         "      --allow-partial        Explicitly allow lossy import conversion\n",
         "      --force               Replace existing Probe agent skill files\n",
-        "      --json                Emit versioned deterministic JSON\n",
+        "      --json                Emit versioned JSON (live WebSocket: NDJSON)\n",
         "  -q, --quiet               Suppress successful command output\n",
         "  -h, --help                Print help\n",
         "  -V, --version             Print version\n",
@@ -225,7 +229,7 @@ const REQUEST_HELP: &str = concat!(
     "  list <path|->                 List requests and repository selectors\n",
     "  get <path|-> <selector> [--environment <name>] [--strict-variables]  Inspect one request\n",
     "  variables <path|-> <selector> [--environment <name>]  Discover referenced variables\n",
-    "  run <path|-> <selector> [--environment <name>] [--strict-variables] [--var <NAME=VALUE>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--expect <expr>]...\n",
+    "  run <path|-> <selector> [--environment <name>] [--strict-variables] [--var <NAME=VALUE>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--expect <expr>]... [--send <text>]... [--max-messages <n>] [--timeout <seconds>]\n",
     "  set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
     "  unset <path> <selector> [--description] [--docs]  Remove description and/or docs from the file\n",
     "  create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
@@ -238,8 +242,14 @@ const REQUEST_HELP: &str = concat!(
     "      --var <NAME=VALUE>  Override a variable for this request execution. May be specified multiple times.\n",
     "      --secret-provider env  Resolve declared secrets from process environment.\n",
     "      --strict-variables   Reject request variables without an available value.\n",
-    "      --dry-run            Resolve the request without sending an HTTP request.\n",
-    "      --expect <expr>      After a live run, assert status=<code> or status=<code|code>.\n",
+    "      --dry-run            Resolve the request without opening a connection.\n",
+    "      --expect <expr>      HTTP/GraphQL only: assert status=<code> or status=<code|code>.\n",
+    "      --send <text>        WebSocket only: send literal text; repeatable.\n",
+    "      --max-messages <n>   WebSocket only: close after n inbound messages.\n",
+    "      --timeout <seconds>  WebSocket only: CLI live-run bound, not connection timeout.\n",
+    "\n",
+    "WebSocket runs stream interactively: > outbound, < inbound. --json emits NDJSON.\n",
+    "--output, --show-headers and --expect apply only to HTTP/GraphQL runs.\n",
 );
 
 const FOLDER_HELP: &str = concat!(
@@ -288,9 +298,71 @@ where
     run_with_stdin(args, &mut io::empty())
 }
 
-/// Runs the CLI adapter with a reader used when the workspace path is `-`.
+/// Captures CLI output using a finite reader for workspace YAML and WebSocket lines.
+/// Live interactive callers should use [`run_with_io`] with a bounded input channel.
 #[must_use]
 pub fn run_with_stdin<I, S, R>(args: I, stdin: &mut R) -> RunOutput
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+    R: Read,
+{
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = run_with_io(args, stdin, &mut stdout, &mut stderr, |reader| {
+        // Legacy capture helpers accept finite readers. Live callers inject a
+        // bounded input channel instead, without blocking the event consumer.
+        let mut text = String::new();
+        reader.read_to_string(&mut text)?;
+        let lines = text
+            .split_inclusive('\n')
+            .map(|line| Ok(streaming::strip_terminator(line.to_owned())))
+            .collect::<Vec<_>>();
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        std::thread::spawn(move || {
+            for line in lines {
+                if tx.blocking_send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(rx)
+    })
+    .expect("writing to capture buffers cannot fail");
+    RunOutput {
+        stdout: String::from_utf8(stdout).expect("CLI output is UTF-8"),
+        stderr: String::from_utf8(stderr).expect("CLI diagnostics are UTF-8"),
+        exit_code: code,
+    }
+}
+
+/// Runs commands with injectable writers and a lazy, bounded interactive input
+/// channel. The input factory is called only after a live WebSocket connects,
+/// after any workspace YAML has been consumed. Lines must omit their terminator.
+/// EOF is represented by dropping the input sender; it does not close the session.
+pub fn run_with_io<I, S, R, F>(
+    args: I,
+    stdin: &mut R,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    mut input: F,
+) -> io::Result<u8>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+    R: Read,
+    F: FnMut(&mut dyn Read) -> io::Result<tokio::sync::mpsc::Receiver<io::Result<String>>>,
+{
+    let mut live = streaming::LiveOutput::new(stdout, stderr, &mut input);
+    let output = run_internal(args, stdin, &mut live);
+    live.stdout.write_all(output.stdout.as_bytes())?;
+    live.stderr.write_all(output.stderr.as_bytes())?;
+    live.stdout.flush()?;
+    live.stderr.flush()?;
+    Ok(output.exit_code)
+}
+
+fn run_internal<I, S, R>(args: I, stdin: &mut R, live: &mut streaming::LiveOutput<'_>) -> RunOutput
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -327,10 +399,7 @@ where
     if args.is_empty() || args == ["-h"] || args == ["--help"] {
         return RunOutput::success(help().to_owned());
     }
-    if args
-        .iter()
-        .any(|argument| matches!(argument.as_str(), "-h" | "--help"))
-    {
+    if contains_help(&args) {
         let help = match args.first().map(String::as_str) {
             Some("agent") => AGENT_HELP,
             Some("collection") => COLLECTION_HELP,
@@ -352,31 +421,60 @@ where
         return RunOutput::success(output.render(json_output, quiet));
     }
 
-    match parse_command(args)
-        .and_then(|command| execute(command, stdin, human_output_requested(json_output, quiet)))
-    {
+    live.mode = streaming::OutputMode::from_flags(json_output, quiet);
+    match parse_command(args).and_then(|command| execute(command, stdin, live)) {
+        Ok(_) if live.started => RunOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: live.exit_code,
+        },
         Ok(output) => RunOutput::success(output.render(json_output, quiet)),
         Err(error) => RunOutput::failure(error, json_output),
     }
 }
 
-fn human_output_requested(json_output: bool, quiet: bool) -> bool {
-    !json_output && !quiet
+fn contains_help(args: &[String]) -> bool {
+    let mut literal = false;
+    for argument in args {
+        if literal {
+            literal = false;
+            continue;
+        }
+        if argument == "--send" {
+            literal = true;
+        } else if matches!(argument.as_str(), "-h" | "--help") {
+            return true;
+        }
+    }
+    false
 }
 
 fn remove_flags(args: &mut Vec<String>, flags: &[&str]) -> usize {
-    let count = args
-        .iter()
-        .filter(|argument| flags.contains(&argument.as_str()))
-        .count();
-    args.retain(|argument| !flags.contains(&argument.as_str()));
+    let mut count = 0;
+    let mut literal = false;
+    args.retain(|argument| {
+        if literal {
+            literal = false;
+            return true;
+        }
+        if argument == "--send" {
+            literal = true;
+            return true;
+        }
+        if flags.contains(&argument.as_str()) {
+            count += 1;
+            false
+        } else {
+            true
+        }
+    });
     count
 }
 
 fn execute(
     command: Command,
     stdin: &mut impl Read,
-    human_output: bool,
+    live: &mut streaming::LiveOutput<'_>,
 ) -> Result<CommandOutput, CliError> {
     match command {
         Command::InstallAgentSkill { force } => agent::install(force),
@@ -444,6 +542,9 @@ fn execute(
             show_headers,
             secret_provider_env,
             expectations,
+            sends,
+            timeout,
+            max_messages,
         } => request::run(
             &input,
             &selector,
@@ -456,9 +557,13 @@ fn execute(
                 show_headers,
                 secret_provider_env,
                 expectations: &expectations,
-                human_output,
+                mode: live.mode,
+                sends: &sends,
+                timeout,
+                max_messages,
             },
             stdin,
+            live,
         ),
         Command::Set {
             input,

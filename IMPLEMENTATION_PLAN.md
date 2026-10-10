@@ -26,7 +26,9 @@ than OpenCollection content. The design contract lives in
 
 ### Streaming Protocols
 
-CLI WebSocket execution/JSONL and desktop connection/message UI remain deferred,
+CLI WebSocket execution is implemented through `request run`, with interactive streaming,
+literal `--send`, inbound `--max-messages`, CLI `--timeout`, and live `--json` NDJSON.
+Desktop connection/message UI remains deferred,
 building on the [streaming session boundary](docs/ARCHITECTURE.md#streaming-sessions-and-websocket-transport).
 SSE and streaming gRPC remain future work and may reuse the common session concepts
 where they fit. Protocol implementations stay independent of stdin/stdout and GPUI.

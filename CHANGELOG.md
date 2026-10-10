@@ -13,10 +13,16 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- Execute native WebSocket requests with `probe request run`: interactive streaming,
+  repeatable literal `--send`, inbound `--max-messages`, live-run `--timeout`, and
+  NDJSON `--json`. Incoming binary frames display as base64; configured binary
+  messages remain unsupported. WebSocket inspection and variable locations use
+  native terminology.
+
 - OpenCollection WebSocket requests (`info.type: websocket`) now load as native
   requests in bundled and unbundled collections. Probe keeps their URL, headers,
   authentication, message or message variants, docs, and settings when you edit
-  and save them. WebSocket requests cannot be sent yet.
+  and save them. Native WebSocket requests execute through the CLI; desktop execution is pending.
 
 ## [0.10.8] - 2026-10-09
 
