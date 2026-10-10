@@ -6,7 +6,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{credentials::CredentialId, execution::SecretPresenceReconciliation};
+use crate::{
+    credentials::{CredentialId, CredentialStoreError},
+    execution::SecretPresenceReconciliation,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 struct EditorSecretIdentityCache {
@@ -55,7 +58,10 @@ impl CredentialPresenceState {
     /// A successful native write or delete supersedes older execution observations.
     pub(crate) fn record_write(&mut self, key: &str, stored: bool) -> bool {
         let changed = self.record(key, stored);
-        self.revision = self.revision.wrapping_add(1);
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("credential presence revision overflow");
         changed
     }
 
@@ -91,30 +97,27 @@ impl CredentialPresenceState {
         workspace: &Path,
         environment: &str,
         names: &BTreeSet<String>,
-    ) -> BTreeMap<String, String> {
+    ) -> Result<BTreeMap<String, String>, CredentialStoreError> {
         let mut cache = self.editor_identities.borrow_mut();
         if let Some(cached) = cache.as_ref()
             && cached.workspace == workspace
             && cached.environment == environment
             && &cached.names == names
         {
-            return cached.keys.clone();
+            return Ok(cached.keys.clone());
         }
-        let keys = names
-            .iter()
-            .filter_map(|name| {
-                CredentialId::for_workspace(workspace, environment, name)
-                    .ok()
-                    .map(|id| (name.clone(), id.persistence_key().to_owned()))
-            })
-            .collect::<BTreeMap<_, _>>();
+        let mut keys = BTreeMap::new();
+        for name in names {
+            let id = CredentialId::for_workspace(workspace, environment, name)?;
+            keys.insert(name.clone(), id.persistence_key().to_owned());
+        }
         *cache = Some(EditorSecretIdentityCache {
             workspace: workspace.to_path_buf(),
             environment: environment.to_owned(),
             names: names.clone(),
             keys: keys.clone(),
         });
-        keys
+        Ok(keys)
     }
 }
 
@@ -190,17 +193,39 @@ mod tests {
                 .to_owned()
         };
 
-        let development = state.persistence_keys(&workspace, "development", &names);
+        let development = state
+            .persistence_keys(&workspace, "development", &names)
+            .unwrap();
         assert_eq!(development["token"], key(&workspace, "development"));
-        let base = state.persistence_keys(&workspace, "base", &names);
+        let base = state.persistence_keys(&workspace, "base", &names).unwrap();
         assert_eq!(base["token"], key(&workspace, "base"));
-        let other = state.persistence_keys(Path::new("/"), "base", &names);
+        let other = state
+            .persistence_keys(Path::new("/"), "base", &names)
+            .unwrap();
         assert_eq!(other["token"], key(Path::new("/"), "base"));
         let renamed: BTreeSet<String> = ["other".into()].into();
         assert!(
             !state
                 .persistence_keys(Path::new("/"), "base", &renamed)
+                .unwrap()
                 .contains_key("token")
+        );
+    }
+
+    #[test]
+    fn persistence_keys_returns_invalid_identity_instead_of_dropping_names() {
+        let state = CredentialPresenceState::default();
+        let workspace = std::env::temp_dir();
+        let names: BTreeSet<String> = ["token".into(), String::new()].into();
+        assert_eq!(
+            state.persistence_keys(&workspace, "development", &names),
+            Err(CredentialStoreError::InvalidIdentity)
+        );
+        let valid: BTreeSet<String> = ["token".into()].into();
+        assert!(
+            state
+                .persistence_keys(&workspace, "development", &valid)
+                .is_ok()
         );
     }
 

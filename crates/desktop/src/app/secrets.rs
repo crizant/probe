@@ -158,15 +158,15 @@ impl ProbeApp {
         &self,
         selected: &str,
         secrets_without_values: &BTreeSet<String>,
-    ) -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
+    ) -> Result<(BTreeSet<String>, BTreeSet<String>, BTreeSet<String>), CredentialStoreError> {
         let Some(workspace) = &self.workspace_path else {
-            return (
+            return Ok((
                 BTreeSet::new(),
                 BTreeSet::new(),
                 secrets_without_values.clone(),
-            );
+            ));
         };
-        let keys = self.secret_persistence_keys(workspace, selected, secrets_without_values);
+        let keys = self.secret_persistence_keys(workspace, selected, secrets_without_values)?;
         let mut missing = BTreeSet::new();
         let mut resolved = BTreeSet::new();
         let mut unknown = BTreeSet::new();
@@ -183,7 +183,7 @@ impl ProbeApp {
                 }
             }
         }
-        (missing, resolved, unknown)
+        Ok((missing, resolved, unknown))
     }
 
     fn secret_persistence_keys(
@@ -191,7 +191,7 @@ impl ProbeApp {
         workspace: &Path,
         environment: &str,
         names: &BTreeSet<String>,
-    ) -> BTreeMap<String, String> {
+    ) -> Result<BTreeMap<String, String>, CredentialStoreError> {
         self.session
             .presence
             .persistence_keys(workspace, environment, names)

@@ -1110,11 +1110,20 @@ impl ProbeApp {
         };
         match resolve_environment(loaded.workspace().environments(), selected) {
             Ok(environment) => {
+                let (secrets, resolved_secrets, unknown_secrets) =
+                    match self.editor_secret_sets(selected, environment.secrets_without_values()) {
+                        Ok(sets) => sets,
+                        Err(error) => {
+                            return components::VariableContext {
+                                unavailable_message: error.to_string(),
+                                on_manage_environments,
+                                ..components::VariableContext::default()
+                            };
+                        }
+                    };
                 let view = cx.weak_entity();
                 let selected_environment = selected.to_owned();
                 let selected_workspace = self.workspace_path.clone();
-                let (secrets, resolved_secrets, unknown_secrets) =
-                    self.editor_secret_sets(selected, environment.secrets_without_values());
                 components::VariableContext {
                     values: environment.variables().clone(),
                     secrets,
