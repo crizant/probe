@@ -380,6 +380,9 @@ pub(crate) struct VariableContext {
     /// Enabled secrets whose presence Probe has not learned.
     /// Names only. Absence from `resolved_secrets` is not enough to mean missing.
     pub(crate) unknown_secrets: BTreeSet<String>,
+    /// Secret names whose credential identity could not be derived, with the error text.
+    /// Names only. A failure here does not remove plain variable values.
+    pub(crate) secret_identity_errors: BTreeMap<String, String>,
     /// Enabled path-parameter names with a non-empty value.
     ///
     /// `None` means this field does not highlight path placeholders, so every
@@ -431,6 +434,7 @@ impl std::fmt::Debug for VariableContext {
             .field("secrets", &self.secrets)
             .field("resolved_secrets", &self.resolved_secrets)
             .field("unknown_secrets", &self.unknown_secrets)
+            .field("secret_identity_errors", &self.secret_identity_errors)
             .field("path_values", &self.path_values)
             .field("unavailable_message", &self.unavailable_message)
             .finish_non_exhaustive()
@@ -631,9 +635,13 @@ pub(super) fn variable_tooltip_popup(
 ) -> impl IntoElement {
     let hover_for_content = hover.clone();
     let secret = presentation.secret;
-    let status_text = secret
-        .map(|state| state.status_text())
-        .or(presentation.hint);
+    let status_text = if secret.is_some() && !presentation.value.is_empty() {
+        Some(presentation.value.clone())
+    } else {
+        secret
+            .map(|state| state.status_text().to_owned())
+            .or_else(|| presentation.hint.map(str::to_owned))
+    };
     let status_color = secret.map_or(theme.colors.text.muted, |state| state.status_color(theme));
     div()
         .id("variable-input-tooltip-popup")

@@ -17,6 +17,14 @@ struct EditorSecretIdentityCache {
     environment: String,
     names: BTreeSet<String>,
     keys: BTreeMap<String, String>,
+    errors: BTreeMap<String, CredentialStoreError>,
+}
+
+/// Persistence keys for secret names that produced an identity, plus the names that did not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PersistenceKeys {
+    pub(crate) keys: BTreeMap<String, String>,
+    pub(crate) errors: BTreeMap<String, CredentialStoreError>,
 }
 
 /// Presentation metadata only. Credential values and store access stay outside this state.
@@ -92,32 +100,48 @@ impl CredentialPresenceState {
         changed
     }
 
+    /// Drops cached identities after a workspace load, reload, or path change.
+    pub(crate) fn clear_identity_cache(&self) {
+        self.editor_identities.take();
+    }
+
     pub(crate) fn persistence_keys(
         &self,
         workspace: &Path,
         environment: &str,
         names: &BTreeSet<String>,
-    ) -> Result<BTreeMap<String, String>, CredentialStoreError> {
+    ) -> PersistenceKeys {
         let mut cache = self.editor_identities.borrow_mut();
         if let Some(cached) = cache.as_ref()
             && cached.workspace == workspace
             && cached.environment == environment
             && &cached.names == names
         {
-            return Ok(cached.keys.clone());
+            return PersistenceKeys {
+                keys: cached.keys.clone(),
+                errors: cached.errors.clone(),
+            };
         }
         let mut keys = BTreeMap::new();
+        let mut errors = BTreeMap::new();
         for name in names {
-            let id = CredentialId::for_workspace(workspace, environment, name)?;
-            keys.insert(name.clone(), id.persistence_key().to_owned());
+            match CredentialId::for_workspace(workspace, environment, name) {
+                Ok(id) => {
+                    keys.insert(name.clone(), id.persistence_key().to_owned());
+                }
+                Err(error) => {
+                    errors.insert(name.clone(), error);
+                }
+            }
         }
         *cache = Some(EditorSecretIdentityCache {
             workspace: workspace.to_path_buf(),
             environment: environment.to_owned(),
             names: names.clone(),
             keys: keys.clone(),
+            errors: errors.clone(),
         });
-        Ok(keys)
+        PersistenceKeys { keys, errors }
     }
 }
 
@@ -193,40 +217,72 @@ mod tests {
                 .to_owned()
         };
 
-        let development = state
-            .persistence_keys(&workspace, "development", &names)
-            .unwrap();
-        assert_eq!(development["token"], key(&workspace, "development"));
-        let base = state.persistence_keys(&workspace, "base", &names).unwrap();
-        assert_eq!(base["token"], key(&workspace, "base"));
-        let other = state
-            .persistence_keys(Path::new("/"), "base", &names)
-            .unwrap();
-        assert_eq!(other["token"], key(Path::new("/"), "base"));
+        let development = state.persistence_keys(&workspace, "development", &names);
+        assert!(development.errors.is_empty());
+        assert_eq!(development.keys["token"], key(&workspace, "development"));
+        let base = state.persistence_keys(&workspace, "base", &names);
+        assert_eq!(base.keys["token"], key(&workspace, "base"));
+        let other = state.persistence_keys(Path::new("/"), "base", &names);
+        assert_eq!(other.keys["token"], key(Path::new("/"), "base"));
         let renamed: BTreeSet<String> = ["other".into()].into();
         assert!(
             !state
                 .persistence_keys(Path::new("/"), "base", &renamed)
-                .unwrap()
+                .keys
                 .contains_key("token")
         );
     }
 
     #[test]
-    fn persistence_keys_returns_invalid_identity_instead_of_dropping_names() {
+    fn persistence_keys_reports_invalid_identity_without_dropping_valid_names() {
         let state = CredentialPresenceState::default();
         let workspace = std::env::temp_dir();
         let names: BTreeSet<String> = ["token".into(), String::new()].into();
+        let lookup = state.persistence_keys(&workspace, "development", &names);
         assert_eq!(
-            state.persistence_keys(&workspace, "development", &names),
-            Err(CredentialStoreError::InvalidIdentity)
+            lookup.errors.get(""),
+            Some(&CredentialStoreError::InvalidIdentity)
         );
-        let valid: BTreeSet<String> = ["token".into()].into();
+        assert!(lookup.keys.contains_key("token"));
+        assert!(!lookup.keys.contains_key(""));
+    }
+
+    #[test]
+    fn failed_identity_lookup_is_reused_until_the_workspace_cache_is_cleared() {
+        let state = CredentialPresenceState::default();
+        let missing = std::env::temp_dir().join(format!(
+            "probe-missing-identity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let names: BTreeSet<String> = ["token".into()].into();
+        let failed = state.persistence_keys(&missing, "development", &names);
+        assert!(failed.keys.is_empty());
+        assert_eq!(
+            failed.errors.get("token"),
+            Some(&CredentialStoreError::InvalidIdentity)
+        );
+
+        std::fs::create_dir(&missing).unwrap();
+        let still_cached = state.persistence_keys(&missing, "development", &names);
         assert!(
-            state
-                .persistence_keys(&workspace, "development", &valid)
-                .is_ok()
+            still_cached.keys.is_empty(),
+            "a repeated lookup must reuse the cached identity failure"
         );
+        assert_eq!(still_cached, failed);
+
+        let other_path = state.persistence_keys(&std::env::temp_dir(), "development", &names);
+        assert!(other_path.errors.is_empty());
+        assert!(other_path.keys.contains_key("token"));
+
+        state.clear_identity_cache();
+        let recomputed = state.persistence_keys(&missing, "development", &names);
+        assert!(recomputed.errors.is_empty());
+        assert!(recomputed.keys.contains_key("token"));
+        let _ = std::fs::remove_dir(&missing);
     }
 
     #[test]

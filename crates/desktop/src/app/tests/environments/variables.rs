@@ -350,3 +350,67 @@ fn variable_context_reclassifies_when_the_selected_environment_changes(cx: &mut 
         }
     });
 }
+
+#[gpui::test]
+fn invalid_secret_identity_keeps_a_plain_variable_resolvable(cx: &mut TestAppContext) {
+    use probe_core::VariableStatus::Resolved;
+
+    let workspace = EnvironmentWorkspace::writable_source(
+        cx,
+        "invalid-secret-identity",
+        r#"opencollection: 1.0.0
+info:
+  name: Invalid secret identity
+bundled: true
+config:
+  environments:
+    - name: development
+      variables:
+        - name: host
+          value: api.example.com
+        - name: ""
+          secret: true
+items:
+  - info:
+      name: Users
+      type: http
+      seq: 1
+    http:
+      method: GET
+      url: "https://{{host}}"
+"#,
+    );
+    workspace.select_environment(cx, "development");
+    workspace.update(cx, |view, _, cx| {
+        let context = view.variable_context(cx);
+        assert_eq!(context.status("host"), Resolved);
+        assert_eq!(
+            context.values.get("host").map(String::as_str),
+            Some("api.example.com")
+        );
+        assert!(
+            context.on_change.is_some(),
+            "plain variables stay editable when a secret identity fails"
+        );
+        assert!(context.on_manage_environments.is_some());
+        assert_eq!(
+            context.unavailable_message, "Variable value is unavailable",
+            "a secret identity failure must not replace the plain-variable message"
+        );
+        assert_eq!(
+            context.secret_identity_errors.get("").map(String::as_str),
+            Some("invalid credential identity")
+        );
+        assert!(!context.secret_identity_errors.contains_key("host"));
+        assert!(!context.secrets.contains(""));
+        assert!(!context.resolved_secrets.contains(""));
+        assert!(!context.unknown_secrets.contains(""));
+
+        let again = view.variable_context(cx);
+        assert_eq!(again.status("host"), Resolved);
+        assert_eq!(
+            again.secret_identity_errors.get("").map(String::as_str),
+            Some("invalid credential identity")
+        );
+    });
+}

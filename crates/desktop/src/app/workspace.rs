@@ -278,6 +278,7 @@ impl ProbeApp {
         self.loaded_workspace = Some(workspace);
         self.detached_requests.clear();
         self.workspace_path = Some(path);
+        self.session.presence.clear_identity_cache();
         self.shell.reset_for_workspace();
         self.reset_collection_ui();
         self.pending_environment_saves.clear();
@@ -825,6 +826,7 @@ impl ProbeApp {
         self.detached_requests.remap(&remaps);
         self.persistence.reset(baselines);
         self.loaded_workspace = Some(workspace);
+        self.session.presence.clear_identity_cache();
         self.shell.reset_for_workspace();
         self.execution.remap_requests(&remaps);
         self.response_viewer.remap_requests(&remaps);
