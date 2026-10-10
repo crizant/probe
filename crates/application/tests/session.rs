@@ -20,31 +20,9 @@ use tokio_tungstenite::{
 
 const SECRET: &str = "private-secret-value";
 
-// A wall-clock watchdog also bounds tests with paused Tokio time held still.
-// Cancellation wakes its thread immediately; no sleeps or virtual-time assumptions.
-async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
-    bounded_with_deadline(Duration::from_secs(2), future).await
-}
-
-async fn bounded_with_deadline<T>(
-    timeout: Duration,
-    future: impl std::future::Future<Output = T>,
-) -> T {
-    let (done, waiting) = std::sync::mpsc::channel();
-    let (expired, deadline) = oneshot::channel();
-    let watchdog = std::thread::spawn(move || {
-        if waiting.recv_timeout(timeout).is_err() {
-            let _ = expired.send(());
-        }
-    });
-    let result = tokio::select! {
-        result = future => result,
-        _ = deadline => panic!("WebSocket test exceeded its wall-clock deadline"),
-    };
-    let _ = done.send(());
-    watchdog.join().unwrap();
-    result
-}
+#[path = "../../../tests/support/streaming.rs"]
+mod streaming_test;
+use streaming_test::bounded;
 
 fn request(url: &str, message: Option<WebSocketMessageSet>) -> Request {
     Request {
@@ -133,6 +111,7 @@ async fn initial_text_json_xml_selected_variant_and_event_order() {
             let (listener, url) = listener().await;
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
+                stream.set_nodelay(true).unwrap();
                 let mut socket = accept_async(stream).await.unwrap();
                 assert_eq!(
                     socket.next().await.unwrap().unwrap(),
@@ -264,6 +243,7 @@ async fn no_initial_message_stays_open_and_drop_closes() {
         let (listener, url) = listener().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut socket = accept_async(stream).await.unwrap();
             // A drop must send Close as the first frame, with no unsolicited text.
             assert!(matches!(
@@ -285,10 +265,7 @@ async fn no_initial_message_stays_open_and_drop_closes() {
         assert!(format!("{session:?}").starts_with("Session {"));
         assert!(!format!("{session:?}").contains("ws://"));
         drop(session);
-        tokio::time::timeout(Duration::from_secs(2), server)
-            .await
-            .unwrap()
-            .unwrap();
+        server.await.unwrap();
     })
     .await;
 }
@@ -302,6 +279,7 @@ async fn secrets_are_used_on_wire_and_redacted_at_every_event_boundary() {
         let auth_on_wire = auth_kind.clone();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut socket = accept_hdr_async(
                 stream,
                 move |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
@@ -466,6 +444,7 @@ async fn runtime_failure_is_terminal_and_diagnostic_free() {
         let (release_tx, release_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let socket = accept_async(stream).await.unwrap();
             release_rx.await.unwrap();
             drop(socket);
@@ -508,6 +487,7 @@ async fn close_releases_runtime_without_draining_events() {
         let (flood_tx, flood_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut socket = accept_async(stream).await.unwrap();
             for _ in 0..32 {
                 socket.send(Message::Text("inbound".into())).await.unwrap();
@@ -527,9 +507,7 @@ async fn close_releases_runtime_without_draining_events() {
             .unwrap();
         flood_rx.await.unwrap();
         session.close();
-        tokio::time::timeout(Duration::from_secs(2), session.wait_closed())
-            .await
-            .unwrap();
+        session.wait_closed().await;
         server.await.unwrap();
         let mut count = 0;
         while let Some(event) = session.next_event().await {
@@ -544,11 +522,18 @@ async fn close_releases_runtime_without_draining_events() {
 
 #[tokio::test(start_paused = true)]
 async fn prepared_session_connection_errors_are_safe_and_typed() {
-    // Windows may retry SYNs for roughly two seconds before reporting refusal.
-    // Allow that OS latency only here; subsequent session operations retain the two-second bound.
-    bounded_with_deadline(Duration::from_secs(5), async {
+    bounded(async {
+        use futures_util::FutureExt;
+        let clock = hold_paused_clock();
         let (listener, url) = listener().await;
-        drop(listener);
+        let reset = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
+            assert!(stream.read(&mut [0; 1]).await.unwrap() > 0);
+            stream.set_zero_linger().unwrap();
+            drop(stream);
+        });
         assert_eq!(
             prepared(&request(&url, None))
                 .into_websocket()
@@ -558,25 +543,35 @@ async fn prepared_session_connection_errors_are_safe_and_typed() {
                 .unwrap_err(),
             SessionError::Connection
         );
-    })
-    .await;
-    bounded(async {
+        reset.await.unwrap();
+
         let (listener, url) = self::listener().await;
         let (accepted_tx, accepted_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             accepted_tx.send(()).unwrap();
             std::future::pending::<()>().await;
             drop(stream);
         });
         let mut req = request(&url, None);
         req.settings.timeout = Some(Duration::from_secs(30));
-        let connect = tokio::spawn(prepared(&req).into_websocket().unwrap().connect());
-        accepted_rx.await.unwrap();
+        let started = tokio::time::Instant::now();
+        let connect = prepared(&req).into_websocket().unwrap().connect();
+        tokio::pin!(connect);
+        tokio::select! {
+            biased;
+            result = &mut connect => panic!("connection finished before the held handshake: {result:?}"),
+            result = accepted_rx => result.unwrap(),
+        }
+        assert_eq!(tokio::time::Instant::now() - started, Duration::ZERO);
         tokio::time::advance(Duration::from_secs(30)).await;
-        assert_eq!(connect.await.unwrap().unwrap_err(), SessionError::Timeout);
+        assert_eq!(tokio::time::Instant::now() - started, Duration::from_secs(30));
+        assert!(matches!(connect.as_mut().now_or_never(), Some(Err(SessionError::Timeout))));
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
+        clock.abort();
+        assert!(clock.await.unwrap_err().is_cancelled());
     })
     .await;
 }
@@ -656,6 +651,7 @@ async fn concurrent_sender_is_backpressured_and_does_not_keep_dropped_session_al
         let (first_tx, first_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut socket = accept_async(stream).await.unwrap();
             assert_eq!(
                 socket.next().await.unwrap().unwrap(),
@@ -693,10 +689,7 @@ async fn concurrent_sender_is_backpressured_and_does_not_keep_dropped_session_al
         assert!(!send.is_finished());
         drop(session);
         assert_eq!(send.await.unwrap(), Err(SessionError::Closed));
-        tokio::time::timeout(Duration::from_secs(2), server)
-            .await
-            .unwrap()
-            .unwrap();
+        server.await.unwrap();
     })
     .await;
 }
@@ -719,6 +712,7 @@ async fn runtime_keep_alive_is_independent_of_event_consumption() {
         let (ping_tx, ping_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut socket = accept_async(stream).await.unwrap();
             assert_eq!(
                 socket.next().await.unwrap().unwrap(),
@@ -789,6 +783,7 @@ async fn nonresponsive_peer_cannot_retain_closed_runtime() {
         let (listener, url) = listener().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let socket = accept_async(stream).await.unwrap();
             std::future::pending::<()>().await;
             drop(socket);
@@ -835,6 +830,7 @@ async fn missing_pong_is_one_terminal_error_followed_by_close() {
         let (ping_tx, ping_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut socket = accept_async(stream).await.unwrap();
             assert_eq!(
                 socket.next().await.unwrap().unwrap(),
@@ -896,6 +892,7 @@ async fn prepared_handshake_rejections_expose_status_without_peer_diagnostics() 
             let (listener, url) = listener().await;
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
                 let result = accept_hdr_async(stream, move |_: &tokio_tungstenite::tungstenite::handshake::server::Request, _: tokio_tungstenite::tungstenite::handshake::server::Response| {
                     Err(tokio_tungstenite::tungstenite::http::Response::builder()
                         .status(status)

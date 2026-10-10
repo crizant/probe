@@ -14,31 +14,9 @@ use tokio_tungstenite::{
     },
 };
 
-// A wall-clock watchdog also bounds tests with paused Tokio time held still.
-// Cancellation wakes its thread immediately; no sleeps or virtual-time assumptions.
-async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
-    bounded_with_deadline(Duration::from_secs(2), future).await
-}
-
-async fn bounded_with_deadline<T>(
-    timeout: Duration,
-    future: impl std::future::Future<Output = T>,
-) -> T {
-    let (done, waiting) = std::sync::mpsc::channel();
-    let (expired, deadline) = oneshot::channel();
-    let watchdog = std::thread::spawn(move || {
-        if waiting.recv_timeout(timeout).is_err() {
-            let _ = expired.send(());
-        }
-    });
-    let result = tokio::select! {
-        result = future => result,
-        _ = deadline => panic!("WebSocket test exceeded its wall-clock deadline"),
-    };
-    let _ = done.send(());
-    watchdog.join().unwrap();
-    result
-}
+#[path = "../../../tests/support/streaming.rs"]
+mod streaming_test;
+use streaming_test::bounded;
 
 fn request(url: String) -> Request {
     Request {
@@ -89,6 +67,7 @@ async fn handshake_headers_and_http_auth_semantics() {
             let (tx, rx) = oneshot::channel();
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
+                stream.set_nodelay(true).unwrap();
                 let mut tx = Some(tx);
                 let mut socket = accept_hdr_async(
                     stream,
@@ -189,6 +168,7 @@ async fn text_binary_ping_and_remote_close() {
     let (listener, url) = listener().await;
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
         let mut socket = accept_async(stream).await.unwrap();
         assert_eq!(
             socket.next().await.unwrap().unwrap(),
@@ -252,22 +232,35 @@ async fn text_binary_ping_and_remote_close() {
 #[tokio::test(start_paused = true)]
 async fn connection_deadline_includes_handshake() {
     bounded(async {
+        use futures_util::FutureExt;
+        let clock = hold_paused_clock();
         let (listener, url) = listener().await;
         let (accepted_tx, accepted_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             accepted_tx.send(()).unwrap();
             std::future::pending::<()>().await;
             drop(stream);
         });
         let mut request = request(url);
         request.settings.timeout = Some(Duration::from_secs(30));
-        let connect = tokio::spawn(WebSocketRequest::new(&request).unwrap().connect());
-        accepted_rx.await.unwrap();
+        let started = tokio::time::Instant::now();
+        let connect = WebSocketRequest::new(&request).unwrap().connect();
+        tokio::pin!(connect);
+        tokio::select! {
+            biased;
+            result = &mut connect => panic!("connection finished before the held handshake: {result:?}"),
+            result = accepted_rx => result.unwrap(),
+        }
+        assert_eq!(tokio::time::Instant::now() - started, Duration::ZERO);
         tokio::time::advance(Duration::from_secs(30)).await;
-        assert_eq!(connect.await.unwrap().unwrap_err(), WebSocketError::Timeout);
+        assert_eq!(tokio::time::Instant::now() - started, Duration::from_secs(30));
+        assert!(matches!(connect.as_mut().now_or_never(), Some(Err(WebSocketError::Timeout))));
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
+        clock.abort();
+        assert!(clock.await.unwrap_err().is_cancelled());
     })
     .await;
 }
@@ -284,6 +277,7 @@ async fn keep_alive_uses_ping_and_shutdown_is_bounded() {
     let (release_tx, release_rx) = oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
         let mut socket = accept_async(stream).await.unwrap();
         assert_eq!(
             socket.next().await.unwrap().unwrap(),
@@ -433,11 +427,16 @@ fn configuration_errors_are_typed_and_do_not_disclose_inputs() {
 
 #[tokio::test]
 async fn connection_failure_and_drop_release_socket() {
-    // Windows may retry SYNs for roughly two seconds before reporting refusal.
-    // Allow that OS latency only here; subsequent session operations retain the two-second bound.
-    bounded_with_deadline(Duration::from_secs(5), async {
+    bounded(async {
         let (listener, url) = listener().await;
-        drop(listener);
+        let reset = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
+            assert!(stream.read(&mut [0; 1]).await.unwrap() > 0);
+            stream.set_zero_linger().unwrap();
+            drop(stream);
+        });
         assert_eq!(
             WebSocketRequest::new(&request(url))
                 .unwrap()
@@ -446,12 +445,14 @@ async fn connection_failure_and_drop_release_socket() {
                 .unwrap_err(),
             WebSocketError::Connection
         );
+        reset.await.unwrap();
     })
     .await;
     bounded(async {
         let (listener, url) = self::listener().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut socket = accept_async(stream).await.unwrap();
             assert!(socket.next().await.unwrap().is_err());
         });
@@ -473,6 +474,7 @@ async fn rejected_upgrade_exposes_only_http_status() {
         let (listener, url) = listener().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let result = accept_hdr_async(
                 stream,
                 |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
@@ -509,6 +511,7 @@ async fn wss_initiates_tls_without_requiring_a_global_crypto_provider() {
         let (listener, url) = listener().await;
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut prefix = [0; 5];
             stream.read_exact(&mut prefix).await.unwrap();
             assert_eq!(prefix[0], 0x16); // TLS handshake record, never an HTTP request.
@@ -543,6 +546,7 @@ async fn upgrade_validation_rejects_invalid_and_unsolicited_headers() {
         let (listener, url) = listener().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let _ = accept_hdr_async(stream, move |_: &tokio_tungstenite::tungstenite::handshake::server::Request, mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
                 response.headers_mut().insert(tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(name.as_bytes()).unwrap(), value.parse().unwrap());
                 Ok(response)
@@ -568,6 +572,7 @@ async fn upgrade_preserves_first_frame_buffered_with_response_and_bounds_headers
         let (listener, url) = listener().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut stream = BufReader::new(stream);
             let mut key = String::new();
             loop {
@@ -624,6 +629,7 @@ async fn missing_pong_times_out_even_after_receive_is_cancelled() {
     let (ping_tx, ping_rx) = oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
         let mut socket = accept_async(stream).await.unwrap();
         assert_eq!(
             socket.next().await.unwrap().unwrap(),
@@ -672,6 +678,7 @@ async fn matching_pong_allows_the_next_keep_alive_interval() {
     let (listener, url) = listener().await;
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
         let mut socket = accept_async(stream).await.unwrap();
         for text in ["first", "second"] {
             assert_eq!(
@@ -712,10 +719,12 @@ async fn matching_pong_allows_the_next_keep_alive_interval() {
 #[tokio::test(start_paused = true)]
 async fn unrelated_pong_and_empty_data_do_not_satisfy_heartbeat() {
     bounded(async {
+        use futures_util::FutureExt;
         let clock = hold_paused_clock();
         let (listener, url) = listener().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut socket = accept_async(stream).await.unwrap();
             assert!(matches!(socket.next().await.unwrap().unwrap(), Message::Ping(_)));
             // Explicit Pong replaces the automatic queued reply, with a different payload.
@@ -729,7 +738,7 @@ async fn unrelated_pong_and_empty_data_do_not_satisfy_heartbeat() {
         tokio::time::advance(Duration::from_secs(10)).await;
         assert!(matches!(connection.receive().await.unwrap(), WebSocketEvent::Data(WebSocketData::Text(text)) if text.is_empty()));
         tokio::time::advance(Duration::from_secs(10)).await;
-        assert!(matches!(connection.receive().await, Err(WebSocketError::KeepAliveTimeout)));
+        assert!(matches!(connection.receive().now_or_never(), Some(Err(WebSocketError::KeepAliveTimeout))));
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
         clock.abort();
@@ -745,6 +754,7 @@ async fn closing_ignores_data_but_reports_protocol_errors() {
             let (listener, url) = listener().await;
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
+                stream.set_nodelay(true).unwrap();
                 let mut socket = accept_async(stream).await.unwrap();
                 // This frame was already in flight when the client initiated Close.
                 socket
@@ -805,6 +815,7 @@ async fn subprotocol_selection_must_be_single_and_offered() {
             let (listener, url) = listener().await;
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
                 let _ = accept_hdr_async(stream, move |_: &tokio_tungstenite::tungstenite::handshake::server::Request, mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
                     for protocol in selected {
                         response.headers_mut().append("sec-websocket-protocol", protocol.parse().unwrap());
@@ -840,6 +851,7 @@ async fn host_override_is_unique_and_disabled_headers_are_ignored() {
             let expected = if override_host { "virtual.example:8080".to_owned() } else { listener.local_addr().unwrap().to_string() };
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
                 let _ = accept_hdr_async(stream, move |req: &tokio_tungstenite::tungstenite::handshake::server::Request, response: tokio_tungstenite::tungstenite::handshake::server::Response| {
                     assert_eq!(req.headers().get_all("host").iter().count(), 1);
                     assert_eq!(req.headers()["host"], expected);
@@ -911,6 +923,7 @@ async fn http_10_upgrade_is_rejected_as_malformed_handshake() {
         let (listener, url) = listener().await;
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             stream
                 .write_all(b"HTTP/1.0 101 Switching Protocols\r\n\r\n")
                 .await

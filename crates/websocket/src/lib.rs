@@ -536,48 +536,61 @@ async fn handshake(
 }
 
 #[cfg(test)]
+mod streaming_test {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/support/streaming.rs"
+    ));
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use probe_core::{Request, RequestKind};
+    use streaming_test::bounded;
+    use tokio::{net::TcpListener, sync::oneshot};
 
     #[tokio::test]
     async fn first_keep_alive_tick_is_not_immediate() {
-        use futures_util::FutureExt;
-        use probe_core::RequestKind;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let request = Request {
-            url: Some(format!("ws://{}", listener.local_addr().unwrap())),
-            kind: RequestKind::WebSocket { message: None },
-            settings: probe_core::RequestSettings {
-                keep_alive_interval: Some(Duration::from_secs(10)),
-                ..Default::default()
-            },
-            ..Request::default()
-        };
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            std::future::pending::<()>().await;
-            drop(socket);
-        });
-        let mut connection = tokio::time::timeout(
-            Duration::from_secs(2),
-            WebSocketRequest::new(&request).unwrap().connect(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert!(
-            connection
-                .keep_alive
-                .as_mut()
+        bounded(async {
+            use futures_util::FutureExt;
+            use probe_core::RequestKind;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let request = Request {
+                url: Some(format!("ws://{}", listener.local_addr().unwrap())),
+                kind: RequestKind::WebSocket { message: None },
+                settings: probe_core::RequestSettings {
+                    keep_alive_interval: Some(Duration::from_secs(10)),
+                    ..Default::default()
+                },
+                ..Request::default()
+            };
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                stream.set_nodelay(true).unwrap();
+                let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                std::future::pending::<()>().await;
+                drop(socket);
+            });
+            let mut connection = WebSocketRequest::new(&request)
                 .unwrap()
-                .tick()
-                .now_or_never()
-                .is_none(),
-            "the first Ping must wait a complete keep-alive interval"
-        );
-        server.abort();
-        assert!(server.await.unwrap_err().is_cancelled());
+                .connect()
+                .await
+                .unwrap();
+            assert!(
+                connection
+                    .keep_alive
+                    .as_mut()
+                    .unwrap()
+                    .tick()
+                    .now_or_never()
+                    .is_none(),
+                "the first Ping must wait a complete keep-alive interval"
+            );
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+        })
+        .await;
     }
 
     #[test]
@@ -613,5 +626,98 @@ mod tests {
             assert!(!format!("{category:?} {diagnostic}").contains("private-secret"));
             assert!(std::error::Error::source(&category).is_none());
         }
+    }
+
+    // Hold the upgrade response until connect has been observed pending. This
+    // makes skipped-handshake failures synchronous in every transport test here.
+    async fn connected_pair() -> (
+        WebSocketConnection,
+        tokio_tungstenite::WebSocketStream<tokio::io::BufReader<TcpStream>>,
+    ) {
+        use futures_util::FutureExt;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio_tungstenite::tungstenite::protocol::Role;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let request = Request {
+            url: Some(format!("ws://{}", listener.local_addr().unwrap())),
+            kind: RequestKind::WebSocket { message: None },
+            ..Request::default()
+        };
+        let (received_tx, received_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut headers = String::new();
+            loop {
+                let start = headers.len();
+                assert!(stream.read_line(&mut headers).await.unwrap() > 0);
+                if &headers[start..] == "\r\n" {
+                    break;
+                }
+            }
+            let key = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("Sec-WebSocket-Key")
+                        .then_some(value.trim())
+                })
+                .unwrap();
+            let accept =
+                tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
+            received_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            stream.write_all(format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").as_bytes()).await.unwrap();
+            tokio_tungstenite::WebSocketStream::from_raw_socket(stream, Role::Server, None).await
+        });
+        let connect = WebSocketRequest::new(&request).unwrap().connect();
+        tokio::pin!(connect);
+        tokio::select! {
+            biased;
+            result = &mut connect => panic!("connect completed without an upgrade response: {result:?}"),
+            result = received_rx => result.unwrap(),
+        }
+        assert!(connect.as_mut().now_or_never().is_none());
+        release_tx.send(()).unwrap();
+        (connect.await.unwrap(), server.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn transport_waits_for_upgrade_and_rejects_sends_after_remote_close() {
+        bounded(async {
+            let (mut connection, mut peer) = connected_pair().await;
+            peer.close(None).await.unwrap();
+            assert!(matches!(
+                connection.receive().await.unwrap(),
+                WebSocketEvent::Closed { .. }
+            ));
+            assert_eq!(
+                connection
+                    .send(WebSocketData::Text("too late".into()))
+                    .await,
+                Err(WebSocketError::Closed)
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn close_waits_for_peer_acknowledgement() {
+        bounded(async {
+            use futures_util::FutureExt;
+            let (mut connection, mut peer) = connected_pair().await;
+            let close = connection.close();
+            tokio::pin!(close);
+            tokio::select! {
+                biased;
+                result = &mut close => panic!("close completed before peer acknowledgement: {result:?}"),
+                message = peer.next() => assert!(matches!(message.unwrap().unwrap(), tokio_tungstenite::tungstenite::Message::Close(_))),
+            }
+            assert!(close.as_mut().now_or_never().is_none());
+            peer.flush().await.unwrap();
+            close.await.unwrap();
+        }).await;
     }
 }

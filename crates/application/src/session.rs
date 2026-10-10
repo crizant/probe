@@ -406,10 +406,19 @@ impl SecretDisclosure {
 }
 
 #[cfg(test)]
+mod streaming_test {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/support/streaming.rs"
+    ));
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use futures_util::{SinkExt, StreamExt};
     use probe_core::{Request, RequestKind};
+    use streaming_test::bounded;
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -499,16 +508,16 @@ mod tests {
         let (mut session, finished, _closing, _commands, _events) = controlled_session();
         assert!(session.wait_closed().now_or_never().is_none());
         finished.send_replace(true);
-        tokio::time::timeout(std::time::Duration::from_secs(1), session.wait_closed())
-            .await
-            .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), session.wait_closed())
-            .await
-            .unwrap();
+        assert_eq!(session.wait_closed().now_or_never(), Some(()));
+        assert_eq!(session.wait_closed().now_or_never(), Some(()));
     }
 
     #[tokio::test]
     async fn missing_initial_presentation_is_typed_and_sends_no_message() {
+        bounded(async {
+        use futures_util::FutureExt;
+        let (received_tx, received_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let request = Request {
             url: Some(format!("ws://{}", listener.local_addr().unwrap())),
@@ -517,11 +526,14 @@ mod tests {
         };
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             let mut socket = accept_async(stream).await.unwrap();
             assert!(matches!(
                 socket.next().await.unwrap().unwrap(),
                 Message::Close(_)
             ));
+            received_tx.send(()).unwrap();
+            release_rx.await.unwrap();
             socket.flush().await.unwrap();
         });
         let mut connection = WebSocketRequest::new(&request)
@@ -542,7 +554,39 @@ mod tests {
         .await;
         assert!(matches!(result, Err(SessionError::InvalidMessageSelection)));
         assert!(event_rx.try_recv().is_err());
-        connection.close().await.unwrap();
+        let close = connection.close();
+        tokio::pin!(close);
+        tokio::select! {
+            biased;
+            result = &mut close => panic!("close completed before peer acknowledgement: {result:?}"),
+            _ = received_rx => {},
+        }
+        assert!(close.as_mut().now_or_never().is_none());
+        release_tx.send(()).unwrap();
+        close.await.unwrap();
         server.await.unwrap();
+        }).await;
+    }
+
+    #[tokio::test]
+    async fn send_enqueues_data_before_reporting_success() {
+        let (session, _finished, _closing, mut commands, _events) = controlled_session();
+        session
+            .send(SessionData::Text("queued".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            commands.try_recv().unwrap(),
+            SessionData::Text("queued".into())
+        );
+        session
+            .sender()
+            .send(SessionData::Binary(vec![1, 2]))
+            .await
+            .unwrap();
+        assert_eq!(
+            commands.try_recv().unwrap(),
+            SessionData::Binary(vec![1, 2])
+        );
     }
 }
