@@ -367,13 +367,15 @@ fn locator_nodes_from_items(
                 .and_then(|info| info.get("type"))
                 .and_then(Value::as_str);
             match item_type {
-                Some("http" | "graphql") => Some(LocatorNode::Request {
-                    selector: format!("{prefix}/{index}"),
-                    persistence: document_path.map(|path| RequestPersistence {
-                        document_path: path.to_owned(),
-                        item_path,
-                    }),
-                }),
+                Some(item_type) if probe_core::RequestProtocol::from_name(item_type).is_some() => {
+                    Some(LocatorNode::Request {
+                        selector: format!("{prefix}/{index}"),
+                        persistence: document_path.map(|path| RequestPersistence {
+                            document_path: path.to_owned(),
+                            item_path,
+                        }),
+                    })
+                }
                 Some("folder") => {
                     let children = value
                         .get("items")

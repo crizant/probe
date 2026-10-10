@@ -2260,6 +2260,120 @@ fn request_save_runs_in_background_and_clears_dirty_state(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn websocket_url_edits_stay_raw_and_save(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = std::env::temp_dir().join(format!(
+        "probe-desktop-websocket-{}-{}.yml",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::write(
+        &fixture,
+        r"opencollection: 1.0.0
+info:
+  name: Sockets
+bundled: true
+items:
+  - info:
+      name: Socket
+      type: websocket
+    websocket:
+      url: wss://example.com/socket?token=abc
+",
+    )
+    .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(key, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(visual.debug_bounds("request-method-trigger").is_none());
+    assert!(
+        visual
+            .debug_bounds("request-execution-menu-trigger")
+            .is_none()
+    );
+    let url_input = visual
+        .debug_bounds("request-url-input")
+        .expect("request URL input should render");
+    visual.simulate_click(url_input.center(), Modifiers::default());
+    visual.run_until_parked();
+    visual.simulate_keystrokes("end");
+    visual.simulate_input("d");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let request = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .workspace()
+                .request(key)
+                .unwrap();
+            assert_eq!(
+                request.url.as_deref(),
+                Some("wss://example.com/socket?token=abcd")
+            );
+            assert!(request.query_parameters.is_empty());
+            assert!(request.path_parameters.is_empty());
+            assert_eq!(
+                view.request_editor.section(key),
+                crate::request_editor::EditorSection::Headers
+            );
+        })
+        .unwrap();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let save = visual
+        .debug_bounds("editor-save")
+        .expect("dirty request should show its save icon");
+    visual.simulate_click(save.center(), Modifiers::default());
+    visual.run_until_parked();
+    cx.run_until_parked();
+
+    let (dirty, message) = window
+        .update(cx, |view, _, _| {
+            let request = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .workspace()
+                .request(key)
+                .unwrap();
+            (view.persistence.is_dirty(key, request), toast_debug(view))
+        })
+        .unwrap();
+    assert!(!dirty, "save failed: {message:?}");
+    let reloaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let saved = reloaded
+        .workspace()
+        .request(reloaded.requests()[0].key())
+        .unwrap();
+    assert_eq!(
+        saved.url.as_deref(),
+        Some("wss://example.com/socket?token=abcd")
+    );
+    assert!(saved.query_parameters.is_empty());
+    let yaml = fs::read_to_string(&fixture).unwrap();
+    assert!(!yaml.contains("params"), "{yaml}");
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
 fn save_shortcut_after_clicking_remove_query_row_persists_removal(cx: &mut TestAppContext) {
     assert_save_shortcut_after_clicking_remove_row_persists_removal(
         cx,

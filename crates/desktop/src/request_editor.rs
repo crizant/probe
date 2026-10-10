@@ -42,6 +42,8 @@ impl EditorSection {
         Self::Docs,
     ];
 
+    pub(crate) const ALL_WEBSOCKET: [Self; 3] = [Self::Headers, Self::Authentication, Self::Docs];
+
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Query => "Query",
@@ -75,6 +77,7 @@ impl EditorSection {
         match protocol {
             probe_core::RequestProtocol::Graphql => &Self::ALL_GRAPHQL,
             probe_core::RequestProtocol::Http => &Self::ALL_HTTP,
+            probe_core::RequestProtocol::WebSocket => &Self::ALL_WEBSOCKET,
         }
     }
 }
@@ -108,6 +111,10 @@ pub(crate) fn url_bar_value(request: &Request) -> String {
 }
 
 pub(crate) fn apply_url_bar_value(request: &mut Request, value: &str) {
+    if request.kind.is_websocket() {
+        request.url = Some(value.to_owned());
+        return;
+    }
     let (without_fragment, fragment) = value.split_once('#').unwrap_or((value, ""));
     let (url, query) = without_fragment
         .split_once('?')
@@ -219,6 +226,7 @@ impl RequestEditorState {
             match protocol {
                 probe_core::RequestProtocol::Graphql => EditorSection::GraphqlQuery,
                 probe_core::RequestProtocol::Http => EditorSection::Body,
+                probe_core::RequestProtocol::WebSocket => EditorSection::Headers,
             },
         );
     }
@@ -646,6 +654,35 @@ mod tests {
         editor.set_section(key, EditorSection::GraphqlVariables);
         editor.ensure_available_section(key, probe_core::RequestProtocol::Http);
         assert_eq!(editor.section(key), EditorSection::Body);
+    }
+
+    #[test]
+    fn websocket_requests_offer_only_shared_sections_and_keep_raw_urls() {
+        let key = request_key();
+        let mut editor = RequestEditorState::default();
+        for section in [
+            EditorSection::Body,
+            EditorSection::Query,
+            EditorSection::Path,
+        ] {
+            editor.set_section(key, section);
+            editor.ensure_available_section(key, probe_core::RequestProtocol::WebSocket);
+            assert_eq!(editor.section(key), EditorSection::Headers);
+        }
+        editor.set_section(key, EditorSection::Authentication);
+        editor.ensure_available_section(key, probe_core::RequestProtocol::WebSocket);
+        assert_eq!(editor.section(key), EditorSection::Authentication);
+
+        let mut request = Request {
+            kind: probe_core::RequestKind::WebSocket { message: None },
+            ..Request::default()
+        };
+        let url = "wss://{{host}}/rooms/:room?token={{token}}#live";
+        apply_url_bar_value(&mut request, url);
+        assert_eq!(request.url.as_deref(), Some(url));
+        assert!(request.query_parameters.is_empty());
+        assert!(request.path_parameters.is_empty());
+        assert_eq!(url_bar_value(&request), url);
     }
 
     #[test]

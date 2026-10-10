@@ -8,7 +8,7 @@ use std::{fmt, future::Future, path::Path};
 
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Environment, EnvironmentResolutionError,
-    GraphqlRequestError, PreparedHttpRequest, Request, ResolvedEnvironment, SecretContext,
+    PreparedHttpRequest, Request, RequestProtocolError, ResolvedEnvironment, SecretContext,
     SecretError, SecretProvider, SecretValue, VariableUsage, request_secret_usages,
     resolve_environment_for_request_with_provider, resolve_request,
     resolve_request_for_presentation, resolve_request_strict,
@@ -112,7 +112,7 @@ impl PreparedRequest {
     }
 
     /// Converts the execution request into HTTP engine input.
-    pub fn into_http(mut self) -> Result<HttpExecution, GraphqlRequestError> {
+    pub fn into_http(mut self) -> Result<HttpExecution, RequestProtocolError> {
         let request = self.execution.into_http()?;
         if let Some(environment) = &self.disclosure.secrets {
             self.disclosure.initial_url_uses_secrets =
@@ -130,7 +130,7 @@ fn initial_url_depends_on_secret(
     mut presentation: Request,
     execution: &Request,
     environment: &ResolvedEnvironment,
-) -> Result<bool, GraphqlRequestError> {
+) -> Result<bool, RequestProtocolError> {
     let method_controls_url = presentation.kind.is_graphql();
     let presentation_method = presentation.method.clone();
     // Use the actual method so GraphQL GET fields become query parameters

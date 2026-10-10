@@ -1,0 +1,15 @@
+info:
+  name: Socket
+  type: websocket
+  seq: 1
+websocket:
+  url: wss://{{host}}/socket
+  headers:
+  - name: Authorization
+    value: Bearer {{token}}
+  message:
+    type: binary
+    data: AAEC
+settings:
+  keepAliveInterval: 10000
+x-socket: retained

@@ -1564,6 +1564,10 @@ fn custom_method_labels_supplement_only_generic_http_icons() {
             .custom_method(),
         None
     );
+    let websocket = RequestIcon::from_request(&RequestKind::WebSocket { message: None }, None);
+    assert_eq!(websocket, RequestIcon::WebSocket);
+    assert_eq!(websocket.label(), "WebSocket");
+    assert_eq!(websocket.custom_method(), None);
 }
 
 #[gpui::test]

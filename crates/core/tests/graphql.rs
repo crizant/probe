@@ -1,8 +1,9 @@
 use probe_core::{
     Body, BodyVariant, Environment, EnvironmentVariable, FieldPatch, GraphqlBody,
-    GraphqlBodyVariant, GraphqlOperation, GraphqlRequestError, GraphqlUpdate, QueryParameter,
-    RawBody, RawBodyKind, Request, RequestBody, RequestKind, RequestProtocol, RequestUpdate,
-    Variable, VariableValue, VariableValueSet, resolve_environment, resolve_request,
+    GraphqlBodyVariant, GraphqlOperation, GraphqlUpdate, QueryParameter, RawBody, RawBodyKind,
+    Request, RequestBody, RequestKind, RequestProtocol, RequestProtocolError, RequestUpdate,
+    Variable, VariableValue, VariableValueSet, WebSocketMessage, WebSocketMessageKind,
+    WebSocketMessageSet, WebSocketMessageVariant, resolve_environment, resolve_request,
 };
 use serde_json::{Map, Value, json};
 
@@ -41,12 +42,16 @@ fn graphql_request(body: Option<GraphqlBody>) -> Request {
 fn protocol_identity_and_defaults_are_independent_of_body() {
     assert_eq!(RequestProtocol::default(), RequestProtocol::Http);
     assert_eq!(RequestKind::default().protocol(), RequestProtocol::Http);
+    let websocket_message = WebSocketMessage {
+        kind: WebSocketMessageKind::Json,
+        data: r#"{"subscribe":"orders"}"#.to_owned(),
+    };
     for (kind, protocol, name, method) in [
         (
             RequestKind::Http { body: None },
             RequestProtocol::Http,
             "http",
-            "GET",
+            Some("GET"),
         ),
         (
             RequestKind::Http {
@@ -57,13 +62,13 @@ fn protocol_identity_and_defaults_are_independent_of_body() {
             },
             RequestProtocol::Http,
             "http",
-            "GET",
+            Some("GET"),
         ),
         (
             RequestKind::Graphql { body: None },
             RequestProtocol::Graphql,
             "graphql",
-            "POST",
+            Some("POST"),
         ),
         (
             RequestKind::Graphql {
@@ -74,13 +79,52 @@ fn protocol_identity_and_defaults_are_independent_of_body() {
             },
             RequestProtocol::Graphql,
             "graphql",
-            "POST",
+            Some("POST"),
+        ),
+        (
+            RequestKind::WebSocket { message: None },
+            RequestProtocol::WebSocket,
+            "websocket",
+            None,
+        ),
+        (
+            RequestKind::WebSocket {
+                message: Some(WebSocketMessageSet::Variants(vec![
+                    WebSocketMessageVariant {
+                        title: "Subscribe".to_owned(),
+                        selected: true,
+                        message: websocket_message.clone(),
+                    },
+                ])),
+            },
+            RequestProtocol::WebSocket,
+            "websocket",
+            None,
         ),
     ] {
         assert_eq!(kind.protocol(), protocol);
         assert_eq!(kind.as_str(), name);
         assert_eq!(protocol.as_str(), name);
+        assert_eq!(RequestProtocol::from_name(name), Some(protocol));
         assert_eq!(protocol.default_method(), method);
+        assert_eq!(kind.is_graphql(), protocol == RequestProtocol::Graphql);
+        assert_eq!(kind.is_websocket(), protocol == RequestProtocol::WebSocket);
+        let mut request = Request {
+            kind,
+            ..Request::default()
+        };
+        let body = request.http_body().cloned();
+        assert_eq!(request.http_body_mut().cloned(), body);
+    }
+    assert_eq!(RequestProtocol::from_name("grpc"), None);
+    assert_eq!(RequestProtocol::from_name("WebSocket"), None);
+    for (kind, name) in [
+        (WebSocketMessageKind::Text, "text"),
+        (WebSocketMessageKind::Json, "json"),
+        (WebSocketMessageKind::Xml, "xml"),
+        (WebSocketMessageKind::Binary, "binary"),
+    ] {
+        assert_eq!(kind.as_str(), name);
     }
 }
 
@@ -232,7 +276,7 @@ fn owned_graphql_preparation_selects_one_body_variant() {
         }
         let request = graphql_request(Some(GraphqlBody::Variants(variants)));
         assert!(
-            matches!(request.into_http(), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+            matches!(request.into_http(), Err(RequestProtocolError::InvalidBodySelection(error)) if error.contains(message))
         );
     }
 }
@@ -295,10 +339,10 @@ fn graphql_variant_selection_is_shared_by_read_and_update() {
     ] {
         let mut request = graphql_request(Some(variants(first, second)));
         assert!(
-            matches!(request.selected_graphql(), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+            matches!(request.selected_graphql(), Err(RequestProtocolError::InvalidBodySelection(error)) if error.contains(message))
         );
         assert!(
-            matches!(request.apply_graphql_update(&GraphqlUpdate::default()), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+            matches!(request.apply_graphql_update(&GraphqlUpdate::default()), Err(RequestProtocolError::InvalidBodySelection(error)) if error.contains(message))
         );
     }
 
@@ -350,7 +394,7 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
             ..RequestUpdate::default()
         }
         .apply(&mut ordinary_http),
-        Err(GraphqlRequestError::NotGraphql)
+        Err(RequestProtocolError::NotGraphql)
     );
     assert_eq!(ordinary_http, original_http);
 
@@ -362,7 +406,7 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
             ..RequestUpdate::default()
         }
         .apply(&mut graphql),
-        Err(GraphqlRequestError::NotHttp)
+        Err(RequestProtocolError::NotHttp)
     );
     assert_eq!(graphql, original_graphql);
 }

@@ -92,6 +92,9 @@ impl StructureDialog {
         match self.mode {
             StructureDialogMode::CreateRequest(RequestProtocol::Http) => "New HTTP Request",
             StructureDialogMode::CreateRequest(RequestProtocol::Graphql) => "New GraphQL Request",
+            StructureDialogMode::CreateRequest(RequestProtocol::WebSocket) => {
+                "New WebSocket Request"
+            }
             StructureDialogMode::CreateFolder => "New Folder",
             StructureDialogMode::SaveDetachedRequest { .. } => "Save Request",
             StructureDialogMode::Rename { .. } => "Rename",
@@ -145,7 +148,7 @@ impl StructureDialog {
                     parent,
                     index: None,
                     name: name.to_owned(),
-                    method: Some(protocol.default_method().to_owned()),
+                    method: protocol.default_method().map(str::to_owned),
                     url: None,
                     protocol: *protocol,
                     graphql: None,

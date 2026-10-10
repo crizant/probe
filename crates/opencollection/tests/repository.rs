@@ -22,5 +22,7 @@ mod environment_persistence;
 mod request_persistence;
 #[path = "repository/structure_persistence.rs"]
 mod structure_persistence;
+#[path = "repository/websocket_persistence.rs"]
+mod websocket_persistence;
 #[path = "repository/workspace_creation.rs"]
 mod workspace_creation;

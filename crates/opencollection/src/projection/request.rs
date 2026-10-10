@@ -5,7 +5,7 @@ use serde_yaml_ng::Value;
 
 use super::{
     authentication::project_authentication,
-    body::{project_graphql_body, project_request_body},
+    body::{project_graphql_body, project_request_body, project_websocket_message},
     diagnostic,
 };
 use crate::{ProjectionDiagnostic, ProjectionDiagnosticKind, document::*};
@@ -165,6 +165,47 @@ fn project_item_contents(
                 authentication,
                 settings,
                 kind: RequestKind::Graphql { body },
+            })))
+        }
+        Some("websocket") => {
+            let docs = request_docs_from_yaml(docs.as_ref())?;
+            let item: ItemDocument = serde_yaml_ng::from_value(value)?;
+            let settings = item.settings.into_websocket_domain()?;
+            let websocket = item.websocket.unwrap_or_default();
+            let message = websocket
+                .message
+                .map(|value| {
+                    project_websocket_message(
+                        value,
+                        &format!("{path}/websocket/message"),
+                        diagnostics,
+                    )
+                })
+                .transpose()?
+                .flatten();
+            let authentication = websocket
+                .auth
+                .map(|value| {
+                    project_authentication(value, &format!("{path}/websocket/auth"), diagnostics)
+                })
+                .transpose()?;
+            let mut metadata = item.info.into_domain();
+            metadata.description = description;
+            Ok(Some(CollectionItem::Request(Request {
+                metadata,
+                docs,
+                method: None,
+                url: websocket.url,
+                headers: websocket
+                    .headers
+                    .into_iter()
+                    .map(HeaderDocument::into_domain)
+                    .collect(),
+                query_parameters: Vec::new(),
+                path_parameters: Vec::new(),
+                authentication,
+                settings,
+                kind: RequestKind::WebSocket { message },
             })))
         }
         other => {

@@ -29,6 +29,6 @@ items:
         data: opaque
   - info:
       name: Future item
-      type: websocket
-    websocket:
-      url: wss://example.com/socket
+      type: grpc
+    grpc:
+      url: grpc://example.com/service

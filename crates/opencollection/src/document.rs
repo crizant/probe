@@ -165,6 +165,7 @@ pub(crate) struct ItemDocument {
     pub(crate) items: Vec<Value>,
     pub(crate) http: Option<HttpDetailsDocument>,
     pub(crate) graphql: Option<GraphqlDetailsDocument>,
+    pub(crate) websocket: Option<WebSocketDetailsDocument>,
     #[serde(default)]
     pub(crate) settings: RequestSettingsDocument,
 }
@@ -176,43 +177,52 @@ pub(crate) struct RequestSettingsDocument {
     pub(crate) follow_redirects: Option<bool>,
     #[serde(rename = "maxRedirects")]
     pub(crate) max_redirects: Option<usize>,
+    #[serde(rename = "keepAliveInterval")]
+    pub(crate) keep_alive_interval: Option<Value>,
 }
 
 impl RequestSettingsDocument {
+    /// Projects HTTP and GraphQL settings, which do not define a keep-alive interval.
     pub(crate) fn into_domain(self) -> Result<RequestSettings, serde_yaml_ng::Error> {
-        let timeout = match self.timeout {
-            None => None,
-            Some(Value::String(value)) if value == "inherit" => None,
-            Some(Value::Number(value)) => {
-                let milliseconds = value.as_f64().ok_or_else(|| {
-                    <serde_yaml_ng::Error as serde::de::Error>::custom(
-                        "request timeout must be a finite non-negative number",
-                    )
-                })?;
-                if milliseconds.is_sign_negative() || !milliseconds.is_finite() {
-                    return Err(<serde_yaml_ng::Error as serde::de::Error>::custom(
-                        "request timeout must be a finite non-negative number",
-                    ));
-                }
-                Some(
-                    Duration::try_from_secs_f64(milliseconds / 1000.0).map_err(|_| {
-                        <serde_yaml_ng::Error as serde::de::Error>::custom(
-                            "request timeout is too large",
-                        )
-                    })?,
-                )
-            }
-            Some(_) => {
-                return Err(<serde_yaml_ng::Error as serde::de::Error>::custom(
-                    "request timeout must be milliseconds or 'inherit'",
-                ));
-            }
-        };
         Ok(RequestSettings {
-            timeout,
+            timeout: milliseconds_setting(self.timeout, "request timeout")?,
             follow_redirects: self.follow_redirects,
             max_redirects: self.max_redirects,
+            keep_alive_interval: None,
         })
+    }
+
+    pub(crate) fn into_websocket_domain(mut self) -> Result<RequestSettings, serde_yaml_ng::Error> {
+        let keep_alive_interval =
+            milliseconds_setting(self.keep_alive_interval.take(), "keep-alive interval")?;
+        Ok(RequestSettings {
+            keep_alive_interval,
+            ..self.into_domain()?
+        })
+    }
+}
+
+fn milliseconds_setting(
+    value: Option<Value>,
+    name: &str,
+) -> Result<Option<Duration>, serde_yaml_ng::Error> {
+    match value {
+        None => Ok(None),
+        Some(Value::String(value)) if value == "inherit" => Ok(None),
+        Some(Value::Number(value)) => {
+            let milliseconds = value
+                .as_f64()
+                .filter(|milliseconds| !milliseconds.is_sign_negative() && milliseconds.is_finite())
+                .ok_or_else(|| {
+                    yaml_error(&format!("{name} must be a finite non-negative number"))
+                })?;
+            Duration::try_from_secs_f64(milliseconds / 1000.0)
+                .map(Some)
+                .map_err(|_| yaml_error(&format!("{name} is too large")))
+        }
+        Some(_) => Err(yaml_error(&format!(
+            "{name} must be milliseconds or 'inherit'"
+        ))),
     }
 }
 
@@ -238,6 +248,30 @@ pub(crate) struct GraphqlDetailsDocument {
     pub(crate) params: Vec<Value>,
     pub(crate) body: Option<Value>,
     pub(crate) auth: Option<Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct WebSocketDetailsDocument {
+    pub(crate) url: Option<String>,
+    #[serde(default)]
+    pub(crate) headers: Vec<HeaderDocument>,
+    pub(crate) message: Option<Value>,
+    pub(crate) auth: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct WebSocketMessageDocument {
+    #[serde(rename = "type")]
+    pub(crate) message_type: String,
+    pub(crate) data: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct WebSocketMessageVariantDocument {
+    pub(crate) title: String,
+    #[serde(default)]
+    pub(crate) selected: bool,
+    pub(crate) message: WebSocketMessageDocument,
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -50,7 +50,7 @@ impl ItemLocator {
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum StructureOperation {
-    /// Creates an HTTP or GraphQL request.
+    /// Creates an HTTP, GraphQL, or WebSocket request.
     CreateRequest {
         /// Destination folder selector, or `None` for the root.
         parent: Option<String>,
@@ -486,9 +486,18 @@ fn request_value(
     url: Option<String>,
     protocol: RequestProtocol,
     graphql: Option<GraphqlUpdate>,
-) -> Value {
+) -> Result<Value, StructureError> {
     let mut details = Mapping::new();
     if let Some(method) = method {
+        if protocol.default_method().is_none() {
+            return Err(StructureError::InvalidDocument(
+                probe_core::RequestProtocolError::UnsupportedField {
+                    protocol,
+                    field: "an HTTP method",
+                }
+                .to_string(),
+            ));
+        }
         details.insert(Value::String("method".to_owned()), Value::String(method));
     }
     if let Some(url) = url {
@@ -503,7 +512,11 @@ fn request_value(
             graphql_body_value(&graphql),
         );
     }
-    item_value(name, protocol.as_str(), Some(Value::Mapping(details)))
+    Ok(item_value(
+        name,
+        protocol.as_str(),
+        Some(Value::Mapping(details)),
+    ))
 }
 
 fn graphql_body_value(update: &GraphqlUpdate) -> Value {
@@ -570,10 +583,10 @@ fn ensure_kind(value: &Value, expected: ItemKind, selector: &str) -> Result<(), 
         .get("info")
         .and_then(|info| info.get("type"))
         .and_then(Value::as_str);
-    let matches = matches!(
-        (expected, actual),
-        (ItemKind::Request, Some("http" | "graphql")) | (ItemKind::Folder, Some("folder"))
-    );
+    let matches = match expected {
+        ItemKind::Request => actual.and_then(RequestProtocol::from_name).is_some(),
+        ItemKind::Folder => actual == Some("folder"),
+    };
     if matches {
         Ok(())
     } else {
@@ -859,6 +872,30 @@ fn unique_suffix() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_kind_accepts_only_native_request_types_or_folders() {
+        let item = |item_type: Option<&str>| {
+            let info = item_type.map_or_else(String::new, |item_type| format!("type: {item_type}"));
+            serde_yaml_ng::from_str::<Value>(&format!("info:\n  {info}\n")).unwrap()
+        };
+        for (item_type, kind, accepted) in [
+            (Some("http"), ItemKind::Request, true),
+            (Some("graphql"), ItemKind::Request, true),
+            (Some("websocket"), ItemKind::Request, true),
+            (Some("grpc"), ItemKind::Request, false),
+            (None, ItemKind::Request, false),
+            (Some("folder"), ItemKind::Request, false),
+            (Some("folder"), ItemKind::Folder, true),
+            (Some("websocket"), ItemKind::Folder, false),
+        ] {
+            assert_eq!(
+                ensure_kind(&item(item_type), kind, "items/0").is_ok(),
+                accepted,
+                "{item_type:?} as {kind:?}"
+            );
+        }
+    }
 
     #[test]
     fn transaction_reports_a_failed_rollback() {

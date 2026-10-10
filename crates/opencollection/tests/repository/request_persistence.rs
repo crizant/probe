@@ -285,7 +285,7 @@ fn unbundled_diagnostics_use_workspace_relative_paths() {
     .unwrap();
     fs::write(
         root.join("future.yml"),
-        "info:\n  name: Future item\n  type: websocket\nwebsocket:\n  url: wss://example.com\n",
+        "info:\n  name: Future item\n  type: grpc\ngrpc:\n  url: grpc://example.com\n",
     )
     .unwrap();
 

@@ -1,7 +1,7 @@
 use probe_core::{
     Body, BodyVariant, Documentation, FieldPatch, GraphqlBody, GraphqlBodyVariant,
-    GraphqlOperation, GraphqlRequestError, ItemMetadata, RawBody, RawBodyKind, Request,
-    RequestBody, RequestDiffError, RequestKind, RequestUpdate,
+    GraphqlOperation, ItemMetadata, RawBody, RawBodyKind, Request, RequestBody, RequestDiffError,
+    RequestKind, RequestProtocolError, RequestUpdate,
 };
 
 #[test]
@@ -171,14 +171,14 @@ fn diff_rejects_graphql_variant_metadata_changes() {
     }
     assert!(matches!(
         RequestUpdate::between(Some(&base), &current),
-        Err(RequestDiffError::Graphql(
-            probe_core::GraphqlRequestError::InvalidBodySelection(_)
+        Err(RequestDiffError::Protocol(
+            probe_core::RequestProtocolError::InvalidBodySelection(_)
         ))
     ));
     assert!(matches!(
         RequestUpdate::between(None, &current),
-        Err(RequestDiffError::Graphql(
-            probe_core::GraphqlRequestError::InvalidBodySelection(_)
+        Err(RequestDiffError::Protocol(
+            probe_core::RequestProtocolError::InvalidBodySelection(_)
         ))
     ));
 }
@@ -253,7 +253,7 @@ fn body_content_updates_only_the_selected_http_variant() {
     .unwrap_err();
     assert_eq!(
         error,
-        GraphqlRequestError::InvalidBodySelection(
+        RequestProtocolError::InvalidBodySelection(
             "request body variants have no selected value".to_owned()
         )
     );
@@ -283,7 +283,7 @@ fn body_content_updates_only_the_selected_http_variant() {
         }
         .apply(&mut ambiguous)
         .unwrap_err(),
-        GraphqlRequestError::InvalidBodySelection(
+        RequestProtocolError::InvalidBodySelection(
             "request body variants have multiple selected values".to_owned()
         )
     );
@@ -298,7 +298,7 @@ fn body_content_updates_only_the_selected_http_variant() {
             ..RequestUpdate::default()
         }
         .apply(&mut graphql),
-        Err(GraphqlRequestError::NotHttp)
+        Err(RequestProtocolError::NotHttp)
     );
 }
 
@@ -366,7 +366,7 @@ fn failed_http_body_apply_leaves_the_request_unchanged() {
         .unwrap_err();
         assert_eq!(
             error,
-            GraphqlRequestError::InvalidBodySelection(message.to_owned())
+            RequestProtocolError::InvalidBodySelection(message.to_owned())
         );
         assert_eq!(request, original);
     }

@@ -96,8 +96,8 @@ impl PersistenceState {
 #[cfg(test)]
 mod tests {
     use probe_core::{
-        Collection, CollectionItem, GraphqlBody, GraphqlBodyVariant, GraphqlOperation,
-        GraphqlRequestError, Request, RequestDiffError, RequestKind, Workspace, WorkspaceItemRef,
+        Collection, CollectionItem, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, Request,
+        RequestDiffError, RequestKind, RequestProtocolError, Workspace, WorkspaceItemRef,
     };
 
     use super::PersistenceState;
@@ -188,7 +188,7 @@ mod tests {
             state.enqueue([key]);
             assert_eq!(state.next(), Some(key));
             assert!(
-                matches!(state.begin(key, &draft), Err(RequestDiffError::Graphql(GraphqlRequestError::InvalidBodySelection(error))) if error.contains(message))
+                matches!(state.begin(key, &draft), Err(RequestDiffError::Protocol(RequestProtocolError::InvalidBodySelection(error))) if error.contains(message))
             );
             state.fail(key);
             assert!(state.is_dirty(key, &draft));

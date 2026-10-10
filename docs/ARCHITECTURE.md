@@ -234,12 +234,23 @@ CLI or GPUI
 For the desktop application, the resulting workspace remains in memory
 for fast navigation.
 
-Collection items are `Folder` or `Request`. Every OpenCollection request item, HTTP or
-GraphQL, loads into one native `Request` whose `RequestKind` selects the protocol and
-owns that protocol's body: `Http { body }` or `Graphql { body }`. A request therefore
-cannot carry a body for the other protocol. OpenCollection projection maps `info.type`
-and the matching `http`/`graphql` section to and from `RequestKind`, and imports build
-the same model directly.
+Collection items are `Folder` or `Request`. Every OpenCollection request item, HTTP,
+GraphQL, or WebSocket, loads into one native `Request` whose `RequestKind` selects the
+protocol and owns that protocol's payload: `Http { body }`, `Graphql { body }`, or
+`WebSocket { message }`. A request therefore cannot carry a payload for another
+protocol. OpenCollection projection maps `info.type` and the matching
+`http`/`graphql`/`websocket` section to and from `RequestKind`, and imports build the
+same model directly.
+
+A WebSocket request reuses the common URL, headers, authentication, docs, metadata, and
+settings fields. OpenCollection WebSocket details define no method, parameters, or HTTP
+body, so those fields stay empty and updates that set them are rejected. The message is
+a single `{type, data}` value or titled variants with one selected entry; `type` is
+`text`, `json`, `xml`, or `binary`. A message with another `type` or with missing or
+non-string `data` is reported as an `unsupported_body_type` diagnostic, left out of the
+model, and kept unchanged in the YAML. Settings add the WebSocket `keepAliveInterval`;
+`timeout` is the connection timeout. WebSocket requests load, edit, and save natively,
+but they are not executable yet: preparing one for the HTTP engine is rejected.
 
 
 ## Desktop Runtime

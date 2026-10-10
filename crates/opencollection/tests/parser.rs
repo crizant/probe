@@ -3,7 +3,8 @@ use std::{fs, path::PathBuf, time::Duration};
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, CollectionItem, Documentation,
     EnvironmentVariable, MultipartValue, RawBodyKind, RequestBody, VariableValue, VariableValueSet,
-    VariableValueType, Workspace, WorkspaceItemRef, resolve_environment, resolve_request,
+    VariableValueType, WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet, Workspace,
+    WorkspaceItemRef, resolve_environment, resolve_request,
 };
 use probe_opencollection::{ProjectionDiagnosticKind, parse};
 
@@ -69,6 +70,7 @@ fn fixtures_round_trip_without_data_loss() {
         "phase1-round-trip.yml",
         "phase1-bodies-auth-environments.yml",
         "graphql-http.yml",
+        "websocket.yml",
     ] {
         let source = fixture(name);
         let parsed = parse(&source).unwrap_or_else(|_| panic!("{name} should parse"));
@@ -112,7 +114,7 @@ fn unsupported_projection_is_reported_and_retained() {
         .collect::<Vec<_>>();
     assert!(names.contains(&("matrix", Some("Supported request with future fields"))));
     assert!(names.contains(&("binary-stream", Some("Future body"))));
-    assert!(names.contains(&("websocket", Some("Future item"))));
+    assert!(names.contains(&("grpc", Some("Future item"))));
     for expected in [
         (
             "items/0/http/params/0/type",
@@ -137,7 +139,7 @@ fn unsupported_projection_is_reported_and_retained() {
         (
             "items/2/info/type",
             ProjectionDiagnosticKind::ItemType,
-            "websocket",
+            "grpc",
         ),
     ] {
         assert!(diagnostics.contains(&expected), "missing {expected:?}");
@@ -217,6 +219,162 @@ fn parses_and_interpolates_native_graphql_requests() {
             .unwrap()["login"],
         "octocat"
     );
+}
+
+#[test]
+fn parses_and_interpolates_native_websocket_requests() {
+    let parsed = parse(&fixture("websocket.yml")).expect("WebSocket fixture should parse");
+    let collection = parsed.collection();
+    let requests = collection
+        .items
+        .iter()
+        .map(|item| match item {
+            CollectionItem::Request(request) => request,
+            CollectionItem::Folder(_) => panic!("fixture should contain only requests"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["websocket", "websocket", "http", "graphql"]
+    );
+
+    let subscribe = requests[0];
+    assert_eq!(subscribe.metadata.name.as_deref(), Some("Subscribe"));
+    assert_eq!(subscribe.metadata.sequence, Some(1.0));
+    assert_eq!(
+        subscribe.metadata.description,
+        Some(Documentation::Text("Subscribe to order events".to_owned()))
+    );
+    assert_eq!(subscribe.docs.as_deref(), Some("Streams order events."));
+    assert_eq!(subscribe.method, None);
+    assert_eq!(subscribe.url.as_deref(), Some("wss://{{host}}/events"));
+    assert!(subscribe.query_parameters.is_empty());
+    assert!(subscribe.path_parameters.is_empty());
+    assert_eq!(subscribe.headers.len(), 2);
+    assert!(subscribe.headers[1].disabled);
+    let authentication = subscribe.authentication.as_ref().unwrap();
+    assert_eq!(authentication.kind, AuthenticationKind::Bearer);
+    assert_eq!(
+        subscribe.selected_websocket_message().unwrap(),
+        Some(&WebSocketMessage {
+            kind: WebSocketMessageKind::Json,
+            data: r#"{"subscribe":"{{channel}}"}"#.to_owned(),
+        })
+    );
+    assert_eq!(
+        subscribe.settings.timeout,
+        Some(Duration::from_millis(1500))
+    );
+    assert_eq!(
+        subscribe.settings.keep_alive_interval,
+        Some(Duration::from_secs(30))
+    );
+
+    let variants = requests[1];
+    let Some(WebSocketMessageSet::Variants(messages)) = variants.websocket_message() else {
+        panic!("fixture should contain WebSocket message variants");
+    };
+    assert_eq!(
+        messages
+            .iter()
+            .map(|variant| (
+                variant.title.as_str(),
+                variant.selected,
+                variant.message.kind
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("Greeting", false, WebSocketMessageKind::Text),
+            ("Payload", true, WebSocketMessageKind::Xml),
+        ]
+    );
+    assert_eq!(
+        variants.selected_websocket_message().unwrap().unwrap().data,
+        "<ping/>"
+    );
+    assert_eq!(variants.settings.timeout, None);
+    assert_eq!(variants.settings.keep_alive_interval, None);
+    assert_eq!(
+        parsed
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.path.as_str(),
+                diagnostic.kind,
+                diagnostic.value.as_str(),
+                diagnostic.item_name.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        [(
+            "items/1/websocket/message/2/message/type",
+            ProjectionDiagnosticKind::BodyType,
+            "cbor",
+            Some("Variants")
+        )]
+    );
+
+    assert_eq!(requests[2].method.as_deref(), Some("GET"));
+    assert_eq!(requests[2].settings.keep_alive_interval, None);
+    assert_eq!(
+        requests[3]
+            .selected_graphql()
+            .unwrap()
+            .unwrap()
+            .query
+            .as_deref(),
+        Some("{ viewer { login } }")
+    );
+
+    let environment = resolve_environment(&collection.environments, "local").unwrap();
+    let resolved = resolve_request(subscribe, &environment).unwrap();
+    assert_eq!(
+        resolved.url.as_deref(),
+        Some("wss://socket.example.com/events")
+    );
+    assert_eq!(resolved.headers[0].value, "probe-orders");
+    assert_eq!(
+        resolved.authentication.as_ref().unwrap().properties["token"],
+        AuthenticationValue::String("local-token".to_owned())
+    );
+    assert_eq!(
+        resolved.selected_websocket_message().unwrap().unwrap().data,
+        r#"{"subscribe":"orders"}"#
+    );
+    let resolved_variants = resolve_request(variants, &environment).unwrap();
+    let Some(WebSocketMessageSet::Variants(messages)) = resolved_variants.websocket_message()
+    else {
+        panic!("resolution should keep WebSocket message variants");
+    };
+    assert_eq!(messages[0].message.data, "hello orders");
+}
+
+#[test]
+fn websocket_settings_reject_invalid_keep_alive_intervals_only_for_websocket() {
+    let document = |item_type: &str, interval: &str| {
+        format!(
+            "opencollection: 1.0.0\ninfo:\n  name: Settings\nbundled: true\nitems:\n- info:\n    name: Item\n    type: {item_type}\n  {item_type}:\n    url: wss://example.com\n  settings:\n    keepAliveInterval: {interval}\n"
+        )
+    };
+    for (interval, message) in [
+        ("-1", "must be a finite non-negative number"),
+        (".inf", "must be a finite non-negative number"),
+        ("soon", "must be milliseconds or 'inherit'"),
+    ] {
+        let error = parse(&document("websocket", interval)).unwrap_err();
+        assert!(
+            error.to_string().contains("keep-alive interval")
+                && error.to_string().contains(message),
+            "{interval}: {error}"
+        );
+    }
+    let http = parse(&document("http", "soon")).expect("HTTP ignores keepAliveInterval");
+    let CollectionItem::Request(request) = &http.collection().items[0] else {
+        panic!("fixture should contain a request");
+    };
+    assert_eq!(request.settings.keep_alive_interval, None);
 }
 
 #[test]

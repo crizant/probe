@@ -69,12 +69,15 @@ impl ProbeApp {
             return;
         };
         let request = Request {
-            method: Some(protocol.default_method().to_owned()),
+            method: protocol.default_method().map(str::to_owned),
             kind: match protocol {
                 probe_core::RequestProtocol::Graphql => {
                     probe_core::RequestKind::Graphql { body: None }
                 }
                 probe_core::RequestProtocol::Http => probe_core::RequestKind::Http { body: None },
+                probe_core::RequestProtocol::WebSocket => {
+                    probe_core::RequestKind::WebSocket { message: None }
+                }
             },
             ..Request::default()
         };
