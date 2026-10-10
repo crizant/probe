@@ -109,6 +109,7 @@ impl ProbeApp {
             return div().flex_1();
         };
         let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
+        let websocket = request.kind.is_websocket();
         let url = url_bar_value(&request);
         let request_dirty = self.persistence.is_dirty(key, &request);
         let folders = self
@@ -231,31 +232,33 @@ impl ProbeApp {
                             .w_full()
                             .flex()
                             .items_center()
-                            .child(div().w(px(108.0)).mr(px(theme.metrics.spacing_1)).child(
-                                components::dropdown_with_option_colors(
-                                    theme,
-                                    "request-method",
-                                    "HTTP method",
-                                    Some(method.clone()),
-                                    request_method_options(theme, &method),
-                                    108.0,
-                                    {
-                                        let method_view = cx.weak_entity();
-                                        move |value, _, cx| {
-                                            let Some(value) = value.cloned() else {
-                                                return;
-                                            };
-                                            let _ = method_view.update(cx, |view, cx| {
-                                                view.edit_request(
-                                                    key,
-                                                    |request| request.method = Some(value),
-                                                    cx,
-                                                );
-                                            });
-                                        }
-                                    },
-                                ),
-                            ))
+                            .when(!websocket, |bar| {
+                                bar.child(div().w(px(108.0)).mr(px(theme.metrics.spacing_1)).child(
+                                    components::dropdown_with_option_colors(
+                                        theme,
+                                        "request-method",
+                                        "HTTP method",
+                                        Some(method.clone()),
+                                        request_method_options(theme, &method),
+                                        108.0,
+                                        {
+                                            let method_view = cx.weak_entity();
+                                            move |value, _, cx| {
+                                                let Some(value) = value.cloned() else {
+                                                    return;
+                                                };
+                                                let _ = method_view.update(cx, |view, cx| {
+                                                    view.edit_request(
+                                                        key,
+                                                        |request| request.method = Some(value),
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        },
+                                    ),
+                                ))
+                            })
                             .child(
                                 div()
                                     .flex_1()
@@ -278,34 +281,34 @@ impl ProbeApp {
                                         },
                                     )),
                             )
-                            .child(div().ml(px(theme.metrics.spacing_1)).flex_none().child(
-                                if request_running {
-                                    components::primary_button(
-                                        theme,
-                                        "request-execution",
-                                        "Cancel",
-                                        move |_, _, cx| {
-                                            let _ = execution_view.update(cx, |view, cx| {
-                                                view.cancel_request(key, cx);
-                                            });
-                                        },
-                                    )
-                                    .w(px(components::COMPACT_SPLIT_ACTION_BUTTON_WIDTH
-                                        + theme.metrics.control_height
-                                        + 1.0))
-                                    .into_any_element()
-                                } else {
-                                    let send_view = execution_view.clone();
-                                    let menu_state_view = cx.weak_entity();
-                                    let download_view = cx.weak_entity();
-                                    let copy_view = cx.weak_entity();
-                                    let popup = components::popup_surface(
-                                        theme,
-                                        "request-execution-menu-popup",
-                                        180.0,
-                                    )
-                                    .child(
-                                        components::menu_button(
+                            .when(!websocket, |bar| {
+                                bar.child(div().ml(px(theme.metrics.spacing_1)).flex_none().child(
+                                    if request_running {
+                                        components::primary_button(
+                                            theme,
+                                            "request-execution",
+                                            "Cancel",
+                                            move |_, _, cx| {
+                                                let _ = execution_view.update(cx, |view, cx| {
+                                                    view.cancel_request(key, cx);
+                                                });
+                                            },
+                                        )
+                                        .w(px(components::COMPACT_SPLIT_ACTION_BUTTON_WIDTH
+                                            + theme.metrics.control_height
+                                            + 1.0))
+                                        .into_any_element()
+                                    } else {
+                                        let send_view = execution_view.clone();
+                                        let menu_state_view = cx.weak_entity();
+                                        let download_view = cx.weak_entity();
+                                        let copy_view = cx.weak_entity();
+                                        let popup = components::popup_surface(
+                                            theme,
+                                            "request-execution-menu-popup",
+                                            180.0,
+                                        )
+                                        .child(components::menu_button(
                                             theme,
                                             "request-send-and-save",
                                             "Send and Save Body…",
@@ -315,58 +318,62 @@ impl ProbeApp {
                                                     view.choose_send_and_save(key, window, cx);
                                                 });
                                             },
-                                        ),
-                                    );
-                                    let popup = popup.child(components::menu_button(
-                                        theme,
-                                        "request-copy-as-curl",
-                                        "Copy as cURL",
-                                        None,
-                                        move |_, cx| {
-                                            let _ = copy_view
-                                                .update(cx, |view, cx| view.copy_as_curl(key, cx));
-                                        },
-                                    ));
-                                    let send_shortcut =
-                                        components::shortcut_label_for_action_in_context(
-                                            window,
-                                            &SendRequest,
-                                            "Input",
-                                        );
-                                    let send_tooltip = send_shortcut.as_ref().map_or_else(
-                                        || "Send".to_owned(),
-                                        |shortcut| format!("Send ({shortcut})"),
-                                    );
-                                    components::DropdownButton::new(
-                                        theme,
-                                        "request-execution",
-                                        "Send",
-                                        move |_, _, cx| {
-                                            let _ = send_view.update(cx, |view, cx| {
-                                                view.send_request(key, cx);
-                                            });
-                                        },
-                                    )
-                                    .tooltip(move |_, cx| {
-                                        cx.new(|_| ActionTooltip {
-                                            id: "request-send-tooltip",
+                                        ));
+                                        let popup = popup.child(components::menu_button(
                                             theme,
-                                            label: send_tooltip.clone(),
+                                            "request-copy-as-curl",
+                                            "Copy as cURL",
+                                            None,
+                                            move |_, cx| {
+                                                let _ = copy_view.update(cx, |view, cx| {
+                                                    view.copy_as_curl(key, cx)
+                                                });
+                                            },
+                                        ));
+                                        let send_shortcut =
+                                            components::shortcut_label_for_action_in_context(
+                                                window,
+                                                &SendRequest,
+                                                "Input",
+                                            );
+                                        let send_tooltip = send_shortcut.as_ref().map_or_else(
+                                            || "Send".to_owned(),
+                                            |shortcut| format!("Send ({shortcut})"),
+                                        );
+                                        components::DropdownButton::new(
+                                            theme,
+                                            "request-execution",
+                                            "Send",
+                                            move |_, _, cx| {
+                                                let _ = send_view.update(cx, |view, cx| {
+                                                    view.send_request(key, cx);
+                                                });
+                                            },
+                                        )
+                                        .tooltip(move |_, cx| {
+                                            cx.new(|_| ActionTooltip {
+                                                id: "request-send-tooltip",
+                                                theme,
+                                                label: send_tooltip.clone(),
+                                            })
+                                            .into()
                                         })
-                                        .into()
-                                    })
-                                    .menu_trigger("request-execution-menu-trigger", "Send options")
-                                    .open(self.transient.request_execution_menu_open)
-                                    .on_open_change(move |open, _, cx| {
-                                        let _ = menu_state_view.update(cx, |view, cx| {
-                                            view.transient.request_execution_menu_open = *open;
-                                            cx.notify();
-                                        });
-                                    })
-                                    .menu("request-execution-menu", popup)
-                                    .into_any_element()
-                                },
-                            )),
+                                        .menu_trigger(
+                                            "request-execution-menu-trigger",
+                                            "Send options",
+                                        )
+                                        .open(self.transient.request_execution_menu_open)
+                                        .on_open_change(move |open, _, cx| {
+                                            let _ = menu_state_view.update(cx, |view, cx| {
+                                                view.transient.request_execution_menu_open = *open;
+                                                cx.notify();
+                                            });
+                                        })
+                                        .menu("request-execution-menu", popup)
+                                        .into_any_element()
+                                    },
+                                ))
+                            }),
                     )
                     .child(section_tabs),
             )

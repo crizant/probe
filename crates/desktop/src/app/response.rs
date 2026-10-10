@@ -74,6 +74,9 @@ impl ProbeApp {
         let Some(request) = loaded.workspace().request(key).cloned() else {
             return;
         };
+        if request.kind.is_websocket() {
+            return;
+        }
         let input = ExecutionInput {
             request,
             environments: loaded.workspace().environments().to_vec(),
