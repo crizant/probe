@@ -23,10 +23,17 @@ const SECRET: &str = "private-secret-value";
 // A wall-clock watchdog also bounds tests with paused Tokio time held still.
 // Cancellation wakes its thread immediately; no sleeps or virtual-time assumptions.
 async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
+    bounded_with_deadline(Duration::from_secs(2), future).await
+}
+
+async fn bounded_with_deadline<T>(
+    timeout: Duration,
+    future: impl std::future::Future<Output = T>,
+) -> T {
     let (done, waiting) = std::sync::mpsc::channel();
     let (expired, deadline) = oneshot::channel();
     let watchdog = std::thread::spawn(move || {
-        if waiting.recv_timeout(Duration::from_secs(2)).is_err() {
+        if waiting.recv_timeout(timeout).is_err() {
             let _ = expired.send(());
         }
     });
@@ -537,7 +544,9 @@ async fn close_releases_runtime_without_draining_events() {
 
 #[tokio::test(start_paused = true)]
 async fn prepared_session_connection_errors_are_safe_and_typed() {
-    bounded(async {
+    // Windows may retry SYNs for roughly two seconds before reporting refusal.
+    // Allow that OS latency only here; subsequent session operations retain the two-second bound.
+    bounded_with_deadline(Duration::from_secs(5), async {
         let (listener, url) = listener().await;
         drop(listener);
         assert_eq!(
@@ -549,6 +558,9 @@ async fn prepared_session_connection_errors_are_safe_and_typed() {
                 .unwrap_err(),
             SessionError::Connection
         );
+    })
+    .await;
+    bounded(async {
         let (listener, url) = self::listener().await;
         let (accepted_tx, accepted_rx) = oneshot::channel();
         let server = tokio::spawn(async move {

@@ -17,10 +17,17 @@ use tokio_tungstenite::{
 // A wall-clock watchdog also bounds tests with paused Tokio time held still.
 // Cancellation wakes its thread immediately; no sleeps or virtual-time assumptions.
 async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
+    bounded_with_deadline(Duration::from_secs(2), future).await
+}
+
+async fn bounded_with_deadline<T>(
+    timeout: Duration,
+    future: impl std::future::Future<Output = T>,
+) -> T {
     let (done, waiting) = std::sync::mpsc::channel();
     let (expired, deadline) = oneshot::channel();
     let watchdog = std::thread::spawn(move || {
-        if waiting.recv_timeout(Duration::from_secs(2)).is_err() {
+        if waiting.recv_timeout(timeout).is_err() {
             let _ = expired.send(());
         }
     });
@@ -426,7 +433,9 @@ fn configuration_errors_are_typed_and_do_not_disclose_inputs() {
 
 #[tokio::test]
 async fn connection_failure_and_drop_release_socket() {
-    bounded(async {
+    // Windows may retry SYNs for roughly two seconds before reporting refusal.
+    // Allow that OS latency only here; subsequent session operations retain the two-second bound.
+    bounded_with_deadline(Duration::from_secs(5), async {
         let (listener, url) = listener().await;
         drop(listener);
         assert_eq!(
@@ -437,6 +446,9 @@ async fn connection_failure_and_drop_release_socket() {
                 .unwrap_err(),
             WebSocketError::Connection
         );
+    })
+    .await;
+    bounded(async {
         let (listener, url) = self::listener().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
