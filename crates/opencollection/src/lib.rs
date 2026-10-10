@@ -11,7 +11,6 @@ use probe_core::{Collection, validate_environments};
 use serde_yaml_ng::Value;
 
 mod document;
-mod native_item;
 mod projection;
 mod repository;
 mod structure;

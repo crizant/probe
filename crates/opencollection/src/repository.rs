@@ -21,8 +21,7 @@ use serde_yaml_ng::Value;
 
 use super::{ParseError, ProjectionDiagnostic, parse};
 use crate::{
-    document::EnvironmentDocument,
-    native_item::NativeItemType,
+    document::{EnvironmentDocument, NativeItemType},
     projection::{project_item, project_items, sort_diagnostics},
 };
 
@@ -1463,17 +1462,16 @@ pub(crate) fn apply_request_update(
     document: &mut Value,
     update: &RequestUpdate,
 ) -> Result<(), SaveError> {
+    let item_type = NativeItemType::from_value(document);
     let request = document.as_mapping_mut().ok_or_else(|| {
         SaveError::InvalidDocument("the request item is not a mapping".to_owned())
     })?;
 
-    let item_type = request
-        .get(Value::String("info".to_owned()))
-        .and_then(Value::as_mapping)
-        .and_then(|info| info.get(Value::String("type".to_owned())))
-        .and_then(Value::as_str);
-    let Some(NativeItemType::Request(protocol)) = item_type.and_then(NativeItemType::from_name)
-    else {
+    let Some(NativeItemType::Request(protocol)) = item_type else {
+        let item_type = request
+            .get("info")
+            .and_then(|info| info.get("type"))
+            .and_then(Value::as_str);
         return Err(SaveError::InvalidDocument(format!(
             "the request item has an unsupported or missing type: {}",
             item_type.unwrap_or("<missing>")
@@ -1942,24 +1940,21 @@ mod tests {
 
     #[test]
     fn request_updates_reject_non_request_item_types_without_mutating_document() {
-        use probe_core::{FieldPatch, RequestUpdate};
+        use probe_core::{Documentation, FieldPatch, RequestUpdate};
+        use serde_yaml_ng::Value;
 
         let update = RequestUpdate {
-            name: Some("Renamed".to_owned()),
-            description: FieldPatch::Set(probe_core::Documentation::Text(
-                "New description".to_owned(),
-            )),
-            docs: FieldPatch::Set("New docs".to_owned()),
-            url: FieldPatch::Set("https://example.com/updated".to_owned()),
+            name: Some("Renamed".into()),
+            description: FieldPatch::Set(Documentation::Text("New description".into())),
+            docs: FieldPatch::Set("New docs".into()),
+            url: FieldPatch::Set("https://example.com/updated".into()),
             ..RequestUpdate::default()
         };
-        for source in [
-            "info: { name: Original, type: grpc }\nx-unknown: retained\n",
-            "info: { name: Original, type: folder }\nitems: []\n",
-            "info: { name: Original }\nx-unknown: retained\n",
-            "info: { name: Original, type: 42 }\nx-unknown: retained\n",
-        ] {
-            let mut document: serde_yaml_ng::Value = serde_yaml_ng::from_str(source).unwrap();
+        for item_type in ["type: grpc", "type: folder", "", "type: 42"] {
+            let mut document: Value = serde_yaml_ng::from_str(&format!(
+                "info: {{ name: Original, {item_type} }}\nx-unknown: retained\n"
+            ))
+            .unwrap();
             let original = document.clone();
             assert!(matches!(
                 super::apply_request_update(&mut document, &update),

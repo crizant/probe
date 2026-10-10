@@ -1,9 +1,6 @@
 use probe_core::{CollectionItem, Folder, QueryParameter, Request, RequestKind, RequestProtocol};
 
-use crate::{
-    document::{optional_documentation, request_docs_from_yaml},
-    native_item::NativeItemType,
-};
+use crate::document::{optional_documentation, request_docs_from_yaml};
 use serde_yaml_ng::Value;
 
 use super::{
@@ -85,12 +82,7 @@ fn project_item_contents(
     let docs = value.get("docs").cloned();
     let kind: ItemKindDocument = serde_yaml_ng::from_value(value.clone())?;
 
-    match kind
-        .info
-        .item_type
-        .as_deref()
-        .and_then(NativeItemType::from_name)
-    {
+    match NativeItemType::from_value(&value) {
         Some(NativeItemType::Folder) => {
             let docs = optional_documentation(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
