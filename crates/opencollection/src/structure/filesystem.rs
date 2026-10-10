@@ -190,13 +190,7 @@ pub(super) fn direct_children(directory: &Path) -> Result<Vec<DiskChild>, Struct
         let source = fs::read(&config).map_err(|error| io_error(&config, error))?;
         let value: Value = serde_yaml_ng::from_slice(&source)
             .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;
-        if !matches!(
-            value
-                .get("info")
-                .and_then(|info| info.get("type"))
-                .and_then(Value::as_str),
-            Some("http" | "graphql" | "websocket" | "folder")
-        ) {
+        if NativeItemType::from_value(&value).is_none() {
             continue;
         }
         let sequence = value

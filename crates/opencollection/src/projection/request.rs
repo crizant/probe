@@ -1,4 +1,4 @@
-use probe_core::{CollectionItem, Folder, QueryParameter, Request, RequestKind};
+use probe_core::{CollectionItem, Folder, QueryParameter, Request, RequestKind, RequestProtocol};
 
 use crate::document::{optional_documentation, request_docs_from_yaml};
 use serde_yaml_ng::Value;
@@ -82,8 +82,8 @@ fn project_item_contents(
     let docs = value.get("docs").cloned();
     let kind: ItemKindDocument = serde_yaml_ng::from_value(value.clone())?;
 
-    match kind.info.item_type.as_deref() {
-        Some("folder") => {
+    match NativeItemType::from_value(&value) {
+        Some(NativeItemType::Folder) => {
             let docs = optional_documentation(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let mut metadata = item.info.into_domain();
@@ -94,7 +94,7 @@ fn project_item_contents(
                 items: project_items(item.items, &format!("{path}/items"), diagnostics)?,
             })))
         }
-        Some("http") => {
+        Some(NativeItemType::Request(RequestProtocol::Http)) => {
             let docs = request_docs_from_yaml(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_domain()?;
@@ -131,7 +131,7 @@ fn project_item_contents(
                 kind: RequestKind::Http { body },
             })))
         }
-        Some("graphql") => {
+        Some(NativeItemType::Request(RequestProtocol::Graphql)) => {
             let docs = request_docs_from_yaml(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_domain()?;
@@ -167,7 +167,7 @@ fn project_item_contents(
                 kind: RequestKind::Graphql { body },
             })))
         }
-        Some("websocket") => {
+        Some(NativeItemType::Request(RequestProtocol::WebSocket)) => {
             let docs = request_docs_from_yaml(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_websocket_domain()?;
@@ -208,12 +208,12 @@ fn project_item_contents(
                 kind: RequestKind::WebSocket { message },
             })))
         }
-        other => {
+        None => {
             diagnostic(
                 diagnostics,
                 format!("{path}/info/type"),
                 ProjectionDiagnosticKind::ItemType,
-                other.unwrap_or("<missing>"),
+                kind.info.item_type.as_deref().unwrap_or("<missing>"),
             );
             Ok(None)
         }

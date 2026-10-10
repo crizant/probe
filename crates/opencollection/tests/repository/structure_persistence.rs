@@ -1,6 +1,9 @@
+use super::support::TemporaryPath;
 use super::*;
 use probe_core::ItemKind;
 use probe_opencollection::ItemLocator;
+use serde_yaml_ng::Value;
+use std::path::Path;
 
 #[test]
 fn creation_preserves_omitted_and_explicit_methods() {
@@ -333,24 +336,55 @@ fn bundled_duplicate_request_copies_request_after_original() {
     fs::remove_file(path).unwrap();
 }
 
-#[test]
-fn unbundled_graphql_rename_preserves_request_order_and_unknown_fields() {
-    let root = temporary_path("graphql-rename-unbundled");
+fn item_yaml(root: &Path, selector: &str) -> Value {
+    serde_yaml_ng::from_slice(&fs::read(root.join(selector)).unwrap()).unwrap()
+}
+
+fn native_request_fixture(label: &str, protocol: RequestProtocol) -> TemporaryPath {
+    let root = temporary_path(label);
     copy_directory(&fixture("phase16-unbundled"), &root);
+    fs::rename(
+        root.join("group/graphql.yml"),
+        root.join("group/request.yml"),
+    )
+    .unwrap();
+    if protocol == RequestProtocol::WebSocket {
+        let mut item = item_yaml(&fixture("websocket-unbundled"), "socket.yml");
+        item["info"].as_mapping_mut().unwrap().remove("seq");
+        fs::write(
+            root.join("group/request.yml"),
+            serde_yaml_ng::to_string(&item).unwrap(),
+        )
+        .unwrap();
+    }
+    root
+}
+
+#[test]
+fn unbundled_native_rename_preserves_request_order_and_unknown_fields() {
+    for protocol in [RequestProtocol::Graphql, RequestProtocol::WebSocket] {
+        check_unbundled_rename(protocol);
+    }
+}
+
+fn check_unbundled_rename(protocol: RequestProtocol) {
+    let root = native_request_fixture("native-rename-unbundled", protocol);
     let mut loaded = load_workspace(&root).unwrap();
-    let selector = "group/graphql.yml";
+    let selector = "group/request.yml";
     let key = loaded.request_key(selector).unwrap();
     let mut expected = loaded.workspace().request(key).unwrap().clone();
-    expected.metadata.name = Some("Renamed GraphQL".to_owned());
+    expected.metadata.name = Some("Renamed Request".to_owned());
     let sibling = fs::read(root.join("group/nested.yml")).unwrap();
+    let mut expected_yaml = item_yaml(&root, selector);
+    expected_yaml["info"]["name"] = "Renamed Request".into();
 
     let result = loaded
         .apply_structure(StructureOperation::Rename {
             target: ItemLocator::new(ItemKind::Request, selector),
-            name: "Renamed GraphQL".to_owned(),
+            name: "Renamed Request".to_owned(),
         })
         .unwrap();
-    let renamed_selector = "group/renamed-graphql.yml";
+    let renamed_selector = "group/renamed-request.yml";
     assert_eq!(result.previous_selector.as_deref(), Some(selector));
     assert_eq!(result.selector.as_deref(), Some(renamed_selector));
     assert_eq!(result.parent.as_deref(), Some("group"));
@@ -375,28 +409,29 @@ fn unbundled_graphql_rename_preserves_request_order_and_unknown_fields() {
     );
     assert!(!root.join(selector).exists());
     assert_eq!(fs::read(root.join("group/nested.yml")).unwrap(), sibling);
-    assert!(
-        fs::read_to_string(root.join(renamed_selector))
-            .unwrap()
-            .contains("x-unsupported: retained")
-    );
+    assert_eq!(item_yaml(&root, renamed_selector), expected_yaml);
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn unbundled_graphql_reorder_and_move_preserve_request_and_unknown_fields() {
-    let root = temporary_path("graphql-reorder-move-unbundled");
-    copy_directory(&fixture("phase16-unbundled"), &root);
+fn unbundled_native_reorder_and_move_preserve_request_and_unknown_fields() {
+    for protocol in [RequestProtocol::Graphql, RequestProtocol::WebSocket] {
+        check_unbundled_reorder_and_move(protocol);
+    }
+}
+
+fn check_unbundled_reorder_and_move(protocol: RequestProtocol) {
+    let root = native_request_fixture("native-reorder-move-unbundled", protocol);
     let mut loaded = load_workspace(&root).unwrap();
-    let selector = "group/graphql.yml";
+    let selector = "group/request.yml";
     let mut expected = loaded
         .workspace()
         .request(loaded.request_key(selector).unwrap())
         .unwrap()
         .clone();
     expected.metadata.sequence = Some(1.0);
-    let mut expected_yaml: serde_yaml_ng::Value =
-        serde_yaml_ng::from_slice(&fs::read(root.join(selector)).unwrap()).unwrap();
+    let mut expected_yaml = item_yaml(&root, selector);
+    let mut sibling = item_yaml(&root, "group/nested.yml");
     expected_yaml["info"]["seq"] = 1.into();
 
     let reordered = loaded
@@ -415,7 +450,7 @@ fn unbundled_graphql_reorder_and_move_preserve_request_and_unknown_fields() {
             .iter()
             .map(|item| item.selector())
             .collect::<Vec<_>>(),
-        ["alpha.yml", "group/graphql.yml", "group/nested.yml"]
+        ["alpha.yml", "group/request.yml", "group/nested.yml"]
     );
     assert_eq!(
         reloaded
@@ -423,6 +458,9 @@ fn unbundled_graphql_reorder_and_move_preserve_request_and_unknown_fields() {
             .request(reloaded.request_key(selector).unwrap()),
         Some(&expected)
     );
+
+    sibling["info"]["seq"] = 2.into();
+    assert_eq!(item_yaml(&root, "group/nested.yml"), sibling);
 
     let moved = reloaded
         .apply_structure(StructureOperation::Move {
@@ -432,12 +470,12 @@ fn unbundled_graphql_reorder_and_move_preserve_request_and_unknown_fields() {
         })
         .unwrap();
     assert_eq!(moved.previous_selector.as_deref(), Some(selector));
-    assert_eq!(moved.selector.as_deref(), Some("graphql.yml"));
+    assert_eq!(moved.selector.as_deref(), Some("request.yml"));
     assert_eq!(moved.parent, None);
     assert_eq!(moved.index, Some(0));
     assert_eq!(
         moved.selector_remaps.get(selector).map(String::as_str),
-        Some("graphql.yml")
+        Some("request.yml")
     );
     let reloaded = load_workspace(&root).unwrap();
     assert_eq!(
@@ -446,32 +484,19 @@ fn unbundled_graphql_reorder_and_move_preserve_request_and_unknown_fields() {
             .iter()
             .map(|item| item.selector())
             .collect::<Vec<_>>(),
-        ["graphql.yml", "alpha.yml", "group/nested.yml"]
+        ["request.yml", "alpha.yml", "group/nested.yml"]
     );
     assert_eq!(
         reloaded
             .workspace()
-            .request(reloaded.request_key("graphql.yml").unwrap()),
+            .request(reloaded.request_key("request.yml").unwrap()),
         Some(&expected)
     );
-    assert_eq!(
-        reloaded
-            .workspace()
-            .request(reloaded.request_key("group/nested.yml").unwrap())
-            .unwrap()
-            .metadata
-            .sequence,
-        Some(1.0)
-    );
+    sibling["info"]["seq"] = 1.into();
+    assert_eq!(item_yaml(&root, "group/nested.yml"), sibling);
     assert!(reloaded.request_key(selector).is_none());
     assert!(!root.join(selector).exists());
-    assert_eq!(
-        serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(
-            &fs::read(root.join("graphql.yml")).unwrap()
-        )
-        .unwrap(),
-        expected_yaml
-    );
+    assert_eq!(item_yaml(&root, "request.yml"), expected_yaml);
     fs::remove_dir_all(root).unwrap();
 }
 

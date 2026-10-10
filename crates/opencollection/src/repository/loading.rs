@@ -362,21 +362,15 @@ fn locator_nodes_from_items(
         .filter_map(|(index, value)| {
             let mut item_path = parent_path.to_vec();
             item_path.push(index);
-            let item_type = value
-                .get("info")
-                .and_then(|info| info.get("type"))
-                .and_then(Value::as_str);
-            match item_type {
-                Some(item_type) if probe_core::RequestProtocol::from_name(item_type).is_some() => {
-                    Some(LocatorNode::Request {
-                        selector: format!("{prefix}/{index}"),
-                        persistence: document_path.map(|path| RequestPersistence {
-                            document_path: path.to_owned(),
-                            item_path,
-                        }),
-                    })
-                }
-                Some("folder") => {
+            match NativeItemType::from_value(value) {
+                Some(NativeItemType::Request(_)) => Some(LocatorNode::Request {
+                    selector: format!("{prefix}/{index}"),
+                    persistence: document_path.map(|path| RequestPersistence {
+                        document_path: path.to_owned(),
+                        item_path,
+                    }),
+                }),
+                Some(NativeItemType::Folder) => {
                     let children = value
                         .get("items")
                         .and_then(Value::as_sequence)
@@ -395,7 +389,7 @@ fn locator_nodes_from_items(
                         ),
                     })
                 }
-                _ => None,
+                None => None,
             }
         })
         .collect()

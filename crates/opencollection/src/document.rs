@@ -3,8 +3,8 @@ use std::time::Duration;
 use probe_core::{
     Author, CollectionMetadata, Documentation, Environment, EnvironmentVariable, FileReference,
     FormField, Header, ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBodyKind, RequestSettings, SecretVariable, Variable, VariableValue,
-    VariableValueSet, VariableValueType, VariableValueVariant,
+    QueryParameter, RawBodyKind, RequestProtocol, RequestSettings, SecretVariable, Variable,
+    VariableValue, VariableValueSet, VariableValueType, VariableValueVariant,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
@@ -73,6 +73,21 @@ impl AuthorDocument {
 pub(crate) struct ItemInfoDocument {
     pub(crate) name: Option<String>,
     pub(crate) seq: Option<f64>,
+}
+
+/// Native item classification shared by loading, ordering, and request updates.
+pub(crate) enum NativeItemType {
+    Folder,
+    Request(RequestProtocol),
+}
+
+impl NativeItemType {
+    pub(crate) fn from_value(value: &Value) -> Option<Self> {
+        match value.get("info")?.get("type")?.as_str()? {
+            "folder" => Some(Self::Folder),
+            name => RequestProtocol::from_name(name).map(Self::Request),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]

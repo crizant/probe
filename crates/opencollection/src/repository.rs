@@ -21,7 +21,7 @@ use serde_yaml_ng::Value;
 
 use super::{ParseError, ProjectionDiagnostic, parse};
 use crate::{
-    document::EnvironmentDocument,
+    document::{EnvironmentDocument, NativeItemType},
     projection::{project_item, project_items, sort_diagnostics},
 };
 
@@ -1462,9 +1462,21 @@ pub(crate) fn apply_request_update(
     document: &mut Value,
     update: &RequestUpdate,
 ) -> Result<(), SaveError> {
+    let item_type = NativeItemType::from_value(document);
     let request = document.as_mapping_mut().ok_or_else(|| {
         SaveError::InvalidDocument("the request item is not a mapping".to_owned())
     })?;
+
+    let Some(NativeItemType::Request(protocol)) = item_type else {
+        let item_type = request
+            .get("info")
+            .and_then(|info| info.get("type"))
+            .and_then(Value::as_str);
+        return Err(SaveError::InvalidDocument(format!(
+            "the request item has an unsupported or missing type: {}",
+            item_type.unwrap_or("<missing>")
+        )));
+    };
 
     if let Some(name) = &update.name {
         let info = mapping_child(request, "info")?;
@@ -1488,13 +1500,6 @@ pub(crate) fn apply_request_update(
             },
         );
     }
-    let protocol = request
-        .get(Value::String("info".to_owned()))
-        .and_then(Value::as_mapping)
-        .and_then(|info| info.get(Value::String("type".to_owned())))
-        .and_then(Value::as_str)
-        .and_then(RequestProtocol::from_name)
-        .unwrap_or_default();
     let websocket = protocol == RequestProtocol::WebSocket;
     validate_websocket_fields(websocket, update)?;
     let details_name = protocol.as_str();
@@ -1932,6 +1937,32 @@ mod tests {
         fs, process,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn request_updates_reject_non_request_item_types_without_mutating_document() {
+        use probe_core::{Documentation, FieldPatch, RequestUpdate};
+        use serde_yaml_ng::Value;
+
+        let update = RequestUpdate {
+            name: Some("Renamed".into()),
+            description: FieldPatch::Set(Documentation::Text("New description".into())),
+            docs: FieldPatch::Set("New docs".into()),
+            url: FieldPatch::Set("https://example.com/updated".into()),
+            ..RequestUpdate::default()
+        };
+        for item_type in ["type: grpc", "type: folder", "", "type: 42"] {
+            let mut document: Value = serde_yaml_ng::from_str(&format!(
+                "info: {{ name: Original, {item_type} }}\nx-unknown: retained\n"
+            ))
+            .unwrap();
+            let original = document.clone();
+            assert!(matches!(
+                super::apply_request_update(&mut document, &update),
+                Err(SaveError::InvalidDocument(_))
+            ));
+            assert_eq!(document, original);
+        }
+    }
 
     #[test]
     fn live_repository_baselines_have_distinct_runtime_identity() {
