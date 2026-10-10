@@ -132,12 +132,11 @@ fn variable_usage_human(usage: &VariableUsage) -> String {
         VariableUsage::Header { name } => format!("header: {name}"),
         VariableUsage::QueryParameter { name } => format!("query parameter: {name}"),
         VariableUsage::PathParameter { name } => format!("path parameter: {name}"),
-        VariableUsage::Body => "body".to_owned(),
+        VariableUsage::Body | VariableUsage::WebSocketMessage => "body".to_owned(),
         VariableUsage::GraphqlQuery => "GraphQL query".to_owned(),
         VariableUsage::GraphqlVariables => "GraphQL variables".to_owned(),
         VariableUsage::GraphqlOperationName => "GraphQL operation name".to_owned(),
         VariableUsage::GraphqlExtensions => "GraphQL extensions".to_owned(),
-        VariableUsage::WebSocketMessage => "WebSocket message".to_owned(),
         VariableUsage::FormUrlEncoded { name } => format!("form field: {name}"),
         VariableUsage::Multipart { name } => format!("multipart: {name}"),
         VariableUsage::File => "file".to_owned(),
@@ -156,12 +155,11 @@ fn variable_usage_json(usage: &VariableUsage) -> serde_json::Value {
         VariableUsage::PathParameter { name } => {
             json!({ "location": "path_parameter", "name": name })
         }
-        VariableUsage::Body => json!({ "location": "body" }),
+        VariableUsage::Body | VariableUsage::WebSocketMessage => json!({ "location": "body" }),
         VariableUsage::GraphqlQuery => json!({ "location": "graphql_query" }),
         VariableUsage::GraphqlVariables => json!({ "location": "graphql_variables" }),
         VariableUsage::GraphqlOperationName => json!({ "location": "graphql_operation_name" }),
         VariableUsage::GraphqlExtensions => json!({ "location": "graphql_extensions" }),
-        VariableUsage::WebSocketMessage => json!({ "location": "websocket_message" }),
         VariableUsage::FormUrlEncoded { name } => {
             json!({ "location": "form_urlencoded", "name": name })
         }

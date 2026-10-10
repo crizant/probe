@@ -109,7 +109,6 @@ impl ProbeApp {
             return div().flex_1();
         };
         let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
-        let websocket = request.kind.is_websocket();
         let url = url_bar_value(&request);
         let request_dirty = self.persistence.is_dirty(key, &request);
         let folders = self
@@ -232,33 +231,31 @@ impl ProbeApp {
                             .w_full()
                             .flex()
                             .items_center()
-                            .when(!websocket, |bar| {
-                                bar.child(div().w(px(108.0)).mr(px(theme.metrics.spacing_1)).child(
-                                    components::dropdown_with_option_colors(
-                                        theme,
-                                        "request-method",
-                                        "HTTP method",
-                                        Some(method.clone()),
-                                        request_method_options(theme, &method),
-                                        108.0,
-                                        {
-                                            let method_view = cx.weak_entity();
-                                            move |value, _, cx| {
-                                                let Some(value) = value.cloned() else {
-                                                    return;
-                                                };
-                                                let _ = method_view.update(cx, |view, cx| {
-                                                    view.edit_request(
-                                                        key,
-                                                        |request| request.method = Some(value),
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        },
-                                    ),
-                                ))
-                            })
+                            .child(div().w(px(108.0)).mr(px(theme.metrics.spacing_1)).child(
+                                components::dropdown_with_option_colors(
+                                    theme,
+                                    "request-method",
+                                    "HTTP method",
+                                    Some(method.clone()),
+                                    request_method_options(theme, &method),
+                                    108.0,
+                                    {
+                                        let method_view = cx.weak_entity();
+                                        move |value, _, cx| {
+                                            let Some(value) = value.cloned() else {
+                                                return;
+                                            };
+                                            let _ = method_view.update(cx, |view, cx| {
+                                                view.edit_request(
+                                                    key,
+                                                    |request| request.method = Some(value),
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    },
+                                ),
+                            ))
                             .child(
                                 div()
                                     .flex_1()

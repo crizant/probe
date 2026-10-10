@@ -106,7 +106,6 @@ fn protocol_identity_and_defaults_are_independent_of_body() {
         assert_eq!(kind.as_str(), name);
         assert_eq!(protocol.as_str(), name);
         assert_eq!(RequestProtocol::from_name(name), Some(protocol));
-        assert_eq!(RequestKind::empty(protocol).protocol(), protocol);
         assert_eq!(protocol.default_method(), method);
         assert_eq!(kind.is_graphql(), protocol == RequestProtocol::Graphql);
         assert_eq!(kind.is_websocket(), protocol == RequestProtocol::WebSocket);

@@ -592,16 +592,6 @@ impl RequestKind {
         }
     }
 
-    /// Returns an empty request kind for a protocol.
-    #[must_use]
-    pub const fn empty(protocol: RequestProtocol) -> Self {
-        match protocol {
-            RequestProtocol::Http => Self::Http { body: None },
-            RequestProtocol::Graphql => Self::Graphql { body: None },
-            RequestProtocol::WebSocket => Self::WebSocket { message: None },
-        }
-    }
-
     /// Returns the stable lowercase protocol name.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
