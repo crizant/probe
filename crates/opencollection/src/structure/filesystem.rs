@@ -195,7 +195,7 @@ pub(super) fn direct_children(directory: &Path) -> Result<Vec<DiskChild>, Struct
                 .get("info")
                 .and_then(|info| info.get("type"))
                 .and_then(Value::as_str),
-            Some("http" | "websocket" | "folder")
+            Some("http" | "graphql" | "websocket" | "folder")
         ) {
             continue;
         }

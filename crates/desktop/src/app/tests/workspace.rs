@@ -1679,6 +1679,71 @@ fn dismissing_transient_surfaces_closes_the_request_execution_menu(cx: &mut Test
 }
 
 #[gpui::test]
+fn unbundled_graphql_rename_dialog_keeps_open_tab_and_dirty_draft(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/opencollection/phase16-unbundled");
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture = std::env::temp_dir().join(format!(
+        "probe-desktop-unbundled-{}-{unique}-graphql-rename",
+        std::process::id()
+    ));
+    copy_unbundled_fixture(&source, &fixture);
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = workspace.request_key("group/graphql.yml").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(key, cx);
+            view.edit_request(
+                key,
+                |request| request.url = Some("https://local.example/dirty".to_owned()),
+                cx,
+            );
+            view.open_rename_dialog(window, cx);
+            view.structure_dialog.as_mut().unwrap().name = "Renamed GraphQL".to_owned();
+            view.submit_structure_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
+            assert!(view.structure_dialog.is_none(), "{:?}", toast_debug(view));
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            assert!(loaded.request_key("group/graphql.yml").is_none());
+            let renamed = loaded.request_key("group/renamed-graphql.yml").unwrap();
+            let request = loaded.workspace().request(renamed).unwrap();
+            assert_eq!(request.metadata.name.as_deref(), Some("Renamed GraphQL"));
+            assert_eq!(
+                request.kind.protocol(),
+                probe_core::RequestProtocol::Graphql
+            );
+            assert_eq!(request.url.as_deref(), Some("https://local.example/dirty"));
+            assert!(view.persistence.is_dirty(renamed, request));
+            assert_eq!(view.shell.active_tab(), Some(renamed));
+            assert_eq!(view.shell.tabs().collect::<Vec<_>>(), &[renamed]);
+        })
+        .unwrap();
+    let reloaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let saved = reloaded
+        .workspace()
+        .request(reloaded.request_key("group/renamed-graphql.yml").unwrap())
+        .unwrap();
+    assert_eq!(saved.metadata.name.as_deref(), Some("Renamed GraphQL"));
+    assert_eq!(saved.kind.protocol(), probe_core::RequestProtocol::Graphql);
+    assert_eq!(saved.url.as_deref(), Some("https://example.com/graphql"));
+    assert!(!fixture.join("group/graphql.yml").exists());
+    fs::remove_dir_all(fixture).unwrap();
+}
+
+#[gpui::test]
 fn structural_rename_keeps_open_tab_and_dirty_draft(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
