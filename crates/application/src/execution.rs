@@ -358,3 +358,10 @@ pub fn copy_as_curl(
         .curl_command(&prepared, options)
         .map_err(|error| error.to_string())
 }
+
+#[path = "session.rs"]
+mod session;
+pub use session::{
+    CloseOrigin, Session, SessionData, SessionError, SessionEvent, SessionSender,
+    WebSocketExecution,
+};

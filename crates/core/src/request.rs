@@ -831,7 +831,7 @@ impl std::fmt::Display for RequestProtocolError {
             ),
             Self::UnsupportedExecution(protocol) => write!(
                 formatter,
-                "native {} requests cannot be executed yet",
+                "native {} requests cannot be executed through HTTP",
                 protocol.label()
             ),
         }

@@ -144,7 +144,7 @@ automatic reason to split code or add a tautological test. Existing high scores
 are not a blanket failure. The largest risks are untested error/adapter paths
 and a few complex desktop interaction handlers.
 
-For a change with production lines in `crates/{application,cli,core,http,opencollection,postman,yaak}/src`,
+For a change with production lines in `crates/{application,cli,core,http,websocket,opencollection,postman,yaak}/src`,
 run diff-scoped mutation testing. The diff file must include the changed
 production lines. For uncommitted local changes, first run
 `git add -N path/to/new.rs` for each new production file so it appears in the
@@ -190,7 +190,7 @@ mutant builds retain separate temporary target directories.
 
 For a PR branch, use `git diff --unified=0 origin/main...HEAD` to include
 committed changes. CI runs this gate only on PRs that change Rust source in the
-seven behavior crates. A survivor needs investigation: it may expose a missing
+eight behavior crates. A survivor needs investigation: it may expose a missing
 behavior assertion, an equivalent change, platform glue, or a design problem. Add
 a test when a documented behavior or regression has no assertion, and record the
 reason for an equivalent or irrelevant mutant in the change review. Desktop mutation
