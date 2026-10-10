@@ -1,5 +1,6 @@
 //! Terminal adaptation of the application session boundary.
 use std::{
+    future::Future,
     io::{self, Read, Write},
     time::Duration,
 };
@@ -181,6 +182,25 @@ fn input_error() -> CliError {
     }
 }
 
+// Output is already unavailable: preserve that error while making cleanup
+// interruptible. A consumed CLI deadline must not be polled a second time.
+async fn finish_output_error(
+    error: CliError,
+    closed: impl Future<Output = ()>,
+    interrupt: impl Future<Output = io::Result<()>>,
+    timeout: impl Future<Output = ()>,
+    timed_out: bool,
+) -> Result<(), CliError> {
+    if !timed_out {
+        tokio::select! {
+            _ = closed => {},
+            _ = interrupt => {},
+            _ = timeout => {},
+        }
+    }
+    Err(error)
+}
+
 enum SessionEnd {
     Drained,
     Cancelled,
@@ -331,8 +351,14 @@ pub(crate) fn run(
             Ok(SessionEnd::Drained) => Ok(()),
             Err(error) => {
                 session.close();
-                session.wait_closed().await;
-                Err(error)
+                finish_output_error(
+                    error,
+                    session.wait_closed(),
+                    &mut interrupt,
+                    &mut timeout,
+                    timed_out,
+                )
+                .await
             }
         }
     })
@@ -355,6 +381,50 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             self.flushes += 1;
             Ok(())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn output_error_cleanup_is_interruptible_and_preserves_the_original_error() {
+        for finish in ["closed", "interrupt", "timeout", "already_timed_out"] {
+            let started = tokio::time::Instant::now();
+            let error = finish_output_error(
+                CliError::output(io::Error::other("output unavailable")),
+                async {
+                    if finish != "closed" {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                },
+                async {
+                    if finish != "interrupt" {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(())
+                },
+                async {
+                    assert_ne!(
+                        finish, "already_timed_out",
+                        "completed deadline was polled again"
+                    );
+                    if finish == "timeout" {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                },
+                finish == "already_timed_out",
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.category, "output_error");
+            assert_eq!(error.message, "output unavailable");
+            assert_eq!(error.exit_code, crate::EXECUTION_EXIT_CODE);
+            let expected = if finish == "timeout" {
+                Duration::from_secs(1)
+            } else {
+                Duration::ZERO
+            };
+            assert_eq!(tokio::time::Instant::now() - started, expected, "{finish}");
         }
     }
 

@@ -555,7 +555,7 @@ outbound/inbound text and binary payloads and close reasons use the existing
 errors contain only stable safe categories, and execution/session Debug omits raw
 network material. No execution request getter is added.
 
-CLI human/JSONL adaptation and desktop visual session adaptation remain pending.
+Desktop visual session adaptation remains pending.
 SSE and streaming gRPC may reuse these narrow session concepts where suitable;
 neither protocol is implemented. Application/transport APIs contain no terminal,
 JSONL, GPUI, or desktop entity types.

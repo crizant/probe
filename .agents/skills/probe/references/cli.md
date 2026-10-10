@@ -1,6 +1,6 @@
 # CLI
 
-The `probe` CLI is non-interactive and separates command output on stdout from human
+The `probe` CLI does not prompt for input and separates command output on stdout from human
 diagnostics on stderr. Add `--json` to commands that return data or structured errors.
 
 ## Commands
