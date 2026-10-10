@@ -497,7 +497,11 @@ native WebSocket fields, performs ws:// or wss:// upgrades using Rustls with web
 roots, applies enabled headers and Basic/Bearer/API-key authentication with the same
 semantics as HTTP, and enforces the connection/handshake timeout. Errors are typed
 categories without request values or peer diagnostics. Ping/pong and periodic
-protocol Ping frames remain internal. There is no reconnect behavior. The transport
+protocol Ping frames remain internal. With keep-alive enabled, a missing matching
+Pong by the next interval terminates the session with a typed keep-alive timeout.
+Heartbeat progress pauses with network reads under event backpressure. Rustls client
+configuration is initialized once and shared across connections. Incoming messages
+use the frame library's default 64 MiB limit. There is no reconnect behavior. The transport
 uses a bounded HTTP upgrade handshake to preserve duplicate header semantics and
 retains buffered first-frame bytes before handing off to the frame library. Neither
 the transport nor its frame implementation logs raw network values.

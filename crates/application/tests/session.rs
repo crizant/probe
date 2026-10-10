@@ -746,3 +746,69 @@ async fn nonresponsive_peer_cannot_retain_closed_runtime() {
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
 }
+
+#[tokio::test(start_paused = true)]
+async fn missing_pong_is_one_terminal_error_followed_by_close() {
+    use tokio::io::AsyncReadExt;
+
+    // Prevent paused time from auto-advancing while local socket I/O is idle.
+    let clock = tokio::spawn(async {
+        loop {
+            tokio::task::yield_now().await;
+        }
+    });
+    let (listener, url) = listener().await;
+    let (close_tx, close_rx) = oneshot::channel();
+    let (ping_tx, ping_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(stream).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Ping(Vec::new().into())
+        );
+        ping_tx.send(()).unwrap();
+        // Read the raw close bytes without flushing the automatic Pong or
+        // acknowledging Close. This synchronizes the bounded shutdown deadline.
+        let mut bytes = [0; 128];
+        assert!(socket.get_mut().read(&mut bytes).await.unwrap() > 0);
+        assert_eq!(bytes[0] & 0x0f, 8);
+        close_tx.send(()).unwrap();
+        std::future::pending::<()>().await;
+    });
+    let mut req = request(&url, None);
+    req.settings.keep_alive_interval = Some(Duration::from_secs(10));
+    let mut session = prepared(&req)
+        .into_websocket()
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    assert_eq!(
+        session.next_event().await,
+        Some(SessionEvent::Opened { url })
+    );
+    tokio::time::advance(Duration::from_secs(10)).await;
+    ping_rx.await.unwrap();
+    tokio::time::advance(Duration::from_secs(10)).await;
+    close_rx.await.unwrap();
+    tokio::time::advance(Duration::from_secs(5)).await;
+    session.wait_closed().await;
+    assert_eq!(
+        session.next_event().await,
+        Some(SessionEvent::Error(SessionError::KeepAliveTimeout))
+    );
+    assert_eq!(
+        session.next_event().await,
+        Some(SessionEvent::Closed {
+            origin: CloseOrigin::Error,
+            code: None,
+            reason: String::new(),
+        })
+    );
+    assert_eq!(session.next_event().await, None);
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    clock.abort();
+    assert!(clock.await.unwrap_err().is_cancelled());
+}

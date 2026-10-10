@@ -3,7 +3,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
@@ -32,6 +36,7 @@ pub enum WebSocketError {
     InvalidApiKeyPlacement,
     Timeout,
     CloseTimeout,
+    KeepAliveTimeout,
     Connection,
     Tls,
     Handshake,
@@ -58,6 +63,7 @@ impl fmt::Display for WebSocketError {
             }
             Self::Timeout => f.write_str("WebSocket handshake timed out"),
             Self::CloseTimeout => f.write_str("WebSocket close handshake timed out"),
+            Self::KeepAliveTimeout => f.write_str("WebSocket keep-alive Pong timed out"),
             Self::Connection => f.write_str("WebSocket connection failed"),
             Self::Tls => f.write_str("WebSocket TLS failed"),
             Self::Handshake => f.write_str("WebSocket upgrade failed"),
@@ -154,16 +160,7 @@ impl WebSocketRequest {
     pub async fn connect(self) -> Result<WebSocketConnection, WebSocketError> {
         // Select the same crypto implementation as Probe HTTP explicitly. Do not
         // depend on another workspace crate installing a global Rustls provider.
-        let roots =
-            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::aws_lc_rs::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .map_err(|_| WebSocketError::Tls)?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-        let connector = Connector::Rustls(tokio_rustls::TlsConnector::from(Arc::new(tls)));
+        let connector = Connector::Rustls(tokio_rustls::TlsConnector::from(tls_config()?));
         let connect = async {
             let host = self
                 .url
@@ -184,6 +181,7 @@ impl WebSocketRequest {
             };
             let mut stream = BufReader::new(stream);
             handshake(&mut stream, &self.url, self.headers).await?;
+            // Retain the frame library default limit: 64 MiB per incoming message.
             Ok(tokio_websockets::ClientBuilder::new().take_over(stream))
         };
         let socket = match self.timeout {
@@ -201,8 +199,26 @@ impl WebSocketRequest {
             socket,
             keep_alive,
             remote_closed: false,
+            ping_due: false,
+            awaiting_pong: false,
         })
     }
+}
+
+fn tls_config() -> Result<Arc<rustls::ClientConfig>, WebSocketError> {
+    static CONFIG: OnceLock<Result<Arc<rustls::ClientConfig>, WebSocketError>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let roots =
+                rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            rustls::ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::aws_lc_rs::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .map_err(|_| WebSocketError::Tls)
+            .map(|builder| Arc::new(builder.with_root_certificates(roots).with_no_client_auth()))
+        })
+        .clone()
 }
 
 fn property<'a>(
@@ -279,6 +295,8 @@ pub struct WebSocketConnection {
     socket: WebSocketStream<BufReader<MaybeTlsStream<TcpStream>>>,
     keep_alive: Option<Interval>,
     remote_closed: bool,
+    ping_due: bool,
+    awaiting_pong: bool,
 }
 impl fmt::Debug for WebSocketConnection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -303,10 +321,30 @@ impl WebSocketConnection {
     /// the socket. Returning Close itself is cancellation-safe.
     pub async fn receive(&mut self) -> Result<WebSocketEvent, WebSocketError> {
         loop {
+            if self.ping_due {
+                // The application select! may cancel receive() during this write.
+                // feed() queues only after readiness, with no subsequent await;
+                // until then ping_due survives cancellation. Once queued, both
+                // the frame and its partial-write progress live in the socket,
+                // and awaiting_pong survives cancellation of flush().
+                self.socket
+                    .feed(Message::ping(Vec::new()))
+                    .await
+                    .map_err(classify)?;
+                self.ping_due = false;
+                self.awaiting_pong = true;
+                if let Some(interval) = &mut self.keep_alive {
+                    interval.reset();
+                }
+            }
+            self.socket.flush().await.map_err(classify)?;
             let incoming = tokio::select! {
                 incoming = self.socket.next() => incoming,
                 _ = async { match &mut self.keep_alive { Some(interval) => { interval.tick().await; }, None => std::future::pending().await } } => {
-                    self.socket.send(Message::ping(Vec::new())).await.map_err(classify)?;
+                    if self.awaiting_pong {
+                        return Err(WebSocketError::KeepAliveTimeout);
+                    }
+                    self.ping_due = true;
                     continue;
                 }
             };
@@ -331,8 +369,10 @@ impl WebSocketConnection {
                     reason: reason.to_owned(),
                 });
             }
-            // Reading Ping queues its Pong; flush before reading another frame.
-            self.socket.flush().await.map_err(classify)?;
+            if message.is_pong() && message.as_payload().is_empty() {
+                self.awaiting_pong = false;
+            }
+            // Reading Ping queues its Pong; the next iteration flushes it.
         }
     }
     /// Initiate a normal close and drive the peer reply. A noncooperative peer

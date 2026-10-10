@@ -54,6 +54,7 @@ pub enum SessionError {
     Configuration,
     Timeout,
     CloseTimeout,
+    KeepAliveTimeout,
     Connection,
     Tls,
     Handshake,
@@ -74,6 +75,7 @@ impl fmt::Display for SessionError {
             Self::Configuration => "invalid streaming session configuration",
             Self::Timeout => "streaming connection timed out",
             Self::CloseTimeout => "streaming close handshake timed out",
+            Self::KeepAliveTimeout => "streaming keep-alive timed out",
             Self::Connection => "streaming connection failed",
             Self::Tls => "streaming TLS failed",
             Self::Handshake => "streaming handshake failed",
@@ -90,6 +92,7 @@ impl From<WebSocketError> for SessionError {
             WebSocketError::NotWebSocket => Self::NotWebSocket,
             WebSocketError::Timeout => Self::Timeout,
             WebSocketError::CloseTimeout => Self::CloseTimeout,
+            WebSocketError::KeepAliveTimeout => Self::KeepAliveTimeout,
             WebSocketError::Connection => Self::Connection,
             WebSocketError::Tls => Self::Tls,
             WebSocketError::Handshake => Self::Handshake,
@@ -352,11 +355,10 @@ async fn drive_session(
     disclosure: &SecretDisclosure,
 ) -> Result<End, SessionError> {
     if let Some(initial) = initial {
+        let presentation = initial_presentation.ok_or(SessionError::InvalidMessageSelection)?;
         connection.send(WebSocketData::Text(initial)).await?;
         events
-            .send(SessionEvent::Sent(SessionData::Text(
-                initial_presentation.expect("selected presentation message"),
-            )))
+            .send(SessionEvent::Sent(SessionData::Text(presentation)))
             .await
             .map_err(|_| SessionError::Closed)?;
     }
@@ -395,5 +397,53 @@ impl SecretDisclosure {
                 None => bytes.clone(),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use probe_core::{Request, RequestKind};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    #[tokio::test]
+    async fn missing_initial_presentation_is_typed_and_sends_no_message() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let request = Request {
+            url: Some(format!("ws://{}", listener.local_addr().unwrap())),
+            kind: RequestKind::WebSocket { message: None },
+            ..Request::default()
+        };
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Close(_)
+            ));
+            socket.flush().await.unwrap();
+        });
+        let mut connection = WebSocketRequest::new(&request)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let (_commands, mut command_rx) = mpsc::channel(1);
+        let (events, mut event_rx) = mpsc::channel(1);
+        let result = drive_session(
+            &mut connection,
+            &mut command_rx,
+            &events,
+            Some("private execution message".into()),
+            None,
+            &SecretDisclosure::default(),
+        )
+        .await;
+        assert!(matches!(result, Err(SessionError::InvalidMessageSelection)));
+        assert!(event_rx.try_recv().is_err());
+        connection.close().await.unwrap();
+        server.await.unwrap();
     }
 }

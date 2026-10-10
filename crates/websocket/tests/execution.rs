@@ -537,3 +537,102 @@ async fn upgrade_preserves_first_frame_buffered_with_response_and_bounds_headers
         server.await.unwrap();
     }
 }
+
+// Paused Tokio time otherwise auto-advances during idle socket I/O. Keep a task
+// runnable so heartbeat deadlines move only through explicit test advances.
+fn hold_paused_clock() -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async {
+        loop {
+            tokio::task::yield_now().await;
+        }
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn missing_pong_times_out_even_after_receive_is_cancelled() {
+    let clock = hold_paused_clock();
+    let (listener, url) = listener().await;
+    let (ping_tx, ping_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(stream).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Ping(Vec::new().into())
+        );
+        ping_tx.send(()).unwrap();
+        // Reading Ping queues a Pong, but withholding flush simulates a half-open peer.
+        std::future::pending::<()>().await;
+    });
+    let mut request = request(url);
+    request.settings.keep_alive_interval = Some(Duration::from_secs(10));
+    let mut connection = WebSocketRequest::new(&request)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let receive = tokio::spawn(async move {
+        tokio::select! {
+            _ = cancel_rx => {},
+            result = connection.receive() => panic!("unexpected receive result: {}", result.is_ok()),
+        }
+        connection
+    });
+    tokio::time::advance(Duration::from_secs(10)).await;
+    ping_rx.await.unwrap();
+    cancel_tx.send(()).unwrap();
+    let mut connection = receive.await.unwrap();
+    tokio::time::advance(Duration::from_secs(10)).await;
+    assert!(matches!(
+        connection.receive().await,
+        Err(WebSocketError::KeepAliveTimeout)
+    ));
+    drop(connection);
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    clock.abort();
+    assert!(clock.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test(start_paused = true)]
+async fn matching_pong_allows_the_next_keep_alive_interval() {
+    let clock = hold_paused_clock();
+    let (listener, url) = listener().await;
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(stream).await.unwrap();
+        for text in ["first", "second"] {
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Ping(Vec::new().into())
+            );
+            // Flush Pong before the text barrier: receiving text then proves
+            // the client consumed Pong before the next clock advance.
+            socket.flush().await.unwrap();
+            socket.send(Message::Text(text.into())).await.unwrap();
+        }
+        assert!(matches!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Close(_)
+        ));
+        socket.flush().await.unwrap();
+    });
+    let mut request = request(url);
+    request.settings.keep_alive_interval = Some(Duration::from_secs(10));
+    let mut connection = WebSocketRequest::new(&request)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    for expected in ["first", "second"] {
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert!(
+            matches!(connection.receive().await.unwrap(), WebSocketEvent::Data(WebSocketData::Text(text)) if text == expected)
+        );
+    }
+    connection.close().await.unwrap();
+    server.await.unwrap();
+    clock.abort();
+    assert!(clock.await.unwrap_err().is_cancelled());
+}
