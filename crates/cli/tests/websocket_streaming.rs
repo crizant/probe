@@ -185,6 +185,16 @@ fn real_binary_flushes_inbound_while_stdin_waits_and_eof_keeps_session_open() {
             socket.next().await.unwrap().unwrap(),
             Message::Text("answer".into())
         );
+        socket.send(Message::Text("next".into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Text("".into())
+        );
+        socket.send(Message::Text("last".into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Text("tail".into())
+        );
         socket
             .send(Message::Binary(vec![0, 1, 2].into()))
             .await
@@ -214,8 +224,16 @@ fn real_binary_flushes_inbound_while_stdin_waits_and_eof_keeps_session_open() {
     // The server waits for this line, which is supplied only after inbound output
     // arrives. Buffering output or reading stdin in the event loop deadlocks.
     stdin.write_all(b"answer\r\n").unwrap();
-    drop(stdin);
     assert_eq!(rx.recv_timeout(GUARD).unwrap(), "> answer");
+    assert_eq!(rx.recv_timeout(GUARD).unwrap(), "< next");
+    // Drive the binary's line reader again while the pipe remains open.
+    stdin.write_all(b"\n").unwrap();
+    assert_eq!(rx.recv_timeout(GUARD).unwrap(), "> ");
+    assert_eq!(rx.recv_timeout(GUARD).unwrap(), "< last");
+    // EOF also delivers a final line without a terminator.
+    stdin.write_all(b"tail").unwrap();
+    drop(stdin);
+    assert_eq!(rx.recv_timeout(GUARD).unwrap(), "> tail");
     assert_eq!(rx.recv_timeout(GUARD).unwrap(), "< [binary/base64] AAEC");
     assert!(
         rx.recv_timeout(GUARD)
@@ -534,6 +552,125 @@ fn ctrl_c_cleanly_closes_with_terminal_input_still_open() {
     );
     assert!(child.wait().unwrap().success());
     assert!(reading.join().unwrap().contains("Closed: local"));
+    server.join().unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn second_ctrl_c_drops_a_session_whose_peer_withholds_close_acknowledgement() {
+    let (closing_tx, closing_rx) = mpsc::channel();
+    let (url, server) = server(|mut socket| async move {
+        assert!(matches!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Close(_)
+        ));
+        closing_tx.send(()).unwrap();
+        // Do not poll tungstenite again: that would flush its automatic close ack.
+        // Raw EOF confirms that the client abandoned this unacknowledged close.
+        let mut byte = [0];
+        assert_eq!(
+            tokio::io::AsyncReadExt::read(socket.get_mut(), &mut byte)
+                .await
+                .unwrap(),
+            0
+        );
+    });
+    let path = workspace(&url, None);
+    let mut child = probe()
+        .args(["request", "run"])
+        .arg(&path)
+        .arg("items/0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let reading = thread::spawn(move || {
+        let mut opened = String::new();
+        reader.read_line(&mut opened).unwrap();
+        tx.send(opened).unwrap();
+        let mut rest = String::new();
+        reader.read_to_string(&mut rest).unwrap();
+        rest
+    });
+    assert!(rx.recv_timeout(GUARD).unwrap().starts_with("Connected:"));
+    for press in 0..2 {
+        assert!(
+            Command::new("kill")
+                .args(["-INT", &child.id().to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        if press == 0 {
+            // Synchronize on the first close, rather than sleeping between signals.
+            closing_rx.recv_timeout(GUARD).unwrap();
+        }
+    }
+    let (tx, rx) = mpsc::channel();
+    let waiting = thread::spawn(move || tx.send(child.wait_with_output().unwrap()).unwrap());
+    let output = rx.recv_timeout(GUARD).unwrap();
+    assert_eq!(output.status.code(), Some(6), "{output:?}");
+    assert_eq!(
+        output.stderr,
+        b"error[request_cancelled]: request was cancelled\n"
+    );
+    assert!(
+        reading.join().unwrap().is_empty(),
+        "force termination must not wait for Closed"
+    );
+    waiting.join().unwrap();
+    server.join().unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn ctrl_c_during_handshake_uses_protocol_neutral_cancellation() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let path = workspace(&format!("ws://{}", listener.local_addr().unwrap()), None);
+    let (handshake_tx, handshake_rx) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(GUARD)).unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0];
+        while !head.ends_with(b"\r\n\r\n") {
+            assert_eq!(stream.read(&mut byte).unwrap(), 1);
+            head.push(byte[0]);
+        }
+        handshake_tx.send(()).unwrap();
+        assert_eq!(stream.read(&mut byte).unwrap(), 0);
+    });
+    let child = probe()
+        .args(["request", "run"])
+        .arg(&path)
+        .args(["items/0", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    handshake_rx.recv_timeout(GUARD).unwrap();
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let (tx, rx) = mpsc::channel();
+    let waiting = thread::spawn(move || tx.send(child.wait_with_output().unwrap()).unwrap());
+    let output = rx.recv_timeout(GUARD).unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["error"]["category"], "request_cancelled");
+    assert_eq!(value["error"]["message"], "request was cancelled");
+    assert!(output.stderr.is_empty());
+    waiting.join().unwrap();
     server.join().unwrap();
     fs::remove_file(path).unwrap();
 }

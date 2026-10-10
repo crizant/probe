@@ -127,6 +127,15 @@ impl CliError {
         }
     }
 
+    pub(crate) fn cancelled() -> Self {
+        Self {
+            category: "request_cancelled",
+            message: "request was cancelled".into(),
+            exit_code: EXECUTION_EXIT_CODE,
+            details: None,
+        }
+    }
+
     pub(crate) fn session(error: probe_application::SessionError) -> Self {
         use probe_application::SessionError;
         let (category, exit_code) = match error {

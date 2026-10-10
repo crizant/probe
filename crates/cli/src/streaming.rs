@@ -64,6 +64,10 @@ impl<'a> LiveOutput<'a> {
     }
 
     fn failure(&mut self, error: &CliError, event: bool) -> Result<(), CliError> {
+        // A terminal session failure wins over subsequent CLI shutdown failures.
+        if self.exit_code != 0 {
+            return Ok(());
+        }
         self.exit_code = error.exit_code;
         if self.mode == OutputMode::Json {
             let mut value = json!({"schemaVersion": JSON_SCHEMA_VERSION, "error": {
@@ -177,6 +181,11 @@ fn input_error() -> CliError {
     }
 }
 
+enum SessionEnd {
+    Drained,
+    Cancelled,
+}
+
 pub(crate) fn run(
     execution: WebSocketExecution,
     options: &RunOptions<'_>,
@@ -216,7 +225,7 @@ pub(crate) fn run(
         let mut session = tokio::select! {
             result = execution.connect() => result.map_err(CliError::session)?,
             _ = &mut timeout => return Err(CliError::session(SessionError::Timeout)),
-            _ = &mut interrupt => return Err(CliError::http(probe_http::HttpError::Cancelled)),
+            _ = &mut interrupt => return Err(CliError::cancelled()),
         };
         let mut input = match (output.input)(stdin) {
             Ok(input) => input,
@@ -270,10 +279,14 @@ pub(crate) fn run(
                         }
                         if matches!(event, SessionEvent::Closed { .. }) { break; }
                     }
-                    _ = &mut interrupt, if !closing => {
+                    _ = &mut interrupt => {
+                        interrupt.set(tokio::signal::ctrl_c());
+                        producer.abort();
+                        if closing {
+                            return Ok(SessionEnd::Cancelled);
+                        }
                         closing = true;
                         session.close();
-                        producer.abort();
                     }
                     _ = &mut timeout, if !timed_out => {
                         timed_out = true;
@@ -305,15 +318,23 @@ pub(crate) fn run(
             } else if let Some(error) = input_error {
                 output.failure(&error, false)?;
             }
-            Ok(())
+            Ok(SessionEnd::Drained)
         }
         .await;
         producer.abort();
-        if result.is_err() {
-            session.close();
-            session.wait_closed().await;
+        match result {
+            Ok(SessionEnd::Cancelled) => {
+                // Dropping the owner and runtime cancels the bounded close wait.
+                drop(session);
+                output.failure(&CliError::cancelled(), false)
+            }
+            Ok(SessionEnd::Drained) => Ok(()),
+            Err(error) => {
+                session.close();
+                session.wait_closed().await;
+                Err(error)
+            }
         }
-        result
     })
 }
 
@@ -334,6 +355,52 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             self.flushes += 1;
             Ok(())
+        }
+    }
+
+    #[test]
+    fn terminal_session_error_wins_over_timeout_before_closed() {
+        for mode in [OutputMode::Human, OutputMode::Json, OutputMode::Quiet] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut input = |_: &mut dyn Read| unreachable!();
+            let exit_code = {
+                let mut output = LiveOutput::new(&mut stdout, &mut stderr, &mut input);
+                output.mode = mode;
+                output
+                    .event(&SessionEvent::Error(SessionError::Protocol))
+                    .unwrap();
+                // The CLI deadline can become ready between Error and Closed.
+                output
+                    .failure(&CliError::session(SessionError::Timeout), false)
+                    .unwrap();
+                output
+                    .event(&SessionEvent::Closed {
+                        origin: CloseOrigin::Error,
+                        code: None,
+                        reason: String::new(),
+                    })
+                    .unwrap();
+                output.exit_code
+            };
+            assert_eq!(exit_code, crate::EXECUTION_EXIT_CODE);
+            if mode == OutputMode::Json {
+                let records: Vec<Value> = String::from_utf8(stdout)
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+                assert_eq!(records.len(), 2);
+                assert_eq!(records[0]["event"], "error");
+                assert_eq!(records[0]["error"]["category"], "network_execution");
+                assert_eq!(records[1]["event"], "closed");
+                assert!(stderr.is_empty());
+            } else {
+                let diagnostics = String::from_utf8(stderr).unwrap();
+                assert_eq!(diagnostics.lines().count(), 1);
+                assert!(diagnostics.starts_with("error[network_execution]:"));
+                assert!(!diagnostics.contains("request_timeout"));
+            }
         }
     }
 

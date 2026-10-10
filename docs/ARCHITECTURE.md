@@ -537,6 +537,9 @@ the same events without successful output. The CLI owns only live-run bounds,
 inbound message counts, and Ctrl-C adaptation; close handshake, authentication,
 keep-alive, transport, and redaction remain application responsibilities. Session
 errors map structurally to existing CLI categories, with no transport diagnostics.
+Normal Ctrl-C drains close and succeeds; another interrupt during shutdown drops
+the Session and returns protocol-neutral `request_cancelled`. Output retains the
+first terminal failure even if the CLI deadline expires while draining events.
 
 Only native WebSocket requests enter this execution path. A selected text, JSON,
 or XML message is sent as a text frame after opening; no configured message leaves

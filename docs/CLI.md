@@ -127,8 +127,11 @@ present. Output flushes as events arrive. Stdin lines send literal text, includi
 empty lines; line terminators are removed. Input and inbound events run concurrently.
 EOF stops input without closing the connection, including after a workspace supplied
 with path `-` consumes stdin. Ctrl-C requests normal local close and drains terminal
-events; a clean disconnect succeeds, as does clean remote close. `--quiet` suppresses
-successful events but still reports errors.
+events; a clean single Ctrl-C disconnect exits 0, as does clean remote close. This
+is different from HTTP/GraphQL Ctrl-C, which cancels execution with `request_cancelled`
+(exit 6). Another Ctrl-C during WebSocket shutdown force-terminates the session and
+returns `request_cancelled` (exit 6); Ctrl-C before connection also cancels with exit 6.
+`--quiet` suppresses successful events but still reports errors.
 
 Repeatable `--send <text>` queues additional literal text after opening, following
 the configured initial message. These values do not undergo variable interpolation.
@@ -156,7 +159,8 @@ For example:
 Terminal session errors produce an `event:"error"` record with the usual `error`
 category/exitCode/message (and safe handshake status detail when available), followed
 by the Closed record and nonzero exit. The CLI does not repeat that error. A CLI
-wall-clock timeout adds a compact versioned CLI error record after shutdown. Failures
+wall-clock timeout adds a compact versioned CLI error record after shutdown only if
+no terminal failure has already been reported; the first terminal error wins. Failures
 before connection use the normal single JSON error document. Configuration failures
 use `request_configuration` (exit 5), connection/close/keep-alive timeouts use
 `request_timeout` (exit 6), and other session failures use `network_execution` (exit 6).
