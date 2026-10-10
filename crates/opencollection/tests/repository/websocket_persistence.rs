@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use probe_core::{
-    GraphqlRequestError, WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet,
+    RequestProtocolError, WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet,
 };
 use probe_opencollection::ItemLocator;
 
@@ -237,7 +237,7 @@ fn websocket_rejects_fields_outside_its_opencollection_shape_without_writing() {
         assert!(
             matches!(
                 error,
-                SaveError::Graphql(GraphqlRequestError::UnsupportedField {
+                SaveError::Protocol(RequestProtocolError::UnsupportedField {
                     protocol: RequestProtocol::WebSocket,
                     field: rejected,
                 }) if rejected == field
@@ -256,7 +256,7 @@ fn websocket_rejects_fields_outside_its_opencollection_shape_without_writing() {
         .unwrap_err();
     assert!(matches!(
         error,
-        SaveError::Graphql(GraphqlRequestError::NotWebSocket)
+        SaveError::Protocol(RequestProtocolError::NotWebSocket)
     ));
     assert_eq!(fs::read(&path).unwrap(), original);
 }

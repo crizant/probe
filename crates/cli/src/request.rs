@@ -64,8 +64,9 @@ pub(crate) fn get(
     let loaded = load(input, stdin)?;
     let request = selected_request(&loaded, selector, environment, &[], strict_variables)?;
     Ok(CommandOutput {
-        human: request_human(selector, environment, &request).map_err(CliError::graphql)?,
-        json: request_json(selector, environment, &request).map_err(CliError::graphql)?,
+        human: request_human(selector, environment, &request)
+            .map_err(CliError::request_protocol)?,
+        json: request_json(selector, environment, &request).map_err(CliError::request_protocol)?,
     })
 }
 
@@ -201,9 +202,9 @@ pub(crate) fn update(
     Ok(CommandOutput {
         human: format!(
             "Updated request\n{}",
-            request_human(selector, None, request).map_err(CliError::graphql)?
+            request_human(selector, None, request).map_err(CliError::request_protocol)?
         ),
-        json: request_json(selector, None, request).map_err(CliError::graphql)?,
+        json: request_json(selector, None, request).map_err(CliError::request_protocol)?,
     })
 }
 
@@ -278,15 +279,15 @@ pub(crate) fn run(
     if options.dry_run {
         return Ok(CommandOutput {
             human: dry_run_human(display),
-            json: dry_run_json(display).map_err(CliError::graphql)?,
+            json: dry_run_json(display).map_err(CliError::request_protocol)?,
         });
     }
     let method = display
         .method
         .clone()
         .unwrap_or_else(|| "<unset>".to_owned());
-    let request_json = run_request_json(display).map_err(CliError::graphql)?;
-    let execution = prepared.into_http().map_err(CliError::graphql)?;
+    let request_json = run_request_json(display).map_err(CliError::request_protocol)?;
+    let execution = prepared.into_http().map_err(CliError::request_protocol)?;
     let execution_options = ExecutionOptions {
         base_directory: input.base_directory(),
         ..ExecutionOptions::default()

@@ -1,6 +1,6 @@
 use probe_core::{
-    EnvironmentResolutionError, ExpectationOutcome, ExpectationParseError, GraphqlRequestError,
-    ImportDiagnostic,
+    EnvironmentResolutionError, ExpectationOutcome, ExpectationParseError, ImportDiagnostic,
+    RequestProtocolError,
 };
 use probe_http::HttpError;
 use probe_opencollection::{CreateError, SaveError, StructureError};
@@ -155,7 +155,7 @@ impl CliError {
             | SaveError::StaleCompletion
             | SaveError::CommittedButNotIntegrated => ("workspace_modified", PERSISTENCE_EXIT_CODE),
             SaveError::Environment(error) => return Self::configuration(error.clone()),
-            SaveError::Graphql(error) => return Self::graphql(error.clone()),
+            SaveError::Protocol(error) => return Self::request_protocol(error.clone()),
             SaveError::InvalidDocument(_) | SaveError::Serialize(_) | SaveError::Io { .. } => {
                 ("persistence_error", PERSISTENCE_EXIT_CODE)
             }
@@ -168,21 +168,21 @@ impl CliError {
         }
     }
 
-    pub(crate) fn graphql(error: GraphqlRequestError) -> Self {
+    pub(crate) fn request_protocol(error: RequestProtocolError) -> Self {
         match error {
-            GraphqlRequestError::NotGraphql
-            | GraphqlRequestError::NotHttp
-            | GraphqlRequestError::NotWebSocket
-            | GraphqlRequestError::UnsupportedField { .. } => {
+            RequestProtocolError::NotGraphql
+            | RequestProtocolError::NotHttp
+            | RequestProtocolError::NotWebSocket
+            | RequestProtocolError::UnsupportedField { .. } => {
                 Self::invalid_arguments(error.to_string())
             }
-            GraphqlRequestError::UnsupportedExecution(_) => Self {
+            RequestProtocolError::UnsupportedExecution(_) => Self {
                 category: "request_configuration",
                 message: error.to_string(),
                 exit_code: CONFIGURATION_EXIT_CODE,
                 details: None,
             },
-            GraphqlRequestError::InvalidBodySelection(message) => {
+            RequestProtocolError::InvalidBodySelection(message) => {
                 Self::http(HttpError::InvalidBodySelection(message))
             }
         }

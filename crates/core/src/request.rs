@@ -418,24 +418,24 @@ impl RequestUpdate {
     /// Applies the update to a domain request, including native GraphQL fields.
     ///
     /// On error the request is left unchanged.
-    pub fn apply(&self, request: &mut Request) -> Result<(), GraphqlRequestError> {
+    pub fn apply(&self, request: &mut Request) -> Result<(), RequestProtocolError> {
         let mut updated = request.clone();
         self.apply_to_candidate(&mut updated)?;
         *request = updated;
         Ok(())
     }
 
-    fn apply_to_candidate(&self, request: &mut Request) -> Result<(), GraphqlRequestError> {
+    fn apply_to_candidate(&self, request: &mut Request) -> Result<(), RequestProtocolError> {
         let graphql = self.graphql.as_ref().filter(|update| !update.is_empty());
         let http_body_change = !self.body.is_unchanged() || !self.body_content.is_unchanged();
         if graphql.is_some() && !request.kind.is_graphql() {
-            return Err(GraphqlRequestError::NotGraphql);
+            return Err(RequestProtocolError::NotGraphql);
         }
         if http_body_change && request.kind.is_graphql() {
-            return Err(GraphqlRequestError::NotHttp);
+            return Err(RequestProtocolError::NotHttp);
         }
         if !self.websocket_message.is_unchanged() && !request.kind.is_websocket() {
-            return Err(GraphqlRequestError::NotWebSocket);
+            return Err(RequestProtocolError::NotWebSocket);
         }
         if request.kind.is_websocket() {
             self.reject_websocket_unsupported_fields()?;
@@ -475,8 +475,8 @@ impl RequestUpdate {
     }
 
     /// OpenCollection WebSocket details have no method, parameters, or HTTP body.
-    fn reject_websocket_unsupported_fields(&self) -> Result<(), GraphqlRequestError> {
-        let unsupported = |field| GraphqlRequestError::UnsupportedField {
+    fn reject_websocket_unsupported_fields(&self) -> Result<(), RequestProtocolError> {
+        let unsupported = |field| RequestProtocolError::UnsupportedField {
             protocol: RequestProtocol::WebSocket,
             field,
         };
@@ -809,9 +809,9 @@ pub struct WebSocketMessageVariant {
     pub message: WebSocketMessage,
 }
 
-/// An invalid native GraphQL request or update.
+/// A request or update that is invalid for the request protocol.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum GraphqlRequestError {
+pub enum RequestProtocolError {
     /// A body variant selection is missing or ambiguous.
     InvalidBodySelection(String),
     /// GraphQL-only fields were requested for an HTTP request.
@@ -831,7 +831,7 @@ pub enum GraphqlRequestError {
     UnsupportedExecution(RequestProtocol),
 }
 
-impl std::fmt::Display for GraphqlRequestError {
+impl std::fmt::Display for RequestProtocolError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidBodySelection(message) => formatter.write_str(message),
@@ -853,27 +853,27 @@ impl std::fmt::Display for GraphqlRequestError {
     }
 }
 
-impl std::error::Error for GraphqlRequestError {}
+impl std::error::Error for RequestProtocolError {}
 
 /// A request edit that cannot be represented by a persistence update.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RequestDiffError {
-    /// The GraphQL body or selection is invalid.
-    Graphql(GraphqlRequestError),
+    /// The request body, selection, or protocol fields are invalid.
+    Protocol(RequestProtocolError),
     /// A changed field has no supported persistence operation.
     UnsupportedChange(&'static str),
 }
 
-impl From<GraphqlRequestError> for RequestDiffError {
-    fn from(error: GraphqlRequestError) -> Self {
-        Self::Graphql(error)
+impl From<RequestProtocolError> for RequestDiffError {
+    fn from(error: RequestProtocolError) -> Self {
+        Self::Protocol(error)
     }
 }
 
 impl std::fmt::Display for RequestDiffError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Graphql(error) => error.fmt(formatter),
+            Self::Protocol(error) => error.fmt(formatter),
             Self::UnsupportedChange(field) => write!(formatter, "cannot save changed {field}"),
         }
     }
@@ -881,18 +881,18 @@ impl std::fmt::Display for RequestDiffError {
 
 impl std::error::Error for RequestDiffError {}
 
-fn selected_http_variant_index(variants: &[BodyVariant]) -> Result<usize, GraphqlRequestError> {
+fn selected_http_variant_index(variants: &[BodyVariant]) -> Result<usize, RequestProtocolError> {
     let mut selected = variants
         .iter()
         .enumerate()
         .filter(|(_, variant)| variant.selected);
     let (index, _) = selected.next().ok_or_else(|| {
-        GraphqlRequestError::InvalidBodySelection(
+        RequestProtocolError::InvalidBodySelection(
             "request body variants have no selected value".to_owned(),
         )
     })?;
     if selected.next().is_some() {
-        return Err(GraphqlRequestError::InvalidBodySelection(
+        return Err(RequestProtocolError::InvalidBodySelection(
             "request body variants have multiple selected values".to_owned(),
         ));
     }
@@ -902,7 +902,7 @@ fn selected_http_variant_index(variants: &[BodyVariant]) -> Result<usize, Graphq
 fn apply_body_content(
     target: &mut Option<RequestBody>,
     patch: &FieldPatch<Body>,
-) -> Result<(), GraphqlRequestError> {
+) -> Result<(), RequestProtocolError> {
     match patch {
         FieldPatch::Unchanged => Ok(()),
         FieldPatch::Clear => {
@@ -925,18 +925,18 @@ fn apply_body_content(
 
 fn selected_websocket_variant_index(
     variants: &[WebSocketMessageVariant],
-) -> Result<usize, GraphqlRequestError> {
+) -> Result<usize, RequestProtocolError> {
     let mut selected = variants
         .iter()
         .enumerate()
         .filter(|(_, variant)| variant.selected);
     let (index, _) = selected.next().ok_or_else(|| {
-        GraphqlRequestError::InvalidBodySelection(
+        RequestProtocolError::InvalidBodySelection(
             "WebSocket message variants have no selected value".to_owned(),
         )
     })?;
     if selected.next().is_some() {
-        return Err(GraphqlRequestError::InvalidBodySelection(
+        return Err(RequestProtocolError::InvalidBodySelection(
             "WebSocket message variants have multiple selected values".to_owned(),
         ));
     }
@@ -946,7 +946,7 @@ fn selected_websocket_variant_index(
 fn apply_websocket_message(
     target: &mut Option<WebSocketMessageSet>,
     patch: &FieldPatch<WebSocketMessage>,
-) -> Result<(), GraphqlRequestError> {
+) -> Result<(), RequestProtocolError> {
     match patch {
         FieldPatch::Unchanged => {}
         FieldPatch::Clear => *target = None,
@@ -1000,7 +1000,7 @@ impl Request {
     /// Returns the selected native WebSocket message.
     pub fn selected_websocket_message(
         &self,
-    ) -> Result<Option<&WebSocketMessage>, GraphqlRequestError> {
+    ) -> Result<Option<&WebSocketMessage>, RequestProtocolError> {
         match self.websocket_message() {
             None => Ok(None),
             Some(WebSocketMessageSet::Single(message)) => Ok(Some(message)),
@@ -1014,18 +1014,18 @@ impl Request {
     /// Finds the single selected operation in a GraphQL variant list.
     fn selected_graphql_variant_index(
         variants: &[GraphqlBodyVariant],
-    ) -> Result<usize, GraphqlRequestError> {
+    ) -> Result<usize, RequestProtocolError> {
         let mut selected = variants
             .iter()
             .enumerate()
             .filter(|(_, variant)| variant.selected);
         let (index, _) = selected.next().ok_or_else(|| {
-            GraphqlRequestError::InvalidBodySelection(
+            RequestProtocolError::InvalidBodySelection(
                 "GraphQL body variants have no selected value".to_owned(),
             )
         })?;
         if selected.next().is_some() {
-            return Err(GraphqlRequestError::InvalidBodySelection(
+            return Err(RequestProtocolError::InvalidBodySelection(
                 "GraphQL body variants have multiple selected values".to_owned(),
             ));
         }
@@ -1033,7 +1033,7 @@ impl Request {
     }
 
     /// Returns the selected native GraphQL operation.
-    pub fn selected_graphql(&self) -> Result<Option<&GraphqlOperation>, GraphqlRequestError> {
+    pub fn selected_graphql(&self) -> Result<Option<&GraphqlOperation>, RequestProtocolError> {
         match self.graphql() {
             None => Ok(None),
             Some(GraphqlBody::Single(operation)) => Ok(Some(operation)),
@@ -1046,9 +1046,9 @@ impl Request {
     pub fn apply_graphql_update(
         &mut self,
         update: &GraphqlUpdate,
-    ) -> Result<(), GraphqlRequestError> {
+    ) -> Result<(), RequestProtocolError> {
         let RequestKind::Graphql { body } = &mut self.kind else {
-            return Err(GraphqlRequestError::NotGraphql);
+            return Err(RequestProtocolError::NotGraphql);
         };
         let operation =
             match body.get_or_insert_with(|| GraphqlBody::Single(GraphqlOperation::default())) {
@@ -1066,14 +1066,14 @@ impl Request {
     ///
     /// Native GraphQL requests become GraphQL-over-HTTP: GET requests carry the selected
     /// operation in query parameters, other methods carry a JSON envelope body.
-    pub fn into_http(mut self) -> Result<PreparedHttpRequest, GraphqlRequestError> {
+    pub fn into_http(mut self) -> Result<PreparedHttpRequest, RequestProtocolError> {
         let operation = match std::mem::take(&mut self.kind) {
             http @ RequestKind::Http { .. } => {
                 self.kind = http;
                 return Ok(PreparedHttpRequest(self));
             }
             RequestKind::WebSocket { .. } => {
-                return Err(GraphqlRequestError::UnsupportedExecution(
+                return Err(RequestProtocolError::UnsupportedExecution(
                     RequestProtocol::WebSocket,
                 ));
             }

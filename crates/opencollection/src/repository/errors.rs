@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, io, path::PathBuf};
 
-use probe_core::{EnvironmentResolutionError, GraphqlRequestError};
+use probe_core::{EnvironmentResolutionError, RequestProtocolError};
 
 use crate::ParseError;
 
@@ -145,8 +145,8 @@ pub enum SaveError {
     CommittedButNotIntegrated,
     /// A retained source document no longer has the expected OpenCollection shape.
     InvalidDocument(String),
-    /// A native GraphQL update cannot be applied to the selected request.
-    Graphql(GraphqlRequestError),
+    /// The update is invalid for the selected request's protocol.
+    Protocol(RequestProtocolError),
     /// Domain environment mutation failed.
     Environment(EnvironmentResolutionError),
     /// YAML serialization failed.
@@ -184,7 +184,7 @@ impl fmt::Display for SaveError {
                     "cannot update retained OpenCollection document: {message}"
                 )
             }
-            Self::Graphql(error) => write!(formatter, "{error}"),
+            Self::Protocol(error) => write!(formatter, "{error}"),
             Self::Environment(error) => write!(formatter, "{error}"),
             Self::Serialize(source) => {
                 write!(formatter, "cannot serialize OpenCollection YAML: {source}")
@@ -201,7 +201,7 @@ impl Error for SaveError {
         match self {
             Self::Serialize(source) => Some(source),
             Self::Io { source, .. } => Some(source),
-            Self::Graphql(error) => Some(error),
+            Self::Protocol(error) => Some(error),
             Self::RequestNotFound(_)
             | Self::FolderNotFound(_)
             | Self::EmptyUpdate

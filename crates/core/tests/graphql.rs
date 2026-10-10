@@ -1,7 +1,7 @@
 use probe_core::{
     Body, BodyVariant, Environment, EnvironmentVariable, FieldPatch, GraphqlBody,
-    GraphqlBodyVariant, GraphqlOperation, GraphqlRequestError, GraphqlUpdate, QueryParameter,
-    RawBody, RawBodyKind, Request, RequestBody, RequestKind, RequestProtocol, RequestUpdate,
+    GraphqlBodyVariant, GraphqlOperation, GraphqlUpdate, QueryParameter, RawBody, RawBodyKind,
+    Request, RequestBody, RequestKind, RequestProtocol, RequestProtocolError, RequestUpdate,
     Variable, VariableValue, VariableValueSet, WebSocketMessage, WebSocketMessageKind,
     WebSocketMessageSet, WebSocketMessageVariant, resolve_environment, resolve_request,
 };
@@ -263,7 +263,7 @@ fn owned_graphql_preparation_selects_one_body_variant() {
         }
         let request = graphql_request(Some(GraphqlBody::Variants(variants)));
         assert!(
-            matches!(request.into_http(), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+            matches!(request.into_http(), Err(RequestProtocolError::InvalidBodySelection(error)) if error.contains(message))
         );
     }
 }
@@ -326,10 +326,10 @@ fn graphql_variant_selection_is_shared_by_read_and_update() {
     ] {
         let mut request = graphql_request(Some(variants(first, second)));
         assert!(
-            matches!(request.selected_graphql(), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+            matches!(request.selected_graphql(), Err(RequestProtocolError::InvalidBodySelection(error)) if error.contains(message))
         );
         assert!(
-            matches!(request.apply_graphql_update(&GraphqlUpdate::default()), Err(GraphqlRequestError::InvalidBodySelection(error)) if error.contains(message))
+            matches!(request.apply_graphql_update(&GraphqlUpdate::default()), Err(RequestProtocolError::InvalidBodySelection(error)) if error.contains(message))
         );
     }
 
@@ -381,7 +381,7 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
             ..RequestUpdate::default()
         }
         .apply(&mut ordinary_http),
-        Err(GraphqlRequestError::NotGraphql)
+        Err(RequestProtocolError::NotGraphql)
     );
     assert_eq!(ordinary_http, original_http);
 
@@ -393,7 +393,7 @@ fn request_update_applies_graphql_fields_and_rejects_http_targets() {
             ..RequestUpdate::default()
         }
         .apply(&mut graphql),
-        Err(GraphqlRequestError::NotHttp)
+        Err(RequestProtocolError::NotHttp)
     );
     assert_eq!(graphql, original_graphql);
 }

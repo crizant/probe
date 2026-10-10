@@ -491,7 +491,7 @@ fn request_value(
     if let Some(method) = method {
         if protocol.default_method().is_none() {
             return Err(StructureError::InvalidDocument(
-                probe_core::GraphqlRequestError::UnsupportedField {
+                probe_core::RequestProtocolError::UnsupportedField {
                     protocol,
                     field: "an HTTP method",
                 }

@@ -48,11 +48,11 @@ pub use path_parameters::{
 };
 pub use request::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, BodyVariant, FieldPatch,
-    FileReference, FormField, GraphqlBody, GraphqlBodyVariant, GraphqlOperation,
-    GraphqlRequestError, GraphqlUpdate, Header, MultipartPart, MultipartPartKind, MultipartValue,
-    PreparedHttpRequest, QueryParameter, RawBody, RawBodyKind, Request, RequestBody,
-    RequestDiffError, RequestKind, RequestProtocol, RequestSettings, RequestUpdate,
-    WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet, WebSocketMessageVariant,
+    FileReference, FormField, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, GraphqlUpdate,
+    Header, MultipartPart, MultipartPartKind, MultipartValue, PreparedHttpRequest, QueryParameter,
+    RawBody, RawBodyKind, Request, RequestBody, RequestDiffError, RequestKind, RequestProtocol,
+    RequestProtocolError, RequestSettings, RequestUpdate, WebSocketMessage, WebSocketMessageKind,
+    WebSocketMessageSet, WebSocketMessageVariant,
 };
 pub use request_resolution::{
     RequestVariableInfo, VariableUsage, discover_request_variables, request_secret_usages,

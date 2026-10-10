@@ -1,6 +1,6 @@
 use probe_core::{
-    Body, FieldPatch, GraphqlRequestError, GraphqlUpdate, Header, QueryParameter, RawBody,
-    RawBodyKind, Request, RequestBody, RequestDiffError, RequestKind, RequestProtocol,
+    Body, FieldPatch, GraphqlUpdate, Header, QueryParameter, RawBody, RawBodyKind, Request,
+    RequestBody, RequestDiffError, RequestKind, RequestProtocol, RequestProtocolError,
     RequestUpdate, VariableUsage, WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet,
     WebSocketMessageVariant, discover_request_variables,
 };
@@ -127,7 +127,7 @@ fn message_updates_target_only_the_selected_variant() {
         let mut ambiguous = websocket(Some(variants(selection)));
         assert!(matches!(
             ambiguous.selected_websocket_message(),
-            Err(GraphqlRequestError::InvalidBodySelection(message)) if message.contains(error)
+            Err(RequestProtocolError::InvalidBodySelection(message)) if message.contains(error)
         ));
         let original = ambiguous.clone();
         let update = RequestUpdate {
@@ -137,7 +137,7 @@ fn message_updates_target_only_the_selected_variant() {
         };
         assert!(matches!(
             update.apply(&mut ambiguous),
-            Err(GraphqlRequestError::InvalidBodySelection(message)) if message.contains(error)
+            Err(RequestProtocolError::InvalidBodySelection(message)) if message.contains(error)
         ));
         assert_eq!(ambiguous, original);
     }
@@ -226,7 +226,7 @@ fn updates_reject_fields_outside_the_request_protocol() {
         let error = update.apply(&mut request).unwrap_err();
         assert_eq!(
             error,
-            GraphqlRequestError::UnsupportedField {
+            RequestProtocolError::UnsupportedField {
                 protocol: RequestProtocol::WebSocket,
                 field,
             }
@@ -247,7 +247,7 @@ fn updates_reject_fields_outside_the_request_protocol() {
     };
     assert_eq!(
         graphql.apply(&mut websocket(None)),
-        Err(GraphqlRequestError::NotGraphql)
+        Err(RequestProtocolError::NotGraphql)
     );
     let message_update = RequestUpdate {
         websocket_message: FieldPatch::Set(message(WebSocketMessageKind::Text, "x")),
@@ -264,7 +264,7 @@ fn updates_reject_fields_outside_the_request_protocol() {
         };
         assert_eq!(
             message_update.apply(&mut request),
-            Err(GraphqlRequestError::NotWebSocket)
+            Err(RequestProtocolError::NotWebSocket)
         );
     }
 
@@ -308,7 +308,7 @@ fn websocket_requests_are_not_prepared_for_http_execution() {
     let error = websocket(None).into_http().unwrap_err();
     assert_eq!(
         error,
-        GraphqlRequestError::UnsupportedExecution(RequestProtocol::WebSocket)
+        RequestProtocolError::UnsupportedExecution(RequestProtocol::WebSocket)
     );
     assert_eq!(
         error.to_string(),

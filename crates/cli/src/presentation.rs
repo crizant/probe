@@ -3,8 +3,8 @@ use std::path::Path;
 use crate::CommandOutput;
 
 use probe_core::{
-    AuthenticationValue, Body, Documentation, GraphqlOperation, GraphqlRequestError,
-    MultipartPartKind, MultipartValue, RawBodyKind, Request, RequestBody, VariableValueType,
+    AuthenticationValue, Body, Documentation, GraphqlOperation, MultipartPartKind, MultipartValue,
+    RawBodyKind, Request, RequestBody, RequestProtocolError, VariableValueType,
 };
 use probe_http::{HttpResponse, MAX_IN_MEMORY_RESPONSE_BYTES};
 use serde_json::{Map, Value, json};
@@ -192,14 +192,14 @@ pub(super) fn dry_run_human(request: &Request) -> String {
     )
 }
 
-pub(super) fn dry_run_json(request: &Request) -> Result<Value, GraphqlRequestError> {
+pub(super) fn dry_run_json(request: &Request) -> Result<Value, RequestProtocolError> {
     Ok(json!({
         "dryRun": true,
         "request": run_request_json(request)?,
     }))
 }
 
-pub(super) fn run_request_json(request: &Request) -> Result<Value, GraphqlRequestError> {
+pub(super) fn run_request_json(request: &Request) -> Result<Value, RequestProtocolError> {
     Ok(json!({
         "type": request.kind.as_str(),
         "graphql": request.selected_graphql()?.map(graphql_json),
@@ -222,7 +222,7 @@ pub(super) fn request_human(
     selector: &str,
     environment: Option<&str>,
     request: &Request,
-) -> Result<String, GraphqlRequestError> {
+) -> Result<String, RequestProtocolError> {
     let mut output = String::new();
     output.push_str(&format!(
         "Name: {}\nSelector: {selector}\nType: {}\nEnvironment: {}\nMethod: {}\nURL: {}\n",
@@ -315,7 +315,7 @@ pub(super) fn request_json(
     selector: &str,
     environment: Option<&str>,
     request: &Request,
-) -> Result<Value, GraphqlRequestError> {
+) -> Result<Value, RequestProtocolError> {
     let headers: Vec<_> = request
         .headers
         .iter()

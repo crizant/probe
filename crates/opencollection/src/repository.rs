@@ -813,7 +813,7 @@ impl LoadedWorkspace {
             .request_mut(located.key)
             .expect("repository request key must resolve");
         let mut updated = request.clone();
-        update.apply(&mut updated).map_err(SaveError::Graphql)?;
+        update.apply(&mut updated).map_err(SaveError::Protocol)?;
         *request = updated;
 
         let persistence = located.persistence.ok_or(SaveError::ReadOnlySource)?;
@@ -1562,7 +1562,9 @@ pub(crate) fn apply_request_update(
         }
         if !update.body_content.is_unchanged() {
             if protocol == RequestProtocol::Graphql {
-                return Err(SaveError::Graphql(probe_core::GraphqlRequestError::NotHttp));
+                return Err(SaveError::Protocol(
+                    probe_core::RequestProtocolError::NotHttp,
+                ));
             }
             match &update.body_content {
                 FieldPatch::Set(body) => apply_http_body_content(details, body)?,
@@ -1580,8 +1582,8 @@ pub(crate) fn apply_request_update(
         }
         if let Some(graphql) = &update.graphql {
             if protocol != RequestProtocol::Graphql {
-                return Err(SaveError::Graphql(
-                    probe_core::GraphqlRequestError::NotGraphql,
+                return Err(SaveError::Protocol(
+                    probe_core::RequestProtocolError::NotGraphql,
                 ));
             }
             apply_graphql_update(details, graphql)?;
@@ -1600,8 +1602,8 @@ fn validate_websocket_fields(websocket: bool, update: &RequestUpdate) -> Result<
         return if update.websocket_message.is_unchanged() {
             Ok(())
         } else {
-            Err(SaveError::Graphql(
-                probe_core::GraphqlRequestError::NotWebSocket,
+            Err(SaveError::Protocol(
+                probe_core::RequestProtocolError::NotWebSocket,
             ))
         };
     }
@@ -1624,8 +1626,8 @@ fn validate_websocket_fields(websocket: bool, update: &RequestUpdate) -> Result<
     } else {
         return Ok(());
     };
-    Err(SaveError::Graphql(
-        probe_core::GraphqlRequestError::UnsupportedField {
+    Err(SaveError::Protocol(
+        probe_core::RequestProtocolError::UnsupportedField {
             protocol: RequestProtocol::WebSocket,
             field,
         },
@@ -1649,13 +1651,13 @@ fn apply_websocket_message(
             .unwrap_or(false)
     });
     let variant = selected.next().ok_or_else(|| {
-        SaveError::Graphql(probe_core::GraphqlRequestError::InvalidBodySelection(
+        SaveError::Protocol(probe_core::RequestProtocolError::InvalidBodySelection(
             "WebSocket message variants have no selected value".to_owned(),
         ))
     })?;
     if selected.next().is_some() {
-        return Err(SaveError::Graphql(
-            probe_core::GraphqlRequestError::InvalidBodySelection(
+        return Err(SaveError::Protocol(
+            probe_core::RequestProtocolError::InvalidBodySelection(
                 "WebSocket message variants have multiple selected values".to_owned(),
             ),
         ));
@@ -1695,13 +1697,13 @@ fn apply_http_body_content(
                     .unwrap_or(false)
             });
             let variant = selected.next().ok_or_else(|| {
-                SaveError::Graphql(probe_core::GraphqlRequestError::InvalidBodySelection(
+                SaveError::Protocol(probe_core::RequestProtocolError::InvalidBodySelection(
                     "request body variants have no selected value".to_owned(),
                 ))
             })?;
             if selected.next().is_some() {
-                return Err(SaveError::Graphql(
-                    probe_core::GraphqlRequestError::InvalidBodySelection(
+                return Err(SaveError::Protocol(
+                    probe_core::RequestProtocolError::InvalidBodySelection(
                         "request body variants have multiple selected values".to_owned(),
                     ),
                 ));
