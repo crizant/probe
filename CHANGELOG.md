@@ -8,7 +8,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
-- Renaming GraphQL requests in directory-based OpenCollection collections no longer crashes.
+- Fixed renaming, reordering, and moving GraphQL requests in directory-based
+  OpenCollection collections.
 
 ### Added
 

@@ -1694,7 +1694,7 @@ fn unbundled_graphql_rename_dialog_keeps_open_tab_and_dirty_draft(cx: &mut TestA
     ));
     copy_unbundled_fixture(&source, &fixture);
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let key = workspace.request_key("group/unsupported.yml").unwrap();
+    let key = workspace.request_key("group/graphql.yml").unwrap();
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
@@ -1717,7 +1717,7 @@ fn unbundled_graphql_rename_dialog_keeps_open_tab_and_dirty_draft(cx: &mut TestA
             assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
             assert!(view.structure_dialog.is_none(), "{:?}", toast_debug(view));
             let loaded = view.loaded_workspace.as_ref().unwrap();
-            assert!(loaded.request_key("group/unsupported.yml").is_none());
+            assert!(loaded.request_key("group/graphql.yml").is_none());
             let renamed = loaded.request_key("group/renamed-graphql.yml").unwrap();
             let request = loaded.workspace().request(renamed).unwrap();
             assert_eq!(request.metadata.name.as_deref(), Some("Renamed GraphQL"));
@@ -1739,7 +1739,7 @@ fn unbundled_graphql_rename_dialog_keeps_open_tab_and_dirty_draft(cx: &mut TestA
     assert_eq!(saved.metadata.name.as_deref(), Some("Renamed GraphQL"));
     assert_eq!(saved.kind.protocol(), probe_core::RequestProtocol::Graphql);
     assert_eq!(saved.url.as_deref(), Some("https://example.com/graphql"));
-    assert!(!fixture.join("group/unsupported.yml").exists());
+    assert!(!fixture.join("group/graphql.yml").exists());
     fs::remove_dir_all(fixture).unwrap();
 }
 

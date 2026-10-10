@@ -338,7 +338,7 @@ fn unbundled_graphql_rename_preserves_request_order_and_unknown_fields() {
     let root = temporary_path("graphql-rename-unbundled");
     copy_directory(&fixture("phase16-unbundled"), &root);
     let mut loaded = load_workspace(&root).unwrap();
-    let selector = "group/unsupported.yml";
+    let selector = "group/graphql.yml";
     let key = loaded.request_key(selector).unwrap();
     let mut expected = loaded.workspace().request(key).unwrap().clone();
     expected.metadata.name = Some("Renamed GraphQL".to_owned());
@@ -384,11 +384,103 @@ fn unbundled_graphql_rename_preserves_request_order_and_unknown_fields() {
 }
 
 #[test]
+fn unbundled_graphql_reorder_and_move_preserve_request_and_unknown_fields() {
+    let root = temporary_path("graphql-reorder-move-unbundled");
+    copy_directory(&fixture("phase16-unbundled"), &root);
+    let mut loaded = load_workspace(&root).unwrap();
+    let selector = "group/graphql.yml";
+    let mut expected = loaded
+        .workspace()
+        .request(loaded.request_key(selector).unwrap())
+        .unwrap()
+        .clone();
+    expected.metadata.sequence = Some(1.0);
+    let mut expected_yaml: serde_yaml_ng::Value =
+        serde_yaml_ng::from_slice(&fs::read(root.join(selector)).unwrap()).unwrap();
+    expected_yaml["info"]["seq"] = 1.into();
+
+    let reordered = loaded
+        .apply_structure(StructureOperation::Reorder {
+            target: ItemLocator::new(ItemKind::Request, selector),
+            index: 0,
+        })
+        .unwrap();
+    assert_eq!(reordered.selector.as_deref(), Some(selector));
+    assert_eq!(reordered.parent.as_deref(), Some("group"));
+    assert_eq!(reordered.index, Some(0));
+    let mut reloaded = load_workspace(&root).unwrap();
+    assert_eq!(
+        reloaded
+            .requests()
+            .iter()
+            .map(|item| item.selector())
+            .collect::<Vec<_>>(),
+        ["alpha.yml", "group/graphql.yml", "group/nested.yml"]
+    );
+    assert_eq!(
+        reloaded
+            .workspace()
+            .request(reloaded.request_key(selector).unwrap()),
+        Some(&expected)
+    );
+
+    let moved = reloaded
+        .apply_structure(StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Request, selector),
+            parent: None,
+            index: Some(0),
+        })
+        .unwrap();
+    assert_eq!(moved.previous_selector.as_deref(), Some(selector));
+    assert_eq!(moved.selector.as_deref(), Some("graphql.yml"));
+    assert_eq!(moved.parent, None);
+    assert_eq!(moved.index, Some(0));
+    assert_eq!(
+        moved.selector_remaps.get(selector).map(String::as_str),
+        Some("graphql.yml")
+    );
+    let reloaded = load_workspace(&root).unwrap();
+    assert_eq!(
+        reloaded
+            .requests()
+            .iter()
+            .map(|item| item.selector())
+            .collect::<Vec<_>>(),
+        ["graphql.yml", "alpha.yml", "group/nested.yml"]
+    );
+    assert_eq!(
+        reloaded
+            .workspace()
+            .request(reloaded.request_key("graphql.yml").unwrap()),
+        Some(&expected)
+    );
+    assert_eq!(
+        reloaded
+            .workspace()
+            .request(reloaded.request_key("group/nested.yml").unwrap())
+            .unwrap()
+            .metadata
+            .sequence,
+        Some(1.0)
+    );
+    assert!(reloaded.request_key(selector).is_none());
+    assert!(!root.join(selector).exists());
+    assert_eq!(
+        serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(
+            &fs::read(root.join("graphql.yml")).unwrap()
+        )
+        .unwrap(),
+        expected_yaml
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
     let root = temporary_path("phase16-unbundled");
     copy_directory(&fixture("phase16-unbundled"), &root);
     let mut graphql: serde_yaml_ng::Value =
-        serde_yaml_ng::from_slice(&fs::read(root.join("group/unsupported.yml")).unwrap()).unwrap();
+        serde_yaml_ng::from_slice(&fs::read(root.join("group/graphql.yml")).unwrap()).unwrap();
     graphql["info"]["seq"] = 2.into();
     let mut loaded = load_workspace(&root).unwrap();
 
@@ -461,7 +553,7 @@ fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
     );
     assert_eq!(
         serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(
-            &fs::read(root.join("group/unsupported.yml")).unwrap()
+            &fs::read(root.join("group/graphql.yml")).unwrap()
         )
         .unwrap(),
         graphql
