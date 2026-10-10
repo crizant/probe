@@ -336,6 +336,13 @@ fn websocket_rejects_fields_outside_its_opencollection_shape_without_writing() {
             },
             "an HTTP body",
         ),
+        (
+            RequestUpdate {
+                body_content: FieldPatch::Clear,
+                ..RequestUpdate::default()
+            },
+            "an HTTP body",
+        ),
     ] {
         let error = loaded.update_request("items/0", &update).unwrap_err();
         assert!(
@@ -346,6 +353,22 @@ fn websocket_rejects_fields_outside_its_opencollection_shape_without_writing() {
                     field: rejected,
                 }) if rejected == field
             ),
+            "{field}: {error:?}"
+        );
+        let error = loaded
+            .apply_structure(StructureOperation::CreateRequest {
+                parent: None,
+                index: None,
+                name: "Invalid".to_owned(),
+                method: None,
+                url: None,
+                protocol: RequestProtocol::WebSocket,
+                graphql: None,
+                update: Some(update),
+            })
+            .unwrap_err();
+        assert!(
+            matches!(&error, StructureError::InvalidDocument(message) if message.ends_with(field)),
             "{field}: {error:?}"
         );
     }
@@ -363,6 +386,31 @@ fn websocket_rejects_fields_outside_its_opencollection_shape_without_writing() {
         SaveError::Protocol(RequestProtocolError::NotWebSocket)
     ));
     assert_eq!(fs::read(&path).unwrap(), original);
+
+    for (update, name) in [
+        (
+            RequestUpdate {
+                query_parameters: Some(vec![parameter.clone()]),
+                ..RequestUpdate::default()
+            },
+            "replay",
+        ),
+        (
+            RequestUpdate {
+                path_parameters: Some(vec![QueryParameter {
+                    name: "id".to_owned(),
+                    ..parameter.clone()
+                }]),
+                ..RequestUpdate::default()
+            },
+            "id",
+        ),
+    ] {
+        loaded.update_request("items/2", &update).unwrap();
+        let saved = yaml(&path);
+        let params = saved["items"][2]["http"]["params"].as_sequence().unwrap();
+        assert!(params.iter().any(|param| param["name"] == name), "{name}");
+    }
 }
 
 #[test]
@@ -425,29 +473,6 @@ fn websocket_structure_operations_create_rename_and_reorder() {
         })
         .unwrap_err();
     assert!(matches!(error, StructureError::InvalidDocument(_)));
-    let error = loaded
-        .apply_structure(StructureOperation::CreateRequest {
-            parent: None,
-            index: None,
-            name: "Invalid".to_owned(),
-            method: None,
-            url: None,
-            protocol: RequestProtocol::WebSocket,
-            graphql: None,
-            update: Some(RequestUpdate {
-                query_parameters: Some(vec![QueryParameter {
-                    name: "replay".to_owned(),
-                    value: "true".to_owned(),
-                    disabled: false,
-                }]),
-                ..RequestUpdate::default()
-            }),
-        })
-        .unwrap_err();
-    assert!(
-        matches!(&error, StructureError::InvalidDocument(message) if message.contains("query parameters")),
-        "{error:?}"
-    );
     let error = loaded
         .apply_structure(StructureOperation::CreateRequest {
             parent: None,
@@ -534,7 +559,7 @@ fn websocket_structure_operations_create_rename_and_reorder() {
 }
 
 #[test]
-fn created_request_settings_contain_only_keys_valid_for_the_protocol() {
+fn created_requests_contain_only_fields_and_settings_valid_for_the_protocol() {
     let path = temporary_path("websocket-settings.yml");
     let settings = probe_core::RequestSettings {
         timeout: Some(Duration::from_millis(1500)),
@@ -544,6 +569,12 @@ fn created_request_settings_contain_only_keys_valid_for_the_protocol() {
     };
     let item = |kind| {
         CollectionItem::Request(Request {
+            method: Some("GET".to_owned()),
+            query_parameters: vec![QueryParameter {
+                name: "replay".to_owned(),
+                value: "true".to_owned(),
+                disabled: false,
+            }],
             settings: settings.clone(),
             kind,
             ..Request::default()
@@ -568,14 +599,19 @@ fn created_request_settings_contain_only_keys_valid_for_the_protocol() {
             .map(|key| key.as_str().unwrap().to_owned())
             .collect::<Vec<_>>()
     };
-    for index in [0, 1] {
+    for (index, section) in [(0, "http"), (1, "graphql")] {
         assert_eq!(
             keys(index),
             ["timeout", "followRedirects", "maxRedirects"],
             "item {index}"
         );
+        let details = &saved["items"][index][section];
+        assert_eq!(details["method"], "GET", "item {index}");
+        assert_eq!(details["params"][0]["name"], "replay", "item {index}");
     }
     assert_eq!(keys(2), ["timeout", "keepAliveInterval"]);
+    assert!(saved["items"][2]["websocket"].get("method").is_none());
+    assert!(saved["items"][2]["websocket"].get("params").is_none());
     assert_eq!(saved["items"][2]["settings"]["timeout"], 1500.0);
     assert_eq!(saved["items"][2]["settings"]["keepAliveInterval"], 30000.0);
 }

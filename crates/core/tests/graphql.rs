@@ -109,9 +109,23 @@ fn protocol_identity_and_defaults_are_independent_of_body() {
         assert_eq!(protocol.default_method(), method);
         assert_eq!(kind.is_graphql(), protocol == RequestProtocol::Graphql);
         assert_eq!(kind.is_websocket(), protocol == RequestProtocol::WebSocket);
+        let mut request = Request {
+            kind,
+            ..Request::default()
+        };
+        let body = request.http_body().cloned();
+        assert_eq!(request.http_body_mut().cloned(), body);
     }
     assert_eq!(RequestProtocol::from_name("grpc"), None);
     assert_eq!(RequestProtocol::from_name("WebSocket"), None);
+    for (kind, name) in [
+        (WebSocketMessageKind::Text, "text"),
+        (WebSocketMessageKind::Json, "json"),
+        (WebSocketMessageKind::Xml, "xml"),
+        (WebSocketMessageKind::Binary, "binary"),
+    ] {
+        assert_eq!(kind.as_str(), name);
+    }
 }
 
 fn native_request(method: &str) -> Request {

@@ -107,11 +107,14 @@ fn message_updates_target_only_the_selected_variant() {
         unreachable!();
     };
     messages[0].title = "Renamed".to_owned();
+    let error = RequestUpdate::between(Some(&base), &retitled).unwrap_err();
     assert_eq!(
-        RequestUpdate::between(Some(&base), &retitled),
-        Err(RequestDiffError::UnsupportedChange(
-            "WebSocket message variants"
-        ))
+        error,
+        RequestDiffError::UnsupportedChange("WebSocket message variants")
+    );
+    assert_eq!(
+        error.to_string(),
+        "cannot save changed WebSocket message variants"
     );
     assert_eq!(
         RequestUpdate::between(None, &base),
@@ -152,9 +155,19 @@ fn unchanged_variants_without_one_selected_message_do_not_block_other_edits() {
 
         let update = RequestUpdate::between(Some(&base), &current).unwrap();
         assert!(update.websocket_message.is_unchanged());
-        let mut restored = base;
+        let mut restored = base.clone();
         update.apply(&mut restored).unwrap();
         assert_eq!(restored, current);
+
+        let mut cleared = base.clone();
+        cleared.kind = RequestKind::WebSocket { message: None };
+        let error = RequestUpdate::between(Some(&base), &cleared).unwrap_err();
+        let RequestDiffError::Protocol(RequestProtocolError::InvalidBodySelection(message)) =
+            &error
+        else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(error.to_string(), *message);
     }
 }
 

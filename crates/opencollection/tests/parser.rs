@@ -358,10 +358,15 @@ fn websocket_settings_reject_invalid_keep_alive_intervals_only_for_websocket() {
             "opencollection: 1.0.0\ninfo:\n  name: Settings\nbundled: true\nitems:\n- info:\n    name: Item\n    type: {item_type}\n  {item_type}:\n    url: wss://example.com\n  settings:\n    keepAliveInterval: {interval}\n"
         )
     };
-    for interval in ["-1", "soon", "1e400"] {
+    for (interval, message) in [
+        ("-1", "must be a finite non-negative number"),
+        (".inf", "must be a finite non-negative number"),
+        ("soon", "must be milliseconds or 'inherit'"),
+    ] {
         let error = parse(&document("websocket", interval)).unwrap_err();
         assert!(
-            error.to_string().contains("keep-alive interval"),
+            error.to_string().contains("keep-alive interval")
+                && error.to_string().contains(message),
             "{interval}: {error}"
         );
     }

@@ -1,7 +1,7 @@
 use crate::{ImportDiagnosticSeverity, YaakImportError, YaakSourceFormat, inspect_yaak_source};
 use probe_core::{
     AuthenticationKind, Body, CollectionItem, GraphqlBody, MultipartPartKind, MultipartValue,
-    RequestBody, WorkspaceItemRef,
+    RequestBody, RequestSettings, WorkspaceItemRef,
 };
 use probe_opencollection::create_bundled_workspace_from_collection;
 use std::{fs, path::PathBuf, time::SystemTime};
@@ -37,6 +37,14 @@ fn converts_export_http_hierarchy_and_environment() {
     assert_eq!(request.path_parameters[0].name, "id");
     assert_eq!(request.query_parameters[0].name, "page");
     assert_eq!(request.headers[0].value, "{{TOKEN}}");
+    assert_eq!(
+        request.settings,
+        RequestSettings {
+            timeout: Some(std::time::Duration::from_millis(2500)),
+            follow_redirects: Some(true),
+            ..RequestSettings::default()
+        }
+    );
     assert_eq!(
         request.authentication.as_ref().unwrap().kind,
         AuthenticationKind::Bearer

@@ -281,15 +281,12 @@ impl RequestUpdate {
         }
         let websocket_message_changed =
             base.and_then(Request::websocket_message) != current.websocket_message();
-        let (base_message, current_message) = if websocket_message_changed {
-            (
-                base.map(Request::selected_websocket_message)
-                    .transpose()?
-                    .flatten(),
-                current.selected_websocket_message()?,
-            )
+        let current_message = if websocket_message_changed {
+            // A saved message set without exactly one selected variant cannot be replaced or cleared.
+            base.map(Request::selected_websocket_message).transpose()?;
+            current.selected_websocket_message()?
         } else {
-            (None, None)
+            None
         };
         if base.is_none()
             && matches!(
@@ -373,9 +370,7 @@ impl RequestUpdate {
                 _ => None,
             },
             websocket_message: match &current.kind {
-                RequestKind::WebSocket { .. }
-                    if websocket_message_changed && base_message != current_message =>
-                {
+                RequestKind::WebSocket { .. } if websocket_message_changed => {
                     FieldPatch::from_optional(current_message.cloned())
                 }
                 _ => FieldPatch::Unchanged,
