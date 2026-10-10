@@ -496,7 +496,16 @@ returns the 16 MiB preview with a retention warning; existing retained responses
 native WebSocket fields, performs ws:// or wss:// upgrades using Rustls with web PKI
 roots, applies enabled headers and Basic/Bearer/API-key authentication with the same
 semantics as HTTP, and enforces the connection/handshake timeout. Errors are typed
-categories without request values or peer diagnostics. Ping/pong and periodic
+categories without request values or peer diagnostics. Upgrade rejection errors retain
+only the numeric HTTP status (for example, 401 or 426), without response headers or body.
+The last enabled user `Host` header overrides the generated authority. Other
+handshake-owned headers (`Upgrade`, `Connection`, `Sec-WebSocket-Key`,
+`Sec-WebSocket-Version`, `Sec-WebSocket-Accept`, and `Sec-WebSocket-Extensions`)
+are rejected with `InvalidHeader` during preparation, including API-key header placement.
+Disabled headers are ignored. Ordinary `Sec-WebSocket-Protocol` request headers offer
+comma-separated, case-sensitive tokens: the server may select one offered token or
+return no subprotocol. Unoffered or multiple selections fail the handshake. Extensions
+remain unsupported. Ping/pong and periodic
 protocol Ping frames remain internal. With keep-alive enabled, a missing matching
 Pong by the next interval terminates the session with a typed keep-alive timeout.
 Heartbeat progress pauses with network reads under event backpressure. Rustls client

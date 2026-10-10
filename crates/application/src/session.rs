@@ -58,6 +58,7 @@ pub enum SessionError {
     Connection,
     Tls,
     Handshake,
+    HandshakeRejected { status: u16 },
     Protocol,
     Capacity,
     Closed,
@@ -79,6 +80,9 @@ impl fmt::Display for SessionError {
             Self::Connection => "streaming connection failed",
             Self::Tls => "streaming TLS failed",
             Self::Handshake => "streaming handshake failed",
+            Self::HandshakeRejected { status } => {
+                return write!(f, "streaming handshake rejected with HTTP status {status}");
+            }
             Self::Protocol => "streaming protocol failed",
             Self::Capacity => "streaming message exceeds capacity",
             Self::Closed => "streaming session is closed",
@@ -96,6 +100,7 @@ impl From<WebSocketError> for SessionError {
             WebSocketError::Connection => Self::Connection,
             WebSocketError::Tls => Self::Tls,
             WebSocketError::Handshake => Self::Handshake,
+            WebSocketError::HandshakeRejected { status } => Self::HandshakeRejected { status },
             WebSocketError::Protocol => Self::Protocol,
             WebSocketError::Capacity => Self::Capacity,
             WebSocketError::Closed => Self::Closed,
@@ -421,6 +426,10 @@ mod tests {
             (WebSocketError::Connection, SessionError::Connection),
             (WebSocketError::Tls, SessionError::Tls),
             (WebSocketError::Handshake, SessionError::Handshake),
+            (
+                WebSocketError::HandshakeRejected { status: 403 },
+                SessionError::HandshakeRejected { status: 403 },
+            ),
             (WebSocketError::Protocol, SessionError::Protocol),
             (WebSocketError::Capacity, SessionError::Capacity),
             (WebSocketError::Closed, SessionError::Closed),

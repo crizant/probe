@@ -468,7 +468,7 @@ async fn connection_failure_and_drop_release_socket() {
 
 #[tokio::test]
 #[allow(clippy::result_large_err)] // tungstenite fixes the handshake callback error type.
-async fn failed_upgrade_with_echoed_request_returns_only_category() {
+async fn rejected_upgrade_exposes_only_http_status() {
     bounded(async {
         let (listener, url) = listener().await;
         let server = tokio::spawn(async move {
@@ -491,7 +491,11 @@ async fn failed_upgrade_with_echoed_request_returns_only_category() {
             .connect()
             .await
             .unwrap_err();
-        assert_eq!(error, WebSocketError::Handshake);
+        assert_eq!(error, WebSocketError::HandshakeRejected { status: 403 });
+        assert_eq!(
+            error.to_string(),
+            "WebSocket upgrade rejected with HTTP status 403"
+        );
         assert!(!format!("{error:?} {error}").contains("private-secret"));
         server.await.unwrap();
     })
@@ -776,6 +780,155 @@ async fn closing_ignores_data_but_reports_protocol_errors() {
             // Repeated close after completed shutdown is harmless.
             assert_eq!(connection.close().await, Ok(()));
         }
+    })
+    .await;
+}
+
+#[tokio::test]
+#[allow(clippy::result_large_err)] // tungstenite fixes the handshake callback error type.
+async fn subprotocol_selection_must_be_single_and_offered() {
+    bounded(async {
+        for (offered, selected, accepted) in [
+            (&[][..], &[][..], true),
+            (&["chat"][..], &[][..], true),
+            (&["chat, superchat"][..], &["chat"][..], true),
+            (&["chat, superchat"][..], &["superchat"][..], true),
+            (&["chat", " superchat , third "][..], &[" third "][..], true),
+            (&["chat"][..], &["Chat"][..], false),
+            (&["chat"][..], &["unoffered"][..], false),
+            (&[][..], &["chat"][..], false),
+            (&["chat"][..], &["chat", "chat"][..], false),
+            (&["chat, superchat"][..], &["chat", "superchat"][..], false),
+            (&["chat, superchat"][..], &["chat, superchat"][..], false),
+            (&[""][..], &[""][..], false),
+        ] {
+            let (listener, url) = listener().await;
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let _ = accept_hdr_async(stream, move |_: &tokio_tungstenite::tungstenite::handshake::server::Request, mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    for protocol in selected {
+                        response.headers_mut().append("sec-websocket-protocol", protocol.parse().unwrap());
+                    }
+                    Ok(response)
+                }).await;
+            });
+            let mut req = request(url);
+            req.headers = offered.iter().map(|value| Header {
+                name: "Sec-WebSocket-Protocol".into(),
+                value: (*value).into(),
+                disabled: false,
+            }).collect();
+            // Disabled offers must never authorize a server's selection.
+            req.headers.push(Header { name: "Sec-WebSocket-Protocol".into(), value: "unoffered".into(), disabled: true });
+            let result = WebSocketRequest::new(&req).unwrap().connect().await;
+            if accepted {
+                drop(result.unwrap());
+            } else {
+                assert_eq!(result.unwrap_err(), WebSocketError::Handshake, "offered={offered:?}, selected={selected:?}");
+            }
+            server.await.unwrap();
+        }
+    }).await;
+}
+
+#[tokio::test]
+#[allow(clippy::result_large_err)] // tungstenite fixes the handshake callback error type.
+async fn host_override_is_unique_and_disabled_headers_are_ignored() {
+    bounded(async {
+        for override_host in [false, true] {
+            let (listener, url) = listener().await;
+            let expected = if override_host { "virtual.example:8080".to_owned() } else { listener.local_addr().unwrap().to_string() };
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let _ = accept_hdr_async(stream, move |req: &tokio_tungstenite::tungstenite::handshake::server::Request, response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    assert_eq!(req.headers().get_all("host").iter().count(), 1);
+                    assert_eq!(req.headers()["host"], expected);
+                    Ok(response)
+                }).await;
+            });
+            let mut req = request(url);
+            if override_host {
+                req.headers = vec![
+                    Header { name: "HOST".into(), value: "replaced.example".into(), disabled: false },
+                    Header { name: "Host".into(), value: "virtual.example:8080".into(), disabled: false },
+                ];
+            }
+            for name in ["Host", "Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Accept", "Sec-WebSocket-Extensions"] {
+                req.headers.push(Header { name: name.into(), value: "disabled".into(), disabled: true });
+            }
+            drop(WebSocketRequest::new(&req).unwrap().connect().await.unwrap());
+            server.await.unwrap();
+        }
+    }).await;
+}
+
+#[test]
+fn handshake_owned_headers_are_rejected_before_connecting() {
+    for name in [
+        "Upgrade",
+        "Connection",
+        "Sec-WebSocket-Key",
+        "Sec-WebSocket-Version",
+        "Sec-WebSocket-Accept",
+        "Sec-WebSocket-Extensions",
+    ] {
+        for name in [
+            name.to_owned(),
+            name.to_ascii_lowercase(),
+            name.to_ascii_uppercase(),
+        ] {
+            let mut req = request("ws://127.0.0.1:1".into());
+            req.headers.push(Header {
+                name: name.clone(),
+                value: "private-secret".into(),
+                disabled: false,
+            });
+            assert_eq!(
+                WebSocketRequest::new(&req).unwrap_err(),
+                WebSocketError::InvalidHeader
+            );
+            req.headers.clear();
+            req.authentication = Some(auth(
+                AuthenticationKind::ApiKey,
+                &[
+                    ("key", &name),
+                    ("value", "private-secret"),
+                    ("placement", "header"),
+                ],
+            ));
+            assert_eq!(
+                WebSocketRequest::new(&req).unwrap_err(),
+                WebSocketError::InvalidHeader
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn http_10_upgrade_is_rejected_as_malformed_handshake() {
+    bounded(async {
+        use tokio::io::AsyncWriteExt;
+        let (listener, url) = listener().await;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream
+                .write_all(b"HTTP/1.0 101 Switching Protocols\r\n\r\n")
+                .await
+                .unwrap();
+            // Keep the socket open until the client has read the response.
+            use tokio::io::AsyncReadExt;
+            let mut data = Vec::new();
+            stream.read_to_end(&mut data).await.unwrap();
+        });
+        assert_eq!(
+            WebSocketRequest::new(&request(url))
+                .unwrap()
+                .connect()
+                .await
+                .unwrap_err(),
+            WebSocketError::Handshake
+        );
+        server.await.unwrap();
     })
     .await;
 }

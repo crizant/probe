@@ -40,6 +40,9 @@ pub enum WebSocketError {
     Connection,
     Tls,
     Handshake,
+    HandshakeRejected {
+        status: u16,
+    },
     Protocol,
     Capacity,
     Closed,
@@ -67,6 +70,9 @@ impl fmt::Display for WebSocketError {
             Self::Connection => f.write_str("WebSocket connection failed"),
             Self::Tls => f.write_str("WebSocket TLS failed"),
             Self::Handshake => f.write_str("WebSocket upgrade failed"),
+            Self::HandshakeRejected { status } => {
+                write!(f, "WebSocket upgrade rejected with HTTP status {status}")
+            }
             Self::Protocol => f.write_str("WebSocket protocol error"),
             Self::Capacity => f.write_str("WebSocket message exceeds transport capacity"),
             Self::Closed => f.write_str("WebSocket connection is closed"),
@@ -103,6 +109,7 @@ impl WebSocketRequest {
     /// Prepare already-resolved fields without network I/O. Header and authentication
     /// semantics match probe-http: enabled named headers append; Basic/Bearer replace
     /// Authorization; API-key headers append and query keys append with form encoding.
+    /// Host uses the last enabled value. Other handshake-owned headers are rejected.
     pub fn new(request: &Request) -> Result<Self, WebSocketError> {
         if !request.kind.is_websocket() {
             return Err(WebSocketError::NotWebSocket);
@@ -249,8 +256,23 @@ fn api_key(auth: &Authentication) -> Result<(&str, &str, &str), WebSocketError> 
 fn append_header(headers: &mut HeaderMap, name: &str, value: &str) -> Result<(), WebSocketError> {
     let name =
         HeaderName::from_bytes(name.as_bytes()).map_err(|_| WebSocketError::InvalidHeader)?;
+    if matches!(
+        name.as_str(),
+        "upgrade"
+            | "connection"
+            | "sec-websocket-key"
+            | "sec-websocket-version"
+            | "sec-websocket-accept"
+            | "sec-websocket-extensions"
+    ) {
+        return Err(WebSocketError::InvalidHeader);
+    }
     let value = HeaderValue::from_str(value).map_err(|_| WebSocketError::InvalidHeader)?;
-    headers.append(name, value);
+    if name == http::header::HOST {
+        headers.insert(name, value);
+    } else {
+        headers.append(name, value);
+    }
     Ok(())
 }
 fn apply_auth(headers: &mut HeaderMap, auth: &Authentication) -> Result<(), WebSocketError> {
@@ -410,14 +432,24 @@ async fn handshake(
     url: &Url,
     headers: HeaderMap,
 ) -> Result<(), WebSocketError> {
+    let offered_protocols: Vec<&[u8]> = headers
+        .get_all(http::header::SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+        .map(<[u8]>::trim_ascii)
+        .collect();
     let mut random = [0; 16];
     getrandom::fill(&mut random).map_err(|_| WebSocketError::Connection)?;
     let key = STANDARD.encode(random);
     let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
     let path = &url[url::Position::BeforePath..url::Position::AfterQuery];
     let mut request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
+        "GET {path} HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
     ).into_bytes();
+    // A user Host replaces the generated authority, without duplicating it.
+    if !headers.contains_key(http::header::HOST) {
+        request.extend_from_slice(format!("Host: {host}\r\n").as_bytes());
+    }
     for (name, value) in &headers {
         request.extend_from_slice(name.as_str().as_bytes());
         request.extend_from_slice(b": ");
@@ -457,8 +489,10 @@ async fn handshake(
     parsed
         .parse(&response)
         .map_err(|_| WebSocketError::Handshake)?;
-    if (parsed.code, parsed.version) != (Some(101), Some(1)) {
-        return Err(WebSocketError::Handshake);
+    match (parsed.code, parsed.version) {
+        (Some(101), Some(1)) => {}
+        (Some(status), Some(1)) => return Err(WebSocketError::HandshakeRejected { status }),
+        _ => return Err(WebSocketError::Handshake),
     }
     let header = |name: &str| {
         parsed
@@ -484,9 +518,19 @@ async fn handshake(
                     .any(|token| token.trim_ascii().eq_ignore_ascii_case(b"upgrade"))
             })
         || header("Sec-WebSocket-Extensions").is_some()
-        || header("Sec-WebSocket-Protocol").is_some()
     {
         return Err(WebSocketError::Handshake);
+    }
+    let selected_protocols: Vec<&[u8]> = parsed
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("Sec-WebSocket-Protocol"))
+        .map(|header| header.value.trim_ascii())
+        .collect();
+    match selected_protocols.as_slice() {
+        [] => {}
+        [protocol] if !protocol.is_empty() && offered_protocols.contains(protocol) => {}
+        _ => return Err(WebSocketError::Handshake),
     }
     Ok(())
 }

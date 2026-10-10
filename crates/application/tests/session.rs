@@ -887,3 +887,46 @@ async fn missing_pong_is_one_terminal_error_followed_by_close() {
     })
     .await;
 }
+
+#[tokio::test]
+#[allow(clippy::result_large_err)] // tungstenite fixes the handshake callback error type.
+async fn prepared_handshake_rejections_expose_status_without_peer_diagnostics() {
+    bounded(async {
+        for status in [401, 403, 404, 426] {
+            let (listener, url) = listener().await;
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let result = accept_hdr_async(stream, move |_: &tokio_tungstenite::tungstenite::handshake::server::Request, _: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                        .status(status)
+                        .header("x-diagnostic", SECRET)
+                        .body(Some(format!("{SECRET}: unsafe request URL/header/message")))
+                        .unwrap())
+                }).await;
+                assert!(result.is_err());
+            });
+            let error = prepared(&request(&url, None)).into_websocket().unwrap().connect().await.unwrap_err();
+            assert_eq!(error, SessionError::HandshakeRejected { status });
+            assert_eq!(error.to_string(), format!("streaming handshake rejected with HTTP status {status}"));
+            let diagnostic = format!("{error:?} {error}");
+            assert!(!diagnostic.contains(SECRET));
+            assert!(!diagnostic.contains(&url));
+            assert!(!diagnostic.contains("x-diagnostic"));
+            assert!(std::error::Error::source(&error).is_none());
+            server.await.unwrap();
+        }
+    }).await;
+}
+
+#[test]
+fn prepared_handshake_owned_headers_fail_with_safe_configuration_error() {
+    let mut req = request("ws://127.0.0.1:1", None);
+    req.headers.push(Header {
+        name: "Upgrade".into(),
+        value: SECRET.into(),
+        disabled: false,
+    });
+    let error = prepared(&req).into_websocket().unwrap_err();
+    assert_eq!(error, SessionError::Configuration);
+    assert!(!format!("{error:?} {error}").contains(SECRET));
+}
