@@ -11,6 +11,7 @@ use serde_yaml_ng::{Mapping, Value};
 
 use probe_core::{FieldPatch, GraphqlUpdate, ItemKind, RequestProtocol, RequestUpdate};
 
+use crate::native_item::NativeItemType;
 use crate::repository::{
     LoadedWorkspace, SaveError, SaveLock, WorkspaceSource, apply_request_update, atomic_write,
     load_workspace, relative_selector,
@@ -582,10 +583,11 @@ fn ensure_kind(value: &Value, expected: ItemKind, selector: &str) -> Result<(), 
     let actual = value
         .get("info")
         .and_then(|info| info.get("type"))
-        .and_then(Value::as_str);
+        .and_then(Value::as_str)
+        .and_then(NativeItemType::from_name);
     let matches = match expected {
-        ItemKind::Request => actual.and_then(RequestProtocol::from_name).is_some(),
-        ItemKind::Folder => actual == Some("folder"),
+        ItemKind::Request => actual.is_some_and(|kind| kind != NativeItemType::Folder),
+        ItemKind::Folder => actual == Some(NativeItemType::Folder),
     };
     if matches {
         Ok(())

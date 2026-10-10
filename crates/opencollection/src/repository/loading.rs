@@ -1,4 +1,5 @@
 use super::*;
+use crate::native_item::NativeItemType;
 
 pub fn load_workspace(path: impl AsRef<Path>) -> Result<LoadedWorkspace, LoadError> {
     let path = path.as_ref();
@@ -366,17 +367,8 @@ fn locator_nodes_from_items(
                 .get("info")
                 .and_then(|info| info.get("type"))
                 .and_then(Value::as_str);
-            match item_type {
-                Some(item_type) if probe_core::RequestProtocol::from_name(item_type).is_some() => {
-                    Some(LocatorNode::Request {
-                        selector: format!("{prefix}/{index}"),
-                        persistence: document_path.map(|path| RequestPersistence {
-                            document_path: path.to_owned(),
-                            item_path,
-                        }),
-                    })
-                }
-                Some("folder") => {
+            match item_type.and_then(NativeItemType::from_name) {
+                Some(NativeItemType::Folder) => {
                     let children = value
                         .get("items")
                         .and_then(Value::as_sequence)
@@ -395,7 +387,14 @@ fn locator_nodes_from_items(
                         ),
                     })
                 }
-                _ => None,
+                Some(_) => Some(LocatorNode::Request {
+                    selector: format!("{prefix}/{index}"),
+                    persistence: document_path.map(|path| RequestPersistence {
+                        document_path: path.to_owned(),
+                        item_path,
+                    }),
+                }),
+                None => None,
             }
         })
         .collect()

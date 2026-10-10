@@ -334,6 +334,81 @@ fn bundled_duplicate_request_copies_request_after_original() {
 }
 
 #[test]
+fn unbundled_websocket_rename_and_reorder_preserve_request_and_unknown_fields() {
+    let root = temporary_path("websocket-rename-reorder-unbundled");
+    copy_directory(&fixture("websocket-unbundled"), &root);
+    let mut loaded = load_workspace(&root).unwrap();
+    let mut expected = loaded
+        .workspace()
+        .request(loaded.request_key("socket.yml").unwrap())
+        .unwrap()
+        .clone();
+    expected.metadata.name = Some("Renamed Socket".to_owned());
+    let sibling = fs::read(root.join("health.yml")).unwrap();
+    let mut expected_yaml: serde_yaml_ng::Value =
+        serde_yaml_ng::from_slice(&fs::read(root.join("socket.yml")).unwrap()).unwrap();
+    expected_yaml["info"]["name"] = "Renamed Socket".into();
+
+    let renamed = loaded
+        .apply_structure(StructureOperation::Rename {
+            target: ItemLocator::new(ItemKind::Request, "socket.yml"),
+            name: "Renamed Socket".to_owned(),
+        })
+        .unwrap();
+    let selector = "renamed-socket.yml";
+    assert_eq!(renamed.selector.as_deref(), Some(selector));
+    assert_eq!(renamed.index, Some(0));
+    assert_eq!(
+        renamed
+            .selector_remaps
+            .get("socket.yml")
+            .map(String::as_str),
+        Some(selector)
+    );
+    assert!(loaded.request_key("socket.yml").is_none());
+    assert!(!root.join("socket.yml").exists());
+    assert_eq!(fs::read(root.join("health.yml")).unwrap(), sibling);
+    let mut reloaded = load_workspace(&root).unwrap();
+    assert_eq!(
+        reloaded
+            .workspace()
+            .request(reloaded.request_key(selector).unwrap()),
+        Some(&expected)
+    );
+
+    let reordered = reloaded
+        .apply_structure(StructureOperation::Reorder {
+            target: ItemLocator::new(ItemKind::Request, selector),
+            index: 1,
+        })
+        .unwrap();
+    assert_eq!(reordered.index, Some(1));
+    expected.metadata.sequence = Some(2.0);
+    expected_yaml["info"]["seq"] = 2.into();
+    let reloaded = load_workspace(&root).unwrap();
+    assert_eq!(
+        reloaded
+            .requests()
+            .iter()
+            .map(|item| item.selector())
+            .collect::<Vec<_>>(),
+        ["health.yml", selector]
+    );
+    assert_eq!(
+        reloaded
+            .workspace()
+            .request(reloaded.request_key(selector).unwrap()),
+        Some(&expected)
+    );
+    assert_eq!(
+        serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(&fs::read(root.join(selector)).unwrap())
+            .unwrap(),
+        expected_yaml
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn unbundled_graphql_rename_preserves_request_order_and_unknown_fields() {
     let root = temporary_path("graphql-rename-unbundled");
     copy_directory(&fixture("phase16-unbundled"), &root);
