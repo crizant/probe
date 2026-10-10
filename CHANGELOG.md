@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Renaming GraphQL requests in directory-based OpenCollection collections no longer crashes.
+
 ### Added
 
 - OpenCollection WebSocket requests (`info.type: websocket`) now load as native
