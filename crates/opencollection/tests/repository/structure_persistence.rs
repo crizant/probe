@@ -368,6 +368,8 @@ fn unbundled_websocket_rename_and_reorder_preserve_request_and_unknown_fields() 
     assert!(loaded.request_key("socket.yml").is_none());
     assert!(!root.join("socket.yml").exists());
     assert_eq!(fs::read(root.join("health.yml")).unwrap(), sibling);
+    let mut expected_sibling: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&sibling).unwrap();
+    expected_sibling["info"]["seq"] = 1.into();
     let mut reloaded = load_workspace(&root).unwrap();
     assert_eq!(
         reloaded
@@ -404,6 +406,13 @@ fn unbundled_websocket_rename_and_reorder_preserve_request_and_unknown_fields() 
         serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(&fs::read(root.join(selector)).unwrap())
             .unwrap(),
         expected_yaml
+    );
+    assert_eq!(
+        serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(
+            &fs::read(root.join("health.yml")).unwrap()
+        )
+        .unwrap(),
+        expected_sibling
     );
     fs::remove_dir_all(root).unwrap();
 }

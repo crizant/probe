@@ -586,7 +586,7 @@ fn ensure_kind(value: &Value, expected: ItemKind, selector: &str) -> Result<(), 
         .and_then(Value::as_str)
         .and_then(NativeItemType::from_name);
     let matches = match expected {
-        ItemKind::Request => actual.is_some_and(|kind| kind != NativeItemType::Folder),
+        ItemKind::Request => matches!(actual, Some(NativeItemType::Request(_))),
         ItemKind::Folder => actual == Some(NativeItemType::Folder),
     };
     if matches {

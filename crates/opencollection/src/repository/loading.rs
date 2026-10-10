@@ -387,7 +387,7 @@ fn locator_nodes_from_items(
                         ),
                     })
                 }
-                Some(_) => Some(LocatorNode::Request {
+                Some(NativeItemType::Request(_)) => Some(LocatorNode::Request {
                     selector: format!("{prefix}/{index}"),
                     persistence: document_path.map(|path| RequestPersistence {
                         document_path: path.to_owned(),

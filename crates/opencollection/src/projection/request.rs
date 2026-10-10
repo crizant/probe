@@ -1,4 +1,4 @@
-use probe_core::{CollectionItem, Folder, QueryParameter, Request, RequestKind};
+use probe_core::{CollectionItem, Folder, QueryParameter, Request, RequestKind, RequestProtocol};
 
 use crate::{
     document::{optional_documentation, request_docs_from_yaml},
@@ -102,7 +102,7 @@ fn project_item_contents(
                 items: project_items(item.items, &format!("{path}/items"), diagnostics)?,
             })))
         }
-        Some(NativeItemType::Http) => {
+        Some(NativeItemType::Request(RequestProtocol::Http)) => {
             let docs = request_docs_from_yaml(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_domain()?;
@@ -139,7 +139,7 @@ fn project_item_contents(
                 kind: RequestKind::Http { body },
             })))
         }
-        Some(NativeItemType::Graphql) => {
+        Some(NativeItemType::Request(RequestProtocol::Graphql)) => {
             let docs = request_docs_from_yaml(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_domain()?;
@@ -175,7 +175,7 @@ fn project_item_contents(
                 kind: RequestKind::Graphql { body },
             })))
         }
-        Some(NativeItemType::WebSocket) => {
+        Some(NativeItemType::Request(RequestProtocol::WebSocket)) => {
             let docs = request_docs_from_yaml(docs.as_ref())?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_websocket_domain()?;
