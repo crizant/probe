@@ -13,8 +13,9 @@ use atomic_write_file::AtomicWriteFile;
 use probe_core::{
     Body, CollectionItem, CollectionUpdate, Documentation, Environment, EnvironmentResolutionError,
     EnvironmentVariable, FieldPatch, FolderKey, FolderUpdate, RequestKey, RequestProtocol,
-    RequestUpdate, Variable, VariableValue, VariableValueSet, VariableValueVariant, Workspace,
-    WorkspaceItemRef, validate_environments, validate_unique_variable_names,
+    RequestUpdate, Variable, VariableValue, VariableValueSet, VariableValueVariant,
+    WebSocketMessage, Workspace, WorkspaceItemRef, validate_environments,
+    validate_unique_variable_names,
 };
 use serde_yaml_ng::Value;
 
@@ -1487,17 +1488,19 @@ pub(crate) fn apply_request_update(
             },
         );
     }
-    let protocol = if request
+    let protocol = request
         .get(Value::String("info".to_owned()))
         .and_then(Value::as_mapping)
         .and_then(|info| info.get(Value::String("type".to_owned())))
         .and_then(Value::as_str)
-        == Some("graphql")
-    {
-        RequestProtocol::Graphql
-    } else {
-        RequestProtocol::Http
-    };
+        .and_then(RequestProtocol::from_name)
+        .unwrap_or_default();
+    let websocket = protocol == RequestProtocol::WebSocket;
+    if !update.websocket_message.is_unchanged() && !websocket {
+        return Err(SaveError::Graphql(
+            probe_core::GraphqlRequestError::NotWebSocket,
+        ));
+    }
     let details_name = protocol.as_str();
     if !update.method.is_unchanged()
         || !update.url.is_unchanged()
@@ -1508,9 +1511,13 @@ pub(crate) fn apply_request_update(
         || !update.body_content.is_unchanged()
         || !update.authentication.is_unchanged()
         || update.graphql.is_some()
+        || !update.websocket_message.is_unchanged()
     {
+        if websocket {
+            reject_websocket_unsupported_fields(update)?;
+        }
         let details = mapping_child(request, details_name)?;
-        if !update.method.is_unchanged() {
+        if !update.method.is_unchanged() && !websocket {
             set_optional(
                 details,
                 "method",
@@ -1540,7 +1547,7 @@ pub(crate) fn apply_request_update(
                 &[],
             );
         }
-        if update.query_parameters.is_some() || update.path_parameters.is_some() {
+        if (update.query_parameters.is_some() || update.path_parameters.is_some()) && !websocket {
             merge_parameters(
                 details,
                 update.query_parameters.as_deref(),
@@ -1586,7 +1593,75 @@ pub(crate) fn apply_request_update(
             }
             apply_graphql_update(details, graphql)?;
         }
+        match &update.websocket_message {
+            FieldPatch::Unchanged => {}
+            FieldPatch::Set(message) => apply_websocket_message(details, message)?,
+            FieldPatch::Clear => set_optional(details, "message", None),
+        }
     }
+    Ok(())
+}
+
+fn reject_websocket_unsupported_fields(update: &RequestUpdate) -> Result<(), SaveError> {
+    let field = if matches!(update.method, FieldPatch::Set(_)) {
+        "an HTTP method"
+    } else if update
+        .query_parameters
+        .as_ref()
+        .is_some_and(|p| !p.is_empty())
+    {
+        "query parameters"
+    } else if update
+        .path_parameters
+        .as_ref()
+        .is_some_and(|p| !p.is_empty())
+    {
+        "path parameters"
+    } else if !update.body.is_unchanged() || !update.body_content.is_unchanged() {
+        "an HTTP body"
+    } else {
+        return Ok(());
+    };
+    Err(SaveError::Graphql(
+        probe_core::GraphqlRequestError::UnsupportedField {
+            protocol: RequestProtocol::WebSocket,
+            field,
+        },
+    ))
+}
+
+fn apply_websocket_message(
+    details: &mut serde_yaml_ng::Mapping,
+    message: &WebSocketMessage,
+) -> Result<(), SaveError> {
+    let key = string_key("message");
+    let Some(Value::Sequence(variants)) = details.get_mut(&key) else {
+        set_optional_merged(details, "message", Some(websocket_message_value(message)));
+        return Ok(());
+    };
+    let mut selected = variants.iter_mut().filter(|variant| {
+        variant
+            .as_mapping()
+            .and_then(|variant| variant.get(string_key("selected")))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
+    let variant = selected.next().ok_or_else(|| {
+        SaveError::Graphql(probe_core::GraphqlRequestError::InvalidBodySelection(
+            "WebSocket message variants have no selected value".to_owned(),
+        ))
+    })?;
+    if selected.next().is_some() {
+        return Err(SaveError::Graphql(
+            probe_core::GraphqlRequestError::InvalidBodySelection(
+                "WebSocket message variants have multiple selected values".to_owned(),
+            ),
+        ));
+    }
+    let variant = variant.as_mapping_mut().ok_or_else(|| {
+        SaveError::InvalidDocument("WebSocket message variant is not a mapping".to_owned())
+    })?;
+    set_optional_merged(variant, "message", Some(websocket_message_value(message)));
     Ok(())
 }
 

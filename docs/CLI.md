@@ -150,6 +150,10 @@ formally defines `query` and JSON-string `variables` in the
 native GraphQL body. Probe also preserves `operationName` and `extensions` there as forward-compatible
 GraphQL-over-HTTP fields; strict OpenCollection 1.0.0 schema validators may reject those two fields.
 
+Probe loads and saves OpenCollection-native WebSocket items (`info.type: websocket` with a
+`websocket` section) but cannot execute them yet. `request run` on a WebSocket request
+fails with category `request_configuration` and exit code 5 without opening a connection.
+
 `request set` and `request create` also replace headers, query parameters, path
 parameters, the HTTP body, and authentication. Pass JSON `null` to clear any of
 those fields. An empty JSON array also clears a header or parameter list. Query
@@ -405,7 +409,8 @@ warnings for values preserved in the created OpenCollection file but unsupported
 by Probe's runtime.
 
 `request list --json` returns a `requests` array. Each entry has nullable `method`,
-`name`, and `url` fields plus a string `selector` and a `type` field (`http` or `graphql`).
+`name`, and `url` fields plus a string `selector` and a `type` field (`http`, `graphql`, or
+`websocket`).
 List entries omit `description` and `docs`.
 
 `folder list --json` returns a `folders` array in deterministic collection order.
@@ -429,7 +434,8 @@ selected name or JSON `null`. Missing optional values are JSON `null`. Headers a
 query and path parameters contain stable `disabled`, `name`, and `value` fields. Path
 parameters are referenced from URLs with `:variableName` segments.
 
-The additional `type` field is `http` or `graphql`. `graphql` is JSON `null` for HTTP requests.
+The additional `type` field is `http`, `graphql`, or `websocket`. `graphql` is JSON `null`
+for HTTP and WebSocket requests, and `body` is JSON `null` for GraphQL and WebSocket requests.
 For native GraphQL requests it contains nullable `query`, `variables`, `operationName`, and
 `extensions` fields for the selected body. GraphQL body variants must have exactly one selected
 entry for inspection, editing, or execution.
@@ -460,8 +466,8 @@ request-field order:
 Without `--environment`, `defined` and `secret` are false because no effective
 environment was selected. Usage locations are `method`, `url`, `header`,
 `query_parameter`, `path_parameter`, `body`, `graphql_query`, `graphql_variables`,
-`graphql_operation_name`, `graphql_extensions`, `form_urlencoded`, `multipart`, `file`,
-or `authentication`. Named request fields also include `name`.
+`graphql_operation_name`, `graphql_extensions`, `websocket_message`, `form_urlencoded`,
+`multipart`, `file`, or `authentication`. Named request fields also include `name`.
 
 `environment list` prints `NAME` and `EXTENDS` as tab-separated text.
 `environment list --json` returns an `environments` array. Each entry has `name`,

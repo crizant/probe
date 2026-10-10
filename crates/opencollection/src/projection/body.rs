@@ -1,5 +1,6 @@
 use probe_core::{
     Body, BodyVariant, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, RawBody, RequestBody,
+    WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet, WebSocketMessageVariant,
 };
 use serde_yaml_ng::Value;
 
@@ -52,6 +53,60 @@ pub(super) fn project_graphql_body(value: Value) -> Result<GraphqlBody, serde_ya
         let body: GraphqlBodyDocument = serde_yaml_ng::from_value(value)?;
         Ok(GraphqlBody::Single(project_graphql_operation(body)?))
     }
+}
+
+pub(super) fn project_websocket_message(
+    value: Value,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) -> Result<Option<WebSocketMessageSet>, serde_yaml_ng::Error> {
+    if value.is_sequence() {
+        let variants: Vec<WebSocketMessageVariantDocument> = serde_yaml_ng::from_value(value)?;
+        let mut projected = Vec::with_capacity(variants.len());
+        for (index, variant) in variants.into_iter().enumerate() {
+            if let Some(message) = websocket_message(
+                variant.message,
+                &format!("{path}/{index}/message"),
+                diagnostics,
+            ) {
+                projected.push(WebSocketMessageVariant {
+                    title: variant.title,
+                    selected: variant.selected,
+                    message,
+                });
+            }
+        }
+        Ok(Some(WebSocketMessageSet::Variants(projected)))
+    } else {
+        let message: WebSocketMessageDocument = serde_yaml_ng::from_value(value)?;
+        Ok(websocket_message(message, path, diagnostics).map(WebSocketMessageSet::Single))
+    }
+}
+
+fn websocket_message(
+    message: WebSocketMessageDocument,
+    path: &str,
+    diagnostics: &mut Vec<ProjectionDiagnostic>,
+) -> Option<WebSocketMessage> {
+    let kind = match message.message_type.as_str() {
+        "text" => WebSocketMessageKind::Text,
+        "json" => WebSocketMessageKind::Json,
+        "xml" => WebSocketMessageKind::Xml,
+        "binary" => WebSocketMessageKind::Binary,
+        other => {
+            diagnostic(
+                diagnostics,
+                format!("{path}/type"),
+                ProjectionDiagnosticKind::BodyType,
+                other,
+            );
+            return None;
+        }
+    };
+    Some(WebSocketMessage {
+        kind,
+        data: message.data,
+    })
 }
 
 fn project_graphql_operation(

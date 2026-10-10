@@ -315,6 +315,7 @@ fn effective_settings(
         timeout: (timeout > 0).then(|| Duration::from_millis(timeout as u64)),
         follow_redirects: Some(follow_redirects),
         max_redirects: None,
+        keep_alive_interval: None,
     }
 }
 

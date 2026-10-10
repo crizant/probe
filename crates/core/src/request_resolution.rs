@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{
     AuthenticationValue, Body, Environment, EnvironmentResolutionError, GraphqlBody,
     GraphqlOperation, MultipartValue, Request, RequestBody, RequestKind, ResolvedEnvironment,
+    WebSocketMessageSet,
     environment::{EffectiveVariableDeclaration, effective_variable_declarations},
 };
 
@@ -29,6 +30,8 @@ pub enum VariableUsage {
     GraphqlOperationName,
     /// Native GraphQL extensions.
     GraphqlExtensions,
+    /// Native WebSocket message data.
+    WebSocketMessage,
     /// A form-urlencoded field name or value.
     FormUrlEncoded { name: String },
     /// A multipart part name, value, or content type.
@@ -187,7 +190,12 @@ fn transform_request_strings<E>(
     match &mut request.kind {
         RequestKind::Http { body: Some(body) } => transform_body(body, &mut transform)?,
         RequestKind::Graphql { body: Some(body) } => transform_graphql_body(body, &mut transform)?,
-        RequestKind::Http { body: None } | RequestKind::Graphql { body: None } => {}
+        RequestKind::WebSocket {
+            message: Some(message),
+        } => transform_websocket_message(message, &mut transform)?,
+        RequestKind::Http { body: None }
+        | RequestKind::Graphql { body: None }
+        | RequestKind::WebSocket { message: None } => {}
     }
     if let Some(authentication) = &mut request.authentication {
         for (name, value) in &mut authentication.properties {
@@ -196,6 +204,23 @@ fn transform_request_strings<E>(
         }
     }
     Ok(())
+}
+
+fn transform_websocket_message<E>(
+    message: &mut WebSocketMessageSet,
+    transform: &mut impl FnMut(&mut String, &VariableUsage) -> Result<(), E>,
+) -> Result<(), E> {
+    match message {
+        WebSocketMessageSet::Single(message) => {
+            transform(&mut message.data, &VariableUsage::WebSocketMessage)
+        }
+        WebSocketMessageSet::Variants(variants) => {
+            for variant in variants {
+                transform(&mut variant.message.data, &VariableUsage::WebSocketMessage)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn transform_graphql_body<E>(

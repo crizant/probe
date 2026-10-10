@@ -2,7 +2,8 @@ use probe_core::{
     Body, BodyVariant, Environment, EnvironmentVariable, FieldPatch, GraphqlBody,
     GraphqlBodyVariant, GraphqlOperation, GraphqlRequestError, GraphqlUpdate, QueryParameter,
     RawBody, RawBodyKind, Request, RequestBody, RequestKind, RequestProtocol, RequestUpdate,
-    Variable, VariableValue, VariableValueSet, resolve_environment, resolve_request,
+    Variable, VariableValue, VariableValueSet, WebSocketMessage, WebSocketMessageKind,
+    WebSocketMessageSet, WebSocketMessageVariant, resolve_environment, resolve_request,
 };
 use serde_json::{Map, Value, json};
 
@@ -41,12 +42,16 @@ fn graphql_request(body: Option<GraphqlBody>) -> Request {
 fn protocol_identity_and_defaults_are_independent_of_body() {
     assert_eq!(RequestProtocol::default(), RequestProtocol::Http);
     assert_eq!(RequestKind::default().protocol(), RequestProtocol::Http);
+    let websocket_message = WebSocketMessage {
+        kind: WebSocketMessageKind::Json,
+        data: r#"{"subscribe":"orders"}"#.to_owned(),
+    };
     for (kind, protocol, name, method) in [
         (
             RequestKind::Http { body: None },
             RequestProtocol::Http,
             "http",
-            "GET",
+            Some("GET"),
         ),
         (
             RequestKind::Http {
@@ -57,13 +62,13 @@ fn protocol_identity_and_defaults_are_independent_of_body() {
             },
             RequestProtocol::Http,
             "http",
-            "GET",
+            Some("GET"),
         ),
         (
             RequestKind::Graphql { body: None },
             RequestProtocol::Graphql,
             "graphql",
-            "POST",
+            Some("POST"),
         ),
         (
             RequestKind::Graphql {
@@ -74,14 +79,40 @@ fn protocol_identity_and_defaults_are_independent_of_body() {
             },
             RequestProtocol::Graphql,
             "graphql",
-            "POST",
+            Some("POST"),
+        ),
+        (
+            RequestKind::WebSocket { message: None },
+            RequestProtocol::WebSocket,
+            "websocket",
+            None,
+        ),
+        (
+            RequestKind::WebSocket {
+                message: Some(WebSocketMessageSet::Variants(vec![
+                    WebSocketMessageVariant {
+                        title: "Subscribe".to_owned(),
+                        selected: true,
+                        message: websocket_message.clone(),
+                    },
+                ])),
+            },
+            RequestProtocol::WebSocket,
+            "websocket",
+            None,
         ),
     ] {
         assert_eq!(kind.protocol(), protocol);
         assert_eq!(kind.as_str(), name);
         assert_eq!(protocol.as_str(), name);
+        assert_eq!(RequestProtocol::from_name(name), Some(protocol));
+        assert_eq!(RequestKind::empty(protocol).protocol(), protocol);
         assert_eq!(protocol.default_method(), method);
+        assert_eq!(kind.is_graphql(), protocol == RequestProtocol::Graphql);
+        assert_eq!(kind.is_websocket(), protocol == RequestProtocol::WebSocket);
     }
+    assert_eq!(RequestProtocol::from_name("grpc"), None);
+    assert_eq!(RequestProtocol::from_name("WebSocket"), None);
 }
 
 fn native_request(method: &str) -> Request {

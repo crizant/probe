@@ -1,0 +1,84 @@
+opencollection: 1.0.0
+info:
+  name: WebSocket fixture
+bundled: true
+config:
+  environments:
+  - name: local
+    variables:
+    - name: host
+      value: socket.example.com
+    - name: token
+      value: local-token
+    - name: channel
+      value: orders
+items:
+- info:
+    name: Subscribe
+    type: websocket
+    seq: 1
+    description: Subscribe to order events
+    tags:
+    - realtime
+  websocket:
+    url: wss://{{host}}/events
+    headers:
+    - name: X-Client
+      value: probe-{{channel}}
+    - name: X-Disabled
+      value: ignored
+      disabled: true
+    message:
+      type: json
+      data: '{"subscribe":"{{channel}}"}'
+    auth:
+      type: bearer
+      token: '{{token}}'
+  runtime:
+    variables:
+    - name: retained
+      value: runtime
+  settings:
+    timeout: 1500
+    keepAliveInterval: 30000
+  docs: Streams order events.
+  x-vendor: retained
+- info:
+    name: Variants
+    type: websocket
+    seq: 2
+  websocket:
+    url: ws://localhost:8080/echo
+    message:
+    - title: Greeting
+      message:
+        type: text
+        data: hello {{channel}}
+    - title: Payload
+      selected: true
+      message:
+        type: xml
+        data: <ping/>
+    - title: Future
+      message:
+        type: cbor
+        data: opaque
+  settings:
+    timeout: inherit
+    keepAliveInterval: inherit
+- info:
+    name: Plain HTTP
+    type: http
+    seq: 3
+  http:
+    method: GET
+    url: https://{{host}}/health
+- info:
+    name: Plain GraphQL
+    type: graphql
+    seq: 4
+  graphql:
+    method: POST
+    url: https://{{host}}/graphql
+    body:
+      query: '{ viewer { login } }'

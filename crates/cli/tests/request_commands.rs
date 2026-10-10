@@ -371,6 +371,66 @@ fn request_list_includes_type_field() {
 }
 
 #[test]
+fn websocket_requests_are_listed_inspected_and_not_executed_over_http() {
+    let list = probe()
+        .args(["request", "list"])
+        .arg(fixture("websocket.yml"))
+        .arg("--json")
+        .output()
+        .expect("list command should run");
+    assert!(list.status.success());
+    let value: Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(value["requests"][0]["type"], "websocket");
+    assert!(value["requests"][0]["method"].is_null());
+    assert_eq!(value["requests"][2]["type"], "http");
+    assert_eq!(value["requests"][3]["type"], "graphql");
+
+    let get = probe()
+        .args(["request", "get"])
+        .arg(fixture("websocket.yml"))
+        .args(["items/0", "--environment", "local", "--json"])
+        .output()
+        .expect("get command should run");
+    assert!(get.status.success());
+    let value: Value = serde_json::from_slice(&get.stdout).unwrap();
+    assert_eq!(value["type"], "websocket");
+    assert_eq!(value["url"], "wss://socket.example.com/events");
+    assert!(value["body"].is_null());
+    assert!(value["graphql"].is_null());
+
+    let variables = probe()
+        .args(["request", "variables"])
+        .arg(fixture("websocket.yml"))
+        .args(["items/0", "--json"])
+        .output()
+        .expect("variables command should run");
+    assert!(variables.status.success());
+    let value: Value = serde_json::from_slice(&variables.stdout).unwrap();
+    let channel = value["variables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|variable| variable["name"] == "channel")
+        .unwrap();
+    assert!(
+        channel["usages"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!({ "location": "websocket_message" }))
+    );
+
+    let run = probe()
+        .args(["request", "run"])
+        .arg(fixture("websocket.yml"))
+        .args(["items/0", "--environment", "local", "--json"])
+        .output()
+        .expect("run command should run");
+    assert_eq!(run.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&run.stdout).unwrap();
+    assert_eq!(value["error"]["category"], "request_configuration");
+}
+
+#[test]
 fn reads_a_bundled_workspace_from_stdin() {
     let source = fs::read(fixture("phase1-bundled.yml")).unwrap();
     let output = run_with_stdin(&["request", "list", "-", "--json"], &source);

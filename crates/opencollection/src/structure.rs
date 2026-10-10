@@ -50,7 +50,7 @@ impl ItemLocator {
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum StructureOperation {
-    /// Creates an HTTP or GraphQL request.
+    /// Creates an HTTP, GraphQL, or WebSocket request.
     CreateRequest {
         /// Destination folder selector, or `None` for the root.
         parent: Option<String>,
@@ -486,9 +486,18 @@ fn request_value(
     url: Option<String>,
     protocol: RequestProtocol,
     graphql: Option<GraphqlUpdate>,
-) -> Value {
+) -> Result<Value, StructureError> {
     let mut details = Mapping::new();
     if let Some(method) = method {
+        if protocol.default_method().is_none() {
+            return Err(StructureError::InvalidDocument(
+                probe_core::GraphqlRequestError::UnsupportedField {
+                    protocol,
+                    field: "an HTTP method",
+                }
+                .to_string(),
+            ));
+        }
         details.insert(Value::String("method".to_owned()), Value::String(method));
     }
     if let Some(url) = url {
@@ -503,7 +512,11 @@ fn request_value(
             graphql_body_value(&graphql),
         );
     }
-    item_value(name, protocol.as_str(), Some(Value::Mapping(details)))
+    Ok(item_value(
+        name,
+        protocol.as_str(),
+        Some(Value::Mapping(details)),
+    ))
 }
 
 fn graphql_body_value(update: &GraphqlUpdate) -> Value {
@@ -570,10 +583,11 @@ fn ensure_kind(value: &Value, expected: ItemKind, selector: &str) -> Result<(), 
         .get("info")
         .and_then(|info| info.get("type"))
         .and_then(Value::as_str);
-    let matches = matches!(
-        (expected, actual),
-        (ItemKind::Request, Some("http" | "graphql")) | (ItemKind::Folder, Some("folder"))
-    );
+    let matches = match (expected, actual) {
+        (ItemKind::Request, Some(actual)) => RequestProtocol::from_name(actual).is_some(),
+        (ItemKind::Folder, actual) => actual == Some("folder"),
+        (ItemKind::Request, None) => false,
+    };
     if matches {
         Ok(())
     } else {

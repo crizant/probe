@@ -1,7 +1,7 @@
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, Documentation, FieldPatch,
     FileReference, FormField, Header, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBodyKind, RequestBody,
+    QueryParameter, RawBodyKind, RequestBody, WebSocketMessage, WebSocketMessageSet,
 };
 use serde_yaml_ng::Value;
 
@@ -214,6 +214,31 @@ pub(super) fn request_body_value(body: &RequestBody) -> Value {
                 .collect(),
         ),
     }
+}
+
+pub(super) fn websocket_message_set_value(message: &WebSocketMessageSet) -> Value {
+    match message {
+        WebSocketMessageSet::Single(message) => websocket_message_value(message),
+        WebSocketMessageSet::Variants(variants) => Value::Sequence(
+            variants
+                .iter()
+                .map(|variant| {
+                    map([
+                        ("title", Value::String(variant.title.clone())),
+                        ("selected", Value::Bool(variant.selected)),
+                        ("message", websocket_message_value(&variant.message)),
+                    ])
+                })
+                .collect(),
+        ),
+    }
+}
+
+pub(super) fn websocket_message_value(message: &WebSocketMessage) -> Value {
+    map([
+        ("type", Value::String(message.kind.as_str().to_owned())),
+        ("data", Value::String(message.data.clone())),
+    ])
 }
 
 pub(super) fn body_value(body: &Body) -> Value {

@@ -52,6 +52,7 @@ pub use request::{
     GraphqlRequestError, GraphqlUpdate, Header, MultipartPart, MultipartPartKind, MultipartValue,
     PreparedHttpRequest, QueryParameter, RawBody, RawBodyKind, Request, RequestBody,
     RequestDiffError, RequestKind, RequestProtocol, RequestSettings, RequestUpdate,
+    WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet, WebSocketMessageVariant,
 };
 pub use request_resolution::{
     RequestVariableInfo, VariableUsage, discover_request_variables, request_secret_usages,

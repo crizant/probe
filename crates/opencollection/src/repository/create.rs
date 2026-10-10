@@ -224,7 +224,8 @@ fn collection_item_value(item: &CollectionItem) -> Value {
             let section = request.kind.as_str();
             let mut item = item_info_value(&request.metadata, section);
             let mut details = serde_yaml_ng::Mapping::new();
-            if let Some(method) = &request.method {
+            let websocket = request.kind.is_websocket();
+            if let Some(method) = request.method.as_ref().filter(|_| !websocket) {
                 details.insert(string_key("method"), Value::String(method.clone()));
             }
             if let Some(url) = &request.url {
@@ -242,12 +243,18 @@ fn collection_item_value(item: &CollectionItem) -> Value {
                 .map(query_parameter_value)
                 .chain(request.path_parameters.iter().map(path_parameter_value))
                 .collect::<Vec<_>>();
-            if !parameters.is_empty() {
+            if !parameters.is_empty() && !websocket {
                 details.insert(string_key("params"), Value::Sequence(parameters));
             }
             let body = match &request.kind {
                 RequestKind::Http { body } => body.as_ref().map(request_body_value),
                 RequestKind::Graphql { body } => body.as_ref().map(graphql_body_value),
+                RequestKind::WebSocket { message } => {
+                    if let Some(message) = message {
+                        details.insert(string_key("message"), websocket_message_set_value(message));
+                    }
+                    None
+                }
             };
             if let Some(body) = body {
                 details.insert(string_key("body"), body);
@@ -346,6 +353,11 @@ fn request_settings_value(settings: &probe_core::RequestSettings) -> Option<Valu
         && let Ok(max_redirects) = serde_yaml_ng::to_value(max_redirects)
     {
         value.insert(string_key("maxRedirects"), max_redirects);
+    }
+    if let Some(interval) = settings.keep_alive_interval
+        && let Ok(interval) = serde_yaml_ng::to_value(interval.as_secs_f64() * 1000.0)
+    {
+        value.insert(string_key("keepAliveInterval"), interval);
     }
     (!value.is_empty()).then(|| Value::Mapping(value))
 }

@@ -244,6 +244,12 @@ pub struct RequestUpdate {
     pub authentication: FieldPatch<Authentication>,
     /// Partial native GraphQL body update.
     pub graphql: Option<GraphqlUpdate>,
+    /// Replacement for the selected native WebSocket message.
+    ///
+    /// A single message is written directly. An existing variant list keeps every
+    /// variant title and selected flag; only the selected variant's message changes.
+    /// Clearing removes the whole message, including a variant list.
+    pub websocket_message: FieldPatch<WebSocketMessage>,
 }
 
 impl RequestUpdate {
@@ -272,6 +278,21 @@ impl RequestUpdate {
         let current_operation = current.selected_graphql()?;
         if base.is_none() && matches!(current.graphql(), Some(GraphqlBody::Variants(_))) {
             return Err(RequestDiffError::UnsupportedChange("GraphQL body variants"));
+        }
+        let base_message = base
+            .map(Request::selected_websocket_message)
+            .transpose()?
+            .flatten();
+        let current_message = current.selected_websocket_message()?;
+        if base.is_none()
+            && matches!(
+                current.websocket_message(),
+                Some(WebSocketMessageSet::Variants(_))
+            )
+        {
+            return Err(RequestDiffError::UnsupportedChange(
+                "WebSocket message variants",
+            ));
         }
         let update = Self {
             name: (base.and_then(|request| request.metadata.name.as_ref())
@@ -344,12 +365,24 @@ impl RequestUpdate {
                 }
                 _ => None,
             },
+            websocket_message: match &current.kind {
+                RequestKind::WebSocket { .. } if base_message != current_message => {
+                    FieldPatch::from_optional(current_message.cloned())
+                }
+                _ => FieldPatch::Unchanged,
+            },
         };
         if let Some(base) = base {
             let mut reconstructed = base.clone();
             update.apply(&mut reconstructed)?;
             if reconstructed != *current {
-                return Err(RequestDiffError::UnsupportedChange("GraphQL body variants"));
+                return Err(RequestDiffError::UnsupportedChange(
+                    if current.kind.is_websocket() {
+                        "WebSocket message variants"
+                    } else {
+                        "GraphQL body variants"
+                    },
+                ));
             }
         }
         Ok(update)
@@ -370,6 +403,7 @@ impl RequestUpdate {
             && self.body_content.is_unchanged()
             && self.authentication.is_unchanged()
             && self.graphql.as_ref().is_none_or(GraphqlUpdate::is_empty)
+            && self.websocket_message.is_unchanged()
     }
 
     /// Applies the update to a domain request, including native GraphQL fields.
@@ -391,12 +425,21 @@ impl RequestUpdate {
         if http_body_change && request.kind.is_graphql() {
             return Err(GraphqlRequestError::NotHttp);
         }
+        if !self.websocket_message.is_unchanged() && !request.kind.is_websocket() {
+            return Err(GraphqlRequestError::NotWebSocket);
+        }
+        if request.kind.is_websocket() {
+            self.reject_websocket_unsupported_fields()?;
+        }
         match &mut request.kind {
             RequestKind::Http { body } => {
                 self.body.apply(body);
                 apply_body_content(body, &self.body_content)?;
             }
             RequestKind::Graphql { .. } => {}
+            RequestKind::WebSocket { message } => {
+                apply_websocket_message(message, &self.websocket_message)?;
+            }
         }
         // Must precede common fields: variant selection can still fail here.
         if let Some(graphql) = graphql {
@@ -421,6 +464,31 @@ impl RequestUpdate {
         self.authentication.apply(&mut request.authentication);
         Ok(())
     }
+
+    /// OpenCollection WebSocket details have no method, parameters, or HTTP body.
+    fn reject_websocket_unsupported_fields(&self) -> Result<(), GraphqlRequestError> {
+        let unsupported = |field| GraphqlRequestError::UnsupportedField {
+            protocol: RequestProtocol::WebSocket,
+            field,
+        };
+        if matches!(self.method, FieldPatch::Set(_)) {
+            return Err(unsupported("an HTTP method"));
+        }
+        if self
+            .query_parameters
+            .as_ref()
+            .is_some_and(|p| !p.is_empty())
+        {
+            return Err(unsupported("query parameters"));
+        }
+        if self.path_parameters.as_ref().is_some_and(|p| !p.is_empty()) {
+            return Err(unsupported("path parameters"));
+        }
+        if !self.body.is_unchanged() || !self.body_content.is_unchanged() {
+            return Err(unsupported("an HTTP body"));
+        }
+        Ok(())
+    }
 }
 
 /// Protocol identity independent of a request's body.
@@ -431,6 +499,8 @@ pub enum RequestProtocol {
     Http,
     /// A native OpenCollection GraphQL request.
     Graphql,
+    /// A native OpenCollection WebSocket request.
+    WebSocket,
 }
 
 impl RequestProtocol {
@@ -440,15 +510,38 @@ impl RequestProtocol {
         match self {
             Self::Http => "http",
             Self::Graphql => "graphql",
+            Self::WebSocket => "websocket",
         }
     }
 
-    /// Returns the default HTTP method for this protocol.
+    /// Parses a stable lowercase protocol name.
     #[must_use]
-    pub const fn default_method(self) -> &'static str {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "http" => Some(Self::Http),
+            "graphql" => Some(Self::Graphql),
+            "websocket" => Some(Self::WebSocket),
+            _ => None,
+        }
+    }
+
+    /// Returns the human-readable protocol name.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            Self::Http => "GET",
-            Self::Graphql => "POST",
+            Self::Http => "HTTP",
+            Self::Graphql => "GraphQL",
+            Self::WebSocket => "WebSocket",
+        }
+    }
+
+    /// Returns the default HTTP method, or `None` for protocols without one.
+    #[must_use]
+    pub const fn default_method(self) -> Option<&'static str> {
+        match self {
+            Self::Http => Some("GET"),
+            Self::Graphql => Some("POST"),
+            Self::WebSocket => None,
         }
     }
 }
@@ -466,6 +559,11 @@ pub enum RequestKind {
         /// Native GraphQL body definition.
         body: Option<GraphqlBody>,
     },
+    /// A native OpenCollection WebSocket request.
+    WebSocket {
+        /// Message definition sent after the connection opens.
+        message: Option<WebSocketMessageSet>,
+    },
 }
 
 impl Default for RequestKind {
@@ -481,6 +579,17 @@ impl RequestKind {
         match self {
             Self::Http { .. } => RequestProtocol::Http,
             Self::Graphql { .. } => RequestProtocol::Graphql,
+            Self::WebSocket { .. } => RequestProtocol::WebSocket,
+        }
+    }
+
+    /// Returns an empty request kind for a protocol.
+    #[must_use]
+    pub const fn empty(protocol: RequestProtocol) -> Self {
+        match protocol {
+            RequestProtocol::Http => Self::Http { body: None },
+            RequestProtocol::Graphql => Self::Graphql { body: None },
+            RequestProtocol::WebSocket => Self::WebSocket { message: None },
         }
     }
 
@@ -495,17 +604,25 @@ impl RequestKind {
     pub const fn is_graphql(&self) -> bool {
         matches!(self, Self::Graphql { .. })
     }
+
+    /// Returns whether this is a native WebSocket request.
+    #[must_use]
+    pub const fn is_websocket(&self) -> bool {
+        matches!(self, Self::WebSocket { .. })
+    }
 }
 
-/// HTTP execution settings.
+/// Request execution settings.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RequestSettings {
-    /// Total timeout; zero means no timeout.
+    /// HTTP total timeout or WebSocket connection timeout; zero means no timeout.
     pub timeout: Option<Duration>,
     /// Whether redirects are followed.
     pub follow_redirects: Option<bool>,
     /// Maximum redirect hops.
     pub max_redirects: Option<usize>,
+    /// WebSocket keep-alive interval.
+    pub keep_alive_interval: Option<Duration>,
 }
 
 /// An HTTP request header.
@@ -628,6 +745,61 @@ impl GraphqlUpdate {
     }
 }
 
+/// A native WebSocket message represented directly or as selectable variants.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WebSocketMessageSet {
+    /// One message definition.
+    Single(WebSocketMessage),
+    /// Multiple named message definitions.
+    Variants(Vec<WebSocketMessageVariant>),
+}
+
+/// A WebSocket message definition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebSocketMessage {
+    /// Message content type.
+    pub kind: WebSocketMessageKind,
+    /// Message data, which may contain variables.
+    pub data: String,
+}
+
+/// WebSocket message types defined by OpenCollection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WebSocketMessageKind {
+    /// Plain text.
+    Text,
+    /// JSON text.
+    Json,
+    /// XML text.
+    Xml,
+    /// Binary data as written in the collection.
+    Binary,
+}
+
+impl WebSocketMessageKind {
+    /// Returns the OpenCollection message type name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Json => "json",
+            Self::Xml => "xml",
+            Self::Binary => "binary",
+        }
+    }
+}
+
+/// A selectable native WebSocket message variant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebSocketMessageVariant {
+    /// Variant title.
+    pub title: String,
+    /// Whether this variant is selected.
+    pub selected: bool,
+    /// Variant message.
+    pub message: WebSocketMessage,
+}
+
 /// An invalid native GraphQL request or update.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphqlRequestError {
@@ -637,6 +809,17 @@ pub enum GraphqlRequestError {
     NotGraphql,
     /// HTTP body fields were requested for a native GraphQL request.
     NotHttp,
+    /// WebSocket-only fields were requested for a non-WebSocket request.
+    NotWebSocket,
+    /// A field was requested that the request protocol does not define.
+    UnsupportedField {
+        /// Request protocol.
+        protocol: RequestProtocol,
+        /// Field description.
+        field: &'static str,
+    },
+    /// The request protocol cannot be prepared for HTTP execution.
+    UnsupportedExecution(RequestProtocol),
 }
 
 impl std::fmt::Display for GraphqlRequestError {
@@ -646,6 +829,17 @@ impl std::fmt::Display for GraphqlRequestError {
             Self::NotGraphql => formatter.write_str("request is not a native GraphQL request"),
             Self::NotHttp => formatter
                 .write_str("HTTP body updates cannot be applied to a native GraphQL request"),
+            Self::NotWebSocket => formatter.write_str("request is not a native WebSocket request"),
+            Self::UnsupportedField { protocol, field } => write!(
+                formatter,
+                "native {} requests do not support {field}",
+                protocol.label()
+            ),
+            Self::UnsupportedExecution(protocol) => write!(
+                formatter,
+                "native {} requests cannot be executed yet",
+                protocol.label()
+            ),
         }
     }
 }
@@ -720,13 +914,51 @@ fn apply_body_content(
     }
 }
 
+fn selected_websocket_variant_index(
+    variants: &[WebSocketMessageVariant],
+) -> Result<usize, GraphqlRequestError> {
+    let mut selected = variants
+        .iter()
+        .enumerate()
+        .filter(|(_, variant)| variant.selected);
+    let (index, _) = selected.next().ok_or_else(|| {
+        GraphqlRequestError::InvalidBodySelection(
+            "WebSocket message variants have no selected value".to_owned(),
+        )
+    })?;
+    if selected.next().is_some() {
+        return Err(GraphqlRequestError::InvalidBodySelection(
+            "WebSocket message variants have multiple selected values".to_owned(),
+        ));
+    }
+    Ok(index)
+}
+
+fn apply_websocket_message(
+    target: &mut Option<WebSocketMessageSet>,
+    patch: &FieldPatch<WebSocketMessage>,
+) -> Result<(), GraphqlRequestError> {
+    match patch {
+        FieldPatch::Unchanged => {}
+        FieldPatch::Clear => *target = None,
+        FieldPatch::Set(message) => match target {
+            Some(WebSocketMessageSet::Variants(variants)) => {
+                let index = selected_websocket_variant_index(variants)?;
+                variants[index].message = message.clone();
+            }
+            other => *other = Some(WebSocketMessageSet::Single(message.clone())),
+        },
+    }
+    Ok(())
+}
+
 impl Request {
     /// Returns the HTTP body when this is an HTTP request with a body.
     #[must_use]
     pub const fn http_body(&self) -> Option<&RequestBody> {
         match &self.kind {
             RequestKind::Http { body } => body.as_ref(),
-            RequestKind::Graphql { .. } => None,
+            RequestKind::Graphql { .. } | RequestKind::WebSocket { .. } => None,
         }
     }
 
@@ -734,7 +966,7 @@ impl Request {
     pub const fn http_body_mut(&mut self) -> Option<&mut RequestBody> {
         match &mut self.kind {
             RequestKind::Http { body } => body.as_mut(),
-            RequestKind::Graphql { .. } => None,
+            RequestKind::Graphql { .. } | RequestKind::WebSocket { .. } => None,
         }
     }
 
@@ -743,7 +975,30 @@ impl Request {
     pub const fn graphql(&self) -> Option<&GraphqlBody> {
         match &self.kind {
             RequestKind::Graphql { body } => body.as_ref(),
-            RequestKind::Http { .. } => None,
+            RequestKind::Http { .. } | RequestKind::WebSocket { .. } => None,
+        }
+    }
+
+    /// Returns the native WebSocket message when this is a WebSocket request with one.
+    #[must_use]
+    pub const fn websocket_message(&self) -> Option<&WebSocketMessageSet> {
+        match &self.kind {
+            RequestKind::WebSocket { message } => message.as_ref(),
+            RequestKind::Http { .. } | RequestKind::Graphql { .. } => None,
+        }
+    }
+
+    /// Returns the selected native WebSocket message.
+    pub fn selected_websocket_message(
+        &self,
+    ) -> Result<Option<&WebSocketMessage>, GraphqlRequestError> {
+        match self.websocket_message() {
+            None => Ok(None),
+            Some(WebSocketMessageSet::Single(message)) => Ok(Some(message)),
+            Some(WebSocketMessageSet::Variants(variants)) => {
+                selected_websocket_variant_index(variants)
+                    .map(|index| Some(&variants[index].message))
+            }
         }
     }
 
@@ -807,6 +1062,11 @@ impl Request {
             http @ RequestKind::Http { .. } => {
                 self.kind = http;
                 return Ok(PreparedHttpRequest(self));
+            }
+            RequestKind::WebSocket { .. } => {
+                return Err(GraphqlRequestError::UnsupportedExecution(
+                    RequestProtocol::WebSocket,
+                ));
             }
             RequestKind::Graphql { body: None } => GraphqlOperation::default(),
             RequestKind::Graphql {

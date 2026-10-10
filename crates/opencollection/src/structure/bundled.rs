@@ -19,7 +19,7 @@ pub(super) fn mutate_bundled(
             let parent_path = destination_path(document, parent.as_deref())?;
             let items = items_mut(document, &parent_path)?;
             let index = checked_index(index, items.len())?;
-            let mut request = request_value(&name, method, url, protocol, graphql);
+            let mut request = request_value(&name, method, url, protocol, graphql)?;
             if let Some(update) = update {
                 apply_request_update(&mut request, &update)
                     .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;

@@ -136,6 +136,7 @@ fn variable_usage_human(usage: &VariableUsage) -> String {
         VariableUsage::GraphqlVariables => "GraphQL variables".to_owned(),
         VariableUsage::GraphqlOperationName => "GraphQL operation name".to_owned(),
         VariableUsage::GraphqlExtensions => "GraphQL extensions".to_owned(),
+        VariableUsage::WebSocketMessage => "WebSocket message".to_owned(),
         VariableUsage::FormUrlEncoded { name } => format!("form field: {name}"),
         VariableUsage::Multipart { name } => format!("multipart: {name}"),
         VariableUsage::File => "file".to_owned(),
@@ -159,6 +160,7 @@ fn variable_usage_json(usage: &VariableUsage) -> serde_json::Value {
         VariableUsage::GraphqlVariables => json!({ "location": "graphql_variables" }),
         VariableUsage::GraphqlOperationName => json!({ "location": "graphql_operation_name" }),
         VariableUsage::GraphqlExtensions => json!({ "location": "graphql_extensions" }),
+        VariableUsage::WebSocketMessage => json!({ "location": "websocket_message" }),
         VariableUsage::FormUrlEncoded { name } => {
             json!({ "location": "form_urlencoded", "name": name })
         }

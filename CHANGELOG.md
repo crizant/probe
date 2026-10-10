@@ -6,6 +6,15 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- OpenCollection WebSocket requests (`info.type: websocket`) now load as native
+  requests in bundled and unbundled collections. Probe keeps their URL, headers,
+  authentication, message or message variants, docs, and settings when you edit
+  and save them, and the desktop sidebar shows them with the WebSocket icon.
+  WebSocket requests cannot be sent yet; `request run` reports a
+  `request_configuration` error.
+
 ## [0.10.8] - 2026-10-09
 
 ### Added

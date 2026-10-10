@@ -19,7 +19,7 @@ pub(super) fn mutate_unbundled(
             let directory = destination_directory(root, parent.as_deref())?;
             let path = directory.join(format!("{}.yml", slug(&name)?));
             ensure_absent(root, &path)?;
-            let mut request = request_value(&name, method, url, protocol, graphql);
+            let mut request = request_value(&name, method, url, protocol, graphql)?;
             if let Some(update) = update {
                 apply_request_update(&mut request, &update)
                     .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;

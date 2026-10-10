@@ -170,9 +170,18 @@ impl CliError {
 
     pub(crate) fn graphql(error: GraphqlRequestError) -> Self {
         match error {
-            GraphqlRequestError::NotGraphql | GraphqlRequestError::NotHttp => {
+            GraphqlRequestError::NotGraphql
+            | GraphqlRequestError::NotHttp
+            | GraphqlRequestError::NotWebSocket
+            | GraphqlRequestError::UnsupportedField { .. } => {
                 Self::invalid_arguments(error.to_string())
             }
+            GraphqlRequestError::UnsupportedExecution(_) => Self {
+                category: "request_configuration",
+                message: error.to_string(),
+                exit_code: CONFIGURATION_EXIT_CODE,
+                details: None,
+            },
             GraphqlRequestError::InvalidBodySelection(message) => {
                 Self::http(HttpError::InvalidBodySelection(message))
             }

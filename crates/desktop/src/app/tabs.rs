@@ -69,13 +69,8 @@ impl ProbeApp {
             return;
         };
         let request = Request {
-            method: Some(protocol.default_method().to_owned()),
-            kind: match protocol {
-                probe_core::RequestProtocol::Graphql => {
-                    probe_core::RequestKind::Graphql { body: None }
-                }
-                probe_core::RequestProtocol::Http => probe_core::RequestKind::Http { body: None },
-            },
+            method: protocol.default_method().map(str::to_owned),
+            kind: probe_core::RequestKind::empty(protocol),
             ..Request::default()
         };
         let key = loaded.add_detached_request(request);
