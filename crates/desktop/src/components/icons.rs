@@ -87,17 +87,17 @@ fn svg_icon(cache_key: &'static str, data: &'static [u8], width: f32, height: f3
 pub(crate) enum RequestIcon {
     Http { method: Option<String> },
     Graphql,
+    WebSocket,
 }
 
 impl RequestIcon {
     pub(crate) fn from_request(kind: &probe_core::RequestKind, method: Option<&str>) -> Self {
         match kind.protocol() {
-            probe_core::RequestProtocol::Http | probe_core::RequestProtocol::WebSocket => {
-                Self::Http {
-                    method: method.map(str::to_uppercase),
-                }
-            }
+            probe_core::RequestProtocol::Http => Self::Http {
+                method: method.map(str::to_uppercase),
+            },
             probe_core::RequestProtocol::Graphql => Self::Graphql,
+            probe_core::RequestProtocol::WebSocket => Self::WebSocket,
         }
     }
 
@@ -105,6 +105,7 @@ impl RequestIcon {
         match self {
             Self::Http { method } => method.as_deref().unwrap_or("HTTP"),
             Self::Graphql => "GraphQL",
+            Self::WebSocket => "WebSocket",
         }
     }
 
@@ -122,6 +123,11 @@ impl RequestIcon {
             RequestIcon::Graphql => (
                 "probe-request-graphql",
                 include_bytes!("../../assets/icons/requests/graphql.svg"),
+                false,
+            ),
+            RequestIcon::WebSocket => (
+                "probe-request-websocket",
+                include_bytes!("../../assets/icons/requests/websocket.svg"),
                 false,
             ),
             RequestIcon::Http { method } => match method.as_deref().unwrap_or("HTTP") {
@@ -187,7 +193,7 @@ pub(crate) fn request_icon(theme: Theme, icon: &RequestIcon) -> gpui::Div {
     let color = match icon {
         RequestIcon::Graphql => theme.colors.protocols.graphql,
         RequestIcon::Http { .. } if is_method => theme.method_color(icon.label()),
-        RequestIcon::Http { .. } => theme.colors.protocols.http,
+        RequestIcon::Http { .. } | RequestIcon::WebSocket => theme.colors.protocols.http,
     };
     tree_icon_slot(
         theme,

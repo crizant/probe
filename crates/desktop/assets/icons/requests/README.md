@@ -37,5 +37,5 @@ Reuse the existing GPUI SVG rendering helper with embedded bytes and a stable,
 unique cache key per icon. Render the method SVGs with their 3:2 aspect ratio;
 the desktop SVG helper supports rectangular method icons.
 Use `http.svg` as the fallback for custom methods. Keep the full method/protocol
-in the row accessibility label and tooltip. The tree, drag previews, and add menu use these assets. The WebSocket icon is
-reserved for future use; it does not enable WebSocket support.
+in the row accessibility label and tooltip. The tree, drag previews, and add menu use these assets. The WebSocket icon
+identifies native WebSocket requests.
