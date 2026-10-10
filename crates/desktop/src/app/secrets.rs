@@ -60,6 +60,8 @@ pub(super) struct SecretTarget {
     pub(super) name: String,
 }
 
+type EditorSecretSets = (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>);
+
 impl ProbeApp {
     fn saved_secret_target(&self, environment: &str, name: &str) -> Option<SecretTarget> {
         let workspace = self.workspace_path.as_ref()?;
@@ -158,7 +160,7 @@ impl ProbeApp {
         &self,
         selected: &str,
         secrets_without_values: &BTreeSet<String>,
-    ) -> Result<(BTreeSet<String>, BTreeSet<String>, BTreeSet<String>), CredentialStoreError> {
+    ) -> Result<EditorSecretSets, CredentialStoreError> {
         let Some(workspace) = &self.workspace_path else {
             return Ok((
                 BTreeSet::new(),
