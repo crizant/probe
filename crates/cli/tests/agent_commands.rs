@@ -26,6 +26,28 @@ fn agent_help_and_unsupported_arguments() {
     }
 }
 
+// On Linux, a parallel process spawn can briefly inherit the write fd opened
+// by fs::copy before CLOEXEC takes effect, causing exec to return ETXTBSY.
+// Retry only that transient error.
+#[cfg(unix)]
+fn output_retrying_text_file_busy(command: &mut Command) -> std::process::Output {
+    const ATTEMPTS: u32 = 5;
+    const DELAY: std::time::Duration = std::time::Duration::from_millis(20);
+    let mut attempt = 1;
+    loop {
+        match command.output() {
+            Ok(output) => return output,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < ATTEMPTS =>
+            {
+                attempt += 1;
+                thread::sleep(DELAY);
+            }
+            Err(error) => panic!("failed to spawn moved probe binary: {error}"),
+        }
+    }
+}
+
 // BaseDirs uses HOME on Unix. Change only the child process environment; Windows
 // uses Known Folders and exercises the injectable home through the unit tests.
 #[cfg(unix)]
@@ -44,7 +66,7 @@ fn moved_binary_installs_offline_without_a_repository_or_working_directory_depen
         if force {
             command.arg("--force");
         }
-        command.output().unwrap()
+        output_retrying_text_file_busy(&mut command)
     };
     let skill = home.join(".agents/skills/probe");
     for changed in [true, false] {
