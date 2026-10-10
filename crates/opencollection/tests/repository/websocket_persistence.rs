@@ -430,6 +430,53 @@ fn websocket_structure_operations_create_rename_and_reorder() {
 }
 
 #[test]
+fn created_request_settings_contain_only_keys_valid_for_the_protocol() {
+    let path = temporary_path("websocket-settings.yml");
+    let settings = probe_core::RequestSettings {
+        timeout: Some(Duration::from_millis(1500)),
+        follow_redirects: Some(false),
+        max_redirects: Some(3),
+        keep_alive_interval: Some(Duration::from_secs(30)),
+    };
+    let item = |kind| {
+        CollectionItem::Request(Request {
+            settings: settings.clone(),
+            kind,
+            ..Request::default()
+        })
+    };
+    let collection = Collection {
+        items: vec![
+            item(probe_core::RequestKind::Http { body: None }),
+            item(probe_core::RequestKind::Graphql { body: None }),
+            item(probe_core::RequestKind::WebSocket { message: None }),
+        ],
+        ..Collection::default()
+    };
+
+    create_bundled_workspace_from_collection(&path, &collection).unwrap();
+    let saved = yaml(&path);
+    let keys = |index: usize| {
+        saved["items"][index]["settings"]
+            .as_mapping()
+            .unwrap()
+            .keys()
+            .map(|key| key.as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    for index in [0, 1] {
+        assert_eq!(
+            keys(index),
+            ["timeout", "followRedirects", "maxRedirects"],
+            "item {index}"
+        );
+    }
+    assert_eq!(keys(2), ["timeout", "keepAliveInterval"]);
+    assert_eq!(saved["items"][2]["settings"]["timeout"], 1500.0);
+    assert_eq!(saved["items"][2]["settings"]["keepAliveInterval"], 30000.0);
+}
+
+#[test]
 fn bundled_creation_from_a_domain_collection_round_trips_websocket_requests() {
     let path = temporary_path("websocket-domain.yml");
     let socket = Request {

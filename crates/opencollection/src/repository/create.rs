@@ -1,5 +1,5 @@
 use super::*;
-use probe_core::RequestKind;
+use probe_core::{RequestKind, RequestProtocol};
 use serde::Serialize;
 
 /// Creates an empty bundled OpenCollection YAML file at `path` and loads it.
@@ -263,7 +263,9 @@ fn collection_item_value(item: &CollectionItem) -> Value {
                 details.insert(string_key("auth"), authentication_value(authentication));
             }
             item.insert(string_key(section), Value::Mapping(details));
-            if let Some(settings) = request_settings_value(&request.settings) {
+            if let Some(settings) =
+                request_settings_value(&request.settings, request.kind.protocol())
+            {
                 item.insert(string_key("settings"), settings);
             }
             if let Some(docs) = &request.docs {
@@ -339,12 +341,24 @@ fn item_info_value(metadata: &probe_core::ItemMetadata, item_type: &str) -> serd
     item
 }
 
-fn request_settings_value(settings: &probe_core::RequestSettings) -> Option<Value> {
+/// Serializes only the settings the protocol's OpenCollection settings schema allows.
+fn request_settings_value(
+    settings: &probe_core::RequestSettings,
+    protocol: RequestProtocol,
+) -> Option<Value> {
     let mut value = serde_yaml_ng::Mapping::new();
     if let Some(timeout) = settings.timeout
         && let Ok(timeout) = serde_yaml_ng::to_value(timeout.as_secs_f64() * 1000.0)
     {
         value.insert(string_key("timeout"), timeout);
+    }
+    if protocol == RequestProtocol::WebSocket {
+        if let Some(interval) = settings.keep_alive_interval
+            && let Ok(interval) = serde_yaml_ng::to_value(interval.as_secs_f64() * 1000.0)
+        {
+            value.insert(string_key("keepAliveInterval"), interval);
+        }
+        return (!value.is_empty()).then(|| Value::Mapping(value));
     }
     if let Some(follow_redirects) = settings.follow_redirects {
         value.insert(string_key("followRedirects"), Value::Bool(follow_redirects));
@@ -353,11 +367,6 @@ fn request_settings_value(settings: &probe_core::RequestSettings) -> Option<Valu
         && let Ok(max_redirects) = serde_yaml_ng::to_value(max_redirects)
     {
         value.insert(string_key("maxRedirects"), max_redirects);
-    }
-    if let Some(interval) = settings.keep_alive_interval
-        && let Ok(interval) = serde_yaml_ng::to_value(interval.as_secs_f64() * 1000.0)
-    {
-        value.insert(string_key("keepAliveInterval"), interval);
     }
     (!value.is_empty()).then(|| Value::Mapping(value))
 }
