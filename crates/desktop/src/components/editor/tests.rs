@@ -62,7 +62,7 @@ fn variable_ranges_trim_names_and_find_placeholders_in_json() {
 }
 
 #[test]
-fn variable_tooltip_presentation_creates_missing_writable_variables() {
+fn variable_tooltip_presentation_handles_variable_and_secret_states() {
     let mut values = BTreeMap::new();
     values.insert("host".to_owned(), "api.example".to_owned());
     values.insert("empty".to_owned(), String::new());
@@ -154,6 +154,24 @@ fn variable_tooltip_presentation_creates_missing_writable_variables() {
         unknown_tooltip.secret.unwrap().action_label(),
         "Set Secret…"
     );
+    let identity_error = VariableContext {
+        values: [("host".to_owned(), "api.example.com".to_owned())]
+            .into_iter()
+            .collect(),
+        secret_identity_errors: [(String::new(), "invalid credential identity".to_owned())]
+            .into_iter()
+            .collect(),
+        on_change: Some(std::rc::Rc::new(|_, _, _, _| {})),
+        ..VariableContext::default()
+    };
+    let host = variable_tooltip_presentation("host", &identity_error);
+    assert_eq!(host.value, "api.example.com");
+    assert!(host.editable);
+    assert!(host.secret.is_none());
+    let failed_secret = variable_tooltip_presentation("", &identity_error);
+    assert_eq!(failed_secret.value, "invalid credential identity");
+    assert!(!failed_secret.editable);
+    assert_eq!(failed_secret.secret, Some(SecretTooltipState::Unknown));
     for theme in [Theme::light(), Theme::dark()] {
         assert_eq!(
             unknown_tooltip.secret.unwrap().status_color(theme),

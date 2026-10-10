@@ -9,6 +9,7 @@ use gpui_base::input::{InputEvent, InputState};
 
 use super::{ApplicationDialog, ProbeApp, SecretUiStatus, ToastIntent};
 use crate::components;
+use crate::credential_presence::PersistenceKeys;
 use crate::credentials::{CredentialId, CredentialStore, CredentialStoreError};
 use crate::execution::SecretPresenceReconciliation;
 
@@ -58,6 +59,13 @@ pub(super) struct SecretTarget {
     pub(super) workspace: PathBuf,
     pub(super) environment: String,
     pub(super) name: String,
+}
+
+pub(super) struct EditorSecretSets {
+    pub(super) missing: BTreeSet<String>,
+    pub(super) resolved: BTreeSet<String>,
+    pub(super) unknown: BTreeSet<String>,
+    pub(super) identity_errors: BTreeMap<String, String>,
 }
 
 impl ProbeApp {
@@ -158,32 +166,43 @@ impl ProbeApp {
         &self,
         selected: &str,
         secrets_without_values: &BTreeSet<String>,
-    ) -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
+    ) -> EditorSecretSets {
         let Some(workspace) = &self.workspace_path else {
-            return (
-                BTreeSet::new(),
-                BTreeSet::new(),
-                secrets_without_values.clone(),
-            );
+            return EditorSecretSets {
+                missing: BTreeSet::new(),
+                resolved: BTreeSet::new(),
+                unknown: secrets_without_values.clone(),
+                identity_errors: BTreeMap::new(),
+            };
         };
-        let keys = self.secret_persistence_keys(workspace, selected, secrets_without_values);
+        let lookup = self.secret_persistence_keys(workspace, selected, secrets_without_values);
         let mut missing = BTreeSet::new();
         let mut resolved = BTreeSet::new();
         let mut unknown = BTreeSet::new();
         for name in secrets_without_values {
-            match keys.get(name) {
+            match lookup.keys.get(name) {
                 Some(key) if self.session.presence.is_stored(key) => {
                     resolved.insert(name.clone());
                 }
                 Some(key) if self.session.presence.is_missing(key) => {
                     missing.insert(name.clone());
                 }
-                _ => {
+                Some(_) => {
                     unknown.insert(name.clone());
                 }
+                None => {}
             }
         }
-        (missing, resolved, unknown)
+        EditorSecretSets {
+            missing,
+            resolved,
+            unknown,
+            identity_errors: lookup
+                .errors
+                .iter()
+                .map(|(name, error)| (name.clone(), error.to_string()))
+                .collect(),
+        }
     }
 
     fn secret_persistence_keys(
@@ -191,7 +210,7 @@ impl ProbeApp {
         workspace: &Path,
         environment: &str,
         names: &BTreeSet<String>,
-    ) -> BTreeMap<String, String> {
+    ) -> PersistenceKeys {
         self.session
             .presence
             .persistence_keys(workspace, environment, names)

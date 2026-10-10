@@ -6,7 +6,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{credentials::CredentialId, execution::SecretPresenceReconciliation};
+use crate::{
+    credentials::{CredentialId, CredentialStoreError},
+    execution::SecretPresenceReconciliation,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 struct EditorSecretIdentityCache {
@@ -14,6 +17,14 @@ struct EditorSecretIdentityCache {
     environment: String,
     names: BTreeSet<String>,
     keys: BTreeMap<String, String>,
+    errors: BTreeMap<String, CredentialStoreError>,
+}
+
+/// Persistence keys for secret names that produced an identity, plus the names that did not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PersistenceKeys {
+    pub(crate) keys: BTreeMap<String, String>,
+    pub(crate) errors: BTreeMap<String, CredentialStoreError>,
 }
 
 /// Presentation metadata only. Credential values and store access stay outside this state.
@@ -55,7 +66,10 @@ impl CredentialPresenceState {
     /// A successful native write or delete supersedes older execution observations.
     pub(crate) fn record_write(&mut self, key: &str, stored: bool) -> bool {
         let changed = self.record(key, stored);
-        self.revision = self.revision.wrapping_add(1);
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("credential presence revision overflow");
         changed
     }
 
@@ -86,35 +100,48 @@ impl CredentialPresenceState {
         changed
     }
 
+    /// Drops cached identities after a workspace load, reload, or path change.
+    pub(crate) fn clear_identity_cache(&self) {
+        self.editor_identities.take();
+    }
+
     pub(crate) fn persistence_keys(
         &self,
         workspace: &Path,
         environment: &str,
         names: &BTreeSet<String>,
-    ) -> BTreeMap<String, String> {
+    ) -> PersistenceKeys {
         let mut cache = self.editor_identities.borrow_mut();
         if let Some(cached) = cache.as_ref()
             && cached.workspace == workspace
             && cached.environment == environment
             && &cached.names == names
         {
-            return cached.keys.clone();
+            return PersistenceKeys {
+                keys: cached.keys.clone(),
+                errors: cached.errors.clone(),
+            };
         }
-        let keys = names
-            .iter()
-            .filter_map(|name| {
-                CredentialId::for_workspace(workspace, environment, name)
-                    .ok()
-                    .map(|id| (name.clone(), id.persistence_key().to_owned()))
-            })
-            .collect::<BTreeMap<_, _>>();
+        let mut keys = BTreeMap::new();
+        let mut errors = BTreeMap::new();
+        for name in names {
+            match CredentialId::for_workspace(workspace, environment, name) {
+                Ok(id) => {
+                    keys.insert(name.clone(), id.persistence_key().to_owned());
+                }
+                Err(error) => {
+                    errors.insert(name.clone(), error);
+                }
+            }
+        }
         *cache = Some(EditorSecretIdentityCache {
             workspace: workspace.to_path_buf(),
             environment: environment.to_owned(),
             names: names.clone(),
             keys: keys.clone(),
+            errors: errors.clone(),
         });
-        keys
+        PersistenceKeys { keys, errors }
     }
 }
 
@@ -191,16 +218,27 @@ mod tests {
         };
 
         let development = state.persistence_keys(&workspace, "development", &names);
-        assert_eq!(development["token"], key(&workspace, "development"));
+        assert!(development.errors.is_empty());
+        assert_eq!(development.keys["token"], key(&workspace, "development"));
         let base = state.persistence_keys(&workspace, "base", &names);
-        assert_eq!(base["token"], key(&workspace, "base"));
+        assert_eq!(base.keys["token"], key(&workspace, "base"));
         let other = state.persistence_keys(Path::new("/"), "base", &names);
-        assert_eq!(other["token"], key(Path::new("/"), "base"));
+        assert_eq!(other.keys["token"], key(Path::new("/"), "base"));
         let renamed: BTreeSet<String> = ["other".into()].into();
         assert!(
             !state
                 .persistence_keys(Path::new("/"), "base", &renamed)
+                .keys
                 .contains_key("token")
+        );
+
+        let mixed: BTreeSet<String> = ["token".into(), String::new()].into();
+        let lookup = state.persistence_keys(&workspace, "development", &mixed);
+        assert_eq!(lookup.keys["token"], key(&workspace, "development"));
+        assert!(!lookup.keys.contains_key(""));
+        assert_eq!(
+            lookup.errors.get(""),
+            Some(&CredentialStoreError::InvalidIdentity)
         );
     }
 

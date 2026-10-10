@@ -539,6 +539,15 @@ pub(in crate::components) fn variable_tooltip_presentation(
     name: &str,
     variables: &VariableContext,
 ) -> VariableTooltipPresentation {
+    if let Some(error) = variables.secret_identity_errors.get(name) {
+        return VariableTooltipPresentation {
+            value: error.clone(),
+            placeholder: "Secret value",
+            editable: false,
+            hint: None,
+            secret: Some(SecretTooltipState::Unknown),
+        };
+    }
     if variables.unknown_secrets.contains(name) {
         return VariableTooltipPresentation::secret(SecretTooltipState::Unknown);
     }
@@ -691,7 +700,10 @@ pub(in crate::components) fn placeholder_tone(
     kind: ReferenceKind,
     name: &str,
 ) -> PlaceholderTone {
-    if kind == ReferenceKind::Environment && variables.unknown_secrets.contains(name) {
+    if kind == ReferenceKind::Environment
+        && (variables.secret_identity_errors.contains_key(name)
+            || variables.unknown_secrets.contains(name))
+    {
         return PlaceholderTone::Neutral;
     }
     if reference_status(variables, kind, name).is_resolved() {
