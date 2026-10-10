@@ -279,11 +279,18 @@ impl RequestUpdate {
         if base.is_none() && matches!(current.graphql(), Some(GraphqlBody::Variants(_))) {
             return Err(RequestDiffError::UnsupportedChange("GraphQL body variants"));
         }
-        let base_message = base
-            .map(Request::selected_websocket_message)
-            .transpose()?
-            .flatten();
-        let current_message = current.selected_websocket_message()?;
+        let websocket_message_changed =
+            base.and_then(Request::websocket_message) != current.websocket_message();
+        let (base_message, current_message) = if websocket_message_changed {
+            (
+                base.map(Request::selected_websocket_message)
+                    .transpose()?
+                    .flatten(),
+                current.selected_websocket_message()?,
+            )
+        } else {
+            (None, None)
+        };
         if base.is_none()
             && matches!(
                 current.websocket_message(),
@@ -366,7 +373,9 @@ impl RequestUpdate {
                 _ => None,
             },
             websocket_message: match &current.kind {
-                RequestKind::WebSocket { .. } if base_message != current_message => {
+                RequestKind::WebSocket { .. }
+                    if websocket_message_changed && base_message != current_message =>
+                {
                     FieldPatch::from_optional(current_message.cloned())
                 }
                 _ => FieldPatch::Unchanged,

@@ -144,6 +144,21 @@ fn message_updates_target_only_the_selected_variant() {
 }
 
 #[test]
+fn unchanged_variants_without_one_selected_message_do_not_block_other_edits() {
+    for selection in [[false, false], [true, true]] {
+        let base = websocket(Some(variants(selection)));
+        let mut current = base.clone();
+        current.url = Some("wss://{{host}}/v2".to_owned());
+
+        let update = RequestUpdate::between(Some(&base), &current).unwrap();
+        assert!(update.websocket_message.is_unchanged());
+        let mut restored = base;
+        update.apply(&mut restored).unwrap();
+        assert_eq!(restored, current);
+    }
+}
+
+#[test]
 fn new_websocket_requests_diff_without_http_only_fields() {
     let current = websocket(Some(WebSocketMessageSet::Single(message(
         WebSocketMessageKind::Json,

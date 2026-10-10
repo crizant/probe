@@ -139,6 +139,60 @@ fn websocket_message_variant_edits_keep_titles_selection_and_unknown_variants() 
 }
 
 #[test]
+fn url_edits_save_when_the_selected_message_variant_is_unknown_or_missing() {
+    for (name, selected) in [("unknown", [false, true]), ("missing", [false, false])] {
+        let path = temporary_path(&format!("websocket-selection-{name}.yml"));
+        fs::write(
+            &path,
+            format!(
+                r"opencollection: 1.0.0
+info:
+  name: Sockets
+bundled: true
+items:
+  - info:
+      name: Variants
+      type: websocket
+    websocket:
+      url: wss://example.test/socket
+      message:
+        - title: Greeting
+          selected: {}
+          message:
+            type: text
+            data: hello
+        - title: Future
+          selected: {}
+          message:
+            type: cbor
+            data: oQ==
+",
+                selected[0], selected[1]
+            ),
+        )
+        .unwrap();
+        let mut loaded = load_workspace(&path).unwrap();
+        let base = request(&loaded, "items/0").clone();
+        let mut edited = base.clone();
+        edited.url = Some("wss://example.test/v2".to_owned());
+
+        let update = RequestUpdate::between(Some(&base), &edited).unwrap();
+        assert!(update.websocket_message.is_unchanged(), "{name}");
+        loaded.update_request("items/0", &update).unwrap();
+
+        let reloaded = load_workspace(&path).unwrap();
+        assert_eq!(request(&reloaded, "items/0"), &edited, "{name}");
+        let saved = yaml(&path);
+        let messages = saved["items"][0]["websocket"]["message"]
+            .as_sequence()
+            .unwrap();
+        assert_eq!(messages[1]["selected"], selected[1], "{name}");
+        assert_eq!(messages[1]["message"]["type"], "cbor", "{name}");
+        assert_eq!(messages[1]["message"]["data"], "oQ==", "{name}");
+    }
+}
+
+#[test]
 fn websocket_rejects_fields_outside_its_opencollection_shape_without_writing() {
     let path = temporary_path("websocket-rejects.yml");
     fs::copy(fixture("websocket.yml"), &path).unwrap();
