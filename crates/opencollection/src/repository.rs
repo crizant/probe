@@ -1496,11 +1496,7 @@ pub(crate) fn apply_request_update(
         .and_then(RequestProtocol::from_name)
         .unwrap_or_default();
     let websocket = protocol == RequestProtocol::WebSocket;
-    if !update.websocket_message.is_unchanged() && !websocket {
-        return Err(SaveError::Graphql(
-            probe_core::GraphqlRequestError::NotWebSocket,
-        ));
-    }
+    validate_websocket_fields(websocket, update)?;
     let details_name = protocol.as_str();
     if !update.method.is_unchanged()
         || !update.url.is_unchanged()
@@ -1513,11 +1509,8 @@ pub(crate) fn apply_request_update(
         || update.graphql.is_some()
         || !update.websocket_message.is_unchanged()
     {
-        if websocket {
-            reject_websocket_unsupported_fields(update)?;
-        }
         let details = mapping_child(request, details_name)?;
-        if !update.method.is_unchanged() && !websocket {
+        if !update.method.is_unchanged() {
             set_optional(
                 details,
                 "method",
@@ -1602,7 +1595,16 @@ pub(crate) fn apply_request_update(
     Ok(())
 }
 
-fn reject_websocket_unsupported_fields(update: &RequestUpdate) -> Result<(), SaveError> {
+fn validate_websocket_fields(websocket: bool, update: &RequestUpdate) -> Result<(), SaveError> {
+    if !websocket {
+        return if update.websocket_message.is_unchanged() {
+            Ok(())
+        } else {
+            Err(SaveError::Graphql(
+                probe_core::GraphqlRequestError::NotWebSocket,
+            ))
+        };
+    }
     let field = if matches!(update.method, FieldPatch::Set(_)) {
         "an HTTP method"
     } else if update

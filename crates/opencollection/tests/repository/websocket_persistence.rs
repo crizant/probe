@@ -290,6 +290,25 @@ fn websocket_structure_operations_create_rename_and_reorder() {
         matches!(&error, StructureError::InvalidDocument(message) if message.contains("query parameters")),
         "{error:?}"
     );
+    let error = loaded
+        .apply_structure(StructureOperation::CreateRequest {
+            parent: None,
+            index: None,
+            name: "Invalid HTTP".to_owned(),
+            method: Some("GET".to_owned()),
+            url: None,
+            protocol: RequestProtocol::Http,
+            graphql: None,
+            update: Some(RequestUpdate {
+                websocket_message: FieldPatch::Set(message(WebSocketMessageKind::Text, "x")),
+                ..RequestUpdate::default()
+            }),
+        })
+        .unwrap_err();
+    assert!(
+        matches!(&error, StructureError::InvalidDocument(message) if message.contains("not a native WebSocket request")),
+        "{error:?}"
+    );
     assert_eq!(
         load_workspace(&path).unwrap().workspace().request_count(),
         4
