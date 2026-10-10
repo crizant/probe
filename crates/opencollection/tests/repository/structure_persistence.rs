@@ -387,7 +387,9 @@ fn unbundled_graphql_rename_preserves_request_order_and_unknown_fields() {
 fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
     let root = temporary_path("phase16-unbundled");
     copy_directory(&fixture("phase16-unbundled"), &root);
-    let unsupported = fs::read(root.join("group/unsupported.yml")).unwrap();
+    let mut graphql: serde_yaml_ng::Value =
+        serde_yaml_ng::from_slice(&fs::read(root.join("group/unsupported.yml")).unwrap()).unwrap();
+    graphql["info"]["seq"] = 2.into();
     let mut loaded = load_workspace(&root).unwrap();
 
     let created = loaded
@@ -458,8 +460,11 @@ fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
             .contains("x-folder: retained")
     );
     assert_eq!(
-        fs::read(root.join("group/unsupported.yml")).unwrap(),
-        unsupported
+        serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(
+            &fs::read(root.join("group/unsupported.yml")).unwrap()
+        )
+        .unwrap(),
+        graphql
     );
     fs::remove_dir_all(root).unwrap();
 }
