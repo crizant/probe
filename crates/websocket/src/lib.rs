@@ -388,15 +388,11 @@ impl WebSocketConnection {
                 Err(WireError::AlreadyClosed) => return Ok(()),
                 Err(error) => return Err(classify(error)),
             }
+            // The stream ends after Close and flushes any acknowledgement. It
+            // never yields AlreadyClosed (that is a Sink/start_send error).
             while let Some(message) = self.socket.next().await {
-                match message {
-                    Ok(message) if message.is_close() => return Ok(()),
-                    Err(WireError::AlreadyClosed) => return Ok(()),
-                    Err(error) => return Err(classify(error)),
-                    _ => {
-                        self.socket.flush().await.map_err(classify)?;
-                    }
-                }
+                message.map_err(classify)?;
+                self.socket.flush().await.map_err(classify)?;
             }
             Ok(())
         })
@@ -456,13 +452,12 @@ async fn handshake(
     }
     let mut headers = [httparse::EMPTY_HEADER; 128];
     let mut parsed = httparse::Response::new(&mut headers);
-    if !parsed
+    // Reading through the terminating blank line supplies a complete header
+    // block; parsing errors and the HTTP upgrade status/version are validated.
+    parsed
         .parse(&response)
-        .map_err(|_| WebSocketError::Handshake)?
-        .is_complete()
-        || parsed.code != Some(101)
-        || parsed.version != Some(1)
-    {
+        .map_err(|_| WebSocketError::Handshake)?;
+    if (parsed.code, parsed.version) != (Some(101), Some(1)) {
         return Err(WebSocketError::Handshake);
     }
     let header = |name: &str| {
@@ -494,4 +489,85 @@ async fn handshake(
         return Err(WebSocketError::Handshake);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn first_keep_alive_tick_is_not_immediate() {
+        use futures_util::FutureExt;
+        use probe_core::RequestKind;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let request = Request {
+            url: Some(format!("ws://{}", listener.local_addr().unwrap())),
+            kind: RequestKind::WebSocket { message: None },
+            settings: probe_core::RequestSettings {
+                keep_alive_interval: Some(Duration::from_secs(10)),
+                ..Default::default()
+            },
+            ..Request::default()
+        };
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        let mut connection = tokio::time::timeout(
+            Duration::from_secs(2),
+            WebSocketRequest::new(&request).unwrap().connect(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            connection
+                .keep_alive
+                .as_mut()
+                .unwrap()
+                .tick()
+                .now_or_never()
+                .is_none(),
+            "the first Ping must wait a complete keep-alive interval"
+        );
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    #[test]
+    fn transport_categories_withhold_underlying_diagnostics() {
+        for (error, expected) in [
+            (WireError::AlreadyClosed, WebSocketError::Closed),
+            (
+                WireError::Io(std::io::Error::other("private-secret")),
+                WebSocketError::Connection,
+            ),
+            (
+                WireError::Rustls(rustls::Error::General("private-secret".into())),
+                WebSocketError::Tls,
+            ),
+            (
+                WireError::Upgrade(tokio_websockets::upgrade::Error::MissingHeader(
+                    "private-secret",
+                )),
+                WebSocketError::Handshake,
+            ),
+            (
+                WireError::PayloadTooLong {
+                    len: 999,
+                    max_len: 1,
+                },
+                WebSocketError::Capacity,
+            ),
+        ] {
+            let category = classify(error);
+            assert_eq!(category, expected);
+            let diagnostic = category.to_string();
+            assert!(!diagnostic.is_empty());
+            assert!(!format!("{category:?} {diagnostic}").contains("private-secret"));
+            assert!(std::error::Error::source(&category).is_none());
+        }
+    }
 }

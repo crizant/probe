@@ -408,6 +408,96 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
+    #[test]
+    fn transport_errors_preserve_safe_session_categories() {
+        for (transport, expected) in [
+            (WebSocketError::NotWebSocket, SessionError::NotWebSocket),
+            (WebSocketError::Timeout, SessionError::Timeout),
+            (WebSocketError::CloseTimeout, SessionError::CloseTimeout),
+            (
+                WebSocketError::KeepAliveTimeout,
+                SessionError::KeepAliveTimeout,
+            ),
+            (WebSocketError::Connection, SessionError::Connection),
+            (WebSocketError::Tls, SessionError::Tls),
+            (WebSocketError::Handshake, SessionError::Handshake),
+            (WebSocketError::Protocol, SessionError::Protocol),
+            (WebSocketError::Capacity, SessionError::Capacity),
+            (WebSocketError::Closed, SessionError::Closed),
+            (WebSocketError::InvalidHeader, SessionError::Configuration),
+        ] {
+            let error = SessionError::from(transport);
+            assert_eq!(error, expected);
+            assert!(!error.to_string().is_empty());
+            assert!(std::error::Error::source(&error).is_none());
+        }
+    }
+
+    fn controlled_session() -> (
+        Session,
+        watch::Sender<bool>,
+        watch::Receiver<bool>,
+        mpsc::Receiver<SessionData>,
+        mpsc::Sender<SessionEvent>,
+    ) {
+        let (commands, command_rx) = mpsc::channel(1);
+        let (close, closing) = watch::channel(false);
+        let (finished_tx, finished) = watch::channel(false);
+        let (event_tx, events) = mpsc::channel(1);
+        (
+            Session {
+                sender: SessionSender {
+                    commands,
+                    close,
+                    finished,
+                },
+                events,
+                terminal: None,
+                tail: VecDeque::new(),
+            },
+            finished_tx,
+            closing,
+            command_rx,
+            event_tx,
+        )
+    }
+
+    #[tokio::test]
+    async fn close_and_drop_reject_sends_before_runtime_cleanup() {
+        for drop_owner in [false, true] {
+            let (session, finished, closing, _commands, _events) = controlled_session();
+            let sender = session.sender();
+            assert!(!*finished.borrow());
+            if drop_owner {
+                drop(session);
+            } else {
+                session.close();
+            }
+            assert!(
+                *closing.borrow(),
+                "close must signal synchronously, including on drop"
+            );
+            assert_eq!(
+                sender.send(SessionData::Text("too late".into())).await,
+                Err(SessionError::Closed)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_closed_waits_for_runtime_cleanup_and_is_idempotent() {
+        use futures_util::FutureExt;
+        let (mut session, finished, _closing, _commands, _events) = controlled_session();
+        assert!(session.wait_closed().now_or_never().is_none());
+        finished.send_replace(true);
+        tokio::time::timeout(std::time::Duration::from_secs(1), session.wait_closed())
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), session.wait_closed())
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn missing_initial_presentation_is_typed_and_sends_no_message() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
