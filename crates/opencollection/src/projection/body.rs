@@ -103,10 +103,23 @@ fn websocket_message(
             return None;
         }
     };
-    Some(WebSocketMessage {
-        kind,
-        data: message.data,
-    })
+    let shape = match message.data {
+        Some(Value::String(data)) => return Some(WebSocketMessage { kind, data }),
+        None => "missing",
+        Some(Value::Null) => "null",
+        Some(Value::Bool(_)) => "boolean",
+        Some(Value::Number(_)) => "number",
+        Some(Value::Sequence(_)) => "sequence",
+        Some(Value::Mapping(_)) => "mapping",
+        Some(Value::Tagged(_)) => "tagged",
+    };
+    diagnostic(
+        diagnostics,
+        format!("{path}/data"),
+        ProjectionDiagnosticKind::BodyType,
+        shape,
+    );
+    None
 }
 
 fn project_graphql_operation(

@@ -193,6 +193,110 @@ items:
 }
 
 #[test]
+fn messages_with_missing_or_non_string_data_are_reported_and_retained() {
+    let path = temporary_path("websocket-message-data.yml");
+    fs::write(
+        &path,
+        r"opencollection: 1.0.0
+info:
+  name: Sockets
+bundled: true
+items:
+  - info:
+      name: Missing data
+      type: websocket
+    websocket:
+      url: wss://example.test/single
+      message:
+        type: text
+  - info:
+      name: Numeric data
+      type: websocket
+    websocket:
+      url: wss://example.test/variants
+      message:
+        - title: Number
+          selected: true
+          message:
+            type: json
+            data: 42
+        - title: Text
+          message:
+            type: text
+            data: hello
+",
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let diagnostics = loaded
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.path.as_str(),
+                diagnostic.kind.as_str(),
+                diagnostic.value.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        diagnostics,
+        [
+            (
+                "items/0/websocket/message/data",
+                "unsupported_body_type",
+                "missing"
+            ),
+            (
+                "items/1/websocket/message/0/message/data",
+                "unsupported_body_type",
+                "number"
+            ),
+        ]
+    );
+    assert_eq!(request(&loaded, "items/0").websocket_message(), None);
+    assert_eq!(
+        request(&loaded, "items/1").websocket_message(),
+        Some(&WebSocketMessageSet::Variants(vec![
+            probe_core::WebSocketMessageVariant {
+                title: "Text".to_owned(),
+                selected: false,
+                message: message(WebSocketMessageKind::Text, "hello"),
+            }
+        ]))
+    );
+
+    for selector in ["items/0", "items/1"] {
+        let base = request(&loaded, selector).clone();
+        let mut edited = base.clone();
+        edited.url = Some(format!("wss://example.test/{selector}"));
+        loaded
+            .update_request(
+                selector,
+                &RequestUpdate::between(Some(&base), &edited).unwrap(),
+            )
+            .unwrap();
+    }
+    let saved = yaml(&path);
+    assert_eq!(saved["items"][0]["websocket"]["message"]["type"], "text");
+    assert!(
+        saved["items"][0]["websocket"]["message"]
+            .get("data")
+            .is_none()
+    );
+    assert_eq!(
+        saved["items"][1]["websocket"]["message"][0]["message"]["data"],
+        42
+    );
+    let reloaded = load_workspace(&path).unwrap();
+    assert_eq!(reloaded.diagnostics().len(), 2);
+    assert_eq!(
+        request(&reloaded, "items/1").url.as_deref(),
+        Some("wss://example.test/items/1")
+    );
+}
+
+#[test]
 fn websocket_rejects_fields_outside_its_opencollection_shape_without_writing() {
     let path = temporary_path("websocket-rejects.yml");
     fs::copy(fixture("websocket.yml"), &path).unwrap();

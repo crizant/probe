@@ -263,7 +263,7 @@ pub(crate) struct WebSocketDetailsDocument {
 pub(crate) struct WebSocketMessageDocument {
     #[serde(rename = "type")]
     pub(crate) message_type: String,
-    pub(crate) data: String,
+    pub(crate) data: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]

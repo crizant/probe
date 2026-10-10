@@ -246,7 +246,9 @@ A WebSocket request reuses the common URL, headers, authentication, docs, metada
 settings fields. OpenCollection WebSocket details define no method, parameters, or HTTP
 body, so those fields stay empty and updates that set them are rejected. The message is
 a single `{type, data}` value or titled variants with one selected entry; `type` is
-`text`, `json`, `xml`, or `binary`. Settings add the WebSocket `keepAliveInterval`;
+`text`, `json`, `xml`, or `binary`. A message with another `type` or with missing or
+non-string `data` is reported as an `unsupported_body_type` diagnostic, left out of the
+model, and kept unchanged in the YAML. Settings add the WebSocket `keepAliveInterval`;
 `timeout` is the connection timeout. WebSocket requests load, edit, and save natively,
 but they are not executable yet: preparing one for the HTTP engine is rejected.
 
