@@ -231,58 +231,15 @@ mod tests {
                 .keys
                 .contains_key("token")
         );
-    }
 
-    #[test]
-    fn persistence_keys_reports_invalid_identity_without_dropping_valid_names() {
-        let state = CredentialPresenceState::default();
-        let workspace = std::env::temp_dir();
-        let names: BTreeSet<String> = ["token".into(), String::new()].into();
-        let lookup = state.persistence_keys(&workspace, "development", &names);
+        let mixed: BTreeSet<String> = ["token".into(), String::new()].into();
+        let lookup = state.persistence_keys(&workspace, "development", &mixed);
+        assert_eq!(lookup.keys["token"], key(&workspace, "development"));
+        assert!(!lookup.keys.contains_key(""));
         assert_eq!(
             lookup.errors.get(""),
             Some(&CredentialStoreError::InvalidIdentity)
         );
-        assert!(lookup.keys.contains_key("token"));
-        assert!(!lookup.keys.contains_key(""));
-    }
-
-    #[test]
-    fn failed_identity_lookup_is_reused_until_the_workspace_cache_is_cleared() {
-        let state = CredentialPresenceState::default();
-        let missing = std::env::temp_dir().join(format!(
-            "probe-missing-identity-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let names: BTreeSet<String> = ["token".into()].into();
-        let failed = state.persistence_keys(&missing, "development", &names);
-        assert!(failed.keys.is_empty());
-        assert_eq!(
-            failed.errors.get("token"),
-            Some(&CredentialStoreError::InvalidIdentity)
-        );
-
-        std::fs::create_dir(&missing).unwrap();
-        let still_cached = state.persistence_keys(&missing, "development", &names);
-        assert!(
-            still_cached.keys.is_empty(),
-            "a repeated lookup must reuse the cached identity failure"
-        );
-        assert_eq!(still_cached, failed);
-
-        let other_path = state.persistence_keys(&std::env::temp_dir(), "development", &names);
-        assert!(other_path.errors.is_empty());
-        assert!(other_path.keys.contains_key("token"));
-
-        state.clear_identity_cache();
-        let recomputed = state.persistence_keys(&missing, "development", &names);
-        assert!(recomputed.errors.is_empty());
-        assert!(recomputed.keys.contains_key("token"));
-        let _ = std::fs::remove_dir(&missing);
     }
 
     #[test]

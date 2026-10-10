@@ -62,7 +62,7 @@ fn variable_ranges_trim_names_and_find_placeholders_in_json() {
 }
 
 #[test]
-fn variable_tooltip_presentation_creates_missing_writable_variables() {
+fn variable_tooltip_presentation_handles_variable_and_secret_states() {
     let mut values = BTreeMap::new();
     values.insert("host".to_owned(), "api.example".to_owned());
     values.insert("empty".to_owned(), String::new());
