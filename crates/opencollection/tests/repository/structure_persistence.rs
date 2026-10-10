@@ -334,6 +334,56 @@ fn bundled_duplicate_request_copies_request_after_original() {
 }
 
 #[test]
+fn unbundled_graphql_rename_preserves_request_order_and_unknown_fields() {
+    let root = temporary_path("graphql-rename-unbundled");
+    copy_directory(&fixture("phase16-unbundled"), &root);
+    let mut loaded = load_workspace(&root).unwrap();
+    let selector = "group/unsupported.yml";
+    let key = loaded.request_key(selector).unwrap();
+    let mut expected = loaded.workspace().request(key).unwrap().clone();
+    expected.metadata.name = Some("Renamed GraphQL".to_owned());
+    let sibling = fs::read(root.join("group/nested.yml")).unwrap();
+
+    let result = loaded
+        .apply_structure(StructureOperation::Rename {
+            target: ItemLocator::new(ItemKind::Request, selector),
+            name: "Renamed GraphQL".to_owned(),
+        })
+        .unwrap();
+    let renamed_selector = "group/renamed-graphql.yml";
+    assert_eq!(result.previous_selector.as_deref(), Some(selector));
+    assert_eq!(result.selector.as_deref(), Some(renamed_selector));
+    assert_eq!(result.parent.as_deref(), Some("group"));
+    assert_eq!(result.index, Some(1));
+    assert_eq!(
+        result.selector_remaps.get(selector).map(String::as_str),
+        Some(renamed_selector)
+    );
+    assert!(loaded.request_key(selector).is_none());
+    assert_eq!(
+        loaded
+            .workspace()
+            .request(loaded.request_key(renamed_selector).unwrap()),
+        Some(&expected)
+    );
+    let reloaded = load_workspace(&root).unwrap();
+    assert_eq!(
+        reloaded
+            .workspace()
+            .request(reloaded.request_key(renamed_selector).unwrap()),
+        Some(&expected)
+    );
+    assert!(!root.join(selector).exists());
+    assert_eq!(fs::read(root.join("group/nested.yml")).unwrap(), sibling);
+    assert!(
+        fs::read_to_string(root.join(renamed_selector))
+            .unwrap()
+            .contains("x-unsupported: retained")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn unbundled_structure_edits_persist_paths_order_and_unknown_fields() {
     let root = temporary_path("phase16-unbundled");
     copy_directory(&fixture("phase16-unbundled"), &root);
