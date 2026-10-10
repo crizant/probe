@@ -26,8 +26,9 @@ fn agent_help_and_unsupported_arguments() {
     }
 }
 
-// Linux fork/exec can return ETXTBSY while a parallel test's `fs::copy` still
-// has this freshly copied executable open for writing. Retry only that error.
+// On Linux, a parallel process spawn can briefly inherit the write fd opened
+// by fs::copy before CLOEXEC takes effect, causing exec to return ETXTBSY.
+// Retry only that transient error.
 #[cfg(unix)]
 fn output_retrying_text_file_busy(command: &mut Command) -> std::process::Output {
     const ATTEMPTS: u32 = 5;
