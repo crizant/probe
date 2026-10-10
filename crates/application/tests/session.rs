@@ -645,8 +645,19 @@ async fn concurrent_sender_is_backpressured_and_does_not_keep_dropped_session_al
         .unwrap();
 }
 
+// Paused Tokio time otherwise auto-advances during idle socket I/O. Keep a task
+// runnable so heartbeat deadlines move only through explicit test advances.
+fn hold_paused_clock() -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async {
+        loop {
+            tokio::task::yield_now().await;
+        }
+    })
+}
+
 #[tokio::test(start_paused = true)]
 async fn runtime_keep_alive_is_independent_of_event_consumption() {
+    let clock = hold_paused_clock();
     let (listener, url) = listener().await;
     let (ping_tx, ping_rx) = oneshot::channel();
     let server = tokio::spawn(async move {
@@ -657,11 +668,13 @@ async fn runtime_keep_alive_is_independent_of_event_consumption() {
             Message::Ping(Vec::new().into())
         );
         ping_tx.send(()).unwrap();
+        // Deliver the automatic Pong before testing the client's Ping response.
+        socket.flush().await.unwrap();
         socket
             .send(Message::Ping(b"challenge".to_vec().into()))
             .await
             .unwrap();
-        // Automatic pong to the earlier client ping can appear first.
+        // Wait for the client's response before initiating the remote close.
         loop {
             match socket.next().await.unwrap().unwrap() {
                 Message::Pong(bytes) if bytes.as_ref() == b"challenge" => break,
@@ -707,6 +720,8 @@ async fn runtime_keep_alive_is_independent_of_event_consumption() {
     ));
     assert_eq!(session.next_event().await, None);
     server.await.unwrap();
+    clock.abort();
+    assert!(clock.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test(start_paused = true)]
@@ -751,12 +766,7 @@ async fn nonresponsive_peer_cannot_retain_closed_runtime() {
 async fn missing_pong_is_one_terminal_error_followed_by_close() {
     use tokio::io::AsyncReadExt;
 
-    // Prevent paused time from auto-advancing while local socket I/O is idle.
-    let clock = tokio::spawn(async {
-        loop {
-            tokio::task::yield_now().await;
-        }
-    });
+    let clock = hold_paused_clock();
     let (listener, url) = listener().await;
     let (close_tx, close_rx) = oneshot::channel();
     let (ping_tx, ping_rx) = oneshot::channel();

@@ -240,7 +240,11 @@ async fn connection_deadline_includes_handshake() {
 
 #[tokio::test(start_paused = true)]
 async fn keep_alive_uses_ping_and_shutdown_is_bounded() {
+    use tokio::io::AsyncReadExt;
+
+    let clock = hold_paused_clock();
     let (listener, url) = listener().await;
+    let (close_tx, close_rx) = oneshot::channel();
     let (ping_tx, ping_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let server = tokio::spawn(async move {
@@ -252,8 +256,16 @@ async fn keep_alive_uses_ping_and_shutdown_is_bounded() {
         );
         ping_tx.send(()).unwrap();
         release_rx.await.unwrap();
+        // Flush the queued Pong before text, so receiving "done" proves the
+        // client has consumed Pong before shutdown starts.
+        socket.flush().await.unwrap();
         socket.send(Message::Text("done".into())).await.unwrap();
-        // Deliberately do not read or acknowledge the close frame.
+        // Read raw Close bytes without acknowledging them. Once they arrive,
+        // the client has started its close deadline and advancing time is safe.
+        let mut bytes = [0; 128];
+        assert!(socket.get_mut().read(&mut bytes).await.unwrap() > 0);
+        assert_eq!(bytes[0] & 0x0f, 8);
+        close_tx.send(()).unwrap();
         std::future::pending::<()>().await;
     });
     let mut request = request(url);
@@ -274,6 +286,7 @@ async fn keep_alive_uses_ping_and_shutdown_is_bounded() {
     release_tx.send(()).unwrap();
     let mut connection = receive.await.unwrap();
     let close = tokio::spawn(async move { connection.close().await });
+    close_rx.await.unwrap();
     tokio::time::advance(Duration::from_secs(5)).await;
     assert_eq!(
         close.await.unwrap().unwrap_err(),
@@ -281,6 +294,8 @@ async fn keep_alive_uses_ping_and_shutdown_is_bounded() {
     );
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
+    clock.abort();
+    assert!(clock.await.unwrap_err().is_cancelled());
 }
 
 #[test]
