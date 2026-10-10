@@ -105,12 +105,14 @@ The crate graph is acyclic:
                             │                           ▼
                             └──► probe-application ──► probe-core
                                         │                ▲
-                                        └──► probe-http ─┘
+                                        ├──► probe-http ─┤
+                                        └──► probe-websocket ─┘
 
 Both interfaces depend on `probe-application`, `probe-core`, the repository and
-import adapters, and `probe-http` for engine construction and response types. `probe-application` depends only on `probe-core` and `probe-http`.
-`probe-http` depends only on `probe-core`. Only `probe-desktop` depends on GPUI,
-gpui-base, and `keyring`.
+import adapters, and `probe-http` for engine construction and response types.
+`probe-application` coordinates `probe-core`, `probe-http`, and `probe-websocket`.
+Both transports depend inward on `probe-core`, never on each other or on interfaces.
+Only `probe-desktop` depends on GPUI, gpui-base, and `keyring`.
 
 Domain must not depend on:
 
@@ -250,7 +252,8 @@ a single `{type, data}` value or titled variants with one selected entry; `type`
 non-string `data` is reported as an `unsupported_body_type` diagnostic, left out of the
 model, and kept unchanged in the YAML. Settings add the WebSocket `keepAliveInterval`;
 `timeout` is the connection timeout. WebSocket requests load, edit, and save natively,
-but they are not executable yet: preparing one for the HTTP engine is rejected.
+and execute through the application streaming boundary. Preparing one for the HTTP
+engine is rejected. CLI and desktop WebSocket execution integration is pending.
 
 
 ## Desktop Runtime
@@ -485,6 +488,50 @@ subsequent reservations remove session directories whose lease was released by a
 accounting includes live response files from every active session. If a response cannot fit in the
 remaining quota, Probe deletes its partial spool, continues draining the network response, and
 returns the 16 MiB preview with a retention warning; existing retained responses are not evicted.
+
+
+## Streaming Sessions and WebSocket Transport
+
+`probe-websocket` owns the Tokio/tokio-websockets transport. It accepts resolved
+native WebSocket fields, performs ws:// or wss:// upgrades using Rustls with web PKI
+roots, applies enabled headers and Basic/Bearer/API-key authentication with the same
+semantics as HTTP, and enforces the connection/handshake timeout. Errors are typed
+categories without request values or peer diagnostics. Ping/pong and periodic
+protocol Ping frames remain internal. There is no reconnect behavior. The transport
+uses a bounded HTTP upgrade handshake to preserve duplicate header semantics and
+retains buffered first-frame bytes before handing off to the frame library. Neither
+the transport nor its frame implementation logs raw network values.
+
+Execution follows `prepare_request(request, RequestResolution, SecretProvider)` →
+`PreparedRequest::into_websocket()` → `WebSocketExecution::connect()` → `Session`.
+The application owns the protocol-neutral `SessionData`, `SessionEvent`, and
+`SessionError` boundary. Consumers queue literal additional data with `send`, request
+normal shutdown with `close`, and consume ordered events with `next_event`. A cloneable
+`SessionSender` allows concurrent sending while an interface drains session events.
+`Opened` precedes initial `Sent`, and a terminal error precedes one `Closed` event.
+The command and data-event queues each hold at most 16 items; backpressure pauses
+network reads. A separate bounded terminal slot permits socket/task cleanup even
+when the event queue is full. Close and drop interrupt backpressure and initiate a
+close handshake; a nonresponsive peer has a five-second shutdown bound.
+
+Only native WebSocket requests enter this execution path. A selected text, JSON,
+or XML message is sent as a text frame after opening; no configured message leaves
+the session open. Missing/ambiguous variant selection and configured binary messages
+fail before connecting. OpenCollection's binary String has no specified encoding
+contract, so execution does not guess. Literal additional binary frames and incoming
+binary frames are supported by the session data boundary.
+
+The execution request and disclosure context remain private. Opening events use the
+presentation URL, initial outbound events preserve secret references, and subsequent
+outbound/inbound text and binary payloads and close reasons use the existing
+`SecretDisclosure` exact resolved-secret redaction policy. Transport/configuration
+errors contain only stable safe categories, and execution/session Debug omits raw
+network material. No execution request getter is added.
+
+CLI human/JSONL adaptation and desktop visual session adaptation remain pending.
+SSE and streaming gRPC may reuse these narrow session concepts where suitable;
+neither protocol is implemented. Application/transport APIs contain no terminal,
+JSONL, GPUI, or desktop entity types.
 
 
 ## Secrets

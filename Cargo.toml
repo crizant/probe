@@ -8,6 +8,7 @@ members = [
     "crates/opencollection",
     "crates/postman",
     "crates/yaak",
+    "crates/websocket",
 ]
 resolver = "2"
 

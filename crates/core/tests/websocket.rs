@@ -325,7 +325,7 @@ fn websocket_requests_are_not_prepared_for_http_execution() {
     );
     assert_eq!(
         error.to_string(),
-        "native WebSocket requests cannot be executed yet"
+        "native WebSocket requests cannot be executed through HTTP"
     );
 }
 

@@ -26,9 +26,11 @@ than OpenCollection content. The design contract lives in
 
 ### Streaming Protocols
 
-Design a shared protocol session/event abstraction before adding WebSocket, SSE, or
-gRPC. Protocol implementations must be independent of stdin/stdout and GPUI; the CLI
-may adapt events to JSONL while the desktop adapts the same events to visual sessions.
+The shared application session/event boundary and WebSocket transport foundation are
+implemented; see [Architecture](docs/ARCHITECTURE.md#streaming-sessions-and-websocket-transport).
+CLI WebSocket execution/JSONL and desktop connection/message UI remain deferred.
+SSE and streaming gRPC remain future work and may reuse the common session concepts
+where they fit. Protocol implementations stay independent of stdin/stdout and GPUI.
 
 ### Git Integration
 

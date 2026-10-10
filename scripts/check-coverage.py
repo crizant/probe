@@ -16,6 +16,8 @@ LINE_FLOORS = {
     "cli": 89.0,
     "core": 90.0,
     "http": 81.0,
+    # Streaming transport baseline measured for the initial session foundation.
+    "websocket": 85.0,
     "opencollection": 84.0,
     "postman": 72.0,
     "yaak": 67.0,
