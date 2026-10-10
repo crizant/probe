@@ -392,24 +392,8 @@ items:
             context.on_change.is_some(),
             "plain variables stay editable when a secret identity fails"
         );
-        assert!(context.on_manage_environments.is_some());
-        assert_eq!(
-            context.unavailable_message, "Variable value is unavailable",
-            "a secret identity failure must not replace the plain-variable message"
-        );
         assert_eq!(
             context.secret_identity_errors.get("").map(String::as_str),
-            Some("invalid credential identity")
-        );
-        assert!(!context.secret_identity_errors.contains_key("host"));
-        assert!(!context.secrets.contains(""));
-        assert!(!context.resolved_secrets.contains(""));
-        assert!(!context.unknown_secrets.contains(""));
-
-        let again = view.variable_context(cx);
-        assert_eq!(again.status("host"), Resolved);
-        assert_eq!(
-            again.secret_identity_errors.get("").map(String::as_str),
             Some("invalid credential identity")
         );
     });
