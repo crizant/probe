@@ -9,31 +9,53 @@ pub(super) fn convert_request(
 ) -> Result<CollectionItem, YaakImportError> {
     diagnose_extra_fields(
         "http_request",
-        Some(&request.id),
+        Some(&request.common.id),
         &request.extra,
         diagnostics,
     );
-    if !request.description.trim().is_empty() {
+    if !request.common.description.trim().is_empty() {
         diagnostics.push(lossy(
             "unsupported_field",
             "http_request",
-            Some(&request.id),
+            Some(&request.common.id),
             Some("description"),
             "request descriptions cannot be represented by the current Probe domain",
         ));
     }
-    let ancestors = folder_ancestors(request.folder_id.as_deref(), folders);
-    let headers = effective_headers(workspace, &ancestors, request, "http_request", diagnostics);
-    let authentication =
-        effective_authentication(workspace, &ancestors, request, "http_request", diagnostics);
-    let settings = effective_settings(workspace, &ancestors, request, "http_request", diagnostics);
+    let ancestors = folder_ancestors(request.common.folder_id.as_deref(), folders);
+    let headers = effective_headers(
+        workspace,
+        &ancestors,
+        &request.common,
+        "http_request",
+        diagnostics,
+    );
+    let authentication = effective_authentication(
+        workspace,
+        &ancestors,
+        &request.common,
+        "http_request",
+        &[
+            AuthenticationKind::Basic,
+            AuthenticationKind::Bearer,
+            AuthenticationKind::ApiKey,
+        ],
+        diagnostics,
+    );
+    let settings = effective_settings(
+        workspace,
+        &ancestors,
+        &request.common,
+        "http_request",
+        diagnostics,
+    );
     let mut query_parameters = Vec::new();
     let mut path_parameters = Vec::new();
-    for parameter in &request.url_parameters {
+    for parameter in &request.common.url_parameters {
         let name = convert_templates(
             &parameter.name,
             "http_request",
-            &request.id,
+            &request.common.id,
             "urlParameters.name",
             diagnostics,
         );
@@ -42,7 +64,7 @@ pub(super) fn convert_request(
             value: convert_templates(
                 &parameter.value,
                 "http_request",
-                &request.id,
+                &request.common.id,
                 "urlParameters.value",
                 diagnostics,
             ),
@@ -55,21 +77,21 @@ pub(super) fn convert_request(
         }
         diagnose_extra_fields(
             "http_request",
-            Some(&request.id),
+            Some(&request.common.id),
             &parameter.extra,
             diagnostics,
         );
     }
     let metadata = ItemMetadata {
-        name: nonempty(&request.name),
-        sequence: Some(request.sort_priority),
+        name: nonempty(&request.common.name),
+        sequence: Some(request.common.sort_priority),
         ..ItemMetadata::default()
     };
     let method = nonempty(&request.method);
     let url = Some(convert_templates(
-        &request.url,
+        &request.common.url,
         "http_request",
-        &request.id,
+        &request.common.id,
         "url",
         diagnostics,
     ));
@@ -163,6 +185,7 @@ pub(super) fn effective_authentication(
     ancestors: &[&YaakFolder],
     request: &YaakRequest,
     resource_type: &str,
+    supported_kinds: &[AuthenticationKind],
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> Option<Authentication> {
     let mut owner_type = workspace.authentication_type.as_deref();
@@ -201,9 +224,7 @@ pub(super) fn effective_authentication(
             return None;
         }
     };
-    if !(matches!(kind, AuthenticationKind::Basic | AuthenticationKind::Bearer)
-        || resource_type == "websocket_request" && kind == AuthenticationKind::ApiKey)
-    {
+    if !supported_kinds.contains(&kind) {
         diagnostics.push(warning(
             "execution_unsupported",
             resource_type,
@@ -215,7 +236,7 @@ pub(super) fn effective_authentication(
             ),
         ));
     }
-    let properties = owner
+    let mut properties: BTreeMap<String, AuthenticationValue> = owner
         .iter()
         .map(|(name, value)| {
             (
@@ -230,6 +251,24 @@ pub(super) fn effective_authentication(
             )
         })
         .collect();
+    if kind == AuthenticationKind::ApiKey {
+        let placement = properties
+            .remove("location")
+            .unwrap_or_else(|| AuthenticationValue::String("header".to_owned()));
+        properties.insert("placement".to_owned(), placement);
+    }
+    if kind == AuthenticationKind::Bearer
+        && let Some(prefix) = properties.get("prefix")
+        && prefix != &AuthenticationValue::String("Bearer".to_owned())
+    {
+        diagnostics.push(lossy(
+            "unsupported_authentication",
+            resource_type,
+            Some(&request.id),
+            Some("authentication.prefix"),
+            "custom bearer prefixes cannot be represented by native Bearer authentication",
+        ));
+    }
     Some(Authentication { kind, properties })
 }
 
@@ -367,14 +406,14 @@ fn convert_http_body(
                     name: convert_templates(
                         &field.name,
                         "http_request",
-                        &request.id,
+                        &request.common.id,
                         "body.form.name",
                         diagnostics,
                     ),
                     value: convert_templates(
                         field.value.as_deref().unwrap_or_default(),
                         "http_request",
-                        &request.id,
+                        &request.common.id,
                         "body.form.value",
                         diagnostics,
                     ),
@@ -391,7 +430,7 @@ fn convert_http_body(
                         name: convert_templates(
                             &field.name,
                             "http_request",
-                            &request.id,
+                            &request.common.id,
                             "body.form.name",
                             diagnostics,
                         ),
@@ -403,7 +442,7 @@ fn convert_http_body(
                         value: MultipartValue::Single(convert_templates(
                             file.or(field.value.as_deref()).unwrap_or_default(),
                             "http_request",
-                            &request.id,
+                            &request.common.id,
                             "body.form.value",
                             diagnostics,
                         )),
@@ -423,7 +462,7 @@ fn convert_http_body(
                 file_path: convert_templates(
                     file_path,
                     "http_request",
-                    &request.id,
+                    &request.common.id,
                     "body.filePath",
                     diagnostics,
                 ),
@@ -435,7 +474,7 @@ fn convert_http_body(
             diagnostics.push(lossy(
                 "unsupported_body_type",
                 "http_request",
-                Some(&request.id),
+                Some(&request.common.id),
                 Some("bodyType"),
                 &format!("Yaak body type '{other}' is not supported"),
             ));
@@ -456,7 +495,7 @@ fn body_text(request: &YaakHttpRequest, diagnostics: &mut Vec<ImportDiagnostic>)
             .and_then(Value::as_str)
             .unwrap_or_default(),
         "http_request",
-        &request.id,
+        &request.common.id,
         "body.text",
         diagnostics,
     )
@@ -478,13 +517,13 @@ fn convert_graphql_body(
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> Result<Option<GraphqlBody>, YaakImportError> {
     diagnose_unknown_graphql_fields(request, diagnostics);
-    let query = optional_graphql_string(request.body.get("query"), "query", &request.id)?;
-    let text = optional_graphql_string(request.body.get("text"), "text", &request.id)?;
+    let query = optional_graphql_string(request.body.get("query"), "query", &request.common.id)?;
+    let text = optional_graphql_string(request.body.get("text"), "text", &request.common.id)?;
     if query.is_some() && text.is_some_and(|value| !value.trim().is_empty()) {
         diagnostics.push(lossy(
             "inactive_body_data",
             "http_request",
-            Some(&request.id),
+            Some(&request.common.id),
             Some("text"),
             "inactive Yaak body data cannot be represented alongside the selected GraphQL query",
         ));
@@ -588,7 +627,7 @@ fn diagnose_unknown_graphql_fields(
             diagnostics.push(lossy(
                 "unknown_field",
                 "http_request",
-                Some(&request.id),
+                Some(&request.common.id),
                 Some(field),
                 &format!("unknown Yaak field '{field}' cannot be guaranteed to survive import"),
             ));
@@ -619,7 +658,7 @@ fn graphql_string(
     nonempty(&convert_templates(
         value,
         "http_request",
-        &request.id,
+        &request.common.id,
         field,
         diagnostics,
     ))
@@ -639,14 +678,26 @@ fn parse_graphql_object(
         Value::Null => Ok(None),
         Value::String(text) if text.trim().is_empty() => Ok(None),
         Value::String(text) => parse_object_json(
-            &convert_templates(text, "http_request", &request.id, &field_path, diagnostics),
+            &convert_templates(
+                text,
+                "http_request",
+                &request.common.id,
+                &field_path,
+                diagnostics,
+            ),
             field,
-            &request.id,
+            &request.common.id,
         ),
         Value::Object(_) => {
             let mut converted = value.clone();
             convert_json_strings(&mut converted, &mut |text| {
-                convert_templates(text, "http_request", &request.id, &field_path, diagnostics)
+                convert_templates(
+                    text,
+                    "http_request",
+                    &request.common.id,
+                    &field_path,
+                    diagnostics,
+                )
             });
             match converted {
                 Value::Object(object) => Ok(Some(object)),
@@ -655,7 +706,7 @@ fn parse_graphql_object(
         }
         _ => Err(YaakImportError::Invalid(format!(
             "GraphQL {field} for request '{}' must be a JSON object",
-            request.id
+            request.common.id
         ))),
     }
 }

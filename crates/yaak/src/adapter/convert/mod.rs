@@ -201,15 +201,15 @@ fn convert_items(
         fn priority(&self) -> f64 {
             match self {
                 Self::Folder(folder) => folder.sort_priority,
-                Self::Request(request) => request.sort_priority,
-                Self::WebSocket(request) => request.sort_priority,
+                Self::Request(request) => request.common.sort_priority,
+                Self::WebSocket(request) => request.common.sort_priority,
             }
         }
         fn id(&self) -> &str {
             match self {
                 Self::Folder(folder) => &folder.id,
-                Self::Request(request) => &request.id,
-                Self::WebSocket(request) => &request.id,
+                Self::Request(request) => &request.common.id,
+                Self::WebSocket(request) => &request.common.id,
             }
         }
     }
@@ -224,8 +224,8 @@ fn convert_items(
                 .http_requests
                 .iter()
                 .filter(|request| {
-                    request.workspace_id == workspace.id
-                        && request.folder_id.as_deref() == parent_id
+                    request.common.workspace_id == workspace.id
+                        && request.common.folder_id.as_deref() == parent_id
                 })
                 .map(SourceItem::Request),
         )
@@ -234,8 +234,8 @@ fn convert_items(
                 .websocket_requests
                 .iter()
                 .filter(|request| {
-                    request.workspace_id == workspace.id
-                        && request.folder_id.as_deref() == parent_id
+                    request.common.workspace_id == workspace.id
+                        && request.common.folder_id.as_deref() == parent_id
                 })
                 .map(SourceItem::WebSocket),
         )

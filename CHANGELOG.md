@@ -37,6 +37,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- Import Yaak WebSocket requests with messages, headers, authentication, variables,
+  folder placement, and ordering; report settings and fields that cannot be preserved.
+
 - Connect native WebSocket requests in the desktop, with a saved Message editor,
   live sent/received timeline, and literal multi-line text composer. Sessions stay
   connected across tab switches; closing their tab or workspace closes them.

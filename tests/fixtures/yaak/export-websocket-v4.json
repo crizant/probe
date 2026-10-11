@@ -5,7 +5,7 @@
       "model": "workspace", "id": "wk_1", "name": "Mixed protocols",
       "headers": [{"name": "X-Shared", "value": "workspace"}],
       "authenticationType": "bearer", "authentication": {"token": "${[env.TOKEN]}", "prefix": "Bearer"},
-      "settingRequestTimeout": 2500
+      "settingFollowRedirects": false, "settingRequestTimeout": 2500
     }],
     "folders": [
       {"model": "folder", "id": "outer", "workspaceId": "wk_1", "name": "Outer", "sortPriority": 2},

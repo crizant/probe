@@ -16,39 +16,38 @@ pub(super) fn convert_request(
     let resource_type = "websocket_request";
     diagnose_extra_fields(
         resource_type,
-        Some(&request.id),
+        Some(&request.common.id),
         &request.extra,
         diagnostics,
     );
-    let ancestors = folder_ancestors(request.folder_id.as_deref(), folders);
-    let headers = effective_headers(workspace, &ancestors, request, resource_type, diagnostics);
-    let mut authentication =
-        effective_authentication(workspace, &ancestors, request, resource_type, diagnostics);
-    if let Some(auth) = &mut authentication {
-        if auth.kind == AuthenticationKind::ApiKey {
-            // Yaak calls OpenCollection's placement property location.
-            let placement = auth
-                .properties
-                .remove("location")
-                .unwrap_or_else(|| AuthenticationValue::String("header".to_owned()));
-            auth.properties.insert("placement".to_owned(), placement);
-        }
-        if auth.kind == AuthenticationKind::Bearer
-            && let Some(prefix) = auth.properties.get("prefix")
-            && prefix != &AuthenticationValue::String("Bearer".to_owned())
-        {
-            diagnostics.push(lossy(
-                "unsupported_authentication",
-                resource_type,
-                Some(&request.id),
-                Some("authentication.prefix"),
-                "custom bearer prefixes cannot be represented by native Bearer authentication",
-            ));
-        }
-    }
-    let mut settings =
-        effective_settings(workspace, &ancestors, request, resource_type, diagnostics);
-    settings.follow_redirects = None;
+    let ancestors = folder_ancestors(request.common.folder_id.as_deref(), folders);
+    let headers = effective_headers(
+        workspace,
+        &ancestors,
+        &request.common,
+        resource_type,
+        diagnostics,
+    );
+    let authentication = effective_authentication(
+        workspace,
+        &ancestors,
+        &request.common,
+        resource_type,
+        &[
+            AuthenticationKind::Basic,
+            AuthenticationKind::Bearer,
+            AuthenticationKind::ApiKey,
+        ],
+        diagnostics,
+    );
+    let mut settings = effective_settings(
+        workspace,
+        &ancestors,
+        &request.common,
+        resource_type,
+        diagnostics,
+    );
+    let follow_redirects = settings.follow_redirects.take() == Some(true);
     let mut message_size = workspace
         .setting_request_message_size
         .unwrap_or(64 * 1024 * 1024);
@@ -58,7 +57,7 @@ pub(super) fn convert_request(
     override_setting(&request.setting_request_message_size, &mut message_size);
     for (unsupported, field, message) in [
         (
-            !request.url_parameters.is_empty(),
+            !request.common.url_parameters.is_empty(),
             "urlParameters",
             "separate WebSocket URL parameters cannot be represented by OpenCollection",
         ),
@@ -68,10 +67,7 @@ pub(super) fn convert_request(
             "custom WebSocket message size limits cannot be represented by OpenCollection",
         ),
         (
-            request
-                .setting_follow_redirects
-                .as_ref()
-                .is_some_and(|setting| setting.enabled == Some(true)),
+            follow_redirects,
             "settingFollowRedirects",
             "WebSocket redirect settings cannot be represented by OpenCollection",
         ),
@@ -80,7 +76,7 @@ pub(super) fn convert_request(
             diagnostics.push(lossy(
                 "unsupported_field",
                 resource_type,
-                Some(&request.id),
+                Some(&request.common.id),
                 Some(field),
                 message,
             ));
@@ -88,15 +84,15 @@ pub(super) fn convert_request(
     }
     CollectionItem::Request(Request {
         metadata: ItemMetadata {
-            name: nonempty(&request.name),
-            sequence: Some(request.sort_priority),
+            name: nonempty(&request.common.name),
+            sequence: Some(request.common.sort_priority),
             ..ItemMetadata::default()
         },
-        docs: nonempty(&request.description),
+        docs: nonempty(&request.common.description),
         url: Some(convert_templates(
-            &request.url,
+            &request.common.url,
             resource_type,
-            &request.id,
+            &request.common.id,
             "url",
             diagnostics,
         )),
@@ -110,7 +106,7 @@ pub(super) fn convert_request(
                     data: convert_templates(
                         &request.message,
                         resource_type,
-                        &request.id,
+                        &request.common.id,
                         "message",
                         diagnostics,
                     ),

@@ -398,6 +398,24 @@ fn imports_native_graphql_requests_and_round_trips() {
             .contains("type: graphql")
     );
     fs::remove_file(destination).unwrap();
+    let mut document: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    document["resources"]["httpRequests"][0]["body"]["futureOption"] = serde_json::json!(true);
+    let preview = inspect_websocket_export(document);
+    assert!(matches!(
+        preview.convert(None, false),
+        Err(YaakImportError::Unsupported(_))
+    ));
+    assert!(
+        preview
+            .convert(None, true)
+            .unwrap()
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "unknown_field"
+                && d.resource_type == "http_request"
+                && d.field.as_deref() == Some("futureOption"))
+    );
 }
 
 #[test]
@@ -572,6 +590,7 @@ fn imports_mixed_websocket_hierarchy_and_round_trips() {
     assert_eq!(socket.metadata.name.as_deref(), Some("Subscribe"));
     assert_eq!(socket.metadata.sequence, Some(1.5));
     assert_eq!(http.method.as_deref(), Some("GET"));
+    assert_eq!(http.metadata.sequence, Some(4.0));
     assert_eq!(socket.url.as_deref(), Some("wss://{{HOST}}/events"));
     assert_eq!(socket.docs.as_deref(), Some("Subscribe to events"));
     assert!(socket.method.is_none());
@@ -617,7 +636,7 @@ fn websocket_sync_validates_folder_references() {
     fs::create_dir(&root).unwrap();
     fs::write(
         root.join("workspace.yaml"),
-        "model: workspace\nid: wk_1\nname: Sync\n",
+        "model: workspace\nid: wk_1\nname: Sync\nsettingFollowRedirects: false\n",
     )
     .unwrap();
     let request_path = root.join("socket.yaml");
@@ -659,7 +678,7 @@ fn websocket_loss_is_reported_with_field_and_resource_identity() {
         ),
         (
             "settingFollowRedirects",
-            serde_json::json!({"enabled":true,"value":false}),
+            serde_json::json!({"enabled":true,"value":true}),
             "unsupported_field",
         ),
         (
@@ -726,7 +745,7 @@ fn websocket_loss_is_reported_with_field_and_resource_identity() {
 }
 
 #[test]
-fn websocket_authentication_overrides_and_order_ties() {
+fn mixed_authentication_overrides_and_order_ties() {
     use probe_core::AuthenticationValue;
     for (scheme, expected, warning, location) in [
         ("none", None, false, Some("query")),
@@ -763,6 +782,10 @@ fn websocket_authentication_overrides_and_order_ties() {
                 .unwrap()
                 .remove("location");
         }
+        let auth_type = socket["authenticationType"].clone();
+        let auth = socket["authentication"].clone();
+        document["resources"]["httpRequests"][0]["authenticationType"] = auth_type;
+        document["resources"]["httpRequests"][0]["authentication"] = auth;
         let imported = inspect_websocket_export(document)
             .convert(None, false)
             .unwrap();
@@ -779,6 +802,14 @@ fn websocket_authentication_overrides_and_order_ties() {
             panic!("expected socket")
         };
         assert_eq!(http.metadata.name.as_deref(), Some("Health"));
+        assert_eq!(http.authentication, socket.authentication);
+        assert_eq!(
+            imported
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "execution_unsupported" && d.resource_type == "http_request"),
+            warning
+        );
         assert_eq!(
             socket.authentication.as_ref().map(|auth| auth.kind.clone()),
             expected
@@ -841,4 +872,102 @@ fn websocket_message_size_inherits_and_can_restore_default() {
             .iter()
             .all(|d| d.resource_id.as_deref() != Some("ws_nested"))
     );
+}
+
+#[test]
+fn websocket_redirect_diagnostics_follow_effective_inheritance() {
+    for (workspace, outer, inner, request, expected) in [
+        (None, None, None, None, true),
+        (Some(true), None, None, None, true),
+        (Some(false), Some((true, true)), None, None, true),
+        (Some(false), Some((false, true)), None, None, false),
+        (Some(true), None, Some((true, false)), None, false),
+        (
+            Some(false),
+            Some((true, true)),
+            Some((false, false)),
+            None,
+            true,
+        ),
+        (Some(true), None, None, Some((true, false)), false),
+        (Some(false), None, None, Some((false, true)), false),
+    ] {
+        let mut document = websocket_export();
+        let resources = &mut document["resources"];
+        resources["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("settingFollowRedirects");
+        if let Some(value) = workspace {
+            resources["workspaces"][0]["settingFollowRedirects"] = serde_json::json!(value);
+        }
+        if let Some((enabled, value)) = outer {
+            resources["folders"][0]["settingFollowRedirects"] =
+                serde_json::json!({"enabled":enabled,"value":value});
+        }
+        if let Some((enabled, value)) = inner {
+            resources["folders"][1]["settingFollowRedirects"] =
+                serde_json::json!({"enabled":enabled,"value":value});
+        }
+        if let Some((enabled, value)) = request {
+            resources["websocketRequests"][0]["settingFollowRedirects"] =
+                serde_json::json!({"enabled":enabled,"value":value});
+        }
+        let imported = inspect_websocket_export(document)
+            .convert(None, true)
+            .unwrap();
+        assert_eq!(
+            imported
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "unsupported_field"
+                    && d.resource_type == "websocket_request"
+                    && d.resource_id.as_deref() == Some("ws_nested")
+                    && d.field.as_deref() == Some("settingFollowRedirects")),
+            expected
+        );
+    }
+}
+
+#[test]
+fn bearer_prefix_loss_is_reported_for_both_protocols() {
+    for prefix in ["Bearer", "Token", ""] {
+        let mut document = websocket_export();
+        document["resources"]["folders"][1]["authenticationType"] = serde_json::json!("bearer");
+        document["resources"]["folders"][1]["authentication"] =
+            serde_json::json!({"token":"${[TOKEN]}","prefix":prefix});
+        let preview = inspect_websocket_export(document);
+        assert_eq!(preview.convert(None, false).is_ok(), prefix == "Bearer");
+        let imported = preview.convert(None, true).unwrap();
+        for (resource_type, id) in [("http_request", "http"), ("websocket_request", "ws_nested")] {
+            assert_eq!(
+                imported
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == "unsupported_authentication"
+                        && d.resource_type == resource_type
+                        && d.resource_id.as_deref() == Some(id)
+                        && d.field.as_deref() == Some("authentication.prefix")),
+                prefix != "Bearer"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_websocket_resource_identity_collisions() {
+    for (id, expected) in [
+        ("http", "duplicate"),
+        ("ws_root", "duplicate"),
+        ("", "empty id"),
+    ] {
+        let mut document = websocket_export();
+        document["resources"]["websocketRequests"][0]["id"] = serde_json::json!(id);
+        let path = temporary_path("invalid-websocket-id.json");
+        fs::write(&path, document.to_string()).unwrap();
+        assert!(
+            matches!(inspect_yaak_source(&path), Err(YaakImportError::Invalid(message)) if message.contains(expected))
+        );
+        fs::remove_file(path).unwrap();
+    }
 }

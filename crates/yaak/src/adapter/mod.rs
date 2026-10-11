@@ -204,7 +204,7 @@ impl Resources {
             .chain(
                 self.http_requests
                     .iter()
-                    .map(|value| ("http_request", value.id.as_str())),
+                    .map(|value| ("http_request", value.common.id.as_str())),
             )
             .chain(
                 self.grpc_requests
@@ -214,7 +214,7 @@ impl Resources {
             .chain(
                 self.websocket_requests
                     .iter()
-                    .map(|value| ("websocket_request", value.id.as_str())),
+                    .map(|value| ("websocket_request", value.common.id.as_str())),
             )
             .chain(
                 self.unsupported_resources
@@ -321,27 +321,11 @@ struct YaakHttpRequest {
 struct YaakWebSocketRequest {
     #[serde(flatten)]
     common: YaakRequest,
-    // Yaak exports the composer as text, without message types or variants.
+    // Yaak exports one string; yaak-app-client/src/ws_ext.rs sends it as Message::Text.
     message: String,
     setting_request_message_size: Option<InheritedSetting<i64>>,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
-}
-
-impl std::ops::Deref for YaakHttpRequest {
-    type Target = YaakRequest;
-
-    fn deref(&self) -> &Self::Target {
-        &self.common
-    }
-}
-
-impl std::ops::Deref for YaakWebSocketRequest {
-    type Target = YaakRequest;
-
-    fn deref(&self) -> &Self::Target {
-        &self.common
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
