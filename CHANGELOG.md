@@ -8,6 +8,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
+- Desktop WebSocket disconnect lines label registered close codes with their
+  standard names, such as 1012 Service Restart. Unregistered codes keep the
+  peer-provided reason.
+
 - Added hints to desktop utility icon buttons and labeled the house button “Home”.
 
 - Polished the desktop WebSocket editor and session panel with clearer status,
