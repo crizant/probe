@@ -132,7 +132,8 @@ fn variable_usage_human(usage: &VariableUsage) -> String {
         VariableUsage::Header { name } => format!("header: {name}"),
         VariableUsage::QueryParameter { name } => format!("query parameter: {name}"),
         VariableUsage::PathParameter { name } => format!("path parameter: {name}"),
-        VariableUsage::Body | VariableUsage::WebSocketMessage => "body".to_owned(),
+        VariableUsage::Body => "body".to_owned(),
+        VariableUsage::WebSocketMessage => "WebSocket message".to_owned(),
         VariableUsage::GraphqlQuery => "GraphQL query".to_owned(),
         VariableUsage::GraphqlVariables => "GraphQL variables".to_owned(),
         VariableUsage::GraphqlOperationName => "GraphQL operation name".to_owned(),
@@ -155,7 +156,8 @@ fn variable_usage_json(usage: &VariableUsage) -> serde_json::Value {
         VariableUsage::PathParameter { name } => {
             json!({ "location": "path_parameter", "name": name })
         }
-        VariableUsage::Body | VariableUsage::WebSocketMessage => json!({ "location": "body" }),
+        VariableUsage::Body => json!({ "location": "body" }),
+        VariableUsage::WebSocketMessage => json!({ "location": "websocket_message" }),
         VariableUsage::GraphqlQuery => json!({ "location": "graphql_query" }),
         VariableUsage::GraphqlVariables => json!({ "location": "graphql_variables" }),
         VariableUsage::GraphqlOperationName => json!({ "location": "graphql_operation_name" }),
@@ -235,7 +237,10 @@ pub(crate) struct RunOptions<'a> {
     pub(crate) show_headers: bool,
     pub(crate) secret_provider_env: bool,
     pub(crate) expectations: &'a [StatusExpectation],
-    pub(crate) human_output: bool,
+    pub(crate) mode: crate::streaming::OutputMode,
+    pub(crate) sends: &'a [String],
+    pub(crate) timeout: Option<u64>,
+    pub(crate) max_messages: Option<u64>,
 }
 
 pub(crate) fn run(
@@ -243,6 +248,7 @@ pub(crate) fn run(
     selector: &str,
     options: &RunOptions<'_>,
     stdin: &mut impl Read,
+    live: &mut crate::streaming::LiveOutput<'_>,
 ) -> Result<CommandOutput, CliError> {
     let loaded = load(input, stdin)?;
     let key = loaded
@@ -252,6 +258,24 @@ pub(crate) fn run(
         .workspace()
         .request(key)
         .expect("repository request key must resolve");
+    if source.kind.is_websocket() {
+        if !options.dry_run
+            && (options.output.is_some()
+                || options.show_headers
+                || !options.expectations.is_empty())
+        {
+            return Err(CliError::invalid_arguments(
+                "--output, --show-headers and --expect are HTTP/GraphQL-only",
+            ));
+        }
+    } else if !options.sends.is_empty()
+        || options.timeout.is_some()
+        || options.max_messages.is_some()
+    {
+        return Err(CliError::invalid_arguments(
+            "--send, --timeout and --max-messages are WebSocket-only",
+        ));
+    }
     let provider: &dyn SecretProvider = if options.secret_provider_env {
         &ProcessEnvironmentSecretProvider
     } else {
@@ -278,6 +302,14 @@ pub(crate) fn run(
         return Ok(CommandOutput {
             human: dry_run_human(display),
             json: dry_run_json(display).map_err(CliError::request_protocol)?,
+        });
+    }
+    if display.kind.is_websocket() {
+        let execution = prepared.into_websocket().map_err(CliError::session)?;
+        crate::streaming::run(execution, options, stdin, live)?;
+        return Ok(CommandOutput {
+            human: String::new(),
+            json: json!({}),
         });
     }
     let method = display
@@ -321,7 +353,7 @@ pub(crate) fn run(
                 options.show_headers,
             )
         },
-        options.human_output,
+        options.mode == crate::streaming::OutputMode::Human,
         request_json,
         &response,
         options.output,
@@ -445,7 +477,8 @@ mod response_output_tests {
         };
         let human = response_output(
             || "human response\n".to_owned(),
-            crate::human_output_requested(false, false),
+            crate::streaming::OutputMode::from_flags(false, false)
+                == crate::streaming::OutputMode::Human,
             json!({}),
             &response,
             None,
@@ -458,7 +491,8 @@ mod response_output_tests {
         for (json_output, quiet) in [(true, false), (false, true)] {
             let output = response_output(
                 || panic!("human response rendering must be skipped"),
-                crate::human_output_requested(json_output, quiet),
+                crate::streaming::OutputMode::from_flags(json_output, quiet)
+                    == crate::streaming::OutputMode::Human,
                 json!({}),
                 &response,
                 None,

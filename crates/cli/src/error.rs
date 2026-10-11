@@ -127,6 +127,47 @@ impl CliError {
         }
     }
 
+    pub(crate) fn cancelled() -> Self {
+        Self {
+            category: "request_cancelled",
+            message: "request was cancelled".into(),
+            exit_code: EXECUTION_EXIT_CODE,
+            details: None,
+        }
+    }
+
+    pub(crate) fn session(error: probe_application::SessionError) -> Self {
+        use probe_application::SessionError;
+        let (category, exit_code) = match error {
+            SessionError::NotWebSocket
+            | SessionError::InvalidMessageSelection
+            | SessionError::UnsupportedBinaryMessage
+            | SessionError::Configuration => ("request_configuration", CONFIGURATION_EXIT_CODE),
+            SessionError::Timeout | SessionError::CloseTimeout | SessionError::KeepAliveTimeout => {
+                ("request_timeout", EXECUTION_EXIT_CODE)
+            }
+            _ => ("network_execution", EXECUTION_EXIT_CODE),
+        };
+        Self {
+            category,
+            exit_code,
+            message: error.to_string(),
+            details: match error {
+                SessionError::HandshakeRejected { status } => Some(json!({"status": status})),
+                _ => None,
+            },
+        }
+    }
+
+    pub(crate) fn output(error: std::io::Error) -> Self {
+        Self {
+            category: "output_error",
+            message: error.to_string(),
+            exit_code: EXECUTION_EXIT_CODE,
+            details: None,
+        }
+    }
+
     pub(crate) fn runtime(error: &std::io::Error) -> Self {
         Self {
             category: "runtime_error",
@@ -310,4 +351,51 @@ pub(crate) fn import_diagnostic_json(diagnostic: &ImportDiagnostic) -> Value {
         "field": diagnostic.field,
         "message": diagnostic.message,
     })
+}
+
+#[cfg(test)]
+mod session_errors {
+    use super::CliError;
+    use probe_application::SessionError;
+
+    #[test]
+    fn session_categories_use_typed_variants_and_safe_status_detail() {
+        use SessionError::*;
+        for error in [
+            NotWebSocket,
+            InvalidMessageSelection,
+            UnsupportedBinaryMessage,
+            Configuration,
+        ] {
+            let mapped = CliError::session(error);
+            assert_eq!(
+                (mapped.category, mapped.exit_code),
+                ("request_configuration", 5)
+            );
+        }
+        for error in [Timeout, CloseTimeout, KeepAliveTimeout] {
+            let mapped = CliError::session(error);
+            assert_eq!((mapped.category, mapped.exit_code), ("request_timeout", 6));
+        }
+        for error in [
+            Connection,
+            Tls,
+            Handshake,
+            Protocol,
+            Capacity,
+            Closed,
+            HandshakeRejected { status: 403 },
+        ] {
+            let mapped = CliError::session(error);
+            assert_eq!(
+                (mapped.category, mapped.exit_code),
+                ("network_execution", 6)
+            );
+            if matches!(error, HandshakeRejected { .. }) {
+                assert_eq!(mapped.details, Some(serde_json::json!({"status": 403})));
+            } else {
+                assert!(mapped.details.is_none());
+            }
+        }
+    }
 }

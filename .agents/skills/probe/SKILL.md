@@ -19,7 +19,7 @@ When modifying an existing request:
 4. Run `probe collection validate <path> --json`.
 5. When runtime resolution matters, run the request with `--dry-run --json`.
 6. Execute the request only when execution is appropriate.
-7. Use `--expect` when the task requires verifying a response status.
+7. Use `--expect` for HTTP/GraphQL response status assertions. For WebSocket sessions, bound execution with `--max-messages` and/or `--timeout`.
 
 Do not manually edit OpenCollection YAML unless Probe cannot perform the required operation.
 
@@ -300,3 +300,16 @@ request list
 Skip unnecessary steps when the task does not require them.
 
 The goal is to use Probe as the authoritative interface for OpenCollection operations, while keeping changes deterministic, inspectable, and safe.
+## WebSocket execution
+
+Use `probe request run <path> <selector>` for native WebSocket requests. Human
+output streams interactively (`>` actual outbound messages, `<` inbound messages).
+For agent execution, prefer `--max-messages 1 --timeout 10 --json`: live WebSocket
+`--json` is NDJSON, one versioned SessionEvent per line, and terminal errors retain
+nonzero exit status. HTTP/GraphQL and dry-run JSON remain single objects.
+Repeatable `--send` sends literal text without interpolation after the configured
+message. Stdin lines can send more messages; EOF does not close the session.
+`--max-messages` counts inbound data only. `--timeout` is the CLI live-run bound,
+separate from persisted connection timeout. `--expect`, `--output`, and
+`--show-headers` are HTTP/GraphQL-only. Configured binary messages lack an encoding
+contract and cannot execute; received binary frames are supported as base64.

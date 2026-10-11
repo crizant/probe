@@ -1,6 +1,6 @@
 # CLI
 
-The `probe` CLI is non-interactive and separates command output on stdout from human
+The `probe` CLI does not prompt for input and separates command output on stdout from human
 diagnostics on stderr. Add `--json` to commands that return data or structured errors.
 
 ## Commands
@@ -17,7 +17,7 @@ probe collection unset <path> [--summary] [--docs] [--json]
 probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--strict-variables] [--json]
 probe request variables <path> <selector> [--environment <name>] [--json]
-probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--expect <expr>]... [--json]
+probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--expect <expr>]... [--send <text>]... [--max-messages <n>] [--timeout <seconds>] [--json]
 probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request unset <path> <selector> [--description] [--docs] [--json]
 probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
@@ -101,7 +101,7 @@ is defined by the effective inherited environment and whether its declaration is
 secret. It never resolves values, reads secrets, accepts runtime `--var` values, or
 executes the request.
 
-`request run` resolves the request and executes it through the shared asynchronous HTTP
+HTTP and GraphQL `request run` resolve the request and execute it through the shared asynchronous HTTP
 engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes the raw
 response body to the specified path using bounded streaming; response metadata remains on
 stdout. The destination is replaced only after the complete response has been written.
@@ -112,6 +112,70 @@ initially sent by the HTTP engine. Path/query parameters and URL normalization
 alone do not show it. Response headers are hidden by default; add `--show-headers`
 to include them. `--json` always includes response headers and is unaffected by this
 flag. `--show-headers` does not change dry-run output.
+
+Native WebSocket requests execute through the same `request run` command:
+
+```bash
+probe request run collection.yml path/to/socket
+probe request run collection.yml path/to/socket --send "one" --send "two" --max-messages 1 --timeout 10 --json
+```
+
+Human mode is an interactive streaming session. `Connected: <url>` reports opening,
+`> text` reports an actual outbound Sent event, `< text` reports an inbound Received
+event, and `Closed: remote` (or local/error) includes safe code/reason metadata when
+present. Output flushes as events arrive. Stdin lines send literal text, including
+empty lines; line terminators are removed. Input and inbound events run concurrently.
+EOF stops input without closing the connection, including after a workspace supplied
+with path `-` consumes stdin. Ctrl-C requests normal local close and drains terminal
+events; a clean single Ctrl-C disconnect exits 0, as does clean remote close. This
+is different from HTTP/GraphQL Ctrl-C, which cancels execution with `request_cancelled`
+(exit 6). Another Ctrl-C during WebSocket shutdown force-terminates the session and
+returns `request_cancelled` (exit 6); Ctrl-C before connection also cancels with exit 6.
+`--quiet` suppresses successful events but still reports errors.
+
+Repeatable `--send <text>` queues additional literal text after opening, following
+the configured initial message. These values do not undergo variable interpolation.
+`--max-messages <n>` counts only inbound Received data messages, then requests normal
+close and drains events. `--timeout <seconds>` bounds the CLI live run, including
+connection time, and closes/drains an established session before returning
+`request_timeout` (exit 6). Both numbers must be positive integers. This CLI bound
+is separate from persisted WebSocket `settings.timeout`, the connection/handshake
+limit. Shutdown itself is bounded by the application session close handshake.
+`--send`, `--max-messages`, and `--timeout` require live WebSocket execution and are
+rejected for HTTP/GraphQL or `--dry-run`. `--expect`, `--output`, and `--show-headers`
+are HTTP/GraphQL response options and are rejected for live WebSocket execution.
+
+Live WebSocket `--json` emits NDJSON: one compact versioned object per SessionEvent,
+flushed immediately, without an array. Text newlines are escaped within each record.
+For example:
+
+```json
+{"schemaVersion":1,"event":"opened","url":"wss://example.com/socket"}
+{"schemaVersion":1,"event":"sent","data":{"type":"text","value":"hello"}}
+{"schemaVersion":1,"event":"received","data":{"type":"binary","encoding":"base64","value":"AAEC"}}
+{"schemaVersion":1,"event":"closed","origin":"remote","code":1000,"reason":""}
+```
+
+Terminal session errors produce an `event:"error"` record with the usual `error`
+category/exitCode/message (and safe handshake status detail when available), followed
+by the Closed record and nonzero exit. The CLI does not repeat that error. A CLI
+wall-clock timeout adds a compact versioned CLI error record after shutdown only if
+no terminal failure has already been reported; the first terminal error wins. Failures
+before connection use the normal single JSON error document. Configuration failures
+use `request_configuration` (exit 5), connection/close/keep-alive timeouts use
+`request_timeout` (exit 6), and other session failures use `network_execution` (exit 6).
+HTTP/GraphQL JSON and all `--dry-run --json` output remain single JSON documents.
+
+Configured text/JSON/XML messages execute as text frames. Configured binary
+OpenCollection messages are still not executable because their string data has no
+unambiguous encoding contract. Received binary frames are supported and rendered as
+`< [binary/base64] AAEC` in human output or explicit base64 data in NDJSON. Binary
+sending syntax, reconnect, and manual ping/pong commands are not available.
+
+WebSocket dry runs show `WebSocket <url>` with safe secret placeholders. `request get`
+shows the selected WebSocket message (JSON field `websocketMessage` with type/data),
+while preserving HTTP/GraphQL fields. `request variables` uses human location
+`WebSocket message` and JSON location `websocket_message`; HTTP body remains `body`.
 
 `--dry-run` uses the same selector, environment, `--var`, and `--strict-variables`
 resolution as a live run, including GraphQL-over-HTTP preparation, then exits without

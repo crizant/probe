@@ -1687,10 +1687,11 @@ fn run_response_with_flags(body: &str, content_type: &'static str, flags: &[&str
         .args(["items/0", "--environment", "local"]);
     command.args(flags);
     let output = command.output().expect("request should run");
-    server.join().unwrap();
-    fs::remove_file(workspace).unwrap();
+    // Check execution before joining a server that may never have been contacted.
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty());
+    server.join().unwrap();
+    fs::remove_file(workspace).unwrap();
     String::from_utf8(output.stdout).unwrap()
 }
 

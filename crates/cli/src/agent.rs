@@ -203,6 +203,7 @@ mod tests {
         }
 
         fn assert_resources(&self) {
+            assert!(!self.skill().join("docs").exists());
             assert_eq!(
                 fs::read(self.skill().join("SKILL.md")).unwrap(),
                 SKILL.as_bytes()

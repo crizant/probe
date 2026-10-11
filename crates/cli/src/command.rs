@@ -100,6 +100,9 @@ pub(crate) enum Command {
         show_headers: bool,
         secret_provider_env: bool,
         expectations: Vec<StatusExpectation>,
+        sends: Vec<String>,
+        timeout: Option<u64>,
+        max_messages: Option<u64>,
     },
     Set {
         input: WorkspaceInput,
@@ -348,6 +351,9 @@ struct RunOptions {
     show_headers: bool,
     secret_provider_env: bool,
     expectations: Vec<StatusExpectation>,
+    sends: Vec<String>,
+    timeout: Option<u64>,
+    max_messages: Option<u64>,
 }
 
 fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
@@ -361,6 +367,9 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         show_headers: false,
         secret_provider_env: false,
         expectations: Vec::new(),
+        sends: Vec::new(),
+        timeout: None,
+        max_messages: None,
     };
     while let Some(argument) = parser.bump() {
         match argument.as_str() {
@@ -382,6 +391,21 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
                 options.secret_provider_env = true;
             }
             "--expect" => options.expectations.push(parser.expectation()?),
+            "--send" => options.sends.push(
+                parser
+                    .bump()
+                    .ok_or_else(|| CliError::invalid_arguments("--send requires text"))?,
+            ),
+            "--timeout" => {
+                options.timeout = Some(positive_option(&mut parser, options.timeout, "--timeout")?)
+            }
+            "--max-messages" => {
+                options.max_messages = Some(positive_option(
+                    &mut parser,
+                    options.max_messages,
+                    "--max-messages",
+                )?)
+            }
             other => push_positional(&mut positionals, other, 2)?,
         }
     }
@@ -393,6 +417,15 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
     if options.dry_run && !options.expectations.is_empty() {
         return Err(CliError::invalid_arguments(
             "--expect cannot be combined with --dry-run",
+        ));
+    }
+    if options.dry_run
+        && (!options.sends.is_empty()
+            || options.timeout.is_some()
+            || options.max_messages.is_some())
+    {
+        return Err(CliError::invalid_arguments(
+            "--send, --timeout and --max-messages require a live WebSocket session",
         ));
     }
     let (path, selector) = two_paths(&positionals)?;
@@ -407,7 +440,28 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         show_headers: options.show_headers,
         secret_provider_env: options.secret_provider_env,
         expectations: options.expectations,
+        sends: options.sends,
+        timeout: options.timeout,
+        max_messages: options.max_messages,
     })
+}
+
+fn positive_option(
+    parser: &mut Parser,
+    previous: Option<u64>,
+    name: &str,
+) -> Result<u64, CliError> {
+    if previous.is_some() {
+        return Err(CliError::invalid_arguments(format!(
+            "{name} may only be specified once"
+        )));
+    }
+    parser
+        .value(name)?
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| CliError::invalid_arguments(format!("{name} requires a positive integer")))
 }
 
 fn parse_request_set(mut parser: Parser) -> Result<Command, CliError> {
@@ -1312,6 +1366,9 @@ fn is_known_option(argument: &str) -> bool {
             | "--type"
             | "--dry-run"
             | "--expect"
+            | "--send"
+            | "--timeout"
+            | "--max-messages"
             | "--summary"
             | "--description"
             | "--description-json"

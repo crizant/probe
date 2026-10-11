@@ -187,7 +187,11 @@ pub(super) fn response_json(
 pub(super) fn dry_run_human(request: &Request) -> String {
     format!(
         "{} {}\n",
-        request.method.as_deref().unwrap_or("<unset>"),
+        if request.kind.is_websocket() {
+            "WebSocket"
+        } else {
+            request.method.as_deref().unwrap_or("<unset>")
+        },
         request.url.as_deref().unwrap_or("<unset>"),
     )
 }
@@ -225,12 +229,20 @@ pub(super) fn request_human(
 ) -> Result<String, RequestProtocolError> {
     let mut output = String::new();
     output.push_str(&format!(
-        "Name: {}\nSelector: {selector}\nType: {}\nEnvironment: {}\nMethod: {}\nURL: {}\n",
+        "Name: {}\nSelector: {selector}\nType: {}\nEnvironment: {}\n",
         request.metadata.name.as_deref().unwrap_or("<unnamed>"),
         request.kind.as_str(),
         environment.unwrap_or("<none>"),
-        request.method.as_deref().unwrap_or("<unset>"),
-        request.url.as_deref().unwrap_or("<unset>"),
+    ));
+    if !request.kind.is_websocket() {
+        output.push_str(&format!(
+            "Method: {}\n",
+            request.method.as_deref().unwrap_or("<unset>")
+        ));
+    }
+    output.push_str(&format!(
+        "URL: {}\n",
+        request.url.as_deref().unwrap_or("<unset>")
     ));
     append_documentation(
         &mut output,
@@ -297,6 +309,15 @@ pub(super) fn request_human(
                 ));
             }
         }
+    } else if request.kind.is_websocket() {
+        match request.selected_websocket_message()? {
+            Some(message) => output.push_str(&format!(
+                "WebSocket message ({}): {}\n",
+                message.kind.as_str(),
+                message.data
+            )),
+            None => output.push_str("WebSocket message: <unset>\n"),
+        }
     } else {
         output.push_str(&format!("Body: {}\n", body_summary(request.http_body())));
     }
@@ -361,7 +382,7 @@ pub(super) fn request_json(
         })
     });
 
-    Ok(json!({
+    let mut value = json!({
         "authentication": authentication,
         "body": request.http_body().map(request_body_json),
         "description": documentation_json(request.metadata.description.as_ref()),
@@ -376,7 +397,14 @@ pub(super) fn request_json(
         "selector": selector,
         "type": request.kind.as_str(),
         "url": request.url,
-    }))
+    });
+    if request.kind.is_websocket() {
+        value["websocketMessage"] = request
+            .selected_websocket_message()?
+            .map(|message| json!({"type": message.kind.as_str(), "data": message.data}))
+            .unwrap_or(Value::Null);
+    }
+    Ok(value)
 }
 
 pub(super) fn unset_documentation(

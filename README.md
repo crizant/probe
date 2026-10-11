@@ -43,6 +43,7 @@ Both interfaces use the same Rust application and domain layers.
 | --- | --- | --- |
 | HTTP requests and response inspection | Yes | Yes |
 | GraphQL over HTTP (GET/POST) | Yes | Yes |
+| Native WebSocket sessions | Inspect and edit; execution pending | `request run`; streaming, `--send`, `--max-messages`, `--timeout`, NDJSON `--json` |
 | OpenCollection YAML (bundled files and directories) | Read and edit | Read, validate, and edit |
 | Environments, inheritance, and `{{variables}}` | Yes | Yes; runtime `--var` overrides |
 | Secret variables | OS credential store | Process environment (`--secret-provider env`) |
