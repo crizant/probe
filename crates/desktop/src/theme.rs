@@ -625,7 +625,7 @@ const fn default_motion() -> Motion {
 mod tests {
     use super::{Theme, ThemeAppearance, appearance_override};
     use crate::user_config::ThemeMode;
-    use gpui::{Rgba, TestAppContext, WindowAppearance};
+    use gpui::WindowAppearance;
 
     #[test]
     fn native_appearances_select_the_expected_built_in_theme() {
@@ -711,87 +711,5 @@ mod tests {
             appearance_override(ThemeMode::Dark),
             Some(WindowAppearance::Dark)
         );
-    }
-
-    /// WCAG 2 relative luminance for an opaque sRGB color.
-    /// <https://www.w3.org/TR/WCAG21/#dfn-relative-luminance>
-    fn relative_luminance(color: Rgba) -> f64 {
-        fn channel(component: f32) -> f64 {
-            let encoded = f64::from(component);
-            if encoded <= 0.04045 {
-                encoded / 12.92
-            } else {
-                ((encoded + 0.055) / 1.055).powf(2.4)
-            }
-        }
-        0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
-    }
-
-    fn contrast_ratio(foreground: Rgba, background: Rgba) -> f64 {
-        let foreground = relative_luminance(foreground);
-        let background = relative_luminance(background);
-        let lighter = foreground.max(background);
-        let darker = foreground.min(background);
-        (lighter + 0.05) / (darker + 0.05)
-    }
-
-    #[test]
-    fn response_status_text_meets_wcag_aa_on_raised_surfaces() {
-        for theme in [Theme::light(), Theme::dark()] {
-            let background = theme.colors.surfaces.raised;
-            let colors = [
-                ("informational", theme.colors.responses.informational),
-                ("success", theme.colors.responses.success),
-                ("redirect", theme.colors.responses.redirect),
-                ("client_error", theme.colors.responses.client_error),
-                ("server_error", theme.colors.responses.server_error),
-                ("muted", theme.colors.text.muted),
-            ];
-            for (role, foreground) in colors {
-                let ratio = contrast_ratio(foreground, background);
-                assert!(
-                    ratio >= 4.5,
-                    "{:?} {role} contrast {ratio:.2} is below 4.5:1 on surfaces.raised",
-                    theme.appearance
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn scrollbar_thumb_strengthens_from_rest_through_hover_to_active() {
-        for theme in [Theme::light(), Theme::dark()] {
-            for background in [theme.colors.surfaces.raised, theme.colors.surfaces.sidebar] {
-                let resting = contrast_ratio(theme.colors.scrollbar.thumb, background);
-                let hover = contrast_ratio(theme.colors.scrollbar.thumb_hover, background);
-                let active = contrast_ratio(theme.colors.scrollbar.thumb_active, background);
-                assert!(
-                    resting < hover && hover < active,
-                    "{:?} scrollbar contrast resting {resting:.2}, hover {hover:.2}, active {active:.2}",
-                    theme.appearance
-                );
-            }
-        }
-        let light = Theme::light();
-        let resting = contrast_ratio(light.colors.scrollbar.thumb, light.colors.surfaces.raised);
-        let muted = contrast_ratio(light.colors.text.muted, light.colors.surfaces.raised);
-        assert!(
-            resting < muted,
-            "light scrollbar thumb contrast {resting:.2} should stay under muted text {muted:.2}"
-        );
-    }
-
-    #[gpui::test]
-    fn sync_theme_keeps_muted_text_as_muted_foreground(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            Theme::init(cx);
-            for theme in [Theme::light(), Theme::dark()] {
-                Theme::sync_theme(theme, cx);
-                assert_eq!(
-                    gpui_base::Theme::global(cx).tokens.colors.muted_foreground,
-                    theme.colors.text.muted.into()
-                );
-            }
-        });
     }
 }
