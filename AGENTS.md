@@ -31,6 +31,8 @@ maintainability, memory efficiency, visual polish.
 
 ## Invariants
 
+- `docs/CLI.md` is the single CLI reference source; do not commit duplicate CLI docs
+  under `.agents/skills/`. Installed `references/cli.md` is generated from it.
 - Business logic belongs in application/core code, never a frontend. CLI, GPUI, and
   future interfaces must share OpenCollection parsing, environment resolution,
   request construction and execution, authentication, and persistence operations.
