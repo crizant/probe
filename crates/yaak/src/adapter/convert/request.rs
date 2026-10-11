@@ -23,9 +23,10 @@ pub(super) fn convert_request(
         ));
     }
     let ancestors = folder_ancestors(request.folder_id.as_deref(), folders);
-    let headers = effective_headers(workspace, &ancestors, request, diagnostics);
-    let authentication = effective_authentication(workspace, &ancestors, request, diagnostics);
-    let settings = effective_settings(workspace, &ancestors, request, diagnostics);
+    let headers = effective_headers(workspace, &ancestors, request, "http_request", diagnostics);
+    let authentication =
+        effective_authentication(workspace, &ancestors, request, "http_request", diagnostics);
+    let settings = effective_settings(workspace, &ancestors, request, "http_request", diagnostics);
     let mut query_parameters = Vec::new();
     let mut path_parameters = Vec::new();
     for parameter in &request.url_parameters {
@@ -95,7 +96,7 @@ pub(super) fn convert_request(
     }))
 }
 
-fn folder_ancestors<'a>(
+pub(super) fn folder_ancestors<'a>(
     folder_id: Option<&str>,
     folders: &'a BTreeMap<&str, &'a YaakFolder>,
 ) -> Vec<&'a YaakFolder> {
@@ -113,10 +114,11 @@ fn folder_ancestors<'a>(
     chain
 }
 
-fn effective_headers(
+pub(super) fn effective_headers(
     workspace: &YaakWorkspace,
     ancestors: &[&YaakFolder],
-    request: &YaakHttpRequest,
+    request: &YaakRequest,
+    resource_type: &str,
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> Vec<Header> {
     let mut headers = Vec::<Header>::new();
@@ -129,14 +131,14 @@ fn effective_headers(
         let converted = Header {
             name: convert_templates(
                 &header.name,
-                "http_request",
+                resource_type,
                 &request.id,
                 "headers.name",
                 diagnostics,
             ),
             value: convert_templates(
                 &header.value,
-                "http_request",
+                resource_type,
                 &request.id,
                 "headers.value",
                 diagnostics,
@@ -156,10 +158,11 @@ fn effective_headers(
     headers
 }
 
-fn effective_authentication(
+pub(super) fn effective_authentication(
     workspace: &YaakWorkspace,
     ancestors: &[&YaakFolder],
-    request: &YaakHttpRequest,
+    request: &YaakRequest,
+    resource_type: &str,
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> Option<Authentication> {
     let mut owner_type = workspace.authentication_type.as_deref();
@@ -190,7 +193,7 @@ fn effective_authentication(
         other => {
             diagnostics.push(lossy(
                 "unsupported_authentication",
-                "http_request",
+                resource_type,
                 Some(&request.id),
                 Some("authenticationType"),
                 &format!("Yaak authentication type '{other}' is not defined by OpenCollection"),
@@ -198,14 +201,16 @@ fn effective_authentication(
             return None;
         }
     };
-    if !matches!(kind, AuthenticationKind::Basic | AuthenticationKind::Bearer) {
+    if !(matches!(kind, AuthenticationKind::Basic | AuthenticationKind::Bearer)
+        || resource_type == "websocket_request" && kind == AuthenticationKind::ApiKey)
+    {
         diagnostics.push(warning(
             "execution_unsupported",
-            "http_request",
+            resource_type,
             Some(&request.id),
             Some("authenticationType"),
             &format!(
-                "authentication type '{}' is preserved but the current Probe HTTP engine cannot execute it",
+                "authentication type '{}' is preserved but the current Probe engine cannot execute it",
                 kind.as_str()
             ),
         ));
@@ -218,6 +223,7 @@ fn effective_authentication(
                 json_auth_value(
                     value,
                     request,
+                    resource_type,
                     &format!("authentication.{name}"),
                     diagnostics,
                 ),
@@ -229,7 +235,8 @@ fn effective_authentication(
 
 fn json_auth_value(
     value: &Value,
-    request: &YaakHttpRequest,
+    request: &YaakRequest,
+    resource_type: &str,
     field: &str,
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> AuthenticationValue {
@@ -239,7 +246,7 @@ fn json_auth_value(
         Value::Number(value) => AuthenticationValue::Number(value.to_string()),
         Value::String(value) => AuthenticationValue::String(convert_templates(
             value,
-            "http_request",
+            resource_type,
             &request.id,
             field,
             diagnostics,
@@ -247,7 +254,7 @@ fn json_auth_value(
         Value::Array(values) => AuthenticationValue::Sequence(
             values
                 .iter()
-                .map(|value| json_auth_value(value, request, field, diagnostics))
+                .map(|value| json_auth_value(value, request, resource_type, field, diagnostics))
                 .collect(),
         ),
         Value::Object(values) => AuthenticationValue::Object(
@@ -256,7 +263,7 @@ fn json_auth_value(
                 .map(|(name, value)| {
                     (
                         name.clone(),
-                        json_auth_value(value, request, field, diagnostics),
+                        json_auth_value(value, request, resource_type, field, diagnostics),
                     )
                 })
                 .collect(),
@@ -264,10 +271,11 @@ fn json_auth_value(
     }
 }
 
-fn effective_settings(
+pub(super) fn effective_settings(
     workspace: &YaakWorkspace,
     ancestors: &[&YaakFolder],
-    request: &YaakHttpRequest,
+    request: &YaakRequest,
+    resource_type: &str,
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> RequestSettings {
     let mut timeout = workspace.setting_request_timeout.unwrap_or(0);
@@ -296,7 +304,7 @@ fn effective_settings(
     if !validate_certificates {
         diagnostics.push(lossy(
             "unsupported_setting",
-            "http_request",
+            resource_type,
             Some(&request.id),
             Some("settingValidateCertificates"),
             "disabling certificate validation cannot be represented by the current Probe domain",
@@ -305,7 +313,7 @@ fn effective_settings(
     if !send_cookies || !store_cookies {
         diagnostics.push(lossy(
             "unsupported_setting",
-            "http_request",
+            resource_type,
             Some(&request.id),
             Some("cookieSettings"),
             "Yaak cookie-jar settings cannot be represented by the current Probe domain",
@@ -319,7 +327,10 @@ fn effective_settings(
     }
 }
 
-fn override_setting<T: Copy + Default>(setting: &Option<InheritedSetting<T>>, value: &mut T) {
+pub(super) fn override_setting<T: Copy + Default>(
+    setting: &Option<InheritedSetting<T>>,
+    value: &mut T,
+) {
     if let Some(setting) = setting
         && setting.enabled.unwrap_or(false)
     {

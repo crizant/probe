@@ -180,7 +180,7 @@ struct Resources {
     http_requests: Vec<YaakHttpRequest>,
     requests: Vec<YaakHttpRequest>,
     grpc_requests: Vec<UnsupportedRequest>,
-    websocket_requests: Vec<UnsupportedRequest>,
+    websocket_requests: Vec<YaakWebSocketRequest>,
     unsupported_resources: Vec<UnsupportedResource>,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
@@ -280,7 +280,7 @@ struct YaakFolder {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-struct YaakHttpRequest {
+struct YaakRequest {
     #[serde(rename = "type")]
     resource_type: String,
     model: String,
@@ -291,12 +291,9 @@ struct YaakHttpRequest {
     updated_at: Option<String>,
     name: String,
     description: String,
-    method: String,
     url: String,
     headers: Vec<YaakHeader>,
     url_parameters: Vec<YaakParameter>,
-    body_type: Option<String>,
-    body: Map<String, Value>,
     authentication_type: Option<String>,
     authentication: Map<String, Value>,
     sort_priority: f64,
@@ -305,8 +302,46 @@ struct YaakHttpRequest {
     setting_request_timeout: Option<InheritedSetting<i64>>,
     setting_send_cookies: Option<InheritedSetting<bool>>,
     setting_store_cookies: Option<InheritedSetting<bool>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct YaakHttpRequest {
+    #[serde(flatten)]
+    common: YaakRequest,
+    method: String,
+    body_type: Option<String>,
+    body: Map<String, Value>,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct YaakWebSocketRequest {
+    #[serde(flatten)]
+    common: YaakRequest,
+    // Yaak exports the composer as text, without message types or variants.
+    message: String,
+    setting_request_message_size: Option<InheritedSetting<i64>>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, Value>,
+}
+
+impl std::ops::Deref for YaakHttpRequest {
+    type Target = YaakRequest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
+}
+
+impl std::ops::Deref for YaakWebSocketRequest {
+    type Target = YaakRequest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

@@ -1,0 +1,30 @@
+{
+  "yaakSchema": 4,
+  "resources": {
+    "workspaces": [{
+      "model": "workspace", "id": "wk_1", "name": "Mixed protocols",
+      "headers": [{"name": "X-Shared", "value": "workspace"}],
+      "authenticationType": "bearer", "authentication": {"token": "${[env.TOKEN]}", "prefix": "Bearer"},
+      "settingRequestTimeout": 2500
+    }],
+    "folders": [
+      {"model": "folder", "id": "outer", "workspaceId": "wk_1", "name": "Outer", "sortPriority": 2},
+      {"model": "folder", "id": "inner", "workspaceId": "wk_1", "folderId": "outer", "name": "Inner", "sortPriority": 3,
+       "headers": [{"name": "x-shared", "value": "folder"}],
+       "authenticationType": "basic", "authentication": {"username": "${[USER]}", "password": "${[env.PASSWORD]}"}}
+    ],
+    "httpRequests": [{"model": "http_request", "id": "http", "workspaceId": "wk_1", "folderId": "inner",
+                      "name": "Health", "url": "https://example.com/health", "method": "GET", "sortPriority": 4}],
+    "websocketRequests": [
+      {"model": "websocket_request", "id": "ws_nested", "workspaceId": "wk_1", "folderId": "inner",
+       "name": "Subscribe", "url": "wss://${[env.HOST]}/events", "sortPriority": 1.5,
+       "description": "Subscribe to events", "message": "{\"topic\":\"${[TOPIC]}\"}",
+       "headers": [{"name": "X-Shared", "value": "${[TRACE]}"}, {"name": "${[HEADER]}", "value": "${[env.VALUE]}", "enabled": false}],
+       "settingSendCookies": {"enabled": false, "value": false},
+       "settingRequestMessageSize": {"enabled": false, "value": 10}},
+      {"model": "websocket_request", "id": "ws_root", "workspaceId": "wk_1", "name": "Connect",
+       "url": "ws://localhost:8080", "message": "", "sortPriority": 1},
+      {"model": "websocket_request", "id": "ws_other", "workspaceId": "wk_other", "folderId": "missing", "name": "Other"}
+    ]
+  }
+}
