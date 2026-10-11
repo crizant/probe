@@ -17,6 +17,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 - Light-theme HTTP status text for success, redirects, and client errors, and muted text, now meet WCAG AA contrast on raised surfaces.
 
+- Scrollbar thumbs use their own colors, so the light-theme thumb stays quiet when muted text is darkened and strengthens from rest to hover to drag.
+
 - Variable tooltips show unavailable-environment guidance as plain text without a text cursor.
 
 - Request editor brackets and quotes now auto-pair only in JSON mode.

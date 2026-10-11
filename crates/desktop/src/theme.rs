@@ -35,6 +35,7 @@ pub struct Colors {
     pub surfaces: SurfaceColors,
     pub text: TextColors,
     pub borders: BorderColors,
+    pub scrollbar: ScrollbarColors,
     pub actions: ActionColors,
     pub selection: SelectionColors,
     pub status: StatusColors,
@@ -70,6 +71,13 @@ pub struct BorderColors {
     pub standard: Rgba,
     pub strong: Rgba,
     pub focused: Rgba,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollbarColors {
+    pub thumb: Rgba,
+    pub thumb_hover: Rgba,
+    pub thumb_active: Rgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -212,14 +220,12 @@ impl Theme {
     pub(crate) fn sync_theme(theme: Self, cx: &mut gpui::App) {
         let gpui_theme = gpui_base::Theme::global_mut(cx);
         gpui_theme.tokens = theme.semantic_tokens();
-        let muted: Hsla = theme.colors.text.muted.into();
-        let border: Hsla = theme.colors.borders.standard.into();
-        let primary: Hsla = theme.colors.text.primary.into();
+        let scrollbar = theme.colors.scrollbar;
         let thumb_radius = px(theme.metrics.radius_small);
         gpui_theme.scrollbar.styles = ScrollbarStyles::default()
-            .thumb(|thumb| thumb.bg(muted).radius(thumb_radius))
-            .thumb_hover(|thumb| thumb.bg(border).radius(thumb_radius))
-            .thumb_active(|thumb| thumb.bg(primary).radius(thumb_radius));
+            .thumb(|thumb| thumb.bg(scrollbar.thumb).radius(thumb_radius))
+            .thumb_hover(|thumb| thumb.bg(scrollbar.thumb_hover).radius(thumb_radius))
+            .thumb_active(|thumb| thumb.bg(scrollbar.thumb_active).radius(thumb_radius));
         gpui_theme.resizable.handle = theme.colors.borders.subtle.into();
         gpui_theme.resizable.active_handle = theme.colors.borders.focused.into();
     }
@@ -399,6 +405,11 @@ fn porcelain_honey() -> Colors {
             strong: rgba(0xc5b9adff),   // grounded divider
             focused: rgba(0xe7821b99),  // orange focus
         },
+        scrollbar: ScrollbarColors {
+            thumb: rgba(0x8b837aff),        // quiet graphite
+            thumb_hover: rgba(0x6c655eff),  // soft graphite
+            thumb_active: rgba(0x4b4641ff), // warm graphite
+        },
         actions: ActionColors {
             accent: rgba(0xe7821bff),              // reference orange
             hover: rgba(0xd96f10ff),               // burnished orange
@@ -472,6 +483,11 @@ fn graphite_honey() -> Colors {
             standard: rgba(0x45474dc2), // graphite divider
             strong: rgba(0x606268d9),   // grounded divider
             focused: rgba(0xd98e2699),  // quiet orange focus
+        },
+        scrollbar: ScrollbarColors {
+            thumb: rgba(0xa7a19aff),        // graphite
+            thumb_hover: rgba(0xcac5bdff),  // lifted graphite
+            thumb_active: rgba(0xe9e6e0ff), // soft off-white
         },
         actions: ActionColors {
             accent: rgba(0xd98e26ff),              // filled golden orange
@@ -609,7 +625,7 @@ const fn default_motion() -> Motion {
 mod tests {
     use super::{Theme, ThemeAppearance, appearance_override};
     use crate::user_config::ThemeMode;
-    use gpui::{Rgba, WindowAppearance};
+    use gpui::{Rgba, TestAppContext, WindowAppearance};
 
     #[test]
     fn native_appearances_select_the_expected_built_in_theme() {
@@ -740,5 +756,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn scrollbar_thumb_strengthens_from_rest_through_hover_to_active() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for background in [theme.colors.surfaces.raised, theme.colors.surfaces.sidebar] {
+                let resting = contrast_ratio(theme.colors.scrollbar.thumb, background);
+                let hover = contrast_ratio(theme.colors.scrollbar.thumb_hover, background);
+                let active = contrast_ratio(theme.colors.scrollbar.thumb_active, background);
+                assert!(
+                    resting < hover && hover < active,
+                    "{:?} scrollbar contrast resting {resting:.2}, hover {hover:.2}, active {active:.2}",
+                    theme.appearance
+                );
+            }
+        }
+        let light = Theme::light();
+        let resting = contrast_ratio(light.colors.scrollbar.thumb, light.colors.surfaces.raised);
+        let muted = contrast_ratio(light.colors.text.muted, light.colors.surfaces.raised);
+        assert!(
+            resting < muted,
+            "light scrollbar thumb contrast {resting:.2} should stay under muted text {muted:.2}"
+        );
+    }
+
+    #[gpui::test]
+    fn sync_theme_keeps_muted_text_as_muted_foreground(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            Theme::init(cx);
+            for theme in [Theme::light(), Theme::dark()] {
+                Theme::sync_theme(theme, cx);
+                assert_eq!(
+                    gpui_base::Theme::global(cx).tokens.colors.muted_foreground,
+                    theme.colors.text.muted.into()
+                );
+            }
+        });
     }
 }
