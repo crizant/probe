@@ -19,9 +19,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
-- WebSocket `Cmd + Enter` follows keyboard focus: connect from the request area,
-  or send from the message composer. Disconnected composers preserve the draft
-  and prompt you to connect first rather than opening a connection.
+- WebSocket `Cmd + Enter` on macOS and `Ctrl + Enter` on Windows/Linux follow
+  keyboard focus: connect from the request area, or send from the message composer.
+  Disconnected composers preserve the draft and prompt you to connect first rather
+  than opening a connection.
 
 - Light-theme HTTP status text for success, redirects, and client errors, and muted text, now meet WCAG AA contrast on raised surfaces.
 
