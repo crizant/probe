@@ -49,6 +49,7 @@ impl EditorField {
             }
 
             if !this.readonly
+                && this.language == "json"
                 && let Some(edit) = detect_auto_edit(&this.last_value, &value, selection)
             {
                 let (final_text, _) = apply_auto_edit(&value, &edit);
