@@ -1,5 +1,8 @@
 use super::*;
-use crate::websocket::ConnectionState;
+use crate::websocket::{
+    ConnectionState, DisconnectLine, TimelineRowHeading, disconnect_severity,
+    disconnect_severity_color,
+};
 use probe_application::SessionEvent;
 impl ProbeApp {
     pub(in crate::app) fn render_websocket_panel(
@@ -153,15 +156,15 @@ impl ProbeApp {
                                 else {
                                     return div().into_any_element();
                                 };
-                                let (label, direction) = match &entry.event {
+                                let heading = TimelineRowHeading::from_event(&entry.event);
+                                let direction = match &entry.event {
                                     SessionEvent::Sent(_) => {
-                                        ("Sent", Some(("↑", theme.colors.status.informational)))
+                                        Some(("↑", theme.colors.status.informational))
                                     }
                                     SessionEvent::Received(_) => {
-                                        ("Received", Some(("↓", theme.colors.status.success)))
+                                        Some(("↓", theme.colors.status.success))
                                     }
-                                    SessionEvent::Error(_) => ("Error", None),
-                                    _ => ("Session", None),
+                                    _ => None,
                                 };
                                 let mut header = div()
                                     .flex()
@@ -178,7 +181,12 @@ impl ProbeApp {
                                             .when_some(direction, |label, (arrow, color)| {
                                                 label.child(div().text_color(color).child(arrow))
                                             })
-                                            .child(label),
+                                            .when_some(heading.severity, |label, severity| {
+                                                label.child(components::disconnect_severity_mark(
+                                                    theme, severity,
+                                                ))
+                                            })
+                                            .child(heading.label),
                                     )
                                     .child(
                                         div()
@@ -216,11 +224,7 @@ impl ProbeApp {
                                     .flex_col()
                                     .gap(px(theme.metrics.spacing_1))
                                     .child(header)
-                                    .child(
-                                        div()
-                                            .font_family(theme.typography.monospace_family)
-                                            .child(entry.display.clone()),
-                                    )
+                                    .child(timeline_message(theme, entry))
                                     .into_any_element()
                             })
                             .unwrap_or_else(|_| div().into_any_element())
@@ -310,4 +314,40 @@ impl ProbeApp {
                 ),
         )
     }
+}
+
+fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gpui::Div {
+    let SessionEvent::Closed {
+        origin,
+        code,
+        reason,
+    } = &entry.event
+    else {
+        return div()
+            .font_family(theme.typography.monospace_family)
+            .child(entry.display.clone());
+    };
+    let line = DisconnectLine::from_close(*origin, *code, reason);
+    let mut message = div()
+        .w_full()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .font_family(theme.typography.monospace_family)
+        .text_color(theme.colors.text.primary)
+        .child(format!("Disconnected · {}", line.origin));
+    if let Some(status) = line.status {
+        message = message.child(" · ").child(
+            div()
+                .text_color(disconnect_severity_color(
+                    theme,
+                    disconnect_severity(*origin, *code),
+                ))
+                .child(status),
+        );
+    }
+    if let Some(reason) = line.reason {
+        message = message.child(div().min_w(px(0.0)).flex_1().child(format!(" · {reason}")));
+    }
+    message
 }

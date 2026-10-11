@@ -1,5 +1,5 @@
 //! Desktop-only, bounded presentation state. Transport ownership stays in Session.
-use gpui::{ListAlignment, ListState, px};
+use gpui::{ListAlignment, ListState, Rgba, px};
 use probe_application::{
     CloseOrigin, SessionData, SessionError, SessionEvent, SessionSender, close_code_name,
 };
@@ -9,6 +9,8 @@ use std::{
     time::Instant,
 };
 use tokio::sync::oneshot;
+
+use crate::theme::Theme;
 
 pub(crate) const BRIDGE_CAPACITY: usize = 16;
 const MAX_ENTRIES: usize = 1000;
@@ -46,6 +48,123 @@ pub(crate) enum Update {
     Event(TimelineEntry),
 }
 
+/// How a WebSocket close should read in the timeline.
+///
+/// Error closes are server failures. Local closes are user-initiated and stay
+/// neutral. Remote closes follow the close code. Informational is unused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DisconnectSeverity {
+    Success,
+    Temporary,
+    ClientError,
+    ServerError,
+    Neutral,
+}
+
+pub(crate) fn disconnect_severity(origin: CloseOrigin, code: Option<u16>) -> DisconnectSeverity {
+    match origin {
+        CloseOrigin::Error => DisconnectSeverity::ServerError,
+        CloseOrigin::Local => DisconnectSeverity::Neutral,
+        CloseOrigin::Remote => match code {
+            Some(1000) => DisconnectSeverity::Success,
+            Some(1001 | 1012 | 1013) => DisconnectSeverity::Temporary,
+            Some(1002 | 1003 | 1007 | 1008 | 1009 | 1010 | 3000 | 3003 | 3008) => {
+                DisconnectSeverity::ClientError
+            }
+            Some(1006 | 1011 | 1014 | 1015) => DisconnectSeverity::ServerError,
+            _ => DisconnectSeverity::Neutral,
+        },
+    }
+}
+
+/// Same response palette as HTTP status text, plus muted text for neutral closes.
+pub(crate) fn disconnect_severity_color(theme: Theme, severity: DisconnectSeverity) -> Rgba {
+    match severity {
+        DisconnectSeverity::Success => theme.colors.responses.success,
+        DisconnectSeverity::Temporary => theme.colors.responses.redirect,
+        DisconnectSeverity::ClientError => theme.colors.responses.client_error,
+        DisconnectSeverity::ServerError => theme.colors.responses.server_error,
+        DisconnectSeverity::Neutral => theme.colors.text.muted,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DisconnectLine {
+    pub(crate) origin: &'static str,
+    pub(crate) status: Option<String>,
+    pub(crate) reason: Option<String>,
+}
+
+impl DisconnectLine {
+    pub(crate) fn from_close(origin: CloseOrigin, code: Option<u16>, reason: &str) -> Self {
+        let origin = match origin {
+            CloseOrigin::Local => "local",
+            CloseOrigin::Remote => "remote",
+            CloseOrigin::Error => "error",
+        };
+        let status = code.map(|code| match close_code_name(code) {
+            Some(name) => format!("{code} {name}"),
+            None => code.to_string(),
+        });
+        let reason = if reason.trim().is_empty() {
+            None
+        } else {
+            Some(reason.to_owned())
+        };
+        Self {
+            origin,
+            status,
+            reason,
+        }
+    }
+
+    pub(crate) fn display(&self) -> String {
+        let mut text = format!("Disconnected · {}", self.origin);
+        if let Some(status) = &self.status {
+            text.push_str(" · ");
+            text.push_str(status);
+        }
+        if let Some(reason) = &self.reason {
+            text.push_str(" · ");
+            text.push_str(reason);
+        }
+        text
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TimelineRowHeading {
+    pub(crate) label: &'static str,
+    pub(crate) severity: Option<DisconnectSeverity>,
+}
+
+impl TimelineRowHeading {
+    pub(crate) fn from_event(event: &SessionEvent) -> Self {
+        match event {
+            SessionEvent::Sent(_) => Self {
+                label: "Sent",
+                severity: None,
+            },
+            SessionEvent::Received(_) => Self {
+                label: "Received",
+                severity: None,
+            },
+            SessionEvent::Error(_) => Self {
+                label: "Error",
+                severity: None,
+            },
+            SessionEvent::Opened { .. } => Self {
+                label: "Session",
+                severity: None,
+            },
+            SessionEvent::Closed { origin, code, .. } => Self {
+                label: "Disconnected",
+                severity: Some(disconnect_severity(*origin, *code)),
+            },
+        }
+    }
+}
+
 pub(crate) struct TimelineEntry {
     pub(crate) event: SessionEvent,
     pub(crate) time: String,
@@ -79,26 +198,7 @@ impl TimelineEntry {
                 code,
                 reason,
             } => (
-                format!(
-                    "Disconnected · {}{}{}",
-                    match origin {
-                        CloseOrigin::Local => "local",
-                        CloseOrigin::Remote => "remote",
-                        CloseOrigin::Error => "error",
-                    },
-                    match *code {
-                        Some(code) => match close_code_name(code) {
-                            Some(name) => format!(" · {code} {name}"),
-                            None => format!(" · {code}"),
-                        },
-                        None => String::new(),
-                    },
-                    if reason.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(" · {reason}")
-                    }
-                ),
+                DisconnectLine::from_close(*origin, *code, reason).display(),
                 None,
             ),
         };
@@ -524,5 +624,161 @@ mod tests {
             display(CloseOrigin::Local, None, ""),
             "Disconnected · local"
         );
+    }
+
+    #[test]
+    fn disconnect_line_splits_status_from_origin_and_reason() {
+        let restart = DisconnectLine::from_close(CloseOrigin::Remote, Some(1012), "restarting");
+        assert_eq!(restart.origin, "remote");
+        assert_eq!(restart.status.as_deref(), Some("1012 Service Restart"));
+        assert_eq!(restart.reason.as_deref(), Some("restarting"));
+
+        let custom = DisconnectLine::from_close(CloseOrigin::Local, Some(4000), "custom");
+        assert_eq!(custom.status.as_deref(), Some("4000"));
+        assert_eq!(custom.reason.as_deref(), Some("custom"));
+
+        let unnamed = DisconnectLine::from_close(CloseOrigin::Remote, Some(1004), "");
+        assert_eq!(unnamed.status.as_deref(), Some("1004"));
+        assert!(unnamed.reason.is_none());
+
+        let reset = DisconnectLine::from_close(CloseOrigin::Error, None, "reset");
+        assert_eq!(reset.origin, "error");
+        assert!(reset.status.is_none());
+        assert_eq!(reset.reason.as_deref(), Some("reset"));
+
+        let blank = DisconnectLine::from_close(CloseOrigin::Remote, Some(1012), " \t ");
+        assert_eq!(blank.status.as_deref(), Some("1012 Service Restart"));
+        assert!(blank.reason.is_none());
+
+        let spaced = DisconnectLine::from_close(CloseOrigin::Local, Some(1000), "  done  ");
+        assert_eq!(spaced.status.as_deref(), Some("1000 Normal Closure"));
+        assert_eq!(spaced.reason.as_deref(), Some("  done  "));
+        assert_eq!(
+            spaced.display(),
+            "Disconnected · local · 1000 Normal Closure ·   done  "
+        );
+
+        let local = DisconnectLine::from_close(CloseOrigin::Local, None, "");
+        assert_eq!(local.origin, "local");
+        assert!(local.status.is_none());
+        assert!(local.reason.is_none());
+    }
+
+    #[test]
+    fn disconnect_severity_classifies_code_and_origin() {
+        use DisconnectSeverity::{ClientError, Neutral, ServerError, Success, Temporary};
+        let remote = [
+            (Some(1000), Success),
+            (Some(1001), Temporary),
+            (Some(1012), Temporary),
+            (Some(1013), Temporary),
+            (Some(1002), ClientError),
+            (Some(1003), ClientError),
+            (Some(1007), ClientError),
+            (Some(1008), ClientError),
+            (Some(1009), ClientError),
+            (Some(1010), ClientError),
+            (Some(3000), ClientError),
+            (Some(3003), ClientError),
+            (Some(3008), ClientError),
+            (Some(1006), ServerError),
+            (Some(1011), ServerError),
+            (Some(1014), ServerError),
+            (Some(1015), ServerError),
+            (Some(1005), Neutral),
+            (Some(1004), Neutral),
+            (Some(1016), Neutral),
+            (Some(2999), Neutral),
+            (Some(3001), Neutral),
+            (Some(3002), Neutral),
+            (Some(3999), Neutral),
+            (Some(4000), Neutral),
+            (Some(4999), Neutral),
+            (Some(0), Neutral),
+            (Some(u16::MAX), Neutral),
+            (None, Neutral),
+        ];
+        for (code, severity) in remote {
+            assert_eq!(
+                disconnect_severity(CloseOrigin::Remote, code),
+                severity,
+                "remote {code:?}"
+            );
+        }
+        for code in [
+            None,
+            Some(1000),
+            Some(1006),
+            Some(1012),
+            Some(3000),
+            Some(4000),
+        ] {
+            assert_eq!(
+                disconnect_severity(CloseOrigin::Local, code),
+                Neutral,
+                "local {code:?}"
+            );
+            assert_eq!(
+                disconnect_severity(CloseOrigin::Error, code),
+                ServerError,
+                "error {code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn timeline_heading_labels_disconnect_rows() {
+        let cases = [
+            (
+                SessionEvent::Sent(SessionData::Text("hi".into())),
+                "Sent",
+                None,
+            ),
+            (
+                SessionEvent::Received(SessionData::Binary(vec![1])),
+                "Received",
+                None,
+            ),
+            (SessionEvent::Error(SessionError::Connection), "Error", None),
+            (
+                SessionEvent::Opened {
+                    url: "wss://example".into(),
+                },
+                "Session",
+                None,
+            ),
+            (
+                SessionEvent::Closed {
+                    origin: CloseOrigin::Remote,
+                    code: Some(1012),
+                    reason: "restarting".into(),
+                },
+                "Disconnected",
+                Some(DisconnectSeverity::Temporary),
+            ),
+            (
+                SessionEvent::Closed {
+                    origin: CloseOrigin::Local,
+                    code: Some(1000),
+                    reason: String::new(),
+                },
+                "Disconnected",
+                Some(DisconnectSeverity::Neutral),
+            ),
+            (
+                SessionEvent::Closed {
+                    origin: CloseOrigin::Error,
+                    code: None,
+                    reason: "reset".into(),
+                },
+                "Disconnected",
+                Some(DisconnectSeverity::ServerError),
+            ),
+        ];
+        for (event, label, severity) in cases {
+            let heading = TimelineRowHeading::from_event(&event);
+            assert_eq!(heading.label, label);
+            assert_eq!(heading.severity, severity);
+        }
     }
 }

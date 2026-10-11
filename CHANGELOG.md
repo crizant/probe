@@ -12,6 +12,11 @@ Release dates use Australia/Brisbane time (UTC+10).
   display name, such as `1012 Service Restart`, and include the peer-provided
   reason when the peer sent one.
 
+- Desktop WebSocket disconnect rows are labeled Disconnected. The close code and
+  its name are colored by severity, using the same palette as HTTP status. The
+  word Disconnected, the close origin, and the peer reason stay in the primary
+  text color. A small severity icon with a distinct shape sits before the label.
+
 - Added hints to desktop utility icon buttons and labeled the house button “Home”.
 
 - Polished the desktop WebSocket editor and session panel with clearer status,
