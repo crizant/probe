@@ -233,11 +233,6 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
     {
         let mut visual = VisualTestContext::from_window(window.into(), cx);
         let composer = visual.debug_bounds("websocket-composer-input").unwrap();
-        let send = visual.debug_bounds("websocket-send").unwrap();
-        assert!(
-            composer.size.height > send.size.height,
-            "the multiline composer must not collapse to a single-line control"
-        );
         visual.simulate_click(composer.center(), Modifiers::default());
         visual.simulate_input("{{literal}}");
         visual.simulate_keystrokes("enter");

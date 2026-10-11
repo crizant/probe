@@ -309,16 +309,18 @@ impl RenderOnce for ProbeEditor {
                 theme.colors.surfaces.raised
             })
             .border_1()
-            .border_color(if focused {
-                theme.colors.borders.focused
-            } else if self.disabled_appearance {
+            .border_color(if self.disabled_appearance {
                 theme.colors.borders.subtle
+            } else if focused {
+                theme.colors.borders.focused
             } else {
                 theme.colors.borders.standard
             })
             .focused(focused)
-            .styles(move |styles| {
-                styles.focused(move |editor| editor.border_color(theme.colors.borders.focused))
+            .when(!self.disabled_appearance, |editor| {
+                editor.styles(move |styles| {
+                    styles.focused(move |editor| editor.border_color(theme.colors.borders.focused))
+                })
             })
             .when_some(self.debug_selector, |editor, selector| {
                 editor.debug_selector(move || selector.into())
