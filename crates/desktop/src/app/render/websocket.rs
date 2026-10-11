@@ -156,16 +156,18 @@ impl ProbeApp {
                                 else {
                                     return div().into_any_element();
                                 };
-                                let heading = TimelineRowHeading::from_event(&entry.event);
-                                let direction = match &entry.event {
+                                let (label, direction) = match &entry.event {
                                     SessionEvent::Sent(_) => {
-                                        Some(("↑", theme.colors.status.informational))
+                                        ("Sent", Some(("↑", theme.colors.status.informational)))
                                     }
                                     SessionEvent::Received(_) => {
-                                        Some(("↓", theme.colors.status.success))
+                                        ("Received", Some(("↓", theme.colors.status.success)))
                                     }
-                                    _ => None,
+                                    SessionEvent::Error(_) => ("Error", None),
+                                    _ => ("Session", None),
                                 };
+                                let heading = TimelineRowHeading::from_event(&entry.event);
+                                let row_label = heading.severity.map_or(label, |_| heading.label);
                                 let mut header = div()
                                     .flex()
                                     .items_center()
@@ -186,7 +188,7 @@ impl ProbeApp {
                                                     theme, severity,
                                                 ))
                                             })
-                                            .child(heading.label),
+                                            .child(row_label),
                                     )
                                     .child(
                                         div()
