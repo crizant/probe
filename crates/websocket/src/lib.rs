@@ -535,12 +535,65 @@ async fn handshake(
     Ok(())
 }
 
+/// Title Case display names based on the IANA WebSocket Close Code Number registry.
+/// 1014 "Bad Gateway" is the conventional name; the registry has no short name for it.
+pub fn close_code_name(code: u16) -> Option<&'static str> {
+    match code {
+        1000 => Some("Normal Closure"),
+        1001 => Some("Going Away"),
+        1002 => Some("Protocol Error"),
+        1003 => Some("Unsupported Data"),
+        1005 => Some("No Status Received"),
+        1006 => Some("Abnormal Closure"),
+        1007 => Some("Invalid Frame Payload Data"),
+        1008 => Some("Policy Violation"),
+        1009 => Some("Message Too Big"),
+        1010 => Some("Mandatory Extension"),
+        1011 => Some("Internal Error"),
+        1012 => Some("Service Restart"),
+        1013 => Some("Try Again Later"),
+        1014 => Some("Bad Gateway"),
+        1015 => Some("TLS Handshake"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod streaming_test {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/support/streaming.rs"
     ));
+}
+
+#[cfg(test)]
+mod close_code_name_tests {
+    use super::close_code_name;
+
+    #[test]
+    fn registered_codes_use_title_case_display_names() {
+        for (code, name) in [
+            (1000, "Normal Closure"),
+            (1001, "Going Away"),
+            (1002, "Protocol Error"),
+            (1003, "Unsupported Data"),
+            (1005, "No Status Received"),
+            (1006, "Abnormal Closure"),
+            (1007, "Invalid Frame Payload Data"),
+            (1008, "Policy Violation"),
+            (1009, "Message Too Big"),
+            (1010, "Mandatory Extension"),
+            (1011, "Internal Error"),
+            (1012, "Service Restart"),
+            (1013, "Try Again Later"),
+            (1014, "Bad Gateway"),
+            (1015, "TLS Handshake"),
+        ] {
+            assert_eq!(close_code_name(code), Some(name));
+        }
+        assert_eq!(close_code_name(1004), None);
+        assert_eq!(close_code_name(4000), None);
+    }
 }
 
 #[cfg(test)]

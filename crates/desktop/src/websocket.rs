@@ -1,6 +1,8 @@
 //! Desktop-only, bounded presentation state. Transport ownership stays in Session.
 use gpui::{ListAlignment, ListState, px};
-use probe_application::{CloseOrigin, SessionData, SessionError, SessionEvent, SessionSender};
+use probe_application::{
+    CloseOrigin, SessionData, SessionError, SessionEvent, SessionSender, close_code_name,
+};
 use probe_core::RequestKey;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -84,14 +86,14 @@ impl TimelineEntry {
                         CloseOrigin::Remote => "remote",
                         CloseOrigin::Error => "error",
                     },
-                    (*code)
-                        .and_then(|code| {
-                            close_code_name(code).map(|name| format!(" · {code} {name}"))
-                        })
-                        .unwrap_or_else(|| {
-                            code.map(|code| format!(" · {code}")).unwrap_or_default()
-                        }),
-                    if reason.is_empty() {
+                    match *code {
+                        Some(code) => match close_code_name(code) {
+                            Some(name) => format!(" · {code} {name}"),
+                            None => format!(" · {code}"),
+                        },
+                        None => String::new(),
+                    },
+                    if reason.trim().is_empty() {
                         String::new()
                     } else {
                         format!(" · {reason}")
@@ -122,27 +124,6 @@ impl TimelineEntry {
     }
 }
 
-/// Official names from RFC 6455 and the IANA WebSocket Close Code Number registry.
-fn close_code_name(code: u16) -> Option<&'static str> {
-    match code {
-        1000 => Some("Normal Closure"),
-        1001 => Some("Going Away"),
-        1002 => Some("Protocol Error"),
-        1003 => Some("Unsupported Data"),
-        1005 => Some("No Status Received"),
-        1006 => Some("Abnormal Closure"),
-        1007 => Some("Invalid Frame Payload Data"),
-        1008 => Some("Policy Violation"),
-        1009 => Some("Message Too Big"),
-        1010 => Some("Mandatory Extension"),
-        1011 => Some("Internal Error"),
-        1012 => Some("Service Restart"),
-        1013 => Some("Try Again Later"),
-        1014 => Some("Bad Gateway"),
-        1015 => Some("TLS Handshake"),
-        _ => None,
-    }
-}
 pub(crate) struct SessionState {
     pub(crate) generation: u64,
     pub(crate) state: ConnectionState,
@@ -511,32 +492,14 @@ mod tests {
             })
             .display
         }
-        for (code, name) in [
-            (1000, "Normal Closure"),
-            (1001, "Going Away"),
-            (1002, "Protocol Error"),
-            (1003, "Unsupported Data"),
-            (1005, "No Status Received"),
-            (1006, "Abnormal Closure"),
-            (1007, "Invalid Frame Payload Data"),
-            (1008, "Policy Violation"),
-            (1009, "Message Too Big"),
-            (1010, "Mandatory Extension"),
-            (1011, "Internal Error"),
-            (1012, "Service Restart"),
-            (1013, "Try Again Later"),
-            (1014, "Bad Gateway"),
-            (1015, "TLS Handshake"),
-        ] {
-            assert_eq!(
-                display(CloseOrigin::Remote, Some(code), "restarting"),
-                format!("Disconnected · remote · {code} {name} · restarting")
-            );
-            assert_eq!(
-                display(CloseOrigin::Local, Some(code), ""),
-                format!("Disconnected · local · {code} {name}")
-            );
-        }
+        assert_eq!(
+            display(CloseOrigin::Remote, Some(1012), "restarting"),
+            "Disconnected · remote · 1012 Service Restart · restarting"
+        );
+        assert_eq!(
+            display(CloseOrigin::Local, Some(1000), ""),
+            "Disconnected · local · 1000 Normal Closure"
+        );
         assert_eq!(
             display(CloseOrigin::Local, Some(4000), "custom"),
             "Disconnected · local · 4000 · custom"
@@ -548,6 +511,14 @@ mod tests {
         assert_eq!(
             display(CloseOrigin::Error, None, "reset"),
             "Disconnected · error · reset"
+        );
+        assert_eq!(
+            display(CloseOrigin::Remote, Some(1012), " \t "),
+            "Disconnected · remote · 1012 Service Restart"
+        );
+        assert_eq!(
+            display(CloseOrigin::Local, Some(4000), " "),
+            "Disconnected · local · 4000"
         );
         assert_eq!(
             display(CloseOrigin::Local, None, ""),
