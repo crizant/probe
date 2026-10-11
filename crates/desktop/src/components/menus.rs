@@ -531,6 +531,7 @@ pub(crate) fn pane_layout_toggle(
         let on_change = on_change.clone();
         Toggle::new(("pane-layout", index))
             .pressed(pressed)
+            .hint(theme, label)
             .accessibility_label(label)
             .w(px(32.0))
             .h(px(theme.metrics.control_height))

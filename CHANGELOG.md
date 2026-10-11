@@ -8,6 +8,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
+- Added hints to desktop utility icon buttons and labeled the house button “Home”.
+
 - Polished the desktop WebSocket editor and session panel with clearer status,
   quieter utility actions, compact message rows, and an auto-hiding timeline scrollbar.
 

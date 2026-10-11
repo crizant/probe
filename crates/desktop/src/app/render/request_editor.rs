@@ -391,7 +391,7 @@ impl ProbeApp {
                                             },
                                         )
                                         .tooltip(move |_, cx| {
-                                            cx.new(|_| ActionTooltip {
+                                            cx.new(|_| components::ActionTooltip {
                                                 id: "request-send-tooltip",
                                                 theme,
                                                 label: send_tooltip.clone(),
@@ -523,27 +523,6 @@ impl ProbeApp {
     }
 }
 
-struct ActionTooltip {
-    id: &'static str,
-    theme: Theme,
-    label: String,
-}
-
-impl Render for ActionTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui_base::Tooltip::new(self.id)
-            .px(px(self.theme.metrics.spacing_2))
-            .py(px(self.theme.metrics.spacing_1))
-            .rounded(px(self.theme.metrics.radius_small))
-            .border_1()
-            .border_color(self.theme.colors.borders.standard)
-            .bg(self.theme.colors.surfaces.overlay)
-            .text_size(px(self.theme.typography.caption_size))
-            .text_color(self.theme.colors.text.primary)
-            .child(self.label.clone())
-    }
-}
-
 impl ProbeApp {
     pub(super) fn render_save_button(
         &self,
@@ -565,7 +544,7 @@ impl ProbeApp {
                 } else {
                     "Ctrl+S"
                 };
-                cx.new(|_| ActionTooltip {
+                cx.new(|_| components::ActionTooltip {
                     id: "editor-save-tooltip",
                     theme,
                     label: format!("{label} ({shortcut})"),
