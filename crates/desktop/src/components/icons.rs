@@ -1,4 +1,5 @@
 use super::*;
+use crate::websocket::{DisconnectSeverity, disconnect_severity_color};
 
 static CHEVRON_DOWN_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuChevronDown));
@@ -26,6 +27,13 @@ static SIDEBAR_EXPAND_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuPanelLeftOpen));
 static HOME_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuHouse));
 static LOCK_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLock));
+static SEVERITY_DIAMOND_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuDiamond));
+static SEVERITY_TRIANGLE_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuTriangle));
+static SEVERITY_OCTAGON_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuOctagon));
+static SEVERITY_MINUS_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuMinus));
 
 fn icon_svg_bytes(icon: icondata::Icon) -> Vec<u8> {
     format!(
@@ -348,6 +356,18 @@ pub(crate) fn download_icon(theme: Theme) -> gpui::Div {
 pub(crate) fn close_icon(theme: Theme) -> gpui::Div {
     library_icon("lucide-x", &CLOSE_SVG, theme.metrics.icon_standard)
         .text_color(theme.colors.text.secondary)
+}
+
+pub(crate) fn disconnect_severity_mark(theme: Theme, severity: DisconnectSeverity) -> gpui::Div {
+    let (name, svg) = match severity {
+        DisconnectSeverity::Success => ("disconnect-severity-success", &CHECK_SVG),
+        DisconnectSeverity::Temporary => ("disconnect-severity-temporary", &SEVERITY_DIAMOND_SVG),
+        DisconnectSeverity::ClientError => ("disconnect-severity-client", &SEVERITY_TRIANGLE_SVG),
+        DisconnectSeverity::Failure => ("disconnect-severity-failure", &SEVERITY_OCTAGON_SVG),
+        DisconnectSeverity::Neutral => ("disconnect-severity-neutral", &SEVERITY_MINUS_SVG),
+    };
+    library_icon(name, svg, theme.metrics.icon_small)
+        .text_color(disconnect_severity_color(theme, severity))
 }
 
 pub(crate) fn locate_icon(theme: Theme) -> gpui::Div {

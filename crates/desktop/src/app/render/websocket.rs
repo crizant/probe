@@ -1,5 +1,7 @@
 use super::*;
-use crate::websocket::ConnectionState;
+use crate::websocket::{
+    ConnectionState, DisconnectLine, disconnect_severity, disconnect_severity_color,
+};
 use probe_application::SessionEvent;
 impl ProbeApp {
     pub(in crate::app) fn render_websocket_panel(
@@ -161,7 +163,14 @@ impl ProbeApp {
                                         ("Received", Some(("↓", theme.colors.status.success)))
                                     }
                                     SessionEvent::Error(_) => ("Error", None),
-                                    _ => ("Session", None),
+                                    SessionEvent::Opened { .. } => ("Session", None),
+                                    SessionEvent::Closed { .. } => ("Disconnected", None),
+                                };
+                                let severity = match &entry.event {
+                                    SessionEvent::Closed { origin, code, .. } => {
+                                        Some(disconnect_severity(*origin, *code))
+                                    }
+                                    _ => None,
                                 };
                                 let mut header = div()
                                     .flex()
@@ -175,8 +184,16 @@ impl ProbeApp {
                                             .items_center()
                                             .gap(px(theme.metrics.spacing_1))
                                             .font_weight(FontWeight::SEMIBOLD)
+                                            .when(severity.is_some(), |row| {
+                                                row.text_color(theme.colors.text.primary)
+                                            })
                                             .when_some(direction, |label, (arrow, color)| {
                                                 label.child(div().text_color(color).child(arrow))
+                                            })
+                                            .when_some(severity, |label, severity| {
+                                                label.child(components::disconnect_severity_mark(
+                                                    theme, severity,
+                                                ))
                                             })
                                             .child(label),
                                     )
@@ -216,11 +233,7 @@ impl ProbeApp {
                                     .flex_col()
                                     .gap(px(theme.metrics.spacing_1))
                                     .child(header)
-                                    .child(
-                                        div()
-                                            .font_family(theme.typography.monospace_family)
-                                            .child(entry.display.clone()),
-                                    )
+                                    .child(timeline_message(theme, entry))
                                     .into_any_element()
                             })
                             .unwrap_or_else(|_| div().into_any_element())
@@ -310,4 +323,34 @@ impl ProbeApp {
                 ),
         )
     }
+}
+
+fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gpui::Div {
+    let SessionEvent::Closed {
+        origin,
+        code,
+        reason,
+    } = &entry.event
+    else {
+        return div()
+            .font_family(theme.typography.monospace_family)
+            .child(entry.display.clone());
+    };
+    let rendered = DisconnectLine::from_close(*origin, *code, reason).text();
+    let message = div()
+        .w_full()
+        .font_family(theme.typography.monospace_family)
+        .text_color(theme.colors.text.primary);
+    let Some(status) = rendered.status else {
+        return message.child(rendered.text);
+    };
+    let color: gpui::Hsla =
+        disconnect_severity_color(theme, disconnect_severity(*origin, *code)).into();
+    message.child(gpui::StyledText::new(rendered.text).with_highlights([(
+        status,
+        gpui::HighlightStyle {
+            color: Some(color),
+            ..Default::default()
+        },
+    )]))
 }

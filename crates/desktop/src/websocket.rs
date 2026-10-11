@@ -1,5 +1,5 @@
 //! Desktop-only, bounded presentation state. Transport ownership stays in Session.
-use gpui::{ListAlignment, ListState, px};
+use gpui::{ListAlignment, ListState, Rgba, px};
 use probe_application::{
     CloseOrigin, SessionData, SessionError, SessionEvent, SessionSender, close_code_name,
 };
@@ -9,6 +9,8 @@ use std::{
     time::Instant,
 };
 use tokio::sync::oneshot;
+
+use crate::theme::Theme;
 
 pub(crate) const BRIDGE_CAPACITY: usize = 16;
 const MAX_ENTRIES: usize = 1000;
@@ -46,6 +48,103 @@ pub(crate) enum Update {
     Event(TimelineEntry),
 }
 
+/// How a WebSocket close should read in the timeline.
+///
+/// `CloseOrigin::Error` and abnormal or internal close codes are failures.
+/// Local closes are user-initiated and stay neutral. Other remote closes follow
+/// the close code. Informational is unused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DisconnectSeverity {
+    Success,
+    Temporary,
+    ClientError,
+    Failure,
+    Neutral,
+}
+
+pub(crate) fn disconnect_severity(origin: CloseOrigin, code: Option<u16>) -> DisconnectSeverity {
+    match origin {
+        CloseOrigin::Error => DisconnectSeverity::Failure,
+        CloseOrigin::Local => DisconnectSeverity::Neutral,
+        CloseOrigin::Remote => match code {
+            Some(1000) => DisconnectSeverity::Success,
+            Some(1001 | 1012 | 1013 | 3008) => DisconnectSeverity::Temporary,
+            Some(1002 | 1003 | 1007 | 1008 | 1009 | 1010 | 3000 | 3003) => {
+                DisconnectSeverity::ClientError
+            }
+            Some(1006 | 1011 | 1014 | 1015) => DisconnectSeverity::Failure,
+            _ => DisconnectSeverity::Neutral,
+        },
+    }
+}
+
+/// Same response palette as HTTP status text, plus muted text for neutral closes.
+pub(crate) fn disconnect_severity_color(theme: Theme, severity: DisconnectSeverity) -> Rgba {
+    match severity {
+        DisconnectSeverity::Success => theme.colors.responses.success,
+        DisconnectSeverity::Temporary => theme.colors.responses.redirect,
+        DisconnectSeverity::ClientError => theme.colors.responses.client_error,
+        DisconnectSeverity::Failure => theme.colors.responses.server_error,
+        DisconnectSeverity::Neutral => theme.colors.text.muted,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DisconnectLine {
+    pub(crate) origin: &'static str,
+    pub(crate) status: Option<String>,
+    pub(crate) reason: Option<String>,
+}
+
+impl DisconnectLine {
+    pub(crate) fn from_close(origin: CloseOrigin, code: Option<u16>, reason: &str) -> Self {
+        let origin = match origin {
+            CloseOrigin::Local => "local",
+            CloseOrigin::Remote => "remote",
+            CloseOrigin::Error => "error",
+        };
+        let status = code.map(|code| match close_code_name(code) {
+            Some(name) => format!("{code} {name}"),
+            None => code.to_string(),
+        });
+        let reason = if reason.trim().is_empty() {
+            None
+        } else {
+            Some(reason.to_owned())
+        };
+        Self {
+            origin,
+            status,
+            reason,
+        }
+    }
+
+    pub(crate) fn display(&self) -> String {
+        self.text().text
+    }
+
+    /// The disconnect sentence and the byte range of its close-code segment.
+    pub(crate) fn text(&self) -> DisconnectText {
+        let mut text = self.origin.to_owned();
+        let status = self.status.as_ref().map(|status| {
+            text.push_str(" · ");
+            let start = text.len();
+            text.push_str(status);
+            start..text.len()
+        });
+        if let Some(reason) = &self.reason {
+            text.push_str(" · ");
+            text.push_str(reason);
+        }
+        DisconnectText { text, status }
+    }
+}
+
+pub(crate) struct DisconnectText {
+    pub(crate) text: String,
+    pub(crate) status: Option<std::ops::Range<usize>>,
+}
+
 pub(crate) struct TimelineEntry {
     pub(crate) event: SessionEvent,
     pub(crate) time: String,
@@ -79,26 +178,7 @@ impl TimelineEntry {
                 code,
                 reason,
             } => (
-                format!(
-                    "Disconnected · {}{}{}",
-                    match origin {
-                        CloseOrigin::Local => "local",
-                        CloseOrigin::Remote => "remote",
-                        CloseOrigin::Error => "error",
-                    },
-                    match *code {
-                        Some(code) => match close_code_name(code) {
-                            Some(name) => format!(" · {code} {name}"),
-                            None => format!(" · {code}"),
-                        },
-                        None => String::new(),
-                    },
-                    if reason.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(" · {reason}")
-                    }
-                ),
+                DisconnectLine::from_close(*origin, *code, reason).display(),
                 None,
             ),
         };
@@ -494,35 +574,68 @@ mod tests {
         }
         assert_eq!(
             display(CloseOrigin::Remote, Some(1012), "restarting"),
-            "Disconnected · remote · 1012 Service Restart · restarting"
+            "remote · 1012 Service Restart · restarting"
         );
         assert_eq!(
             display(CloseOrigin::Local, Some(1000), ""),
-            "Disconnected · local · 1000 Normal Closure"
+            "local · 1000 Normal Closure"
         );
         assert_eq!(
             display(CloseOrigin::Local, Some(4000), "custom"),
-            "Disconnected · local · 4000 · custom"
+            "local · 4000 · custom"
         );
         assert_eq!(
             display(CloseOrigin::Remote, Some(1004), ""),
-            "Disconnected · remote · 1004"
+            "remote · 1004"
         );
-        assert_eq!(
-            display(CloseOrigin::Error, None, "reset"),
-            "Disconnected · error · reset"
-        );
+        assert_eq!(display(CloseOrigin::Error, None, "reset"), "error · reset");
         assert_eq!(
             display(CloseOrigin::Remote, Some(1012), " \t "),
-            "Disconnected · remote · 1012 Service Restart"
+            "remote · 1012 Service Restart"
         );
+        assert_eq!(display(CloseOrigin::Local, Some(4000), " "), "local · 4000");
+        assert_eq!(display(CloseOrigin::Local, None, ""), "local");
+    }
+
+    #[test]
+    fn disconnect_line_status_slice_is_only_the_close_code() {
+        let rendered =
+            DisconnectLine::from_close(CloseOrigin::Remote, Some(1012), "restarting").text();
+        let status = rendered.status.expect("named close has a status segment");
         assert_eq!(
-            display(CloseOrigin::Local, Some(4000), " "),
-            "Disconnected · local · 4000"
+            &rendered.text[status.start..status.end],
+            "1012 Service Restart"
         );
-        assert_eq!(
-            display(CloseOrigin::Local, None, ""),
-            "Disconnected · local"
-        );
+        assert_eq!(&rendered.text[..status.start], "remote · ");
+        assert_eq!(&rendered.text[status.end..], " · restarting");
+
+        let rendered = DisconnectLine::from_close(CloseOrigin::Error, None, "reset").text();
+        assert!(rendered.status.is_none());
+        assert_eq!(rendered.text, "error · reset");
+    }
+
+    #[test]
+    fn disconnect_severity_classifies_code_and_origin() {
+        use DisconnectSeverity::{ClientError, Failure, Neutral, Success, Temporary};
+        for (origin, code, severity) in [
+            (CloseOrigin::Remote, Some(1000), Success),
+            (CloseOrigin::Remote, Some(1012), Temporary),
+            (CloseOrigin::Remote, Some(3008), Temporary),
+            (CloseOrigin::Remote, Some(1002), ClientError),
+            (CloseOrigin::Remote, Some(3000), ClientError),
+            (CloseOrigin::Remote, Some(1006), Failure),
+            (CloseOrigin::Remote, Some(1011), Failure),
+            (CloseOrigin::Remote, Some(1005), Neutral),
+            (CloseOrigin::Remote, Some(4000), Neutral),
+            (CloseOrigin::Remote, None, Neutral),
+            (CloseOrigin::Local, Some(1000), Neutral),
+            (CloseOrigin::Error, Some(1000), Failure),
+        ] {
+            assert_eq!(
+                disconnect_severity(origin, code),
+                severity,
+                "{origin:?} {code:?}"
+            );
+        }
     }
 }
