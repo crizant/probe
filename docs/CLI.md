@@ -133,19 +133,23 @@ an empty binary message. Invalid Base64 reports `stdin_error` (exit 6), stops in
 and closes/drains the session using the same handling as a stdin read error. No
 slash commands or persistent interactive input modes are interpreted. Input and
 inbound events run concurrently.
-EOF stops input without closing the connection, including after a workspace supplied
-with path `-` consumes stdin. Ctrl-C requests normal local close and drains terminal
-events; a clean single Ctrl-C disconnect exits 0, as does clean remote close. This
-is different from HTTP/GraphQL Ctrl-C, which cancels execution with `request_cancelled`
-(exit 6). Another Ctrl-C during WebSocket shutdown force-terminates the session and
-returns `request_cancelled` (exit 6); Ctrl-C before connection also cancels with exit 6.
-`--quiet` suppresses successful events but still reports errors.
+EOF stops input without closing the connection, including after a workspace
+supplied with path `-` consumes stdin. Explicit `--stdin-format` is rejected
+with workspace path `-`, because that stdin stream is consumed by the workspace.
+Ctrl-C requests normal local close and drains terminal events; a clean single
+Ctrl-C disconnect exits 0, as does clean remote close. This is different from
+HTTP/GraphQL Ctrl-C, which cancels execution with `request_cancelled` (exit 6).
+Another Ctrl-C during WebSocket shutdown force-terminates the session and
+returns `request_cancelled` (exit 6); Ctrl-C before connection also cancels with
+exit 6. `--quiet` suppresses successful events but still reports errors.
 
 Repeatable `--send <text>` queues literal text after opening, following the configured
 initial message. Repeatable `--send-binary <BASE64>` decodes standard Base64 into
 binary bytes. Text and binary arguments send in their command-line order: the example
 above sends text `hello`, bytes `00 01 02`, then text `world`. Invalid `--send-binary`
 input is an `invalid_arguments` error (exit 2) before connecting or sending anything.
+The error identifies the invalid `--send-binary` value by its occurrence number
+(counting binary arguments only) without echoing its contents.
 These values do not undergo variable interpolation. Use the standard Base64 alphabet
 (`+` and `/`), with `=` padding when required; whitespace and URL-safe Base64 are
 rejected. Stdin uses the same decoding contract in binary format.
@@ -156,8 +160,9 @@ connection time, and closes/drains an established session before returning
 is separate from persisted WebSocket `settings.timeout`, the connection/handshake
 limit. Shutdown itself is bounded by the application session close handshake.
 `--send`, `--send-binary`, `--stdin-format`, `--max-messages`, and `--timeout` require
-live WebSocket execution and are rejected for HTTP/GraphQL or `--dry-run`. `--expect`, `--output`, and `--show-headers`
-are HTTP/GraphQL response options and are rejected for live WebSocket execution.
+live WebSocket execution and are rejected for HTTP/GraphQL or `--dry-run`.
+`--expect`, `--output`, and `--show-headers` are HTTP/GraphQL response options and are
+rejected for live WebSocket execution.
 
 Live WebSocket `--json` emits NDJSON: one compact versioned object per SessionEvent,
 flushed immediately, without an array. Text newlines are escaped within each record.

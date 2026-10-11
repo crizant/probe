@@ -337,16 +337,39 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
             );
         }
     }
-    // Select Binary through the composer, then exercise validation and the shared shortcut.
-    {
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        let selector = visual
-            .debug_bounds("websocket-message-type-trigger")
+    // Changing the runtime message type must preserve the literal draft.
+    let mode_draft = "Keep this draft {{literal}}\nAAEC";
+    window
+        .update(cx, |view, _, cx| {
+            view.websocket.sessions.get_mut(&key).unwrap().draft = mode_draft.into();
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    for (shortcut, format) in [
+        ("down enter", WebSocketInputFormat::Binary),
+        ("up enter", WebSocketInputFormat::Text),
+        ("down enter", WebSocketInputFormat::Binary),
+    ] {
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            let selector = visual
+                .debug_bounds("websocket-message-type-trigger")
+                .unwrap();
+            visual.simulate_click(selector.center(), Modifiers::default());
+            visual.run_until_parked();
+            visual.simulate_keystrokes(shortcut);
+            visual.run_until_parked();
+        }
+        window
+            .update(cx, |view, _, _| {
+                let state = &view.websocket.sessions[&key];
+                assert_eq!(state.input_format, format);
+                assert_eq!(state.draft, mode_draft);
+                assert_eq!(state.sent, 2, "changing type must not send");
+                assert!(!state.sending);
+            })
             .unwrap();
-        visual.simulate_click(selector.center(), Modifiers::default());
-        visual.run_until_parked();
-        visual.simulate_keystrokes("down enter");
-        visual.run_until_parked();
     }
     window
         .update(cx, |view, _, cx| {

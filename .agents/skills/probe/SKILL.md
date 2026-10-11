@@ -307,12 +307,7 @@ output streams interactively (`>` actual outbound messages, `<` inbound messages
 For agent execution, prefer `--max-messages 1 --timeout 10 --json`: live WebSocket
 `--json` is NDJSON, one versioned SessionEvent per line, and terminal errors retain
 nonzero exit status. HTTP/GraphQL and dry-run JSON remain single objects.
-Repeatable `--send` sends literal text; `--send-binary <BASE64>` decodes standard
-Base64 into binary bytes. Interleaved arguments send in command-line order after the
-configured message. Stdin defaults to text; `--stdin-format binary` decodes each
-standard Base64 line into one binary message. Invalid Base64 is an input error.
-EOF does not close the session. See [docs/CLI.md](../../../docs/CLI.md) for the full
-input and error contract.
+See [docs/CLI.md](../../../docs/CLI.md) for runtime message input and error rules.
 `--max-messages` counts inbound data only. `--timeout` is the CLI live-run bound,
 separate from persisted connection timeout. `--expect`, `--output`, and
 `--show-headers` are HTTP/GraphQL-only. Configured binary messages lack an encoding

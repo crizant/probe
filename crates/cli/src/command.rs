@@ -361,6 +361,7 @@ struct RunOptions {
 
 fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
     let mut positionals = Vec::new();
+    let mut binary_position = 0;
     let mut options = RunOptions {
         environment: None,
         output: None,
@@ -401,11 +402,14 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
                     .ok_or_else(|| CliError::invalid_arguments("--send requires text"))?,
             )),
             "--send-binary" => {
+                binary_position += 1;
                 let value = parser.bump().ok_or_else(|| {
                     CliError::invalid_arguments("--send-binary requires standard Base64")
                 })?;
                 let data = WebSocketInputFormat::Binary.decode(&value).map_err(|_| {
-                    CliError::invalid_arguments("--send-binary requires valid standard Base64")
+                    CliError::invalid_arguments(format!(
+                        "--send-binary value #{binary_position} requires valid standard Base64"
+                    ))
                 })?;
                 options.sends.push(data);
             }
@@ -457,6 +461,11 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         ));
     }
     let (path, selector) = two_paths(&positionals)?;
+    if path == "-" && options.stdin_format.is_some() {
+        return Err(CliError::invalid_arguments(
+            "--stdin-format cannot be used with workspace path '-': stdin is consumed by the workspace",
+        ));
+    }
     Ok(Command::Run {
         input: input(&path),
         selector,
