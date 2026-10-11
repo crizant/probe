@@ -32,6 +32,7 @@ pub(crate) fn documentation_text_input(
         decorations: Vec::new(),
         language: SharedString::default(),
         readonly: false,
+        disabled_appearance: false,
         min_height: None,
         padding: EditorInsets::standard(theme),
         soft_wrap: true,
@@ -59,10 +60,16 @@ pub(crate) fn websocket_composer(
         theme,
         id,
         value: value.into(),
-        placeholder: "Type a message…".into(),
+        placeholder: if enabled {
+            "Type a message…"
+        } else {
+            "Connect to type a message…"
+        }
+        .into(),
         decorations: Vec::new(),
         language: SharedString::default(),
         readonly: !enabled,
+        disabled_appearance: !enabled,
         min_height: None,
         padding: EditorInsets::standard(theme),
         soft_wrap: true,
@@ -107,6 +114,7 @@ pub(crate) fn body_text_input(
             BodySyntax::Plain => SharedString::default(),
         },
         readonly: false,
+        disabled_appearance: false,
         min_height: Some(120.0),
         padding: EditorInsets::standard(theme),
         soft_wrap: true,
@@ -357,6 +365,7 @@ fn response_editor(
         decorations: presentation.decorations,
         language: presentation.language,
         readonly: true,
+        disabled_appearance: false,
         min_height: None,
         padding: EditorInsets::response(theme),
         soft_wrap: presentation.soft_wrap,

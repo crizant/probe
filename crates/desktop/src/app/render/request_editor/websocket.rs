@@ -5,8 +5,8 @@ fn message_tab_choices(
 ) -> impl Iterator<Item = (&'static str, Option<Kind>, usize, usize)> {
     let choices = [
         ("None", None),
-        ("Text", Some(Kind::Text)),
         ("JSON", Some(Kind::Json)),
+        ("Text", Some(Kind::Text)),
         ("XML", Some(Kind::Xml)),
         ("Binary", Some(Kind::Binary)),
     ]
@@ -50,7 +50,7 @@ impl ProbeApp {
                     .child(format!("Selected message: {}", variant.title)),
             );
         }
-        let mut tabs = div().flex().gap(px(theme.metrics.spacing_1));
+        let mut tabs = div().flex().flex_wrap().gap(px(theme.metrics.spacing_1));
         for (label, kind, position, size) in message_tab_choices(variants) {
             let view = cx.weak_entity();
             let active = selected.map(|m| m.kind) == kind;
@@ -87,9 +87,15 @@ impl ProbeApp {
         panel = panel.child(tabs);
         if let Some(message) = selected {
             if message.kind == Kind::Binary {
-                panel = panel.child(div().debug_selector(|| "websocket-binary-warning".into()).text_color(theme.colors.text.secondary).child(
-                    "Configured binary messages can be stored, but Probe cannot send them yet.",
-                ));
+                panel = panel.child(
+                    div()
+                        .debug_selector(|| "websocket-binary-warning".into())
+                        .p(px(theme.metrics.spacing_3))
+                        .rounded(px(theme.metrics.radius_small))
+                        .bg(theme.colors.surfaces.window)
+                        .text_color(theme.colors.text.secondary)
+                        .child("Configured binary messages can be stored, but Probe cannot send them yet."),
+                );
             }
             let view = cx.weak_entity();
             let kind = message.kind;
@@ -150,8 +156,8 @@ mod tests {
         assert_eq!(
             metadata(true),
             vec![
-                ("Text", 1, 4),
-                ("JSON", 2, 4),
+                ("JSON", 1, 4),
+                ("Text", 2, 4),
                 ("XML", 3, 4),
                 ("Binary", 4, 4)
             ]
@@ -160,8 +166,8 @@ mod tests {
             metadata(false),
             vec![
                 ("None", 1, 5),
-                ("Text", 2, 5),
-                ("JSON", 3, 5),
+                ("JSON", 2, 5),
+                ("Text", 3, 5),
                 ("XML", 4, 5),
                 ("Binary", 5, 5)
             ]

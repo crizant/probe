@@ -80,7 +80,7 @@ pub(crate) use buttons::{
 };
 use icons::{CHECK_SVG, CHEVRON_RIGHT_SVG, SEARCH_SVG, folder_open_icon, library_icon};
 pub(crate) use icons::{
-    RequestIcon, add_menu_button, add_menu_button_with_id, chevron_icon, close_icon,
+    RequestIcon, add_menu_button, add_menu_button_with_id, chevron_icon, clear_icon, close_icon,
     collection_icon, download_icon, home_button, hover_fill, locate_icon, lock_icon,
     menu_folder_icon, plus_icon, request_icon, save_icon, sidebar_toggle, trash_icon,
     tree_disclosure_icon, tree_folder_icon, tree_icon_slot,
