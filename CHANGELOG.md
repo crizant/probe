@@ -19,6 +19,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- WebSocket `Cmd + Enter` follows keyboard focus: connect from the request area,
+  or send from the message composer. Disconnected composers preserve the draft
+  and prompt you to connect first rather than opening a connection.
+
 - Variable tooltips show unavailable-environment guidance as plain text without a text cursor.
 
 - Request editor brackets and quotes now auto-pair only in JSON mode.

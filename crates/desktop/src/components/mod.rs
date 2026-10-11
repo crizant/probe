@@ -76,7 +76,8 @@ pub(crate) use surfaces::{
 
 pub(crate) use buttons::{
     ActionTooltip, DialogActionStyle, DropdownButton, IconButtonHint, dialog_action_button,
-    dialog_choice_button, primary_button, secondary_button, secondary_menu_trigger, text_button,
+    dialog_choice_button, primary_button, primary_button_with_disabled, secondary_button,
+    secondary_menu_trigger, text_button,
 };
 use icons::{CHECK_SVG, CHEVRON_RIGHT_SVG, SEARCH_SVG, folder_open_icon, library_icon};
 pub(crate) use icons::{

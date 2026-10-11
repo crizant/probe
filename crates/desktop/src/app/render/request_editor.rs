@@ -318,7 +318,33 @@ impl ProbeApp {
                                                 .text_color(theme.colors.text.inverse)
                                         })
                                     })
-                                    .disabled(state == crate::websocket::ConnectionState::Closing),
+                                    .disabled(state == crate::websocket::ConnectionState::Closing)
+                                    .when(
+                                        matches!(
+                                            state,
+                                            crate::websocket::ConnectionState::Closed
+                                                | crate::websocket::ConnectionState::Failed
+                                        ),
+                                        |button| {
+                                            button.tooltip(move |window, cx| {
+                                                let shortcut = components::shortcut_label_for_action_in_context(
+                                                    window,
+                                                    &SendRequest,
+                                                    "Input",
+                                                );
+                                                let label = shortcut.map_or_else(
+                                                    || "Connect".to_owned(),
+                                                    |shortcut| format!("Connect ({})", shortcut.replace('⏎', "↵")),
+                                                );
+                                                cx.new(|_| components::ActionTooltip {
+                                                    id: "websocket-connect-tooltip",
+                                                    theme,
+                                                    label,
+                                                })
+                                                .into()
+                                            })
+                                        },
+                                    ),
                                 )
                             })
                             .when(!websocket, |bar| {
