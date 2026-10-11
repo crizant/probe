@@ -4,14 +4,25 @@ use probe_core::{
     RequestBody, RequestSettings, WorkspaceItemRef,
 };
 use probe_opencollection::create_bundled_workspace_from_collection;
-use std::{fs, path::PathBuf, time::SystemTime};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+    time::SystemTime,
+};
 
 fn temporary_path(name: &str) -> PathBuf {
+    // Parallel tests can observe the same wall-clock timestamp.
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("probe-yaak-{}-{nanos}-{name}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "probe-yaak-{}-{nanos}-{id}-{name}",
+        std::process::id()
+    ))
 }
 
 #[test]
