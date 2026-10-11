@@ -304,6 +304,20 @@ impl ProbeApp {
                                             });
                                         },
                                     )
+                                    .ml(px(theme.metrics.spacing_1))
+                                    .flex_none()
+                                    .w(px(components::COMPACT_SPLIT_ACTION_BUTTON_WIDTH
+                                        + theme.metrics.control_height
+                                        + 1.0))
+                                    .px(px(theme.metrics.spacing_2))
+                                    .styles(move |styles| {
+                                        styles.disabled(move |button| {
+                                            button
+                                                .bg(theme.colors.actions.accent)
+                                                .border_color(theme.colors.actions.accent)
+                                                .text_color(theme.colors.text.inverse)
+                                        })
+                                    })
                                     .disabled(state == crate::websocket::ConnectionState::Closing),
                                 )
                             })

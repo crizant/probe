@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- Polished the desktop WebSocket editor and session panel with clearer status,
+  quieter utility actions, compact message rows, and an auto-hiding timeline scrollbar.
+
 ### Fixed
 
 - Request editor brackets and quotes now auto-pair only in JSON mode.

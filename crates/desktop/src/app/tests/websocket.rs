@@ -233,6 +233,11 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
     {
         let mut visual = VisualTestContext::from_window(window.into(), cx);
         let composer = visual.debug_bounds("websocket-composer-input").unwrap();
+        let send = visual.debug_bounds("websocket-send").unwrap();
+        assert!(
+            composer.size.height > send.size.height,
+            "the multiline composer must not collapse to a single-line control"
+        );
         visual.simulate_click(composer.center(), Modifiers::default());
         visual.simulate_input("{{literal}}");
         visual.simulate_keystrokes("enter");
@@ -278,6 +283,49 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
     window
         .update(cx, |view, _, cx| {
             assert!(view.websocket.sessions[&key].draft.is_empty());
+            view.websocket.sessions.get_mut(&key).unwrap().draft = "Keep this draft".into();
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("websocket-connection-status").is_some());
+        let clear = visual.debug_bounds("websocket-clear").unwrap();
+        visual.simulate_click(clear.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("websocket-copy-1").is_none());
+    }
+    window
+        .update(cx, |view, _, cx| {
+            let session = &view.websocket.sessions[&key];
+            assert!(session.timeline.is_empty());
+            assert_eq!(session.draft, "Keep this draft");
+            assert_eq!(session.state, ConnectionState::Connected);
+            assert_eq!((session.sent, session.received), (2, 2));
+            view.websocket_control(key, cx);
+        })
+        .unwrap();
+    wait(cx, |cx| {
+        window
+            .update(cx, |view, _, _| {
+                view.websocket.sessions[&key].state == ConnectionState::Closed
+            })
+            .unwrap()
+    });
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let composer = visual.debug_bounds("websocket-composer-input").unwrap();
+        visual.simulate_click(composer.center(), Modifiers::default());
+        visual.simulate_input("blocked edit");
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(
+                view.websocket.sessions[&key].draft, "Keep this draft",
+                "the disconnected composer preserves the draft and rejects typing"
+            );
             view.close_tab_now(key, cx);
             assert!(!view.websocket.sessions.contains_key(&key));
         })

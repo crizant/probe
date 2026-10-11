@@ -103,6 +103,7 @@ pub(in crate::components) struct ProbeEditor {
     pub(in crate::components) decorations: Vec<TextDecoration>,
     pub(in crate::components) language: SharedString,
     pub(in crate::components) readonly: bool,
+    pub(in crate::components) disabled_appearance: bool,
     pub(in crate::components) min_height: Option<f32>,
     pub(in crate::components) padding: EditorInsets,
     pub(in crate::components) soft_wrap: bool,
@@ -126,6 +127,13 @@ impl RenderOnce for ProbeEditor {
             |_, _| TextContextMenuState::default(),
         );
         let placeholder = self.placeholder.clone();
+        let mut paint_style = editor_paint_style(self.theme);
+        if self.disabled_appearance {
+            paint_style.foreground = self.theme.colors.actions.disabled_foreground.into();
+            paint_style.muted_foreground = self.theme.colors.actions.disabled_foreground.into();
+            paint_style.background = self.theme.colors.actions.disabled.into();
+            paint_style.border = self.theme.colors.borders.subtle.into();
+        }
         let on_change = self.on_change.clone();
         let soft_wrap = self.soft_wrap;
         let language = self.language.clone();
@@ -148,7 +156,7 @@ impl RenderOnce for ProbeEditor {
                     .soft_wrap(soft_wrap)
                     .language(language.clone());
                 editor.set_highlighter_factory(crate::syntax::factory(), cx);
-                editor.set_editor_style(editor_paint_style(self.theme));
+                editor.set_editor_style(paint_style.clone());
                 editor
             });
             state.update(cx, |editor, cx| {
@@ -192,8 +200,11 @@ impl RenderOnce for ProbeEditor {
                 field.last_value = self.value.clone();
             }
             field.state.update(cx, |editor, cx| {
-                editor.set_editor_style(editor_paint_style(self.theme));
+                editor.set_editor_style(paint_style.clone());
                 editor.set_editor_paddings(self.padding.edges());
+                if editor.presentation().placeholder() != &placeholder {
+                    editor.set_placeholder(placeholder.clone(), window, cx);
+                }
                 editor.set_readonly(self.readonly, cx);
                 if soft_wrap_changed {
                     editor.set_soft_wrap(self.soft_wrap, window, cx);
@@ -287,11 +298,21 @@ impl RenderOnce for ProbeEditor {
             .rounded(px(theme.metrics.radius_small))
             .font_family(theme.typography.monospace_family)
             .text_size(px(theme.typography.body_size))
-            .text_color(self.text_color)
-            .bg(theme.colors.surfaces.raised)
+            .text_color(if self.disabled_appearance {
+                theme.colors.actions.disabled_foreground
+            } else {
+                self.text_color
+            })
+            .bg(if self.disabled_appearance {
+                theme.colors.actions.disabled
+            } else {
+                theme.colors.surfaces.raised
+            })
             .border_1()
             .border_color(if focused {
                 theme.colors.borders.focused
+            } else if self.disabled_appearance {
+                theme.colors.borders.subtle
             } else {
                 theme.colors.borders.standard
             })

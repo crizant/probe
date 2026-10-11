@@ -17,6 +17,7 @@ pub(super) static SEARCH_SVG: LazyLock<Vec<u8>> =
 static SAVE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuSave));
 static DOWNLOAD_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuDownload));
 static CLOSE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuX));
+static CLEAR_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuEraser));
 static TRASH_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuTrash2));
 static LOCATE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLocateFixed));
 static SIDEBAR_COLLAPSE_SVG: LazyLock<Vec<u8>> =
@@ -458,4 +459,9 @@ pub(super) fn folder_open_icon(color: gpui::Rgba) -> gpui::Div {
 
 pub(crate) fn trash_icon(color: gpui::Rgba) -> gpui::Div {
     library_icon("lucide-trash-2", &TRASH_SVG, 14.0).text_color(color)
+}
+
+pub(crate) fn clear_icon(theme: Theme) -> gpui::Div {
+    library_icon("lucide-eraser", &CLEAR_SVG, theme.metrics.icon_standard)
+        .text_color(theme.colors.text.secondary)
 }
