@@ -7,6 +7,7 @@ mod request_editor;
 mod request_tabs;
 mod response;
 mod sidebar;
+mod websocket;
 
 const ADD_MENU_MARKER_WIDTH: f32 = 24.0;
 

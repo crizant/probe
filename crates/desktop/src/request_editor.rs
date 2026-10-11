@@ -18,6 +18,7 @@ pub(crate) enum EditorSection {
     GraphqlVariables,
     GraphqlOperationName,
     GraphqlExtensions,
+    WebSocketMessage,
 }
 
 impl EditorSection {
@@ -42,7 +43,12 @@ impl EditorSection {
         Self::Docs,
     ];
 
-    pub(crate) const ALL_WEBSOCKET: [Self; 3] = [Self::Headers, Self::Authentication, Self::Docs];
+    pub(crate) const ALL_WEBSOCKET: [Self; 4] = [
+        Self::WebSocketMessage,
+        Self::Headers,
+        Self::Authentication,
+        Self::Docs,
+    ];
 
     pub(crate) const fn label(self) -> &'static str {
         match self {
@@ -56,6 +62,7 @@ impl EditorSection {
             Self::GraphqlVariables => "Variables",
             Self::GraphqlOperationName => "Operation name",
             Self::GraphqlExtensions => "Extensions",
+            Self::WebSocketMessage => "Message",
         }
     }
 
@@ -226,7 +233,7 @@ impl RequestEditorState {
             match protocol {
                 probe_core::RequestProtocol::Graphql => EditorSection::GraphqlQuery,
                 probe_core::RequestProtocol::Http => EditorSection::Body,
-                probe_core::RequestProtocol::WebSocket => EditorSection::Headers,
+                probe_core::RequestProtocol::WebSocket => EditorSection::WebSocketMessage,
             },
         );
     }
@@ -362,6 +369,44 @@ pub(crate) fn body_kind(request: &Request) -> &'static str {
         Some(RequestBody::Single(Body::Multipart(_))) => "Multipart",
         Some(RequestBody::Single(Body::File(_))) => "File",
         Some(RequestBody::Variants(_)) => "Variants",
+    }
+}
+
+pub(crate) fn set_websocket_message(
+    request: &mut Request,
+    kind: Option<probe_core::WebSocketMessageKind>,
+    data: Option<String>,
+) {
+    use probe_core::{WebSocketMessage, WebSocketMessageSet};
+    let RequestKind::WebSocket { message } = &mut request.kind else {
+        return;
+    };
+    match message {
+        Some(WebSocketMessageSet::Variants(variants)) => {
+            if variants.iter().filter(|v| v.selected).count() != 1 {
+                return;
+            }
+            let Some(kind) = kind else {
+                return;
+            };
+            let selected = variants.iter_mut().find(|v| v.selected).unwrap();
+            selected.message.kind = kind;
+            if let Some(data) = data {
+                selected.message.data = data;
+            }
+        }
+        other => {
+            let previous = match other {
+                Some(WebSocketMessageSet::Single(m)) => m.data.clone(),
+                _ => String::new(),
+            };
+            *other = kind.map(|kind| {
+                WebSocketMessageSet::Single(WebSocketMessage {
+                    kind,
+                    data: data.unwrap_or(previous),
+                })
+            });
+        }
     }
 }
 
@@ -667,7 +712,7 @@ mod tests {
         ] {
             editor.set_section(key, section);
             editor.ensure_available_section(key, probe_core::RequestProtocol::WebSocket);
-            assert_eq!(editor.section(key), EditorSection::Headers);
+            assert_eq!(editor.section(key), EditorSection::WebSocketMessage);
         }
         editor.set_section(key, EditorSection::Authentication);
         editor.ensure_available_section(key, probe_core::RequestProtocol::WebSocket);
@@ -714,6 +759,112 @@ mod tests {
         assert_eq!(editor.section(second), EditorSection::Headers);
         editor.remove(second);
         assert_eq!(editor.section(second), EditorSection::Path);
+    }
+
+    #[test]
+    fn websocket_message_edits_preserve_variants_and_invalid_selection() {
+        use probe_core::{
+            RequestKind, WebSocketMessage, WebSocketMessageKind as Kind, WebSocketMessageSet,
+            WebSocketMessageVariant,
+        };
+        let mut request = Request {
+            kind: RequestKind::WebSocket { message: None },
+            ..Default::default()
+        };
+        for kind in [Kind::Text, Kind::Json, Kind::Xml, Kind::Binary] {
+            super::set_websocket_message(&mut request, Some(kind), Some("{{token}}".into()));
+            assert_eq!(
+                request.selected_websocket_message().unwrap().unwrap().kind,
+                kind
+            );
+            assert_eq!(
+                request.selected_websocket_message().unwrap().unwrap().data,
+                "{{token}}"
+            );
+        }
+        super::set_websocket_message(&mut request, Some(Kind::Text), None);
+        assert_eq!(
+            request.selected_websocket_message().unwrap().unwrap().data,
+            "{{token}}",
+            "changing message type preserves configured content"
+        );
+        super::set_websocket_message(&mut request, None, None);
+        assert!(request.websocket_message().is_none());
+        request.kind = RequestKind::WebSocket {
+            message: Some(WebSocketMessageSet::Variants(vec![
+                WebSocketMessageVariant {
+                    title: "First".into(),
+                    selected: false,
+                    message: WebSocketMessage {
+                        kind: Kind::Text,
+                        data: "untouched".into(),
+                    },
+                },
+                WebSocketMessageVariant {
+                    title: "Selected".into(),
+                    selected: true,
+                    message: WebSocketMessage {
+                        kind: Kind::Xml,
+                        data: "<ping/>".into(),
+                    },
+                },
+            ])),
+        };
+        let saved = request.clone();
+        super::set_websocket_message(&mut request, Some(Kind::Json), Some("{}".into()));
+        let patch = probe_core::RequestUpdate::between(Some(&saved), &request).unwrap();
+        let mut persisted = saved.clone();
+        patch.apply(&mut persisted).unwrap();
+        assert_eq!(persisted, request);
+        super::set_websocket_message(&mut request, None, None);
+        assert_eq!(request, persisted, "None cannot delete a variant set");
+        let RequestKind::WebSocket {
+            message: Some(WebSocketMessageSet::Variants(variants)),
+        } = &mut request.kind
+        else {
+            panic!();
+        };
+        variants[0].selected = true;
+        let invalid = request.clone();
+        super::set_websocket_message(&mut request, Some(Kind::Text), Some("destructive".into()));
+        assert_eq!(request, invalid);
+        assert!(request.selected_websocket_message().is_err());
+    }
+
+    #[test]
+    fn websocket_message_dirty_patch_round_trips_native_yaml() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/opencollection/websocket.yml");
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("collection.yml");
+        std::fs::copy(fixture, &path).unwrap();
+        let mut loaded = probe_opencollection::load_workspace(&path).unwrap();
+        let selector = loaded.requests()[1].selector().to_owned();
+        let key = loaded.requests()[1].key();
+        let saved = loaded.workspace().request(key).unwrap().clone();
+        let mut edited = saved.clone();
+        super::set_websocket_message(
+            &mut edited,
+            Some(probe_core::WebSocketMessageKind::Json),
+            Some("{\"changed\":true}".into()),
+        );
+        let patch = probe_core::RequestUpdate::between(Some(&saved), &edited).unwrap();
+        assert!(!patch.is_empty());
+        loaded.update_request(&selector, &patch).unwrap();
+        let reloaded = probe_opencollection::load_workspace(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .workspace()
+                .request(reloaded.request_key(&selector).unwrap())
+                .unwrap(),
+            &edited
+        );
+        let yaml = std::fs::read_to_string(path).unwrap();
+        assert!(yaml.contains("title: Greeting"));
+        assert!(yaml.contains("title: Payload"));
+        assert!(yaml.contains("title: Future"));
+        assert!(yaml.contains("type: cbor"));
+        assert!(yaml.contains("x-vendor: retained"));
     }
 
     fn request_key() -> probe_core::RequestKey {

@@ -253,7 +253,7 @@ non-string `data` is reported as an `unsupported_body_type` diagnostic, left out
 model, and kept unchanged in the YAML. Settings add the WebSocket `keepAliveInterval`;
 `timeout` is the connection timeout. WebSocket requests load, edit, and save natively,
 and execute through the application streaming boundary. Preparing one for the HTTP
-engine is rejected. CLI WebSocket execution uses the Session boundary; desktop integration is pending.
+engine is rejected. CLI and desktop WebSocket execution use the Session boundary.
 
 
 ## Desktop Runtime
@@ -555,7 +555,24 @@ outbound/inbound text and binary payloads and close reasons use the existing
 errors contain only stable safe categories, and execution/session Debug omits raw
 network material. No execution request getter is added.
 
-Desktop visual session adaptation remains pending.
+The desktop ExecutionService resolves snapshots of in-memory requests and the
+selected environment using its existing Tokio runtime and observing native secret
+provider. It owns/drains the application Session into a bounded 16-event bridge;
+GPUI receives only safe application events and command handles. JSON formatting
+and binary base64 encoding run on that worker, not the GPUI thread. A separate
+per-request session state owns generations, literal composer drafts, lifecycle
+metadata, and a virtualized timeline capped at 1,000 entries and 8 MiB of retained
+payload representations. Eviction adds a presentation-only notice. Copy uses the
+original safe text, not its pretty-printed representation.
+
+Tab switches leave sessions running. Closing a tab or replacing/closing a workspace
+releases its state, requests close, and cancels the owning adapter task. Window close
+and quit release all sessions. Filesystem reconciliation remaps surviving sessions
+by request identity without reconnecting; removed sessions are closed. Async events
+and composer results target generations, so remapping preserves ownership and stale
+completions cannot affect a replacement session. Explicit Disconnect retains the
+session consumer until Closed; cancelling Connecting drops the pending connect
+future without producing a network error. HTTP ResponseState remains separate.
 SSE and streaming gRPC may reuse these narrow session concepts where suitable;
 neither protocol is implemented. Application/transport APIs contain no terminal,
 JSONL, GPUI, or desktop entity types.

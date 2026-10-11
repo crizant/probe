@@ -15,7 +15,7 @@ pub(crate) use core::editor_paint_style;
 pub(super) use core::{ProbeEditor, editor_value_needs_refresh};
 pub(crate) use response::{
     BodySyntax, body_text_input, documentation_text_input, response_body_input,
-    response_headers_input, response_inspector_input,
+    response_headers_input, response_inspector_input, websocket_composer,
 };
 #[cfg(not(test))]
 use search::body_text_highlights;

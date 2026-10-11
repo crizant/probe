@@ -2397,7 +2397,7 @@ items:
             assert!(request.path_parameters.is_empty());
             assert_eq!(
                 view.request_editor.section(key),
-                crate::request_editor::EditorSection::Headers
+                crate::request_editor::EditorSection::WebSocketMessage
             );
         })
         .unwrap();

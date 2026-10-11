@@ -7,6 +7,9 @@ impl ProbeApp {
         window_height: f32,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if self.active_request().is_some_and(|r| r.kind.is_websocket()) {
+            return self.render_websocket_panel(theme, window_height, cx);
+        }
         let active_key = self.shell.active_tab();
         let state = active_key.and_then(|key| self.execution.response(key));
         let shows_response_tabs = matches!(state, Some(ResponseState::Complete { .. }))

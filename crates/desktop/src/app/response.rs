@@ -75,6 +75,7 @@ impl ProbeApp {
             return;
         };
         if request.kind.is_websocket() {
+            self.connect_websocket(key, cx);
             return;
         }
         let input = ExecutionInput {

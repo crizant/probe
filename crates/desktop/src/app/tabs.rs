@@ -225,6 +225,7 @@ impl ProbeApp {
             return;
         };
         self.request_editor.remove(key);
+        self.websocket.remove(key);
         self.response_viewer.remove_selection(key);
         if self.detached_requests.remove(&key) {
             if let Some(loaded) = self.loaded_workspace.as_mut() {
@@ -378,6 +379,7 @@ impl ProbeApp {
             self.pump_workspace_writes(window, cx);
             return false;
         }
+        self.websocket.clear();
         true
     }
 
@@ -447,6 +449,7 @@ impl ProbeApp {
                 *request = saved;
             }
             self.execution.remove(*key);
+            self.websocket.remove(*key);
             self.response_viewer.remove(*key);
         }
     }
@@ -748,8 +751,14 @@ impl ProbeApp {
             PendingClose::Tab(key) => self.close_tab_now(key, cx),
             PendingClose::OtherTabs { keep } => self.close_other_tabs_now(keep, cx),
             PendingClose::Workspace => self.close_workspace_now(cx),
-            PendingClose::Window => window.remove_window(),
-            PendingClose::Quit => cx.quit(),
+            PendingClose::Window => {
+                self.websocket.clear();
+                window.remove_window();
+            }
+            PendingClose::Quit => {
+                self.websocket.clear();
+                cx.quit();
+            }
             PendingClose::Open {
                 path,
                 restored_state,

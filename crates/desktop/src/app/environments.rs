@@ -4,6 +4,7 @@ impl ProbeApp {
     pub(super) fn close_workspace_now(&mut self, cx: &mut Context<Self>) {
         self.capture_session();
         self.execution.clear();
+        self.websocket.clear();
         self.response_viewer.clear();
         self.pending_environment_saves.clear();
         self.environment_save_workspace_path = None;
