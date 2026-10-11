@@ -334,7 +334,7 @@ fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gp
             .child(entry.display.clone());
     };
     let rendered = DisconnectLine::from_close(*origin, *code, reason).text();
-    let mut message = div()
+    let message = div()
         .w_full()
         .flex()
         .flex_wrap()
