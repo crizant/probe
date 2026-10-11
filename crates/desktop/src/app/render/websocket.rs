@@ -184,6 +184,9 @@ impl ProbeApp {
                                             .items_center()
                                             .gap(px(theme.metrics.spacing_1))
                                             .font_weight(FontWeight::SEMIBOLD)
+                                            .when(severity.is_some(), |row| {
+                                                row.text_color(theme.colors.text.primary)
+                                            })
                                             .when_some(direction, |label, (arrow, color)| {
                                                 label.child(div().text_color(color).child(arrow))
                                             })

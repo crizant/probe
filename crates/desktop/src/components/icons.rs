@@ -363,7 +363,7 @@ pub(crate) fn disconnect_severity_mark(theme: Theme, severity: DisconnectSeverit
         DisconnectSeverity::Success => ("disconnect-severity-success", &CHECK_SVG),
         DisconnectSeverity::Temporary => ("disconnect-severity-temporary", &SEVERITY_DIAMOND_SVG),
         DisconnectSeverity::ClientError => ("disconnect-severity-client", &SEVERITY_TRIANGLE_SVG),
-        DisconnectSeverity::ServerError => ("disconnect-severity-server", &SEVERITY_OCTAGON_SVG),
+        DisconnectSeverity::Failure => ("disconnect-severity-failure", &SEVERITY_OCTAGON_SVG),
         DisconnectSeverity::Neutral => ("disconnect-severity-neutral", &SEVERITY_MINUS_SVG),
     };
     library_icon(name, svg, theme.metrics.icon_small)

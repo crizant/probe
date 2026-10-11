@@ -50,20 +50,21 @@ pub(crate) enum Update {
 
 /// How a WebSocket close should read in the timeline.
 ///
-/// Error closes are server failures. Local closes are user-initiated and stay
-/// neutral. Remote closes follow the close code. Informational is unused.
+/// `CloseOrigin::Error` and abnormal or internal close codes are failures.
+/// Local closes are user-initiated and stay neutral. Other remote closes follow
+/// the close code. Informational is unused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DisconnectSeverity {
     Success,
     Temporary,
     ClientError,
-    ServerError,
+    Failure,
     Neutral,
 }
 
 pub(crate) fn disconnect_severity(origin: CloseOrigin, code: Option<u16>) -> DisconnectSeverity {
     match origin {
-        CloseOrigin::Error => DisconnectSeverity::ServerError,
+        CloseOrigin::Error => DisconnectSeverity::Failure,
         CloseOrigin::Local => DisconnectSeverity::Neutral,
         CloseOrigin::Remote => match code {
             Some(1000) => DisconnectSeverity::Success,
@@ -71,7 +72,7 @@ pub(crate) fn disconnect_severity(origin: CloseOrigin, code: Option<u16>) -> Dis
             Some(1002 | 1003 | 1007 | 1008 | 1009 | 1010 | 3000 | 3003) => {
                 DisconnectSeverity::ClientError
             }
-            Some(1006 | 1011 | 1014 | 1015) => DisconnectSeverity::ServerError,
+            Some(1006 | 1011 | 1014 | 1015) => DisconnectSeverity::Failure,
             _ => DisconnectSeverity::Neutral,
         },
     }
@@ -83,7 +84,7 @@ pub(crate) fn disconnect_severity_color(theme: Theme, severity: DisconnectSeveri
         DisconnectSeverity::Success => theme.colors.responses.success,
         DisconnectSeverity::Temporary => theme.colors.responses.redirect,
         DisconnectSeverity::ClientError => theme.colors.responses.client_error,
-        DisconnectSeverity::ServerError => theme.colors.responses.server_error,
+        DisconnectSeverity::Failure => theme.colors.responses.server_error,
         DisconnectSeverity::Neutral => theme.colors.text.muted,
     }
 }
@@ -615,20 +616,20 @@ mod tests {
 
     #[test]
     fn disconnect_severity_classifies_code_and_origin() {
-        use DisconnectSeverity::{ClientError, Neutral, ServerError, Success, Temporary};
+        use DisconnectSeverity::{ClientError, Failure, Neutral, Success, Temporary};
         for (origin, code, severity) in [
             (CloseOrigin::Remote, Some(1000), Success),
             (CloseOrigin::Remote, Some(1012), Temporary),
             (CloseOrigin::Remote, Some(3008), Temporary),
             (CloseOrigin::Remote, Some(1002), ClientError),
             (CloseOrigin::Remote, Some(3000), ClientError),
-            (CloseOrigin::Remote, Some(1006), ServerError),
-            (CloseOrigin::Remote, Some(1011), ServerError),
+            (CloseOrigin::Remote, Some(1006), Failure),
+            (CloseOrigin::Remote, Some(1011), Failure),
             (CloseOrigin::Remote, Some(1005), Neutral),
             (CloseOrigin::Remote, Some(4000), Neutral),
             (CloseOrigin::Remote, None, Neutral),
             (CloseOrigin::Local, Some(1000), Neutral),
-            (CloseOrigin::Error, Some(1000), ServerError),
+            (CloseOrigin::Error, Some(1000), Failure),
         ] {
             assert_eq!(
                 disconnect_severity(origin, code),
