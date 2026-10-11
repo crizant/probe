@@ -26,10 +26,8 @@ than OpenCollection content. The design contract lives in
 
 ### Streaming Protocols
 
-Native WebSocket execution and messaging are available in the CLI and desktop
-through the [streaming session boundary](docs/ARCHITECTURE.md#streaming-sessions-and-websocket-transport).
-Message variant management, configured binary encoding, and persisted session
-history remain outside the current scope.
+WebSocket message variant management, configured binary encoding and runtime binary
+sending, and persisted session history remain deferred.
 SSE and streaming gRPC remain future work and may reuse the common session concepts
 where they fit. Protocol implementations stay independent of stdin/stdout and GPUI.
 

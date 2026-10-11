@@ -1,5 +1,25 @@
 use super::*;
 use probe_core::{WebSocketMessageKind as Kind, WebSocketMessageSet};
+fn message_tab_choices(
+    variants: bool,
+) -> impl Iterator<Item = (&'static str, Option<Kind>, usize, usize)> {
+    let choices = [
+        ("None", None),
+        ("Text", Some(Kind::Text)),
+        ("JSON", Some(Kind::Json)),
+        ("XML", Some(Kind::Xml)),
+        ("Binary", Some(Kind::Binary)),
+    ]
+    .into_iter()
+    .filter(|(_, kind)| !variants || kind.is_some())
+    .collect::<Vec<_>>();
+    let size = choices.len();
+    choices
+        .into_iter()
+        .enumerate()
+        .map(move |(index, (label, kind))| (label, kind, index + 1, size))
+}
+
 impl ProbeApp {
     pub(in crate::app) fn render_websocket_message_editor(
         &self,
@@ -30,28 +50,18 @@ impl ProbeApp {
                     .child(format!("Selected message: {}", variant.title)),
             );
         }
-        let choices = [
-            ("None", None),
-            ("Text", Some(Kind::Text)),
-            ("JSON", Some(Kind::Json)),
-            ("XML", Some(Kind::Xml)),
-            ("Binary", Some(Kind::Binary)),
-        ];
         let mut tabs = div().flex().gap(px(theme.metrics.spacing_1));
-        for (index, (label, kind)) in choices.into_iter().enumerate() {
-            if variants && kind.is_none() {
-                continue;
-            }
+        for (label, kind, position, size) in message_tab_choices(variants) {
             let view = cx.weak_entity();
             let active = selected.map(|m| m.kind) == kind;
             tabs = tabs.child(
                 components::editor_subtab(
                     theme,
-                    ("websocket-message-kind", index),
+                    ("websocket-message-kind", position - 1),
                     label,
                     active,
-                    index + 1,
-                    choices.len(),
+                    position,
+                    size,
                     move |_, _, cx| {
                         let _ = view.update(cx, |view, cx| {
                             view.edit_request(
@@ -123,5 +133,38 @@ impl ProbeApp {
             );
         }
         panel.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::message_tab_choices;
+
+    #[test]
+    fn message_tab_aria_metadata_uses_only_visible_choices() {
+        let metadata = |variants| {
+            message_tab_choices(variants)
+                .map(|(label, _, position, size)| (label, position, size))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            metadata(true),
+            vec![
+                ("Text", 1, 4),
+                ("JSON", 2, 4),
+                ("XML", 3, 4),
+                ("Binary", 4, 4)
+            ]
+        );
+        assert_eq!(
+            metadata(false),
+            vec![
+                ("None", 1, 5),
+                ("Text", 2, 5),
+                ("JSON", 3, 5),
+                ("XML", 4, 5),
+                ("Binary", 5, 5)
+            ]
+        );
     }
 }
