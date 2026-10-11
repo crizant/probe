@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::{SendRequest, SendWebSocketMessage};
 use crate::websocket::ConnectionState;
-use probe_application::{SessionData, SessionEvent};
+use probe_application::{SessionData, SessionEvent, WebSocketInputFormat};
 
 #[gpui::test]
 fn websocket_shortcut_routes_by_focus_context(cx: &mut TestAppContext) {
@@ -262,6 +262,10 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
                 view.websocket.sessions[&key].state,
                 ConnectionState::Connected
             );
+            assert_eq!(
+                view.websocket.sessions[&key].input_format,
+                WebSocketInputFormat::Text
+            );
             view.websocket.sessions.get_mut(&key).unwrap().draft =
                 "{{token}}\n{\"ok\":true}".into();
             view.send_websocket_message(key, cx);
@@ -333,9 +337,113 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
             );
         }
     }
+    // Select Binary through the composer, then exercise validation and the shared shortcut.
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let selector = visual
+            .debug_bounds("websocket-message-type-trigger")
+            .unwrap();
+        visual.simulate_click(selector.center(), Modifiers::default());
+        visual.run_until_parked();
+        visual.simulate_keystrokes("down enter");
+        visual.run_until_parked();
+    }
     window
         .update(cx, |view, _, cx| {
-            assert!(view.websocket.sessions[&key].draft.is_empty());
+            let state = view.websocket.sessions.get_mut(&key).unwrap();
+            assert_eq!(state.input_format, WebSocketInputFormat::Binary);
+            state.draft = "invalid!".into();
+            view.send_websocket_message(key, cx);
+            let state = &view.websocket.sessions[&key];
+            assert_eq!(state.draft, "invalid!");
+            assert!(!state.sending);
+            assert_eq!(state.sent, 2);
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Error,
+                "standard Base64"
+            ));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let state = view.websocket.sessions.get_mut(&key).unwrap();
+            assert_eq!(
+                state.draft, "invalid!",
+                "validation must preserve the draft"
+            );
+            assert_eq!(state.sent, 2, "invalid Base64 must not send");
+            assert_eq!(state.received, 2);
+            state.draft = "AAEC".into();
+            // Dismiss the validation toast before further pointer interactions.
+            view.clear_toasts();
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let composer = visual.debug_bounds("websocket-composer-input").unwrap();
+        visual.simulate_click(composer.center(), Modifiers::default());
+        visual.simulate_keystrokes(send_shortcut());
+    }
+    wait(cx, |cx| {
+        window
+            .update(cx, |view, _, _| {
+                let state = &view.websocket.sessions[&key];
+                state.received == 3 && !state.sending
+            })
+            .unwrap()
+    });
+    window
+        .update(cx, |view, _, _| {
+            let state = &view.websocket.sessions[&key];
+            assert!(
+                state.draft.is_empty(),
+                "successful binary send clears the draft"
+            );
+            assert_eq!(state.sent, 3);
+            assert_eq!(
+                state.timeline[5].event,
+                SessionEvent::Sent(SessionData::Binary(vec![0, 1, 2]))
+            );
+            assert_eq!(
+                state.timeline[6].event,
+                SessionEvent::Received(SessionData::Binary(vec![0, 1, 2]))
+            );
+            for entry in [&state.timeline[5], &state.timeline[6]] {
+                assert_eq!(entry.original.as_deref(), Some("AAEC"));
+                assert_eq!(entry.display, "Binary · 3 B\nAAEC");
+            }
+        })
+        .unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.websocket.sessions.get_mut(&key).unwrap().draft = "/w==".into();
+            view.send_websocket_message(key, cx);
+            view.websocket.sessions.get_mut(&key).unwrap().draft = "Edited during send".into();
+        })
+        .unwrap();
+    wait(cx, |cx| {
+        window
+            .update(cx, |view, _, _| {
+                let state = &view.websocket.sessions[&key];
+                state.received == 4 && !state.sending
+            })
+            .unwrap()
+    });
+    window
+        .update(cx, |view, _, cx| {
+            let state = &view.websocket.sessions[&key];
+            assert_eq!(
+                state.draft, "Edited during send",
+                "a send must preserve newer edits"
+            );
+            assert_eq!(
+                state.timeline[7].event,
+                SessionEvent::Sent(SessionData::Binary(vec![255]))
+            );
             view.websocket.sessions.get_mut(&key).unwrap().draft = "Keep this draft".into();
             cx.notify();
         })
@@ -355,7 +463,7 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
             assert!(session.timeline.is_empty());
             assert_eq!(session.draft, "Keep this draft");
             assert_eq!(session.state, ConnectionState::Connected);
-            assert_eq!((session.sent, session.received), (2, 2));
+            assert_eq!((session.sent, session.received), (4, 4));
             view.websocket_control(key, cx);
         })
         .unwrap();
@@ -381,7 +489,7 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
                 "the disconnected composer preserves the draft and rejects typing"
             );
             assert_eq!(view.websocket.sessions[&key].state, ConnectionState::Closed);
-            assert_eq!(view.websocket.sessions[&key].sent, 2);
+            assert_eq!(view.websocket.sessions[&key].sent, 4);
             assert!(
                 view.toasts
                     .iter()

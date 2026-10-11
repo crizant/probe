@@ -118,13 +118,21 @@ Native WebSocket requests execute through the same `request run` command:
 ```bash
 probe request run collection.yml path/to/socket
 probe request run collection.yml path/to/socket --send "one" --send "two" --max-messages 1 --timeout 10 --json
+probe request run collection.yml path/to/socket --send "hello" --send-binary "AAEC" --send "world"
+printf 'AAEC\nAQID\n' | probe request run collection.yml path/to/socket --stdin-format binary
 ```
 
 Human mode is an interactive streaming session. `Connected: <url>` reports opening,
 `> text` reports an actual outbound Sent event, `< text` reports an inbound Received
 event, and `Closed: remote` (or local/error) includes safe code/reason metadata when
-present. Output flushes as events arrive. Stdin lines send literal text, including
-empty lines; line terminators are removed. Input and inbound events run concurrently.
+present. Output flushes as events arrive. Stdin defaults to text: each line sends
+one literal text message, including empty lines; line terminators are removed.
+`--stdin-format text` explicitly selects this behavior. With `--stdin-format binary`,
+each line is standard Base64 decoded into one binary message; an empty line sends
+an empty binary message. Invalid Base64 reports `stdin_error` (exit 6), stops input,
+and closes/drains the session using the same handling as a stdin read error. No
+slash commands or persistent interactive input modes are interpreted. Input and
+inbound events run concurrently.
 EOF stops input without closing the connection, including after a workspace supplied
 with path `-` consumes stdin. Ctrl-C requests normal local close and drains terminal
 events; a clean single Ctrl-C disconnect exits 0, as does clean remote close. This
@@ -133,16 +141,22 @@ is different from HTTP/GraphQL Ctrl-C, which cancels execution with `request_can
 returns `request_cancelled` (exit 6); Ctrl-C before connection also cancels with exit 6.
 `--quiet` suppresses successful events but still reports errors.
 
-Repeatable `--send <text>` queues additional literal text after opening, following
-the configured initial message. These values do not undergo variable interpolation.
+Repeatable `--send <text>` queues literal text after opening, following the configured
+initial message. Repeatable `--send-binary <BASE64>` decodes standard Base64 into
+binary bytes. Text and binary arguments send in their command-line order: the example
+above sends text `hello`, bytes `00 01 02`, then text `world`. Invalid `--send-binary`
+input is an `invalid_arguments` error (exit 2) before connecting or sending anything.
+These values do not undergo variable interpolation. Use the standard Base64 alphabet
+(`+` and `/`), with `=` padding when required; whitespace and URL-safe Base64 are
+rejected. Stdin uses the same decoding contract in binary format.
 `--max-messages <n>` counts only inbound Received data messages, then requests normal
 close and drains events. `--timeout <seconds>` bounds the CLI live run, including
 connection time, and closes/drains an established session before returning
 `request_timeout` (exit 6). Both numbers must be positive integers. This CLI bound
 is separate from persisted WebSocket `settings.timeout`, the connection/handshake
 limit. Shutdown itself is bounded by the application session close handshake.
-`--send`, `--max-messages`, and `--timeout` require live WebSocket execution and are
-rejected for HTTP/GraphQL or `--dry-run`. `--expect`, `--output`, and `--show-headers`
+`--send`, `--send-binary`, `--stdin-format`, `--max-messages`, and `--timeout` require
+live WebSocket execution and are rejected for HTTP/GraphQL or `--dry-run`. `--expect`, `--output`, and `--show-headers`
 are HTTP/GraphQL response options and are rejected for live WebSocket execution.
 
 Live WebSocket `--json` emits NDJSON: one compact versioned object per SessionEvent,
@@ -166,11 +180,16 @@ use `request_configuration` (exit 5), connection/close/keep-alive timeouts use
 `request_timeout` (exit 6), and other session failures use `network_execution` (exit 6).
 HTTP/GraphQL JSON and all `--dry-run --json` output remain single JSON documents.
 
-Configured text/JSON/XML messages execute as text frames. Configured binary
-OpenCollection messages are still not executable because their string data has no
-unambiguous encoding contract. Received binary frames are supported and rendered as
-`< [binary/base64] AAEC` in human output or explicit base64 data in NDJSON. Binary
-sending syntax, reconnect, and manual ping/pong commands are not available.
+Configured text/JSON/XML messages execute as text frames. The official OpenCollection
+[WebSocket message schema](https://github.com/opencollection-dev/opencollection/blob/535a5c5803da7a3fe1d575fff23350b4a7c43c6a/packages/oc-schema/src/opencollection.schema.json)
+and [types](https://github.com/opencollection-dev/opencollection/blob/535a5c5803da7a3fe1d575fff23350b4a7c43c6a/packages/oc-types/src/requests/websocket.ts)
+define `binary` message data as a string without an encoding contract. Configured
+binary messages therefore remain unsupported (`UnsupportedBinaryMessage`); Probe
+does not assume that persisted data is Base64. Explicit runtime binary input through
+the CLI and desktop is supported independently. Sent and received binary frames use
+the existing Base64 representation: `> [binary/base64] AAEC` or
+`< [binary/base64] AAEC` in human output and explicit Base64 data in NDJSON.
+Reconnect and manual ping/pong commands are not available.
 
 WebSocket dry runs show `WebSocket <url>` with safe secret placeholders. `request get`
 shows the selected WebSocket message (JSON field `websocketMessage` with type/data),

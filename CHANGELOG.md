@@ -6,6 +6,15 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Send runtime WebSocket binary messages with repeatable `--send-binary <BASE64>`
+  arguments, interleaved in order with text `--send`, or one Base64 message per stdin
+  line with `--stdin-format binary` (stdin defaults to text).
+- Choose Text or Binary in the desktop WebSocket composer. Binary input uses standard
+  Base64; invalid input shows an error and preserves the draft. Successful sends use
+  the existing binary timeline with Base64 and byte count.
+
 ### Changed
 
 - Desktop WebSocket disconnect lines show a registered close code with its

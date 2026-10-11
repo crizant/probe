@@ -2,7 +2,7 @@ use super::*;
 use crate::websocket::{
     ConnectionState, DisconnectLine, disconnect_severity, disconnect_severity_color,
 };
-use probe_application::SessionEvent;
+use probe_application::{SessionEvent, WebSocketInputFormat};
 impl ProbeApp {
     pub(in crate::app) fn render_websocket_panel(
         &self,
@@ -26,6 +26,7 @@ impl ProbeApp {
         let clear = cx.weak_entity();
         let draft_view = cx.weak_entity();
         let send = cx.weak_entity();
+        let message_type = cx.weak_entity();
         let mut panel = div()
             .flex_none()
             .flex()
@@ -269,6 +270,29 @@ impl ProbeApp {
                 .border_t_1()
                 .border_color(theme.colors.borders.subtle)
                 .p(px(theme.metrics.spacing_2))
+                .child(
+                    components::dropdown(
+                        theme,
+                        "websocket-message-type",
+                        "WebSocket message type",
+                        Some(state.map(|s| s.input_format).unwrap_or_default()),
+                        vec![
+                            (WebSocketInputFormat::Text, "Text".into()),
+                            (WebSocketInputFormat::Binary, "Binary".into()),
+                        ],
+                        100.0,
+                        move |value, _, cx| {
+                            let format = value.copied().unwrap_or_default();
+                            let _ = message_type.update(cx, |view, cx| {
+                                if let Some(state) = view.websocket.sessions.get_mut(&key) {
+                                    state.input_format = format;
+                                }
+                                cx.notify();
+                            });
+                        },
+                    )
+                    .disabled(!connected || state.is_some_and(|s| s.sending)),
+                )
                 .child(
                     div()
                         .flex_1()

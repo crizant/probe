@@ -1,7 +1,8 @@
 //! Desktop-only, bounded presentation state. Transport ownership stays in Session.
 use gpui::{ListAlignment, ListState, Rgba, px};
 use probe_application::{
-    CloseOrigin, SessionData, SessionError, SessionEvent, SessionSender, close_code_name,
+    CloseOrigin, SessionData, SessionError, SessionEvent, SessionSender, WebSocketInputFormat,
+    close_code_name,
 };
 use probe_core::RequestKey;
 use std::{
@@ -218,6 +219,7 @@ pub(crate) struct SessionState {
     pub(crate) close: Option<(CloseOrigin, Option<u16>, String)>,
     pub(crate) error: Option<SessionError>,
     pub(crate) draft: String,
+    pub(crate) input_format: WebSocketInputFormat,
     pub(crate) sending: bool,
     pub(crate) list: ListState,
 }
@@ -338,6 +340,7 @@ impl WebSocketState {
                 close: None,
                 error: None,
                 draft: String::new(),
+                input_format: WebSocketInputFormat::Text,
                 sending: false,
                 list: ListState::new(0, ListAlignment::Bottom, px(300.0)),
             },
@@ -557,9 +560,15 @@ mod tests {
             entry.event,
             SessionEvent::Received(SessionData::Text(original.into()))
         );
-        let entry = TimelineEntry::new(SessionEvent::Received(SessionData::Binary(vec![0, 1, 2])));
-        assert_eq!(entry.original.as_deref(), Some("AAEC"));
-        assert!(entry.display.starts_with("Binary · 3 B"));
+        for event in [
+            SessionEvent::Sent(SessionData::Binary(vec![0, 1, 2])),
+            SessionEvent::Received(SessionData::Binary(vec![0, 1, 2])),
+        ] {
+            let entry = TimelineEntry::new(event.clone());
+            assert_eq!(entry.event, event);
+            assert_eq!(entry.original.as_deref(), Some("AAEC"));
+            assert_eq!(entry.display, "Binary · 3 B\nAAEC");
+        }
     }
 
     #[test]

@@ -148,6 +148,8 @@ pub const fn help() -> &'static str {
         "      --extends <name>       Parent environment for environment create\n",
         "      --output <file>        Write an HTTP/GraphQL response body to a file\n",
         "      --send <text>          Send literal WebSocket text; may be repeated\n",
+        "      --send-binary <BASE64> Decode standard Base64 and send binary; repeatable\n",
+        "      --stdin-format <text|binary>  WebSocket stdin lines: text (default) or Base64 -> binary\n",
         "      --max-messages <n>     Close after n inbound WebSocket messages\n",
         "      --timeout <seconds>    Bound a live WebSocket run (positive integer)\n",
         "      --show-headers         Include HTTP/GraphQL response headers in human output\n",
@@ -229,7 +231,7 @@ const REQUEST_HELP: &str = concat!(
     "  list <path|->                 List requests and repository selectors\n",
     "  get <path|-> <selector> [--environment <name>] [--strict-variables]  Inspect one request\n",
     "  variables <path|-> <selector> [--environment <name>]  Discover referenced variables\n",
-    "  run <path|-> <selector> [--environment <name>] [--strict-variables] [--var <NAME=VALUE>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--expect <expr>]... [--send <text>]... [--max-messages <n>] [--timeout <seconds>]\n",
+    "  run <path|-> <selector> [--environment <name>] [--strict-variables] [--var <NAME=VALUE>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--expect <expr>]... [--send <text>]... [--send-binary <BASE64>]... [--stdin-format <text|binary>] [--max-messages <n>] [--timeout <seconds>]\n",
     "  set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
     "  unset <path> <selector> [--description] [--docs]  Remove description and/or docs from the file\n",
     "  create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
@@ -245,6 +247,8 @@ const REQUEST_HELP: &str = concat!(
     "      --dry-run            Resolve the request without opening a connection.\n",
     "      --expect <expr>      HTTP/GraphQL only: assert status=<code> or status=<code|code>.\n",
     "      --send <text>        WebSocket only: send literal text; repeatable.\n",
+    "      --send-binary <BASE64>  WebSocket only: standard Base64 -> binary; repeatable, in argument order.\n",
+    "      --stdin-format <text|binary>  WebSocket stdin: text (default) or each Base64 line -> binary.\n",
     "      --max-messages <n>   WebSocket only: close after n inbound messages.\n",
     "      --timeout <seconds>  WebSocket only: CLI live-run bound, not connection timeout.\n",
     "\n",
@@ -440,7 +444,7 @@ fn contains_help(args: &[String]) -> bool {
             literal = false;
             continue;
         }
-        if argument == "--send" {
+        if matches!(argument.as_str(), "--send" | "--send-binary") {
             literal = true;
         } else if matches!(argument.as_str(), "-h" | "--help") {
             return true;
@@ -457,7 +461,7 @@ fn remove_flags(args: &mut Vec<String>, flags: &[&str]) -> usize {
             literal = false;
             return true;
         }
-        if argument == "--send" {
+        if matches!(argument.as_str(), "--send" | "--send-binary") {
             literal = true;
             return true;
         }
@@ -543,6 +547,7 @@ fn execute(
             secret_provider_env,
             expectations,
             sends,
+            stdin_format,
             timeout,
             max_messages,
         } => request::run(
@@ -559,6 +564,7 @@ fn execute(
                 expectations: &expectations,
                 mode: live.mode,
                 sends: &sends,
+                stdin_format,
                 timeout,
                 max_messages,
             },

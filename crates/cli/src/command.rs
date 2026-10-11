@@ -1,5 +1,6 @@
 use std::{iter::Peekable, path::PathBuf, vec::IntoIter};
 
+use probe_application::{SessionData, WebSocketInputFormat};
 use probe_core::{
     CollectionUpdate, Documentation, FieldPatch, FolderUpdate, GraphqlUpdate, ItemKind,
     RequestProtocol, RequestUpdate, StatusExpectation,
@@ -100,7 +101,8 @@ pub(crate) enum Command {
         show_headers: bool,
         secret_provider_env: bool,
         expectations: Vec<StatusExpectation>,
-        sends: Vec<String>,
+        sends: Vec<SessionData>,
+        stdin_format: Option<WebSocketInputFormat>,
         timeout: Option<u64>,
         max_messages: Option<u64>,
     },
@@ -351,7 +353,8 @@ struct RunOptions {
     show_headers: bool,
     secret_provider_env: bool,
     expectations: Vec<StatusExpectation>,
-    sends: Vec<String>,
+    sends: Vec<SessionData>,
+    stdin_format: Option<WebSocketInputFormat>,
     timeout: Option<u64>,
     max_messages: Option<u64>,
 }
@@ -368,6 +371,7 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         secret_provider_env: false,
         expectations: Vec::new(),
         sends: Vec::new(),
+        stdin_format: None,
         timeout: None,
         max_messages: None,
     };
@@ -391,11 +395,34 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
                 options.secret_provider_env = true;
             }
             "--expect" => options.expectations.push(parser.expectation()?),
-            "--send" => options.sends.push(
+            "--send" => options.sends.push(SessionData::Text(
                 parser
                     .bump()
                     .ok_or_else(|| CliError::invalid_arguments("--send requires text"))?,
-            ),
+            )),
+            "--send-binary" => {
+                let value = parser.bump().ok_or_else(|| {
+                    CliError::invalid_arguments("--send-binary requires standard Base64")
+                })?;
+                let data = WebSocketInputFormat::Binary.decode(&value).map_err(|_| {
+                    CliError::invalid_arguments("--send-binary requires valid standard Base64")
+                })?;
+                options.sends.push(data);
+            }
+            "--stdin-format" => {
+                if options.stdin_format.is_some() {
+                    return Err(duplicate_option("--stdin-format"));
+                }
+                options.stdin_format = Some(match parser.value("--stdin-format")?.as_str() {
+                    "text" => WebSocketInputFormat::Text,
+                    "binary" => WebSocketInputFormat::Binary,
+                    _ => {
+                        return Err(CliError::invalid_arguments(
+                            "--stdin-format accepts text or binary",
+                        ));
+                    }
+                });
+            }
             "--timeout" => {
                 options.timeout = Some(positive_option(&mut parser, options.timeout, "--timeout")?)
             }
@@ -421,11 +448,12 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
     }
     if options.dry_run
         && (!options.sends.is_empty()
+            || options.stdin_format.is_some()
             || options.timeout.is_some()
             || options.max_messages.is_some())
     {
         return Err(CliError::invalid_arguments(
-            "--send, --timeout and --max-messages require a live WebSocket session",
+            "--send, --send-binary, --stdin-format, --timeout and --max-messages require a live WebSocket session",
         ));
     }
     let (path, selector) = two_paths(&positionals)?;
@@ -441,6 +469,7 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         secret_provider_env: options.secret_provider_env,
         expectations: options.expectations,
         sends: options.sends,
+        stdin_format: options.stdin_format,
         timeout: options.timeout,
         max_messages: options.max_messages,
     })
@@ -1367,6 +1396,8 @@ fn is_known_option(argument: &str) -> bool {
             | "--dry-run"
             | "--expect"
             | "--send"
+            | "--send-binary"
+            | "--stdin-format"
             | "--timeout"
             | "--max-messages"
             | "--summary"

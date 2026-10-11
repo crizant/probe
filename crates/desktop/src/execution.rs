@@ -439,18 +439,14 @@ impl ExecutionService {
     pub(crate) fn send_websocket(
         &self,
         sender: probe_application::SessionSender,
-        text: String,
+        data: probe_application::SessionData,
     ) -> oneshot::Receiver<Result<(), probe_application::SessionError>> {
         let (tx, rx) = oneshot::channel();
         self.runtime
             .as_ref()
             .expect("execution runtime is active")
             .spawn(async move {
-                let _ = tx.send(
-                    sender
-                        .send(probe_application::SessionData::Text(text))
-                        .await,
-                );
+                let _ = tx.send(sender.send(data).await);
             });
         rx
     }
@@ -1541,7 +1537,7 @@ mod tests {
                 assert!(matches!(&observed[0], SessionEvent::Opened { url } if url.contains("{{token}}")));
                 assert!(matches!(&observed[1], SessionEvent::Sent(SessionData::Text(text)) if !text.contains(secret)));
                 assert!(matches!(&observed[2], SessionEvent::Received(SessionData::Text(text)) if text == "[REDACTED]"));
-                service.send_websocket(sender.clone(), "{{token}}".into()).await.unwrap().unwrap();
+                service.send_websocket(sender.clone(), SessionData::Text("{{token}}".into())).await.unwrap().unwrap();
                 let Some(Update::Event(sent)) = events.recv().await else { panic!(); };
                 assert_eq!(sent.event, SessionEvent::Sent(SessionData::Text("{{token}}".into())));
                 let Some(Update::Event(binary)) = events.recv().await else { panic!(); };
