@@ -339,23 +339,18 @@ fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gp
     let rendered = DisconnectLine::from_close(*origin, *code, reason).text();
     let message = div()
         .w_full()
-        .flex()
-        .flex_wrap()
-        .items_center()
         .font_family(theme.typography.monospace_family)
         .text_color(theme.colors.text.primary);
     let Some(status) = rendered.status else {
         return message.child(rendered.text);
     };
-    message
-        .child(rendered.text[..status.start].to_owned())
-        .child(
-            div()
-                .text_color(disconnect_severity_color(
-                    theme,
-                    disconnect_severity(*origin, *code),
-                ))
-                .child(rendered.text[status.start..status.end].to_owned()),
-        )
-        .child(rendered.text[status.end..].to_owned())
+    let color: gpui::Hsla =
+        disconnect_severity_color(theme, disconnect_severity(*origin, *code)).into();
+    message.child(gpui::StyledText::new(rendered.text).with_highlights([(
+        status,
+        gpui::HighlightStyle {
+            color: Some(color),
+            ..Default::default()
+        },
+    )]))
 }
