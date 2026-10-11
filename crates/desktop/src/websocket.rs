@@ -84,11 +84,17 @@ impl TimelineEntry {
                         CloseOrigin::Remote => "remote",
                         CloseOrigin::Error => "error",
                     },
-                    code.map(|c| format!(" · {c}")).unwrap_or_default(),
-                    match (*code).and_then(close_code_name) {
-                        Some(name) => format!(" · {name}"),
-                        None if reason.is_empty() => String::new(),
-                        None => format!(" · {reason}"),
+                    (*code)
+                        .and_then(|code| {
+                            close_code_name(code).map(|name| format!(" · {code} {name}"))
+                        })
+                        .unwrap_or_else(|| {
+                            code.map(|code| format!(" · {code}")).unwrap_or_default()
+                        }),
+                    if reason.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {reason}")
                     }
                 ),
                 None,
@@ -496,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn close_timeline_uses_standard_names_and_falls_back_to_the_peer_reason() {
+    fn close_timeline_keeps_standard_names_and_peer_reasons() {
         fn display(origin: CloseOrigin, code: Option<u16>, reason: &str) -> String {
             TimelineEntry::new(SessionEvent::Closed {
                 origin,
@@ -524,13 +530,13 @@ mod tests {
         ] {
             assert_eq!(
                 display(CloseOrigin::Remote, Some(code), "restarting"),
-                format!("Disconnected · remote · {code} · {name}")
+                format!("Disconnected · remote · {code} {name} · restarting")
+            );
+            assert_eq!(
+                display(CloseOrigin::Local, Some(code), ""),
+                format!("Disconnected · local · {code} {name}")
             );
         }
-        assert_eq!(
-            display(CloseOrigin::Remote, Some(1000), ""),
-            "Disconnected · remote · 1000 · Normal Closure"
-        );
         assert_eq!(
             display(CloseOrigin::Local, Some(4000), "custom"),
             "Disconnected · local · 4000 · custom"
