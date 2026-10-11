@@ -124,7 +124,7 @@ impl DisconnectLine {
 
     /// The disconnect sentence and the byte range of its close-code segment.
     pub(crate) fn text(&self) -> (String, Option<std::ops::Range<usize>>) {
-        let mut text = format!("Disconnected · {}", self.origin);
+        let mut text = self.origin.to_owned();
         let status = self.status.as_ref().map(|status| {
             text.push_str(" · ");
             let start = text.len();
@@ -568,36 +568,27 @@ mod tests {
         }
         assert_eq!(
             display(CloseOrigin::Remote, Some(1012), "restarting"),
-            "Disconnected · remote · 1012 Service Restart · restarting"
+            "remote · 1012 Service Restart · restarting"
         );
         assert_eq!(
             display(CloseOrigin::Local, Some(1000), ""),
-            "Disconnected · local · 1000 Normal Closure"
+            "local · 1000 Normal Closure"
         );
         assert_eq!(
             display(CloseOrigin::Local, Some(4000), "custom"),
-            "Disconnected · local · 4000 · custom"
+            "local · 4000 · custom"
         );
         assert_eq!(
             display(CloseOrigin::Remote, Some(1004), ""),
-            "Disconnected · remote · 1004"
+            "remote · 1004"
         );
-        assert_eq!(
-            display(CloseOrigin::Error, None, "reset"),
-            "Disconnected · error · reset"
-        );
+        assert_eq!(display(CloseOrigin::Error, None, "reset"), "error · reset");
         assert_eq!(
             display(CloseOrigin::Remote, Some(1012), " \t "),
-            "Disconnected · remote · 1012 Service Restart"
+            "remote · 1012 Service Restart"
         );
-        assert_eq!(
-            display(CloseOrigin::Local, Some(4000), " "),
-            "Disconnected · local · 4000"
-        );
-        assert_eq!(
-            display(CloseOrigin::Local, None, ""),
-            "Disconnected · local"
-        );
+        assert_eq!(display(CloseOrigin::Local, Some(4000), " "), "local · 4000");
+        assert_eq!(display(CloseOrigin::Local, None, ""), "local");
     }
 
     #[test]
@@ -606,12 +597,12 @@ mod tests {
             DisconnectLine::from_close(CloseOrigin::Remote, Some(1012), "restarting").text();
         let status = status.expect("named close has a status segment");
         assert_eq!(&text[status.start..status.end], "1012 Service Restart");
-        assert_eq!(&text[..status.start], "Disconnected · remote · ");
+        assert_eq!(&text[..status.start], "remote · ");
         assert_eq!(&text[status.end..], " · restarting");
 
         let (text, status) = DisconnectLine::from_close(CloseOrigin::Error, None, "reset").text();
         assert!(status.is_none());
-        assert_eq!(text, "Disconnected · error · reset");
+        assert_eq!(text, "error · reset");
     }
 
     #[test]
