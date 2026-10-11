@@ -20,6 +20,25 @@ the MSRV; using it does not raise the minimum compiler required to build Probe f
 source. Keep both versions explicit rather than selecting floating `stable`, and
 keep GPUI and dependency upgrades separate from toolchain changes.
 
+## Linux Build Dependencies
+
+Install these Debian or Ubuntu packages before the first desktop or GPUI
+build. A missing library such as fontconfig fails the compile.
+
+```bash
+sudo apt-get update
+sudo apt-get install --no-install-recommends \
+  clang \
+  libasound2-dev \
+  libfontconfig-dev \
+  libglib2.0-dev \
+  libssl-dev \
+  libvulkan1 \
+  libwayland-dev \
+  libx11-xcb-dev \
+  libxkbcommon-x11-dev
+```
+
 ## macOS Packaging Tools
 
 Native app icon packaging requires full Xcode 26 or later (`actool` and
@@ -167,6 +186,14 @@ For small local diffs in a quiet checkout with an already-warm `target/`, use:
 ```bash
 scripts/run-mutants.sh --in-place target/mutants.diff
 ```
+
+Those are the wrapper's only invocations. It always runs
+`cargo mutants --workspace --in-diff <diff-file>` with its jobserver arguments
+and `-- --test-threads <n>`, and it exits if given anything else. `-p probe-desktop`
+and `--test-package` are rejected, so the script cannot limit mutant generation
+to selected crates. cargo-mutants 27.1.0 tests the baseline only in packages
+that produced mutants, and each mutant with `cargo test --package` for its own
+package.
 
 This keeps baseline verification, mutant selection, and the same compiler and
 test-thread budgets. It enables incremental compilation by default while honoring

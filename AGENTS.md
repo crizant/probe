@@ -64,12 +64,22 @@ and regressions; never mirror the implementation or add assertions merely to rai
 coverage. Preserve unrelated worktree changes and never use unsafe merely to bypass
 ownership problems.
 
-Before completing a code change, run the
-[completion checks](docs/DEVELOPMENT.md#completion-checks). For changes to Rust
-production behavior, also run the
-[coverage, CRAP, and mutation review](docs/DEVELOPMENT.md#final-quality-checks).
-Stop once the requested work and applicable checks pass, without unrelated cleanup.
-Do not report completion while a required check fails.
+## Verification
+
+Before the first build, install the
+[Linux system packages](docs/DEVELOPMENT.md#linux-build-dependencies)
+(fontconfig and the other desktop libraries) so compilation does not fail and
+restart. While iterating, check crates you changed with `cargo clippy -p <crate>
+--all-targets --all-features -- -D warnings` and `cargo test -p <crate>
+--all-targets --all-features`. Run the full
+[completion checks](docs/DEVELOPMENT.md#completion-checks) once before pushing.
+`scripts/run-mutants.sh` accepts only `[--in-place] <diff-file>` and rejects
+`-p` (including `-p probe-desktop`); see
+[final quality checks](docs/DEVELOPMENT.md#final-quality-checks). Each mutant
+is already tested with only its own package. Run coverage and CRAP from that
+section when production changes touch a crate those gates cover. Stop once the
+requested work and applicable checks pass, without unrelated cleanup. Do not
+report completion while a required check fails.
 
 ## Scope
 
