@@ -258,6 +258,23 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
             .update(cx, |view, _, _| view.websocket.sessions[&key].received == 2)
             .unwrap()
     });
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        for (selector, payload) in [
+            ("websocket-copy-1", "{{token}}\n{\"ok\":true}"),
+            ("websocket-copy-3", "{{literal}}\nsecond line"),
+        ] {
+            let copy = visual
+                .debug_bounds(selector)
+                .expect("each payload row has its own Copy button");
+            visual.simulate_click(copy.center(), Modifiers::default());
+            visual.run_until_parked();
+            assert_eq!(
+                visual.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+                Some(payload.to_owned())
+            );
+        }
+    }
     window
         .update(cx, |view, _, cx| {
             assert!(view.websocket.sessions[&key].draft.is_empty());

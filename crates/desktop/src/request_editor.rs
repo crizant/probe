@@ -835,16 +835,8 @@ mod tests {
     fn websocket_message_dirty_patch_round_trips_native_yaml() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/opencollection/websocket.yml");
-        let directory = std::env::temp_dir().join(format!(
-            "probe-ws-editor-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("collection.yml");
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("collection.yml");
         std::fs::copy(fixture, &path).unwrap();
         let mut loaded = probe_opencollection::load_workspace(&path).unwrap();
         let selector = loaded.requests()[1].selector().to_owned();
@@ -873,7 +865,6 @@ mod tests {
         assert!(yaml.contains("title: Future"));
         assert!(yaml.contains("type: cbor"));
         assert!(yaml.contains("x-vendor: retained"));
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     fn request_key() -> probe_core::RequestKey {

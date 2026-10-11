@@ -106,7 +106,7 @@ impl ProbeApp {
                         if let Some(original) = entry.original.clone() {
                             header = header.child(components::primary_button(
                                 theme,
-                                "websocket-copy",
+                                ("websocket-copy", index),
                                 "Copy",
                                 move |_, _, cx| {
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(

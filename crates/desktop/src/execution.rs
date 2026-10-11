@@ -1582,8 +1582,14 @@ mod tests {
                 let (_cancel, cancellation) = oneshot::channel();
                 let input = native_input(Request { url: Some(url), kind: probe_core::RequestKind::WebSocket { message: None }, ..Default::default() }, workspace);
                 let (mut events, _) = service.connect_websocket(input, cancellation);
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                while events.len() < BRIDGE_CAPACITY {
+                    assert!(tokio::time::Instant::now() < deadline, "desktop bridge did not fill before the deadline");
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
                 assert_eq!(events.len(), BRIDGE_CAPACITY, "a stalled desktop bridge is bounded");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                assert_eq!(events.len(), BRIDGE_CAPACITY, "a stalled desktop bridge stays bounded after settling");
                 let mut received = 0;
                 let mut closed = false;
                 while let Some(update) = events.recv().await {

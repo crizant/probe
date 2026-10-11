@@ -65,6 +65,80 @@ fn idle_app_does_not_notify_for_caret_blink(cx: &mut TestAppContext) {
     assert_eq!(notifications.get(), 0);
 }
 
+#[gpui::test]
+fn websocket_elapsed_refresh_is_once_per_second_and_http_keeps_fast_cadence(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/opencollection/websocket.yml");
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let websocket_key = loaded.requests()[0].key();
+    let http_key = loaded.requests()[2].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, loaded);
+            view.select_request(websocket_key, cx);
+            let (cancel, _) = oneshot::channel();
+            let generation = view.websocket.begin(websocket_key, cancel);
+            view.websocket.apply(
+                generation,
+                crate::websocket::Update::Event(crate::websocket::TimelineEntry::new(
+                    probe_application::SessionEvent::Opened {
+                        url: "ws://127.0.0.1".into(),
+                    },
+                )),
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = notifications.clone();
+    let _subscription = window
+        .update(cx, |_, _, cx| {
+            cx.observe(&cx.entity(), move |_, _, _| {
+                observed.set(observed.get() + 1)
+            })
+        })
+        .unwrap();
+    for _ in 0..19 {
+        cx.executor()
+            .advance_clock(super::RESPONSE_ELAPSED_REFRESH_INTERVAL);
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        notifications.get(),
+        0,
+        "idle WebSocket must not trigger HTTP-rate rendering"
+    );
+    cx.executor()
+        .advance_clock(super::RESPONSE_ELAPSED_REFRESH_INTERVAL);
+    cx.run_until_parked();
+    assert_eq!(notifications.get(), 1);
+
+    window
+        .update(cx, |view, _, cx| {
+            view.select_request(http_key, cx);
+            let (cancel, _) = oneshot::channel();
+            view.execution.begin(http_key, cancel);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    notifications.set(0);
+    for _ in 0..3 {
+        cx.executor()
+            .advance_clock(super::RESPONSE_ELAPSED_REFRESH_INTERVAL);
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        notifications.get(),
+        3,
+        "active HTTP keeps its 50 ms refresh cadence"
+    );
+}
+
 #[test]
 fn projection_warning_identifies_unsupported_value_and_containing_item() {
     let workspace = probe_opencollection::load_workspace_from_str(include_str!(

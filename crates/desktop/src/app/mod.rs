@@ -488,7 +488,8 @@ impl ProbeApp {
 
     fn spawn_response_elapsed_refresh(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
-            loop {
+            // Twenty HTTP refresh ticks give WebSocket elapsed time a one-second cadence.
+            for tick in (1..=20).cycle() {
                 cx.background_executor()
                     .timer(RESPONSE_ELAPSED_REFRESH_INTERVAL)
                     .await;
@@ -499,13 +500,14 @@ impl ProbeApp {
                             .active_tab()
                             .and_then(|key| view.execution.response(key))
                             .is_some_and(ResponseState::is_running)
-                            || view
-                                .shell
-                                .active_tab()
-                                .and_then(|key| view.websocket.sessions.get(&key))
-                                .is_some_and(|s| {
-                                    s.state == crate::websocket::ConnectionState::Connected
-                                })
+                            || tick == 20
+                                && view
+                                    .shell
+                                    .active_tab()
+                                    .and_then(|key| view.websocket.sessions.get(&key))
+                                    .is_some_and(|s| {
+                                        s.state == crate::websocket::ConnectionState::Connected
+                                    })
                         {
                             cx.notify();
                         }

@@ -9,7 +9,7 @@ pub(super) fn focus_ring_shadow(ring_color: Hsla, gap_color: Hsla) -> Vec<BoxSha
 
 pub(crate) fn primary_button(
     theme: Theme,
-    id: &'static str,
+    id: impl Into<ElementId>,
     label: impl Into<String>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
@@ -284,7 +284,7 @@ pub(crate) enum DialogActionStyle {
 
 fn action_button(
     theme: Theme,
-    id: &'static str,
+    id: impl Into<ElementId>,
     label: impl Into<String>,
     kind: ActionButtonKind,
     shortcut_hint: Option<String>,
@@ -292,8 +292,10 @@ fn action_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
     let label = label.into();
+    let id = id.into();
+    let debug_id = id.to_string();
     let button = Button::new(id)
-        .debug_selector(|| id.into())
+        .debug_selector(move || debug_id.clone())
         .h(px(theme.metrics.control_height))
         .min_w(px(COMPACT_ACTION_BUTTON_WIDTH))
         .px(px(theme.metrics.spacing_3))
