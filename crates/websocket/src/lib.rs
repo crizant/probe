@@ -554,6 +554,9 @@ pub fn close_code_name(code: u16) -> Option<&'static str> {
         1013 => Some("Try Again Later"),
         1014 => Some("Bad Gateway"),
         1015 => Some("TLS Handshake"),
+        3000 => Some("Unauthorized"),
+        3003 => Some("Forbidden"),
+        3008 => Some("Timeout"),
         _ => None,
     }
 }
@@ -588,10 +591,14 @@ mod close_code_name_tests {
             (1013, "Try Again Later"),
             (1014, "Bad Gateway"),
             (1015, "TLS Handshake"),
+            (3000, "Unauthorized"),
+            (3003, "Forbidden"),
+            (3008, "Timeout"),
         ] {
             assert_eq!(close_code_name(code), Some(name));
         }
         assert_eq!(close_code_name(1004), None);
+        assert_eq!(close_code_name(3001), None);
         assert_eq!(close_code_name(4000), None);
     }
 }
