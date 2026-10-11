@@ -40,14 +40,14 @@ pub(super) fn convert_request(
         ],
         diagnostics,
     );
-    let mut settings = effective_settings(
+    // Collect compatibility diagnostics; Yaak ignores HTTP timeout and redirects for WebSockets.
+    effective_settings(
         workspace,
         &ancestors,
         &request.common,
         resource_type,
         diagnostics,
     );
-    let follow_redirects = settings.follow_redirects.take() == Some(true);
     let mut message_size = workspace
         .setting_request_message_size
         .unwrap_or(64 * 1024 * 1024);
@@ -65,11 +65,6 @@ pub(super) fn convert_request(
             message_size != 64 * 1024 * 1024,
             "settingRequestMessageSize",
             "custom WebSocket message size limits cannot be represented by OpenCollection",
-        ),
-        (
-            follow_redirects,
-            "settingFollowRedirects",
-            "WebSocket redirect settings cannot be represented by OpenCollection",
         ),
     ] {
         if unsupported {
@@ -98,7 +93,6 @@ pub(super) fn convert_request(
         )),
         headers,
         authentication,
-        settings,
         kind: RequestKind::WebSocket {
             message: (!request.message.is_empty()).then(|| {
                 WebSocketMessageSet::Single(WebSocketMessage {

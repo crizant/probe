@@ -622,8 +622,9 @@ fn imports_mixed_websocket_hierarchy_and_round_trips() {
         auth.properties["password"],
         AuthenticationValue::String("{{PASSWORD}}".into())
     );
+    assert_eq!(socket.settings.timeout, None);
     assert_eq!(
-        socket.settings.timeout,
+        http.settings.timeout,
         Some(std::time::Duration::from_millis(2500))
     );
     assert_eq!(socket.settings.follow_redirects, None);
@@ -685,11 +686,6 @@ fn websocket_loss_is_reported_with_field_and_resource_identity() {
         (
             "settingRequestMessageSize",
             serde_json::json!({"enabled":true,"value":1024}),
-            "unsupported_field",
-        ),
-        (
-            "settingFollowRedirects",
-            serde_json::json!({"enabled":true,"value":true}),
             "unsupported_field",
         ),
         (
@@ -886,57 +882,45 @@ fn websocket_message_size_inherits_and_can_restore_default() {
 }
 
 #[test]
-fn websocket_redirect_diagnostics_follow_effective_inheritance() {
-    for (workspace, outer, inner, request, expected) in [
-        (None, None, None, None, true),
-        (Some(true), None, None, None, true),
-        (Some(false), Some((true, true)), None, None, true),
-        (Some(false), Some((false, true)), None, None, false),
-        (Some(true), None, Some((true, false)), None, false),
-        (
-            Some(false),
-            Some((true, true)),
-            Some((false, false)),
-            None,
-            true,
-        ),
-        (Some(true), None, None, Some((true, false)), false),
-        (Some(false), None, None, Some((false, true)), false),
-    ] {
-        let mut document = websocket_export();
-        let resources = &mut document["resources"];
-        resources["workspaces"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("settingFollowRedirects");
-        if let Some(value) = workspace {
-            resources["workspaces"][0]["settingFollowRedirects"] = serde_json::json!(value);
+fn websocket_http_settings_are_noops_in_strict_import() {
+    for workspace in [None, Some(true), Some(false)] {
+        for override_value in [None, Some(true), Some(false)] {
+            let mut document = websocket_export();
+            let resources = &mut document["resources"];
+            resources["workspaces"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("settingFollowRedirects");
+            if let Some(value) = workspace {
+                resources["workspaces"][0]["settingFollowRedirects"] = serde_json::json!(value);
+            }
+            if let Some(value) = override_value {
+                resources["folders"][0]["settingFollowRedirects"] =
+                    serde_json::json!({"enabled":true,"value":value});
+                resources["websocketRequests"][0]["settingFollowRedirects"] =
+                    serde_json::json!({"enabled":true,"value":value});
+                resources["folders"][1]["settingRequestTimeout"] =
+                    serde_json::json!({"enabled":true,"value":1000});
+                resources["websocketRequests"][0]["settingRequestTimeout"] =
+                    serde_json::json!({"enabled":true,"value":500});
+            }
+            let imported = inspect_websocket_export(document)
+                .convert(None, false)
+                .unwrap();
+            assert!(!imported.partial);
+            assert!(imported.diagnostics.is_empty());
+            let CollectionItem::Folder(outer) = &imported.collection.items[1] else {
+                panic!("expected outer folder")
+            };
+            let CollectionItem::Folder(inner) = &outer.items[0] else {
+                panic!("expected inner folder")
+            };
+            let CollectionItem::Request(socket) = &inner.items[0] else {
+                panic!("expected WebSocket")
+            };
+            assert_eq!(socket.settings.timeout, None);
+            assert_eq!(socket.settings.follow_redirects, None);
         }
-        if let Some((enabled, value)) = outer {
-            resources["folders"][0]["settingFollowRedirects"] =
-                serde_json::json!({"enabled":enabled,"value":value});
-        }
-        if let Some((enabled, value)) = inner {
-            resources["folders"][1]["settingFollowRedirects"] =
-                serde_json::json!({"enabled":enabled,"value":value});
-        }
-        if let Some((enabled, value)) = request {
-            resources["websocketRequests"][0]["settingFollowRedirects"] =
-                serde_json::json!({"enabled":enabled,"value":value});
-        }
-        let imported = inspect_websocket_export(document)
-            .convert(None, true)
-            .unwrap();
-        assert_eq!(
-            imported
-                .diagnostics
-                .iter()
-                .any(|d| d.code == "unsupported_field"
-                    && d.resource_type == "websocket_request"
-                    && d.resource_id.as_deref() == Some("ws_nested")
-                    && d.field.as_deref() == Some("settingFollowRedirects")),
-            expected
-        );
     }
 }
 
