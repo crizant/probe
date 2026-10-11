@@ -171,10 +171,16 @@ pub(super) fn editor_search_card_overlay(
                 .border_1()
                 .border_color(theme.colors.borders.standard)
                 .shadow(temporary_surface_shadow(theme, 8.0))
-                .child(input)
                 .child(
                     div()
-                        .w(px(46.0))
+                        .w(px(150.0))
+                        .flex_none()
+                        .mr(px(theme.metrics.spacing_1))
+                        .child(input),
+                )
+                .child(
+                    div()
+                        .flex_none()
                         .text_align(TextAlign::Center)
                         .text_size(px(theme.typography.caption_size))
                         .text_color(theme.colors.text.secondary)
