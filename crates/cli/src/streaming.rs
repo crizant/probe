@@ -182,7 +182,7 @@ fn input_error() -> CliError {
     }
 }
 
-// Output is already unavailable: preserve that error while making cleanup
+// I/O is already unavailable: preserve that error while making cleanup
 // interruptible. A consumed CLI deadline must not be polled a second time.
 async fn finish_output_error(
     error: CliError,
@@ -251,8 +251,14 @@ pub(crate) fn run(
             Ok(input) => input,
             Err(_) => {
                 session.close();
-                session.wait_closed().await;
-                return Err(input_error());
+                return finish_output_error(
+                    input_error(),
+                    session.wait_closed(),
+                    &mut interrupt,
+                    &mut timeout,
+                    false,
+                )
+                .await;
             }
         };
         output.started = true;
@@ -385,11 +391,24 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn output_error_cleanup_is_interruptible_and_preserves_the_original_error() {
-        for finish in ["closed", "interrupt", "timeout", "already_timed_out"] {
+    async fn error_cleanup_is_interruptible_and_preserves_the_original_error() {
+        for (finish, input) in [
+            ("closed", false),
+            ("interrupt", false),
+            ("timeout", false),
+            ("already_timed_out", false),
+            ("interrupt", true),
+            ("timeout", true),
+        ] {
             let started = tokio::time::Instant::now();
+            let original = if input {
+                input_error()
+            } else {
+                CliError::output(io::Error::other("output unavailable"))
+            };
+            let expected_error = (original.category, original.message.clone());
             let error = finish_output_error(
-                CliError::output(io::Error::other("output unavailable")),
+                original,
                 async {
                     if finish != "closed" {
                         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -416,8 +435,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert_eq!(error.category, "output_error");
-            assert_eq!(error.message, "output unavailable");
+            assert_eq!((error.category, error.message), expected_error);
             assert_eq!(error.exit_code, crate::EXECUTION_EXIT_CODE);
             let expected = if finish == "timeout" {
                 Duration::from_secs(1)
