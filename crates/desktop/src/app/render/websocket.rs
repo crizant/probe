@@ -333,7 +333,7 @@ fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gp
             .font_family(theme.typography.monospace_family)
             .child(entry.display.clone());
     };
-    let (text, status) = DisconnectLine::from_close(*origin, *code, reason).text();
+    let rendered = DisconnectLine::from_close(*origin, *code, reason).text();
     let mut message = div()
         .w_full()
         .flex()
@@ -341,20 +341,18 @@ fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gp
         .items_center()
         .font_family(theme.typography.monospace_family)
         .text_color(theme.colors.text.primary);
-    let Some(status) = status else {
-        return message.child(text);
+    let Some(status) = rendered.status else {
+        return message.child(rendered.text);
     };
-    message = message.child(text[..status.start].to_owned()).child(
-        div()
-            .text_color(disconnect_severity_color(
-                theme,
-                disconnect_severity(*origin, *code),
-            ))
-            .child(text[status.start..status.end].to_owned()),
-    );
-    let rest = &text[status.end..];
-    if !rest.is_empty() {
-        message = message.child(rest.to_owned());
-    }
     message
+        .child(rendered.text[..status.start].to_owned())
+        .child(
+            div()
+                .text_color(disconnect_severity_color(
+                    theme,
+                    disconnect_severity(*origin, *code),
+                ))
+                .child(rendered.text[status.start..status.end].to_owned()),
+        )
+        .child(rendered.text[status.end..].to_owned())
 }

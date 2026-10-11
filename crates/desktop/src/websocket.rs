@@ -119,11 +119,11 @@ impl DisconnectLine {
     }
 
     pub(crate) fn display(&self) -> String {
-        self.text().0
+        self.text().text
     }
 
     /// The disconnect sentence and the byte range of its close-code segment.
-    pub(crate) fn text(&self) -> (String, Option<std::ops::Range<usize>>) {
+    pub(crate) fn text(&self) -> DisconnectText {
         let mut text = self.origin.to_owned();
         let status = self.status.as_ref().map(|status| {
             text.push_str(" · ");
@@ -135,8 +135,13 @@ impl DisconnectLine {
             text.push_str(" · ");
             text.push_str(reason);
         }
-        (text, status)
+        DisconnectText { text, status }
     }
+}
+
+pub(crate) struct DisconnectText {
+    pub(crate) text: String,
+    pub(crate) status: Option<std::ops::Range<usize>>,
 }
 
 pub(crate) struct TimelineEntry {
@@ -593,16 +598,19 @@ mod tests {
 
     #[test]
     fn disconnect_line_status_slice_is_only_the_close_code() {
-        let (text, status) =
+        let rendered =
             DisconnectLine::from_close(CloseOrigin::Remote, Some(1012), "restarting").text();
-        let status = status.expect("named close has a status segment");
-        assert_eq!(&text[status.start..status.end], "1012 Service Restart");
-        assert_eq!(&text[..status.start], "remote · ");
-        assert_eq!(&text[status.end..], " · restarting");
+        let status = rendered.status.expect("named close has a status segment");
+        assert_eq!(
+            &rendered.text[status.start..status.end],
+            "1012 Service Restart"
+        );
+        assert_eq!(&rendered.text[..status.start], "remote · ");
+        assert_eq!(&rendered.text[status.end..], " · restarting");
 
-        let (text, status) = DisconnectLine::from_close(CloseOrigin::Error, None, "reset").text();
-        assert!(status.is_none());
-        assert_eq!(text, "error · reset");
+        let rendered = DisconnectLine::from_close(CloseOrigin::Error, None, "reset").text();
+        assert!(rendered.status.is_none());
+        assert_eq!(rendered.text, "error · reset");
     }
 
     #[test]
