@@ -856,12 +856,16 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("cmd-o", OpenWorkspace, None),
         KeyBinding::new("cmd-n", NewCollection, None),
         KeyBinding::new("cmd-s", SaveEditor, None),
-        KeyBinding::new("cmd-enter", SendRequest, None),
-        KeyBinding::new("cmd-enter", SendRequest, Some("Input")),
+        KeyBinding::new("cmd-enter", SendRequest, Some("!WebSocketComposer")),
+        KeyBinding::new(
+            "cmd-enter",
+            SendRequest,
+            Some("Input && !WebSocketComposer"),
+        ),
         KeyBinding::new(
             "cmd-enter",
             SendWebSocketMessage,
-            Some("WebSocketComposer > Input"),
+            Some("(WebSocketComposer > Input) || WebSocketComposer"),
         ),
         KeyBinding::new(
             "cmd-s",
@@ -929,12 +933,16 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("ctrl-o", OpenWorkspace, None),
         KeyBinding::new("ctrl-n", NewCollection, None),
         KeyBinding::new("ctrl-s", SaveEditor, None),
-        KeyBinding::new("ctrl-enter", SendRequest, None),
-        KeyBinding::new("ctrl-enter", SendRequest, Some("Input")),
+        KeyBinding::new("ctrl-enter", SendRequest, Some("!WebSocketComposer")),
+        KeyBinding::new(
+            "ctrl-enter",
+            SendRequest,
+            Some("Input && !WebSocketComposer"),
+        ),
         KeyBinding::new(
             "ctrl-enter",
             SendWebSocketMessage,
-            Some("WebSocketComposer > Input"),
+            Some("(WebSocketComposer > Input) || WebSocketComposer"),
         ),
         KeyBinding::new(
             "ctrl-s",

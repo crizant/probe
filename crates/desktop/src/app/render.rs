@@ -75,6 +75,7 @@ impl Render for ProbeApp {
             .size_full()
             .relative()
             .track_focus(&self.focus_handle)
+            .key_context("Probe")
             .bg(theme.colors.surfaces.window)
             .text_color(theme.colors.text.primary)
             .font_family(theme.typography.interface_family)

@@ -82,10 +82,17 @@ impl ProbeApp {
         cx.notify();
     }
     pub(super) fn send_websocket_message(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let Some(state) = self.websocket.sessions.get_mut(&key) else {
+        if !self
+            .websocket
+            .sessions
+            .get(&key)
+            .is_some_and(|state| state.state == ConnectionState::Connected)
+        {
+            self.show_toast(ToastIntent::Info, "Connect before sending a message.", cx);
             return;
-        };
-        if state.state != ConnectionState::Connected || state.sending {
+        }
+        let state = self.websocket.sessions.get_mut(&key).unwrap();
+        if state.sending {
             return;
         }
         let Some(sender) = state.sender.clone() else {

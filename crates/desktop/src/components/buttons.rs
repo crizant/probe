@@ -51,13 +51,23 @@ pub(crate) fn primary_button(
     label: impl Into<String>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
+    primary_button_with_disabled(theme, id, label, false, on_click)
+}
+
+pub(crate) fn primary_button_with_disabled(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<String>,
+    disabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Button {
     action_button(
         theme,
         id,
         label,
         ActionButtonKind::Primary,
         None,
-        false,
+        disabled,
         on_click,
     )
 }

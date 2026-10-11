@@ -279,11 +279,34 @@ impl ProbeApp {
                         )),
                 )
                 .child(
-                    components::primary_button(theme, "websocket-send", "Send", move |_, _, cx| {
-                        let _ = send.update(cx, |view, cx| view.send_websocket_message(key, cx));
-                    })
+                    components::primary_button_with_disabled(
+                        theme,
+                        "websocket-send",
+                        "Send",
+                        !connected || state.is_some_and(|s| s.sending),
+                        move |_, _, cx| {
+                            let _ =
+                                send.update(cx, |view, cx| view.send_websocket_message(key, cx));
+                        },
+                    )
                     .self_start()
-                    .disabled(!connected || state.is_some_and(|s| s.sending)),
+                    .tooltip(move |window, cx| {
+                        let shortcut = components::shortcut_label_for_action_in_context(
+                            window,
+                            &SendWebSocketMessage,
+                            "WebSocketComposer",
+                        );
+                        let label = shortcut.map_or_else(
+                            || "Send message".to_owned(),
+                            |shortcut| format!("Send message ({})", shortcut.replace('⏎', "↵")),
+                        );
+                        cx.new(|_| components::ActionTooltip {
+                            id: "websocket-send-tooltip",
+                            theme,
+                            label,
+                        })
+                        .into()
+                    }),
                 ),
         )
     }

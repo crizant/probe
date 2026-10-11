@@ -1,6 +1,57 @@
 use super::*;
+use crate::app::{SendRequest, SendWebSocketMessage};
 use crate::websocket::ConnectionState;
 use probe_application::{SessionData, SessionEvent};
+
+#[gpui::test]
+fn websocket_shortcut_routes_by_focus_context(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
+    cx.update(|cx| {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let shortcut = gpui::Keystroke::parse(send_shortcut()).unwrap();
+        for (contexts, composer) in [
+            (vec!["Probe"], false),
+            (vec!["Input"], false),
+            (vec!["WebSocketComposer"], true),
+            (vec!["WebSocketComposer", "Input"], true),
+            (
+                vec!["WebSocketComposer", "Input", "ProbeEditorSearch"],
+                true,
+            ),
+        ] {
+            let contexts: Vec<_> = contexts
+                .into_iter()
+                .map(|context| gpui::KeyContext::parse(context).unwrap())
+                .collect();
+            let (bindings, _) =
+                keymap.bindings_for_input(std::slice::from_ref(&shortcut), &contexts);
+            let action = bindings
+                .first()
+                .unwrap_or_else(|| panic!("send shortcut is bound: {contexts:?}; {shortcut:?}"))
+                .action();
+            if composer {
+                assert!(action.as_any().is::<SendWebSocketMessage>());
+                assert!(
+                    bindings
+                        .iter()
+                        .all(|binding| { !binding.action().as_any().is::<SendRequest>() }),
+                    "composer must never fall through to connect"
+                );
+            } else {
+                assert!(action.as_any().is::<SendRequest>());
+            }
+            for text_key in ["enter", "shift-enter"] {
+                let key = gpui::Keystroke::parse(text_key).unwrap();
+                let (bindings, _) = keymap.bindings_for_input(&[key], &contexts);
+                assert!(bindings.iter().all(|binding| {
+                    !binding.action().as_any().is::<SendRequest>()
+                        && !binding.action().as_any().is::<SendWebSocketMessage>()
+                }));
+            }
+        }
+    });
+}
 
 pub(super) fn wait(cx: &mut TestAppContext, mut ready: impl FnMut(&mut TestAppContext) -> bool) {
     cx.executor().allow_parking();
@@ -183,9 +234,14 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
                 view.request_editor.section(key),
                 EditorSection::WebSocketMessage
             );
-            view.send_request(key, cx);
         })
         .unwrap();
+    cx.run_until_parked();
+    // Outside the composer the shared request action connects, not sends.
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_keystrokes(send_shortcut());
+    }
     wait(cx, |cx| {
         window
             .update(cx, |view, _, _| {
@@ -237,12 +293,14 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
         visual.simulate_input("{{literal}}");
         visual.simulate_keystrokes("enter");
         visual.simulate_input("second line");
+        visual.simulate_keystrokes("shift-enter");
+        visual.simulate_input("third line");
         visual.run_until_parked();
     }
     window
         .update(cx, |view, _, _| {
             let session = &view.websocket.sessions[&key];
-            assert_eq!(session.draft, "{{literal}}\nsecond line");
+            assert_eq!(session.draft, "{{literal}}\nsecond line\nthird line");
             assert_eq!(session.sent, 1, "ordinary Enter must not send");
         })
         .unwrap();
@@ -262,7 +320,7 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
         let mut visual = VisualTestContext::from_window(window.into(), cx);
         for (selector, payload) in [
             ("websocket-copy-1", "{{token}}\n{\"ok\":true}"),
-            ("websocket-copy-3", "{{literal}}\nsecond line"),
+            ("websocket-copy-3", "{{literal}}\nsecond line\nthird line"),
         ] {
             let copy = visual
                 .debug_bounds(selector)
@@ -313,6 +371,7 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
         let composer = visual.debug_bounds("websocket-composer-input").unwrap();
         visual.simulate_click(composer.center(), Modifiers::default());
         visual.simulate_input("blocked edit");
+        visual.simulate_keystrokes(send_shortcut());
         visual.run_until_parked();
     }
     window
@@ -320,6 +379,13 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
             assert_eq!(
                 view.websocket.sessions[&key].draft, "Keep this draft",
                 "the disconnected composer preserves the draft and rejects typing"
+            );
+            assert_eq!(view.websocket.sessions[&key].state, ConnectionState::Closed);
+            assert_eq!(view.websocket.sessions[&key].sent, 2);
+            assert!(
+                view.toasts
+                    .iter()
+                    .any(|(_, toast, _)| { toast.message.contains("Connect before sending") })
             );
             view.close_tab_now(key, cx);
             assert!(!view.websocket.sessions.contains_key(&key));
