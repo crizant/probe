@@ -26,6 +26,7 @@ struct MenuTestView {
 struct VariablePopupTestView {
     hover: Entity<VariableHoverState>,
     secret: bool,
+    unavailable: bool,
     editor_focus: gpui::FocusHandle,
 }
 
@@ -34,7 +35,10 @@ impl Render for VariablePopupTestView {
         let presentation = VariableTooltipPresentation {
             value: String::new(),
             placeholder: "Variable value",
-            editable: !self.secret,
+            editable: !self.secret && !self.unavailable,
+            unavailable_message: self
+                .unavailable
+                .then(|| "Select an environment to resolve this variable".to_owned()),
             hint: None,
             secret: self.secret.then_some(SecretTooltipState::Unknown),
         };
@@ -57,6 +61,7 @@ fn secret_popup_does_not_focus_its_hidden_value_input(cx: &mut TestAppContext) {
         VariablePopupTestView {
             hover: cx.new(|cx| VariableHoverState::new(window, cx)),
             secret: true,
+            unavailable: false,
             editor_focus: cx.focus_handle(),
         }
     });
@@ -69,6 +74,37 @@ fn secret_popup_does_not_focus_its_hidden_value_input(cx: &mut TestAppContext) {
     );
     let status = visual.debug_bounds("variable-tooltip-create-hint").unwrap();
     visual.simulate_click(status.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            let input = view.hover.read(cx).value_input.clone();
+            assert!(!input.read(cx).focus_handle(cx).is_focused(window));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn unavailable_variable_popup_does_not_focus_a_value_input(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(400.0), px(240.0)), |window, cx| {
+        VariablePopupTestView {
+            hover: cx.new(|cx| VariableHoverState::new(window, cx)),
+            secret: false,
+            unavailable: true,
+            editor_focus: cx.focus_handle(),
+        }
+    });
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(
+        visual
+            .debug_bounds("variable-tooltip-value-input")
+            .is_none()
+    );
+    let message = visual
+        .debug_bounds("variable-tooltip-unavailable-message")
+        .expect("unavailable guidance should render as text");
+    visual.simulate_click(message.center(), Modifiers::default());
     visual.run_until_parked();
     window
         .update(cx, |view, window, cx| {

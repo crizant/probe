@@ -544,6 +544,7 @@ pub(in crate::components) fn variable_tooltip_presentation(
             value: error.clone(),
             placeholder: "Secret value",
             editable: false,
+            unavailable_message: None,
             hint: None,
             secret: Some(SecretTooltipState::Unknown),
         };
@@ -563,6 +564,7 @@ pub(in crate::components) fn variable_tooltip_presentation(
                 .unwrap_or_else(String::new),
             placeholder: "Variable value",
             editable: variables.on_change.is_some(),
+            unavailable_message: None,
             hint: None,
             secret: None,
         },
@@ -573,6 +575,7 @@ pub(in crate::components) fn variable_tooltip_presentation(
             value: String::new(),
             placeholder: "Enter a value to create",
             editable: true,
+            unavailable_message: None,
             hint: Some("Not defined in this environment"),
             secret: None,
         },
@@ -582,9 +585,10 @@ pub(in crate::components) fn variable_tooltip_presentation(
 
 fn unavailable_variable_tooltip(message: &str) -> VariableTooltipPresentation {
     VariableTooltipPresentation {
-        value: message.to_owned(),
+        value: String::new(),
         placeholder: "Variable value",
         editable: false,
+        unavailable_message: Some(message.to_owned()),
         hint: None,
         secret: None,
     }
@@ -594,6 +598,7 @@ pub(in crate::components) struct VariableTooltipPresentation {
     pub(in crate::components) value: String,
     pub(in crate::components) placeholder: &'static str,
     pub(in crate::components) editable: bool,
+    pub(in crate::components) unavailable_message: Option<String>,
     pub(in crate::components) hint: Option<&'static str>,
     pub(in crate::components) secret: Option<SecretTooltipState>,
 }
@@ -604,6 +609,7 @@ impl VariableTooltipPresentation {
             value: String::new(),
             placeholder: "Secret value",
             editable: false,
+            unavailable_message: None,
             hint: None,
             secret: Some(state),
         }

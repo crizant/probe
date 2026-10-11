@@ -13,6 +13,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Variable tooltips show unavailable-environment guidance as plain text without a text cursor.
+
 - Request editor brackets and quotes now auto-pair only in JSON mode.
 
 - Fixed renaming, reordering, and moving GraphQL requests in directory-based

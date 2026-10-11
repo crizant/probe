@@ -197,7 +197,11 @@ fn variable_tooltip_presentation_keeps_unavailable_when_not_writable() {
         ..VariableContext::default()
     };
     let missing = variable_tooltip_presentation("created", &variables);
-    assert_eq!(missing.value, "Select an environment");
+    assert!(missing.value.is_empty());
+    assert_eq!(
+        missing.unavailable_message.as_deref(),
+        Some("Select an environment")
+    );
     assert!(!missing.editable);
     assert!(missing.hint.is_none());
 }

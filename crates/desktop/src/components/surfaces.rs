@@ -635,6 +635,7 @@ pub(super) fn variable_tooltip_popup(
 ) -> impl IntoElement {
     let hover_for_content = hover.clone();
     let secret = presentation.secret;
+    let show_value_input = secret.is_none() && presentation.unavailable_message.is_none();
     let status_text = if secret.is_some() && !presentation.value.is_empty() {
         Some(presentation.value.clone())
     } else {
@@ -662,7 +663,7 @@ pub(super) fn variable_tooltip_popup(
             let value_input = value_input.clone();
             move |_, window, cx| {
                 cx.stop_propagation();
-                if secret.is_none() {
+                if show_value_input {
                     value_input.update(cx, |input, cx| input.focus(window, cx));
                 }
             }
@@ -725,7 +726,17 @@ pub(super) fn variable_tooltip_popup(
                     }),
             )
         })
-        .when(secret.is_none(), |popup| {
+        .when_some(presentation.unavailable_message, |popup, message| {
+            popup.child(
+                div()
+                    .id("variable-tooltip-unavailable-message")
+                    .debug_selector(|| "variable-tooltip-unavailable-message".into())
+                    .text_size(px(theme.typography.caption_size))
+                    .text_color(theme.colors.text.muted)
+                    .child(message),
+            )
+        })
+        .when(show_value_input, |popup| {
             popup.child(variable_value_input(
                 theme,
                 format!("variable-tooltip-value-{name}"),
