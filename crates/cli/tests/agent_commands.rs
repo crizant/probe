@@ -94,7 +94,7 @@ fn moved_binary_installs_offline_without_a_repository_or_working_directory_depen
         include_bytes!("../../../.agents/skills/probe/SKILL.md")
     );
     assert_eq!(
-        fs::read(skill.join("references/cli.md")).unwrap(),
+        fs::read(skill.join("docs/CLI.md")).unwrap(),
         include_bytes!("../../../docs/CLI.md")
     );
     fs::write(skill.join("SKILL.md"), "modified").unwrap();

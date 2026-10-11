@@ -47,16 +47,16 @@ fn install_at(home: Option<&Path>, force: bool) -> Result<CommandOutput, CliErro
             _ => return Err(filesystem_error(&destination, error)),
         },
     };
-    let references = destination.join("references");
-    if references
+    let docs = destination.join("docs");
+    if docs
         .try_exists()
-        .map_err(|error| filesystem_error(&references, error))?
+        .map_err(|error| filesystem_error(&docs, error))?
     {
-        check_directory(&references)?;
+        check_directory(&docs)?;
     }
     let files = [
         (destination.join("SKILL.md"), SKILL.as_bytes()),
-        (references.join("cli.md"), CLI_REFERENCE.as_bytes()),
+        (docs.join("CLI.md"), CLI_REFERENCE.as_bytes()),
     ];
     let originals = files
         .iter()
@@ -80,7 +80,7 @@ fn install_at(home: Option<&Path>, force: bool) -> Result<CommandOutput, CliErro
             details: None,
         });
     }
-    ensure_directory(&references)?;
+    ensure_directory(&docs)?;
 
     // Stage both complete files before publishing either. Each commit is atomic;
     // a failed commit can leave mixed versions, but never a truncated owned file.
@@ -208,7 +208,7 @@ mod tests {
                 SKILL.as_bytes()
             );
             assert_eq!(
-                fs::read(self.skill().join("references/cli.md")).unwrap(),
+                fs::read(self.skill().join("docs/CLI.md")).unwrap(),
                 CLI_REFERENCE.as_bytes()
             );
         }
@@ -243,7 +243,7 @@ mod tests {
             fs::read(repository.join(".agents/skills/probe/SKILL.md")).unwrap()
         );
         assert_eq!(
-            fs::read(home.skill().join("references/cli.md")).unwrap(),
+            fs::read(home.skill().join("docs/CLI.md")).unwrap(),
             fs::read(repository.join("docs/CLI.md")).unwrap()
         );
         for force in [false, true] {
@@ -269,7 +269,7 @@ mod tests {
         fs::create_dir(&other).unwrap();
         fs::write(other.join("SKILL.md"), "other skill").unwrap();
         fs::write(home.skill().join("notes.txt"), "user notes").unwrap();
-        for relative in ["SKILL.md", "references/cli.md"] {
+        for relative in ["SKILL.md", "docs/CLI.md"] {
             let path = home.skill().join(relative);
             fs::write(&path, "modified").unwrap();
             let error = home.install(false).unwrap_err();
@@ -326,8 +326,8 @@ mod tests {
         fs::remove_file(home.0.join(".agents")).unwrap();
         home.install(false).unwrap();
         fs::write(home.skill().join("SKILL.md"), "keep me").unwrap();
-        fs::remove_file(home.skill().join("references/cli.md")).unwrap();
-        fs::create_dir(home.skill().join("references/cli.md")).unwrap();
+        fs::remove_file(home.skill().join("docs/CLI.md")).unwrap();
+        fs::create_dir(home.skill().join("docs/CLI.md")).unwrap();
         assert_eq!(
             home.install(true).unwrap_err().category,
             "persistence_error"

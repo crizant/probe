@@ -27,8 +27,7 @@ Do not manually edit OpenCollection YAML unless Probe cannot perform the require
 
 Before inventing a command, flag, or behavior, consult the full Probe CLI documentation.
 
-- In the Probe repository: `docs/CLI.md`
-- When installed as an agent skill: `references/cli.md`
+Use `docs/CLI.md`, both in the Probe repository and when installed as an agent skill.
 
 Treat that documentation as the source of truth for CLI syntax and edge cases.
 

@@ -43,7 +43,7 @@ probe environment rename <path> --environment <name> --name <new> [--json]
 ```
 
 `agent skill install` installs the Probe agent skill in the current user's
-`~/.agents/skills/probe/`, with `SKILL.md` and `references/cli.md`. Both the
+`~/.agents/skills/probe/`, with `SKILL.md` and `docs/CLI.md`. Both the
 canonical skill and this CLI reference are embedded in the executable, so the
 installed files match that Probe CLI version without network access or a repository.
 Identical installations succeed without writing files (`changed: false` in JSON).
