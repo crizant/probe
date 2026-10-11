@@ -1296,4 +1296,6 @@ mod environments;
 mod graphql;
 mod interactions;
 mod response;
+mod websocket;
+mod websocket_lifecycle;
 mod workspace;

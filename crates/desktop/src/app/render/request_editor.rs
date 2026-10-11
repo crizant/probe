@@ -8,6 +8,7 @@ mod file;
 mod graphql;
 mod key_value;
 mod multipart;
+mod websocket;
 
 use key_value::KeyValueEditorKind;
 
@@ -166,7 +167,8 @@ impl ProbeApp {
                         EditorSection::Query => format!("  {}", request.query_parameters.len()),
                         EditorSection::Path => format!("  {}", request.path_parameters.len()),
                         EditorSection::Headers => format!("  {}", request.headers.len()),
-                        EditorSection::Docs
+                        EditorSection::WebSocketMessage
+                        | EditorSection::Docs
                         | EditorSection::Body
                         | EditorSection::Authentication
                         | EditorSection::GraphqlQuery
@@ -188,8 +190,10 @@ impl ProbeApp {
         }
 
         let section_kind = self.request_editor.section(key);
-        let section_scrolls = !matches!(section_kind, EditorSection::Body | EditorSection::Docs)
-            && !section_kind.is_graphql();
+        let section_scrolls = !matches!(
+            section_kind,
+            EditorSection::Body | EditorSection::Docs | EditorSection::WebSocketMessage
+        ) && !section_kind.is_graphql();
         if section_scrolls && self.request_section_scroll_owner.get() != Some((key, section_kind)) {
             self.request_section_scroll
                 .set_offset(point(px(0.0), px(0.0)));
@@ -281,6 +285,28 @@ impl ProbeApp {
                                         },
                                     )),
                             )
+                            .when(websocket, |bar| {
+                                let state = self
+                                    .websocket
+                                    .sessions
+                                    .get(&key)
+                                    .map(|s| s.state)
+                                    .unwrap_or(crate::websocket::ConnectionState::Closed);
+                                let view = cx.weak_entity();
+                                bar.child(
+                                    components::primary_button(
+                                        theme,
+                                        "websocket-execution",
+                                        state.button(),
+                                        move |_, _, cx| {
+                                            let _ = view.update(cx, |view, cx| {
+                                                view.websocket_control(key, cx)
+                                            });
+                                        },
+                                    )
+                                    .disabled(state == crate::websocket::ConnectionState::Closing),
+                                )
+                            })
                             .when(!websocket, |bar| {
                                 bar.child(div().ml(px(theme.metrics.spacing_1)).flex_none().child(
                                     if request_running {
@@ -461,6 +487,9 @@ impl ProbeApp {
                 cx,
             ),
             EditorSection::Body => self.render_body_editor(key, request, theme, cx),
+            EditorSection::WebSocketMessage => {
+                self.render_websocket_message_editor(key, request, theme, cx)
+            }
             EditorSection::Authentication => {
                 self.render_authentication_editor(key, request, theme, list_scroll, cx)
             }

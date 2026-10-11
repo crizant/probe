@@ -48,6 +48,37 @@ pub(crate) fn documentation_text_input(
     .into_any_element()
 }
 
+pub(crate) fn websocket_composer(
+    theme: Theme,
+    id: ElementId,
+    value: String,
+    enabled: bool,
+    on_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+) -> gpui::AnyElement {
+    ProbeEditor {
+        theme,
+        id,
+        value: value.into(),
+        placeholder: "Type a message…".into(),
+        decorations: Vec::new(),
+        language: SharedString::default(),
+        readonly: !enabled,
+        min_height: None,
+        padding: EditorInsets::standard(theme),
+        soft_wrap: true,
+        text_color: theme.colors.text.primary,
+        scroll_to_range: None,
+        search_matches: Vec::new(),
+        on_change: Some(Rc::new(on_change)),
+        on_mouse_down: None,
+        on_visible_range: None,
+        extra_context_menu_actions: Vec::new(),
+        debug_selector: Some("websocket-composer-input"),
+        variables: None,
+    }
+    .into_any_element()
+}
+
 pub(crate) fn body_text_input(
     theme: Theme,
     id: impl Into<ElementId>,

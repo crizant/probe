@@ -274,6 +274,7 @@ impl ProbeApp {
                     .map(|request| (located.key(), request))
             }));
         self.execution.clear();
+        self.websocket.clear();
         self.response_viewer.clear();
         self.loaded_workspace = Some(workspace);
         self.detached_requests.clear();
@@ -829,6 +830,7 @@ impl ProbeApp {
         self.session.presence.clear_identity_cache();
         self.shell.reset_for_workspace();
         self.execution.remap_requests(&remaps);
+        self.websocket.remap_requests(&remaps);
         self.response_viewer.remap_requests(&remaps);
         self.request_editor.remap_requests(&remaps);
         if let Some((old_key, section)) = self.request_section_scroll_owner.get() {

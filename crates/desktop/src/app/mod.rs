@@ -55,6 +55,7 @@ mod tabs;
 mod transient;
 mod tree;
 mod user_config;
+mod websocket;
 mod workspace;
 mod workspace_writes;
 
@@ -144,6 +145,7 @@ gpui::actions!(
         ImportYaakExport,
         SaveEditor,
         SendRequest,
+        SendWebSocketMessage,
         CloseActiveTab,
         AboutProbe,
         CloseWindow,
@@ -304,6 +306,7 @@ pub(crate) struct ProbeApp {
     toasts: ToastCenter,
     request_editor: RequestEditorState,
     execution: ExecutionState,
+    websocket: crate::websocket::WebSocketState,
     execution_service: Option<ExecutionService>,
     response_cache: probe_http::ResponseCache,
     response_viewer: ResponseViewerState,
@@ -361,6 +364,7 @@ impl ProbeApp {
             cx,
         );
         let quit_subscription = cx.on_app_quit(|view, cx| {
+            view.websocket.clear();
             view.capture_session();
             let store = view.session_store.clone();
             let state = view.session.clone();
@@ -446,6 +450,7 @@ impl ProbeApp {
             toasts: ToastCenter::default(),
             request_editor: RequestEditorState::default(),
             execution: ExecutionState::default(),
+            websocket: crate::websocket::WebSocketState::default(),
             execution_service: None,
             response_cache,
             response_viewer: ResponseViewerState::default(),
@@ -494,6 +499,13 @@ impl ProbeApp {
                             .active_tab()
                             .and_then(|key| view.execution.response(key))
                             .is_some_and(ResponseState::is_running)
+                            || view
+                                .shell
+                                .active_tab()
+                                .and_then(|key| view.websocket.sessions.get(&key))
+                                .is_some_and(|s| {
+                                    s.state == crate::websocket::ConnectionState::Connected
+                                })
                         {
                             cx.notify();
                         }
@@ -837,6 +849,11 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("cmd-enter", SendRequest, None),
         KeyBinding::new("cmd-enter", SendRequest, Some("Input")),
         KeyBinding::new(
+            "cmd-enter",
+            SendWebSocketMessage,
+            Some("WebSocketComposer > Input"),
+        ),
+        KeyBinding::new(
             "cmd-s",
             SubmitEnvironmentManagerDialog,
             Some("EnvironmentManagerDialog"),
@@ -904,6 +921,11 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("ctrl-s", SaveEditor, None),
         KeyBinding::new("ctrl-enter", SendRequest, None),
         KeyBinding::new("ctrl-enter", SendRequest, Some("Input")),
+        KeyBinding::new(
+            "ctrl-enter",
+            SendWebSocketMessage,
+            Some("WebSocketComposer > Input"),
+        ),
         KeyBinding::new(
             "ctrl-s",
             SubmitEnvironmentManagerDialog,

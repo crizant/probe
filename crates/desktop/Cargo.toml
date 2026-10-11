@@ -59,6 +59,9 @@ sha2 = "0.11.0"
 keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
 
 [dev-dependencies]
+# Local in-process test peer only; production streaming uses probe-application.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+futures-util = "0.3.34"
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["test-support"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

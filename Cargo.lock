@@ -5020,6 +5020,7 @@ dependencies = [
  "atomic-write-file",
  "chrono",
  "directories",
+ "futures-util",
  "gpui",
  "gpui-base",
  "gpui_platform",
@@ -5040,6 +5041,7 @@ dependencies = [
  "sha2 0.11.0",
  "syntect",
  "tokio",
+ "tokio-tungstenite",
  "toml 0.8.23",
  "winresource",
 ]

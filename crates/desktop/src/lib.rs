@@ -25,5 +25,6 @@ mod theme;
 mod toast;
 mod tree_search;
 mod user_config;
+mod websocket;
 
 pub use app::run;

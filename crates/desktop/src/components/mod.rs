@@ -52,7 +52,7 @@ use editor::SecretTooltipState;
 pub(crate) use editor::editor_paint_style;
 pub(crate) use editor::{
     BodySyntax, body_text_input, documentation_text_input, response_body_input,
-    response_headers_input, response_inspector_input, single_line,
+    response_headers_input, response_inspector_input, single_line, websocket_composer,
 };
 #[cfg(test)]
 use editor::{ProbeEditor, editor_value_needs_refresh};

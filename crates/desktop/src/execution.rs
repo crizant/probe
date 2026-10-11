@@ -372,6 +372,89 @@ impl ExecutionService {
         })
     }
 
+    pub(crate) fn connect_websocket(
+        &self,
+        input: ExecutionInput,
+        mut cancellation: oneshot::Receiver<()>,
+    ) -> (
+        mpsc::Receiver<crate::websocket::Update>,
+        oneshot::Receiver<SecretPresenceReconciliation>,
+    ) {
+        use crate::websocket::{BRIDGE_CAPACITY, TimelineEntry, Update};
+        use probe_application::{SessionError, SessionEvent};
+        let (events, receiver) = mpsc::channel(BRIDGE_CAPACITY);
+        let (presence_tx, presence) = oneshot::channel();
+        let credentials = Arc::clone(&self.credentials);
+        self.runtime.as_ref().expect("execution runtime is active").spawn(async move {
+            let observer = Arc::new(SecretPresenceObserver::default());
+            let observed = Arc::clone(&observer);
+            let resolution = tokio::task::spawn_blocking(move || {
+                let native;
+                let provider: &dyn SecretProvider = match &input.credential_workspace {
+                    Some(workspace) => {
+                        native = ObservingSecretProvider {
+                            inner: NativeSecretProvider { store: credentials.as_ref(), workspace },
+                            observer: &observed,
+                        }; &native
+                    }
+                    None => &NoSecrets,
+                };
+                let resolution = RequestResolution {
+                    environments: &input.environments,
+                    environment: input.environment.as_deref(),
+                    ..RequestResolution::default()
+                };
+                prepare_request(&input.request, &resolution, provider)
+                    .map_err(|_| SessionError::Configuration)
+                    .and_then(|prepared| prepared.into_websocket())
+            });
+            let connect = async {
+                let prepared = resolution.await;
+                let _ = presence_tx.send(observer.snapshot());
+                prepared.map_err(|_| SessionError::Configuration)??.connect().await
+            };
+            let result = tokio::select! { biased; _ = &mut cancellation => return, result = connect => result };
+            let mut session = match result {
+                Ok(session) => session,
+                Err(error) => {
+                    for event in [SessionEvent::Error(error), SessionEvent::Closed { origin: probe_application::CloseOrigin::Error, code: None, reason: String::new() }] {
+                        tokio::select! { biased; _ = &mut cancellation => return, _ = events.send(Update::Event(TimelineEntry::new(event))) => {} }
+                    }
+                    return;
+                }
+            };
+            tokio::select! { biased; _ = &mut cancellation => return, result = events.send(Update::Ready(session.sender())) => { if result.is_err() { return; } } }
+            loop {
+                let event = tokio::select! { biased; _ = &mut cancellation => return, event = session.next_event() => event };
+                let Some(event) = event else { break; };
+                let terminal = matches!(event, SessionEvent::Closed { .. });
+                let entry = TimelineEntry::new(event);
+                tokio::select! { biased; _ = &mut cancellation => return, result = events.send(Update::Event(entry)) => { if result.is_err() { return; } } }
+                if terminal { break; }
+            }
+        });
+        (receiver, presence)
+    }
+
+    pub(crate) fn send_websocket(
+        &self,
+        sender: probe_application::SessionSender,
+        text: String,
+    ) -> oneshot::Receiver<Result<(), probe_application::SessionError>> {
+        let (tx, rx) = oneshot::channel();
+        self.runtime
+            .as_ref()
+            .expect("execution runtime is active")
+            .spawn(async move {
+                let _ = tx.send(
+                    sender
+                        .send(probe_application::SessionData::Text(text))
+                        .await,
+                );
+            });
+        rx
+    }
+
     pub(crate) fn copy_as_curl(
         &self,
         input: ExecutionInput,
@@ -1409,6 +1492,139 @@ mod tests {
         assert!(matches!(result, Err(HttpError::InvalidBody(_))));
         assert!(!output.exists());
         assert_eq!(store.reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)] // Test peer's handshake callback fixes its HTTP error type.
+    fn websocket_desktop_adapter_sends_initial_once_and_literal_runtime_then_closes() {
+        use crate::websocket::Update;
+        use futures_util::{SinkExt, StreamExt};
+        use probe_application::{SessionData, SessionEvent};
+        use probe_core::{
+            RequestKind, WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet,
+        };
+        let workspace = std::env::temp_dir();
+        let secret = "WEBSOCKET_NATIVE_SECRET";
+        let store = Arc::new(FakeCredentials::new(false));
+        let id = CredentialId::for_workspace(&workspace, "production", "token").unwrap();
+        store.set(&id, secret).unwrap();
+        let service = ExecutionService::with_credentials(store).unwrap();
+        service.runtime.as_ref().unwrap().block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = tokio_tungstenite::accept_hdr_async(stream, |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                        assert!(request.uri().to_string().contains(secret));
+                        assert_eq!(request.headers()["X-Secret"], secret);
+                        Ok(response)
+                    }).await.unwrap();
+                    let first = socket.next().await.unwrap().unwrap();
+                    assert_eq!(first.to_text().unwrap(), secret);
+                    socket.send(first).await.unwrap();
+                    let runtime = socket.next().await.unwrap().unwrap();
+                    assert_eq!(runtime.to_text().unwrap(), "{{token}}");
+                    socket.send(tokio_tungstenite::tungstenite::Message::binary(vec![0, 1, 2])).await.unwrap();
+                    let close = socket.next().await.unwrap().unwrap();
+                    assert!(close.is_close(), "desktop must not duplicate initial sends");
+                    socket.flush().await.unwrap();
+                });
+                let request = Request { url: Some(format!("ws://{address}/{{{{token}}}}")), headers: vec![Header { name: "X-Secret".into(), value: "{{token}}".into(), disabled: false }], kind: RequestKind::WebSocket { message: Some(WebSocketMessageSet::Single(WebSocketMessage { kind: WebSocketMessageKind::Text, data: "{{token}}".into() })) }, ..Request::default() };
+                let (_cancel, cancellation) = oneshot::channel();
+                let (mut events, presence) = service.connect_websocket(native_input(request, workspace), cancellation);
+                let presence = presence.await.unwrap();
+                assert!(presence.found.contains(id.persistence_key()));
+                let Some(Update::Ready(sender)) = events.recv().await else { panic!("expected command handle"); };
+                let mut observed = Vec::new();
+                for _ in 0..3 { let Some(Update::Event(entry)) = events.recv().await else { panic!("expected event"); }; assert!(!entry.display.contains(secret)); assert!(!format!("{:?}", entry.event).contains(secret)); observed.push(entry.event); }
+                assert!(matches!(&observed[0], SessionEvent::Opened { url } if url.contains("{{token}}")));
+                assert!(matches!(&observed[1], SessionEvent::Sent(SessionData::Text(text)) if !text.contains(secret)));
+                assert!(matches!(&observed[2], SessionEvent::Received(SessionData::Text(text)) if text == "[REDACTED]"));
+                service.send_websocket(sender.clone(), "{{token}}".into()).await.unwrap().unwrap();
+                let Some(Update::Event(sent)) = events.recv().await else { panic!(); };
+                assert_eq!(sent.event, SessionEvent::Sent(SessionData::Text("{{token}}".into())));
+                let Some(Update::Event(binary)) = events.recv().await else { panic!(); };
+                assert!(binary.display.contains("AAEC"));
+                sender.close();
+                let Some(Update::Event(closed)) = events.recv().await else { panic!(); };
+                assert!(matches!(closed.event, SessionEvent::Closed { origin: probe_application::CloseOrigin::Local, .. }));
+                assert!(events.recv().await.is_none());
+                server.await.unwrap();
+            }).await.unwrap();
+        });
+    }
+
+    #[test]
+    fn websocket_remote_close_is_safe_and_desktop_bridge_backpressures() {
+        use crate::websocket::{BRIDGE_CAPACITY, Update};
+        use futures_util::SinkExt;
+        use probe_application::{CloseOrigin, SessionData, SessionEvent};
+        let workspace = std::env::temp_dir();
+        let secret = "REMOTE_CLOSE_SECRET";
+        let store = Arc::new(FakeCredentials::new(false));
+        let id = CredentialId::for_workspace(&workspace, "production", "token").unwrap();
+        store.set(&id, secret).unwrap();
+        let service = ExecutionService::with_credentials(store).unwrap();
+        service.runtime.as_ref().unwrap().block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("ws://{}/{{{{token}}}}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    for index in 0..100 { socket.send(tokio_tungstenite::tungstenite::Message::text(index.to_string())).await.unwrap(); }
+                    socket.close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame { code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal, reason: secret.into() })).await.unwrap();
+                    // Wait for the peer acknowledgement rather than dropping TCP.
+                    use futures_util::StreamExt;
+                    let _ = socket.next().await;
+                });
+                let (_cancel, cancellation) = oneshot::channel();
+                let input = native_input(Request { url: Some(url), kind: probe_core::RequestKind::WebSocket { message: None }, ..Default::default() }, workspace);
+                let (mut events, _) = service.connect_websocket(input, cancellation);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert_eq!(events.len(), BRIDGE_CAPACITY, "a stalled desktop bridge is bounded");
+                let mut received = 0;
+                let mut closed = false;
+                while let Some(update) = events.recv().await {
+                    if let Update::Event(entry) = update {
+                        assert!(!entry.display.contains(secret));
+                        match entry.event {
+                            SessionEvent::Received(SessionData::Text(text)) => { assert_eq!(text, received.to_string()); received += 1; }
+                            SessionEvent::Closed { origin, code, reason } => { assert_eq!(origin, CloseOrigin::Remote); assert_eq!(code, Some(1000)); assert_eq!(reason, "[REDACTED]"); closed = true; }
+                            SessionEvent::Error(error) => panic!("unexpected {error}"),
+                            _ => {}
+                        }
+                    }
+                }
+                assert_eq!(received, 100); assert!(closed); server.await.unwrap();
+            }).await.unwrap();
+        });
+    }
+
+    #[test]
+    fn websocket_connect_can_be_cancelled_and_failure_has_one_typed_error() {
+        use crate::websocket::Update;
+        use probe_application::SessionEvent;
+        let service = ExecutionService::with_credentials(Arc::new(NativeCredentialStore)).unwrap();
+        service.runtime.as_ref().unwrap().block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let input = || ExecutionInput { request: Request { url: Some(format!("ws://{}", listener.local_addr().unwrap())), kind: probe_core::RequestKind::WebSocket { message: None }, ..Request::default() }, environments: vec![], environment: None, credential_workspace: None };
+                let (cancel, cancellation) = oneshot::channel();
+                let (mut events, _) = service.connect_websocket(input(), cancellation);
+                let (_stream, _) = listener.accept().await.unwrap();
+                cancel.send(()).unwrap();
+                assert!(events.recv().await.is_none());
+                let mut failed = input();
+                failed.request.url = Some("ws://127.0.0.1:1".into());
+                let (_cancel, cancellation) = oneshot::channel();
+                let (mut events, _) = service.connect_websocket(failed, cancellation);
+                assert!(matches!(events.recv().await, Some(Update::Event(entry)) if matches!(entry.event, SessionEvent::Error(_))));
+                assert!(matches!(events.recv().await, Some(Update::Event(entry)) if matches!(entry.event, SessionEvent::Closed { .. })));
+                assert!(events.recv().await.is_none());
+            }).await.unwrap();
+        });
     }
 
     fn response(status: u16) -> HttpResponse {

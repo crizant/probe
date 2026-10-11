@@ -13,6 +13,12 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- Connect native WebSocket requests in the desktop, with a saved Message editor,
+  live sent/received timeline, and literal multi-line text composer. Sessions stay
+  connected across tab switches; closing their tab or workspace closes them.
+  History is bounded in memory, incoming binary frames display as base64, and
+  configured binary messages can be edited but not executed.
+
 - Execute native WebSocket requests with `probe request run`: interactive streaming,
   repeatable literal `--send`, inbound `--max-messages`, live-run `--timeout`, and
   NDJSON `--json`. Incoming binary frames display as base64; configured binary
@@ -22,7 +28,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 - OpenCollection WebSocket requests (`info.type: websocket`) now load as native
   requests in bundled and unbundled collections. Probe keeps their URL, headers,
   authentication, message or message variants, docs, and settings when you edit
-  and save them. Native WebSocket requests execute through the CLI; desktop execution is pending.
+  and save them. Native WebSocket requests execute through both the CLI and desktop.
 
 ## [0.10.8] - 2026-10-09
 
