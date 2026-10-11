@@ -389,7 +389,7 @@ fn porcelain_honey() -> Colors {
         text: TextColors {
             primary: rgba(0x4b4641ff),     // warm graphite
             secondary: rgba(0x6c655eff),   // soft graphite
-            muted: rgba(0x8b837aff),       // softened graphite
+            muted: rgba(0x756e66ff),       // stone graphite
             placeholder: rgba(0xa9a199ff), // stone
             inverse: rgba(0xffffffff),     // on-accent
         },
@@ -432,9 +432,9 @@ fn porcelain_honey() -> Colors {
         },
         responses: ResponseColors {
             informational: rgba(0x227c8fff), // blue teal
-            success: rgba(0x2d8a5bff),       // jade
-            redirect: rgba(0xaa7d24ff),      // light brown
-            client_error: rgba(0xe7821bff),  // reference orange
+            success: rgba(0x267f52ff),       // jade
+            redirect: rgba(0x8f6a1eff),      // brown
+            client_error: rgba(0xa65c11ff),  // dark orange
             server_error: rgba(0xc43d3dff),  // red
         },
         syntax: SyntaxColors {
@@ -609,7 +609,7 @@ const fn default_motion() -> Motion {
 mod tests {
     use super::{Theme, ThemeAppearance, appearance_override};
     use crate::user_config::ThemeMode;
-    use gpui::WindowAppearance;
+    use gpui::{Rgba, WindowAppearance};
 
     #[test]
     fn native_appearances_select_the_expected_built_in_theme() {
@@ -695,5 +695,50 @@ mod tests {
             appearance_override(ThemeMode::Dark),
             Some(WindowAppearance::Dark)
         );
+    }
+
+    /// WCAG 2 relative luminance for an opaque sRGB color.
+    /// <https://www.w3.org/TR/WCAG21/#dfn-relative-luminance>
+    fn relative_luminance(color: Rgba) -> f64 {
+        fn channel(component: f32) -> f64 {
+            let encoded = f64::from(component);
+            if encoded <= 0.04045 {
+                encoded / 12.92
+            } else {
+                ((encoded + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+    }
+
+    fn contrast_ratio(foreground: Rgba, background: Rgba) -> f64 {
+        let foreground = relative_luminance(foreground);
+        let background = relative_luminance(background);
+        let lighter = foreground.max(background);
+        let darker = foreground.min(background);
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    #[test]
+    fn response_status_text_meets_wcag_aa_on_raised_surfaces() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let background = theme.colors.surfaces.raised;
+            let colors = [
+                ("informational", theme.colors.responses.informational),
+                ("success", theme.colors.responses.success),
+                ("redirect", theme.colors.responses.redirect),
+                ("client_error", theme.colors.responses.client_error),
+                ("server_error", theme.colors.responses.server_error),
+                ("muted", theme.colors.text.muted),
+            ];
+            for (role, foreground) in colors {
+                let ratio = contrast_ratio(foreground, background);
+                assert!(
+                    ratio >= 4.5,
+                    "{:?} {role} contrast {ratio:.2} is below 4.5:1 on surfaces.raised",
+                    theme.appearance
+                );
+            }
+        }
     }
 }
