@@ -8,6 +8,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Request editor brackets and quotes now auto-pair only in JSON mode.
+
 - Fixed renaming, reordering, and moving GraphQL requests in directory-based
   OpenCollection collections.
 
