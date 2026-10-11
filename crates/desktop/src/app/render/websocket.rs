@@ -1,7 +1,6 @@
 use super::*;
 use crate::websocket::{
-    ConnectionState, DisconnectLine, TimelineRowHeading, disconnect_severity,
-    disconnect_severity_color,
+    ConnectionState, DisconnectLine, disconnect_severity, disconnect_severity_color,
 };
 use probe_application::SessionEvent;
 impl ProbeApp {
@@ -164,10 +163,15 @@ impl ProbeApp {
                                         ("Received", Some(("↓", theme.colors.status.success)))
                                     }
                                     SessionEvent::Error(_) => ("Error", None),
-                                    _ => ("Session", None),
+                                    SessionEvent::Opened { .. } => ("Session", None),
+                                    SessionEvent::Closed { .. } => ("Disconnected", None),
                                 };
-                                let heading = TimelineRowHeading::from_event(&entry.event);
-                                let row_label = heading.severity.map_or(label, |_| heading.label);
+                                let severity = match &entry.event {
+                                    SessionEvent::Closed { origin, code, .. } => {
+                                        Some(disconnect_severity(*origin, *code))
+                                    }
+                                    _ => None,
+                                };
                                 let mut header = div()
                                     .flex()
                                     .items_center()
@@ -183,12 +187,12 @@ impl ProbeApp {
                                             .when_some(direction, |label, (arrow, color)| {
                                                 label.child(div().text_color(color).child(arrow))
                                             })
-                                            .when_some(heading.severity, |label, severity| {
+                                            .when_some(severity, |label, severity| {
                                                 label.child(components::disconnect_severity_mark(
                                                     theme, severity,
                                                 ))
                                             })
-                                            .child(row_label),
+                                            .child(label),
                                     )
                                     .child(
                                         div()
@@ -329,27 +333,28 @@ fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gp
             .font_family(theme.typography.monospace_family)
             .child(entry.display.clone());
     };
-    let line = DisconnectLine::from_close(*origin, *code, reason);
+    let (text, status) = DisconnectLine::from_close(*origin, *code, reason).text();
     let mut message = div()
         .w_full()
         .flex()
         .flex_wrap()
         .items_center()
         .font_family(theme.typography.monospace_family)
-        .text_color(theme.colors.text.primary)
-        .child(format!("Disconnected · {}", line.origin));
-    if let Some(status) = line.status {
-        message = message.child(" · ").child(
-            div()
-                .text_color(disconnect_severity_color(
-                    theme,
-                    disconnect_severity(*origin, *code),
-                ))
-                .child(status),
-        );
-    }
-    if let Some(reason) = line.reason {
-        message = message.child(div().min_w(px(0.0)).flex_1().child(format!(" · {reason}")));
+        .text_color(theme.colors.text.primary);
+    let Some(status) = status else {
+        return message.child(text);
+    };
+    message = message.child(text[..status.start].to_owned()).child(
+        div()
+            .text_color(disconnect_severity_color(
+                theme,
+                disconnect_severity(*origin, *code),
+            ))
+            .child(text[status.start..status.end].to_owned()),
+    );
+    let rest = &text[status.end..];
+    if !rest.is_empty() {
+        message = message.child(rest.to_owned());
     }
     message
 }
