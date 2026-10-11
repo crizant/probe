@@ -208,8 +208,10 @@ pub(crate) fn icon_button(
 ) -> Button {
     let id = id.into();
     let debug_id = id.to_string();
+    let aria_label = aria_label.into();
     Button::new(id)
         .debug_selector(move || debug_id.clone())
+        .hint(theme, aria_label.clone())
         .accessibility_label(aria_label)
         .w(px(30.0))
         .h(px(theme.metrics.control_height))
@@ -235,12 +237,14 @@ pub(crate) fn compact_icon_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let size = theme.metrics.control_height - 2.0;
+    let aria_label = aria_label.into();
     div()
         .debug_selector(move || id.into())
         .size(px(size))
         .flex_none()
         .child(
             Button::new(id)
+                .hint(theme, aria_label.clone())
                 .accessibility_label(aria_label)
                 .size_full()
                 .flex()

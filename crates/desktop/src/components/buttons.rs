@@ -1,5 +1,43 @@
 use super::*;
 
+/// Give icon-only controls a hint using the same wording as their accessible name.
+pub(crate) trait IconButtonHint: gpui::StatefulInteractiveElement + Sized {
+    fn hint(self, theme: Theme, label: impl Into<SharedString>) -> Self {
+        let label = label.into();
+        self.tooltip(move |_, cx| {
+            cx.new(|_| ActionTooltip {
+                id: "icon-button-tooltip",
+                theme,
+                label: label.to_string(),
+            })
+            .into()
+        })
+    }
+}
+
+impl<T: gpui::StatefulInteractiveElement> IconButtonHint for T {}
+
+pub(crate) struct ActionTooltip {
+    pub(crate) id: &'static str,
+    pub(crate) theme: Theme,
+    pub(crate) label: String,
+}
+
+impl Render for ActionTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui_base::Tooltip::new(self.id)
+            .px(px(self.theme.metrics.spacing_2))
+            .py(px(self.theme.metrics.spacing_1))
+            .rounded(px(self.theme.metrics.radius_small))
+            .border_1()
+            .border_color(self.theme.colors.borders.standard)
+            .bg(self.theme.colors.surfaces.overlay)
+            .text_size(px(self.theme.typography.caption_size))
+            .text_color(self.theme.colors.text.primary)
+            .child(self.label.clone())
+    }
+}
+
 pub(super) fn focus_ring_shadow(ring_color: Hsla, gap_color: Hsla) -> Vec<BoxShadow> {
     vec![
         BoxShadow::new(px(0.0), px(0.0), ring_color).spread_radius(px(2.0)),

@@ -408,7 +408,7 @@ pub(crate) fn home_button(
         theme,
         "home-button",
         "home-button",
-        "Close collection",
+        "Home",
         enabled,
         false,
         theme.colors.surfaces.sidebar,
@@ -435,6 +435,7 @@ fn icon_button_base(
     active_background: gpui::Rgba,
 ) -> Button {
     Button::new(id)
+        .hint(theme, accessibility_label)
         .accessibility_label(accessibility_label)
         .debug_selector(move || debug_selector.into())
         .selected(selected)

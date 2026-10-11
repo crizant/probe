@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+use crate::components::IconButtonHint as _;
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -602,10 +604,13 @@ impl ProbeApp {
 fn render_windows_controls(theme: Theme) -> gpui::Div {
     let control = move |id: &'static str,
                         label: &'static str,
+                        hint: &'static str,
                         area,
                         destructive: bool,
                         action: fn(&mut Window)| {
         Button::new(id)
+            .hint(theme, hint)
+            .accessibility_label(hint)
             .focusable(false)
             .tab_stop(false)
             .w(px(44.0))
@@ -633,6 +638,7 @@ fn render_windows_controls(theme: Theme) -> gpui::Div {
         .child(control(
             "window-minimize",
             "—",
+            "Minimize window",
             WindowControlArea::Min,
             false,
             |window| window.minimize_window(),
@@ -640,6 +646,7 @@ fn render_windows_controls(theme: Theme) -> gpui::Div {
         .child(control(
             "window-maximize",
             "□",
+            "Maximize or restore window",
             WindowControlArea::Max,
             false,
             |window| window.zoom_window(),
@@ -647,6 +654,7 @@ fn render_windows_controls(theme: Theme) -> gpui::Div {
         .child(control(
             "window-close",
             "×",
+            "Close window",
             WindowControlArea::Close,
             true,
             Window::remove_window,
