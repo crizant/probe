@@ -63,13 +63,6 @@ pub(super) fn convert_preview(
         "gRPC requests are not supported by the current Probe domain",
         &mut diagnostics,
     );
-    diagnose_unsupported_requests(
-        &preview.resources.websocket_requests,
-        workspace,
-        "websocket_request",
-        "WebSocket requests are not supported by the current Probe domain",
-        &mut diagnostics,
-    );
     for resource in &preview.resources.unsupported_resources {
         if resource.workspace_id.as_deref() == Some(workspace.id.as_str()) {
             diagnostics.push(lossy(
@@ -171,6 +164,13 @@ fn validate_folder_graph(
     for request in resources
         .http_requests
         .iter()
+        .map(|request| &request.common)
+        .chain(
+            resources
+                .websocket_requests
+                .iter()
+                .map(|request| &request.common),
+        )
         .filter(|request| request.workspace_id == workspace.id)
     {
         if let Some(parent) = request.folder_id.as_deref()
@@ -195,18 +195,21 @@ fn convert_items(
     enum SourceItem<'a> {
         Folder(&'a YaakFolder),
         Request(&'a YaakHttpRequest),
+        WebSocket(&'a YaakWebSocketRequest),
     }
     impl SourceItem<'_> {
         fn priority(&self) -> f64 {
             match self {
                 Self::Folder(folder) => folder.sort_priority,
-                Self::Request(request) => request.sort_priority,
+                Self::Request(request) => request.common.sort_priority,
+                Self::WebSocket(request) => request.common.sort_priority,
             }
         }
         fn id(&self) -> &str {
             match self {
                 Self::Folder(folder) => &folder.id,
-                Self::Request(request) => &request.id,
+                Self::Request(request) => &request.common.id,
+                Self::WebSocket(request) => &request.common.id,
             }
         }
     }
@@ -221,10 +224,20 @@ fn convert_items(
                 .http_requests
                 .iter()
                 .filter(|request| {
-                    request.workspace_id == workspace.id
-                        && request.folder_id.as_deref() == parent_id
+                    request.common.workspace_id == workspace.id
+                        && request.common.folder_id.as_deref() == parent_id
                 })
                 .map(SourceItem::Request),
+        )
+        .chain(
+            resources
+                .websocket_requests
+                .iter()
+                .filter(|request| {
+                    request.common.workspace_id == workspace.id
+                        && request.common.folder_id.as_deref() == parent_id
+                })
+                .map(SourceItem::WebSocket),
         )
         .collect::<Vec<_>>();
     source_items.sort_by(|left, right| {
@@ -258,12 +271,19 @@ fn convert_items(
             SourceItem::Request(request) => {
                 convert_request(workspace, request, folders, diagnostics)
             }
+            SourceItem::WebSocket(request) => Ok(websocket::convert_request(
+                workspace,
+                request,
+                folders,
+                diagnostics,
+            )),
         })
         .collect()
 }
 
 mod diagnostics;
 mod request;
+mod websocket;
 
 pub(super) use diagnostics::diagnose_extra_fields;
 use diagnostics::{
