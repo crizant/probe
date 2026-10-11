@@ -446,6 +446,33 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         assert!(visual.debug_bounds("editor-search-input").is_some());
         assert!(visual.debug_bounds("response-search").is_none());
     }
+    let search_focus = window
+        .update(cx, |_, window, cx| {
+            window.focused(cx).expect("search should have focus")
+        })
+        .expect("test window should remain open");
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let body = visual.debug_bounds("response-body").unwrap();
+        visual.simulate_click(body.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |_, window, cx| {
+            assert_ne!(window.focused(cx), Some(search_focus.clone()))
+        })
+        .expect("test window should remain open");
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let input = visual.debug_bounds("editor-search-input").unwrap();
+        visual.simulate_click(input.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |_, window, cx| {
+            assert_eq!(window.focused(cx), Some(search_focus))
+        })
+        .expect("test window should remain open");
     cx.simulate_keystrokes(window.into(), "o k");
     cx.run_until_parked();
     {

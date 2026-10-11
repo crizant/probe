@@ -157,6 +157,7 @@ pub(super) fn editor_search_card_overlay(
                     });
                     escape_editor.update(cx, |editor, cx| editor.focus(window, cx));
                 })
+                .occlude()
                 .absolute()
                 .top(px(theme.metrics.spacing_2))
                 .right(px(theme.metrics.spacing_2))
