@@ -1,6 +1,8 @@
 //! Desktop-only, bounded presentation state. Transport ownership stays in Session.
 use gpui::{ListAlignment, ListState, px};
-use probe_application::{CloseOrigin, SessionData, SessionError, SessionEvent, SessionSender};
+use probe_application::{
+    CloseOrigin, SessionData, SessionError, SessionEvent, SessionSender, close_code_name,
+};
 use probe_core::RequestKey;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -84,8 +86,14 @@ impl TimelineEntry {
                         CloseOrigin::Remote => "remote",
                         CloseOrigin::Error => "error",
                     },
-                    code.map(|c| format!(" · {c}")).unwrap_or_default(),
-                    if reason.is_empty() {
+                    match *code {
+                        Some(code) => match close_code_name(code) {
+                            Some(name) => format!(" · {code} {name}"),
+                            None => format!(" · {code}"),
+                        },
+                        None => String::new(),
+                    },
+                    if reason.trim().is_empty() {
                         String::new()
                     } else {
                         format!(" · {reason}")
@@ -115,6 +123,7 @@ impl TimelineEntry {
             }
     }
 }
+
 pub(crate) struct SessionState {
     pub(crate) generation: u64,
     pub(crate) state: ConnectionState,
@@ -471,5 +480,49 @@ mod tests {
         let entry = TimelineEntry::new(SessionEvent::Received(SessionData::Binary(vec![0, 1, 2])));
         assert_eq!(entry.original.as_deref(), Some("AAEC"));
         assert!(entry.display.starts_with("Binary · 3 B"));
+    }
+
+    #[test]
+    fn close_timeline_keeps_standard_names_and_peer_reasons() {
+        fn display(origin: CloseOrigin, code: Option<u16>, reason: &str) -> String {
+            TimelineEntry::new(SessionEvent::Closed {
+                origin,
+                code,
+                reason: reason.to_owned(),
+            })
+            .display
+        }
+        assert_eq!(
+            display(CloseOrigin::Remote, Some(1012), "restarting"),
+            "Disconnected · remote · 1012 Service Restart · restarting"
+        );
+        assert_eq!(
+            display(CloseOrigin::Local, Some(1000), ""),
+            "Disconnected · local · 1000 Normal Closure"
+        );
+        assert_eq!(
+            display(CloseOrigin::Local, Some(4000), "custom"),
+            "Disconnected · local · 4000 · custom"
+        );
+        assert_eq!(
+            display(CloseOrigin::Remote, Some(1004), ""),
+            "Disconnected · remote · 1004"
+        );
+        assert_eq!(
+            display(CloseOrigin::Error, None, "reset"),
+            "Disconnected · error · reset"
+        );
+        assert_eq!(
+            display(CloseOrigin::Remote, Some(1012), " \t "),
+            "Disconnected · remote · 1012 Service Restart"
+        );
+        assert_eq!(
+            display(CloseOrigin::Local, Some(4000), " "),
+            "Disconnected · local · 4000"
+        );
+        assert_eq!(
+            display(CloseOrigin::Local, None, ""),
+            "Disconnected · local"
+        );
     }
 }

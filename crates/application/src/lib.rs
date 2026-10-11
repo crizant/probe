@@ -16,3 +16,4 @@ pub use execution::{
     CloseOrigin, Session, SessionData, SessionError, SessionEvent, SessionSender,
     WebSocketExecution,
 };
+pub use probe_websocket::close_code_name;
