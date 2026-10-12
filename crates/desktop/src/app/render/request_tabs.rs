@@ -168,7 +168,7 @@ impl ProbeApp {
                         tab.bg(active_tab_background)
                             .border_b_1()
                             .border_color(theme.colors.actions.accent)
-                            .text_color(theme.colors.actions.accent)
+                            .text_color(theme.colors.text.accent)
                     })
                     .when(!active, |tab| {
                         tab.text_color(theme.colors.text.secondary)
