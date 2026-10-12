@@ -61,7 +61,7 @@ pub(crate) fn list(
         }));
     }
     Ok(CommandOutput {
-        human: table::render(&columns, &rows, table::terminal_width()),
+        human: table::render_terminal(&columns, &rows),
         json: json!({ "requests": requests }),
     })
 }
@@ -137,7 +137,7 @@ fn variable_output(variables: &[RequestVariableInfo]) -> CommandOutput {
         })
         .collect::<Vec<_>>();
     CommandOutput {
-        human: table::render(&columns, &rows, table::terminal_width()),
+        human: table::render_terminal(&columns, &rows),
         json: json!({ "variables": json_variables }),
     }
 }

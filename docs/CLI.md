@@ -8,13 +8,18 @@ diagnostics on stderr. Add `--json` to commands that return data or structured e
 `request list`, `folder list`, `environment list`, and `request variables` use
 space-aligned columns measured in terminal display cells, including CJK characters.
 Each item stays on one line. Long values end with `…`; selectors and folder parent
-selectors truncate in the middle to retain both ends. Embedded control characters,
-including tabs and line breaks, become spaces in these tables.
+selectors truncate in the middle to retain both ends. CSI/OSC ANSI escape sequences
+are stripped in full. Control characters, bidi controls, and Unicode line/paragraph
+separators become spaces in these tables.
 
 Tables adapt to stdout's terminal width. Redirected output or unavailable terminal
-size uses a deterministic 120-column limit. Selectors are capped at 28 columns,
+size uses a deterministic 120-column limit. `COLUMNS` is deliberately ignored.
+Piped human output is space-aligned and may be truncated; scripts should use
+`--json` for structured, complete values instead of parsing human tables.
+Selectors and folder parent selectors are capped at 28 columns,
 request and folder names at 36, and environment and variable names at 32. The final
-URL, PARENT, EXTENDS, or USED IN column uses the remaining space. Narrow layouts
+URL, EXTENDS, or USED IN column uses the remaining space. Folder PARENT stays
+within the same 28-column cap as SELECTOR. Narrow layouts
 preserve compact type, method, and boolean columns before shrinking text; headers
 are preserved where space permits. Extremely narrow terminals may truncate headers
 and compact values too. JSON output retains full values and the same fields and order.

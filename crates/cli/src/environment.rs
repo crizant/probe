@@ -97,7 +97,7 @@ pub(crate) fn list(
         environments.push(entry);
     }
     Ok(CommandOutput {
-        human: table::render(&columns, &rows, table::terminal_width()),
+        human: table::render_terminal(&columns, &rows),
         json: json!({ "environments": environments }),
     })
 }

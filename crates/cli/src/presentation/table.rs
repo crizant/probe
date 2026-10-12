@@ -49,12 +49,22 @@ impl Column {
     }
 }
 
-pub(crate) fn terminal_width() -> Option<usize> {
+fn terminal_width(is_terminal: bool, size: impl FnOnce() -> Option<usize>) -> Option<usize> {
     // Redirected output must be deterministic, even when stderr has a terminal.
-    if !stdout().is_terminal() {
+    if !is_terminal {
         return None;
     }
-    terminal_size::terminal_size().map(|(terminal_size::Width(width), _)| usize::from(width))
+    size()
+}
+
+pub(crate) fn render_terminal<const N: usize>(
+    columns: &[Column; N],
+    rows: &[[String; N]],
+) -> String {
+    let width = terminal_width(stdout().is_terminal(), || {
+        terminal_size::terminal_size().map(|(terminal_size::Width(width), _)| usize::from(width))
+    });
+    render(columns, rows, width)
 }
 
 pub(crate) fn render<const N: usize>(
@@ -72,17 +82,10 @@ pub(crate) fn render<const N: usize>(
         0
     };
     let budget = limit.saturating_sub(gap * (N - 1));
-    // User-provided YAML may contain line breaks or tabs. Never let these create
-    // extra rows, tab stops, or terminal controls. Probe adds no ANSI table styling.
+    // Strip terminal sequences before normalizing characters and measuring cells.
     let rows: Vec<[String; N]> = rows
         .iter()
-        .map(|row| {
-            row.each_ref().map(|cell| {
-                cell.chars()
-                    .map(|ch| if ch.is_control() { ' ' } else { ch })
-                    .collect()
-            })
-        })
+        .map(|row| row.each_ref().map(|cell| sanitize(cell)))
         .collect();
     let mut widths: [usize; N] = std::array::from_fn(|index| {
         rows.iter()
@@ -93,26 +96,24 @@ pub(crate) fn render<const N: usize>(
             .min(columns[index].maximum)
             .min(budget)
     });
-    // Preserve compact data first, then flexible headers, then shrink any column
-    // still necessary. Saturating budgets also handle zero-width terminals.
-    for phase in 0..3 {
+    let compact_floors: [usize; N] = std::array::from_fn(|index| {
+        if columns[index].compact {
+            widths[index]
+        } else {
+            0
+        }
+    });
+    let header_floors: [usize; N] = std::array::from_fn(|index| {
+        compact_floors[index].max(columns[index].header.width().min(widths[index]))
+    });
+    // Preserve compact data and flexible headers, then compact data alone, then
+    // allow every column to shrink. Fixed floors make those priorities explicit.
+    for floors in [header_floors, compact_floors, [0; N]] {
         for _ in 0..widths.iter().sum::<usize>().saturating_sub(budget) {
             let candidate = (0..N)
-                .filter_map(|index| {
-                    let column = &columns[index];
-                    let floor = if phase == 0 {
-                        column.header.width().min(widths[index])
-                    } else {
-                        0
-                    };
-                    if (phase < 2 && column.compact) || widths[index] <= floor {
-                        None
-                    } else {
-                        Some((index, widths[index] - floor))
-                    }
-                })
-                .max_by_key(|&(_, slack)| slack);
-            let Some((index, _)) = candidate else { break };
+                .filter(|&index| widths[index] > floors[index])
+                .max_by_key(|&index| widths[index] - floors[index]);
+            let Some(index) = candidate else { break };
             widths[index] -= 1;
         }
     }
@@ -132,8 +133,45 @@ pub(crate) fn render<const N: usize>(
     output
 }
 
+fn sanitize(value: &str) -> String {
+    let mut text = Sanitized(String::new());
+    vte::Parser::new().advance(&mut text, value.as_bytes());
+    text.0
+}
+
+struct Sanitized(String);
+
+// Keep printable text and normalize controls. Default callbacks discard entire
+// CSI/OSC sequences, including OSC payloads and their terminators.
+impl vte::Perform for Sanitized {
+    fn print(&mut self, ch: char) {
+        self.0.push(
+            if ch.is_control()
+                || matches!(ch,
+            '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}'
+            | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            {
+                ' '
+            } else {
+                ch
+            },
+        );
+    }
+
+    fn execute(&mut self, _byte: u8) {
+        self.0.push(' ');
+    }
+}
+
 fn truncate(value: &str, width: usize, policy: Truncation) -> String {
-    if value.width() <= width {
+    // Whole-string width can contract across grapheme boundaries (e.g. Arabic
+    // lam-alef). Fit and clipping must use the same sum of grapheme widths.
+    if value
+        .graphemes(true)
+        .map(UnicodeWidthStr::width)
+        .sum::<usize>()
+        <= width
+    {
         return value.to_owned();
     }
     if width == 0 {
@@ -177,6 +215,31 @@ mod tests {
 
     fn row<const N: usize>(cells: [&str; N]) -> [String; N] {
         cells.map(str::to_owned)
+    }
+
+    #[test]
+    fn tty_uses_available_terminal_size() {
+        assert_eq!(terminal_width(true, || Some(42)), Some(42));
+    }
+
+    #[test]
+    fn redirected_stdout_never_queries_terminal_size() {
+        assert_eq!(
+            terminal_width(false, || panic!("queried terminal size for piped output")),
+            None
+        );
+    }
+
+    #[test]
+    fn tty_without_terminal_size_uses_fallback() {
+        let width = terminal_width(true, || None);
+        assert_eq!(width, None);
+        let columns = [Column::remaining("VALUE")];
+        let rows = [row([&"x".repeat(121)])];
+        assert_eq!(
+            render(&columns, &rows, width),
+            format!("VALUE\n{}…\n", "x".repeat(119))
+        );
     }
 
     #[test]
@@ -242,6 +305,92 @@ mod tests {
     }
 
     #[test]
+    fn flag_and_skin_tone_emoji_stay_whole_and_align() {
+        let columns = [Column::text("NAME", 32), Column::remaining("URL")];
+        let rows = [
+            row(["🇦🇺", "/flag"]),
+            row(["👍🏽", "/skin"]),
+            row(["👩🏽‍💻", "/work"]),
+        ];
+        assert_eq!(
+            render(&columns, &rows, Some(80)),
+            "NAME  URL\n🇦🇺    /flag\n👍🏽    /skin\n👩🏽‍💻    /work\n"
+        );
+        for emoji in ["🇦🇺", "👍🏽", "👩🏽‍💻"] {
+            assert_eq!(
+                truncate(&format!("{emoji}abcd"), 3, Truncation::End),
+                format!("{emoji}…")
+            );
+            assert_eq!(
+                truncate(&format!("ab{emoji}"), 5, Truncation::End),
+                format!("ab{emoji}")
+            );
+            assert_eq!(
+                truncate(&format!("abcd{emoji}"), 5, Truncation::Middle),
+                format!("ab…{emoji}")
+            );
+        }
+    }
+
+    #[test]
+    fn fit_and_clipping_share_the_grapheme_budget() {
+        // These separate graphemes contract to one cell in whole-string width.
+        let lam_alef = "لا";
+        assert_eq!(lam_alef.width(), 1);
+        assert_eq!(truncate(lam_alef, 1, Truncation::End), "…");
+        assert_eq!(truncate(lam_alef, 2, Truncation::End), lam_alef);
+        assert_eq!(
+            truncate(&format!("{lam_alef}abcd"), 3, Truncation::End),
+            "لا…"
+        );
+    }
+
+    #[test]
+    fn bidi_controls_and_unicode_separators_become_spaces() {
+        for ch in [
+            '\u{061c}', '\u{200e}', '\u{200f}', '\u{2028}', '\u{2029}', '\u{202a}', '\u{202b}',
+            '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+        ] {
+            assert_eq!(sanitize(&format!("a{ch}b")), "a b", "U+{:04X}", ch as u32);
+        }
+        assert_eq!(
+            render(
+                &[Column::text("NAME", 32)],
+                &[row(["left\u{202e}right\u{2028}next"])],
+                None
+            ),
+            "NAME\nleft right next\n"
+        );
+    }
+
+    #[test]
+    fn entire_csi_and_osc_sequences_are_removed() {
+        for (input, expected) in [
+            ("\u{1b}[31mred\u{1b}[0m", "red"),
+            ("a\u{1b}[2Jb", "ab"),
+            ("\u{1b}]0;window title\u{7}visible", "visible"),
+            (
+                "\u{1b}]8;;https://example.com\u{1b}\\link\u{1b}]8;;\u{1b}\\",
+                "link",
+            ),
+            ("start\u{1b}[31", "start"),
+            ("start\u{1b}]0;unfinished", "start"),
+            ("literal [31m and ]0;title", "literal [31m and ]0;title"),
+        ] {
+            assert_eq!(sanitize(input), expected);
+        }
+    }
+
+    #[test]
+    fn standalone_ascii_and_c1_controls_become_spaces() {
+        for ch in [
+            '\0', '\u{7}', '\t', '\n', '\r', '\u{7f}', '\u{85}', '\u{9f}',
+        ] {
+            assert_eq!(sanitize(&format!("a{ch}b")), "a b");
+        }
+    }
+
+    #[test]
     fn narrow_layout_preserves_compact_columns_and_headers_when_possible() {
         let columns = [
             Column::text("NAME", 32),
@@ -303,6 +452,8 @@ mod tests {
         assert_eq!(table.lines().count(), 2);
         assert!(!table.contains(['\t', '\r', '\u{1b}']));
         assert!(table.contains("one two three"));
+        assert!(table.contains("/value"));
+        assert!(!table.contains("[31m"));
     }
 
     #[test]

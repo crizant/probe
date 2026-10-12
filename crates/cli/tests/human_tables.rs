@@ -4,6 +4,58 @@ mod common;
 use common::*;
 use unicode_width::UnicodeWidthStr;
 
+#[test]
+fn piped_request_list_matches_the_byte_exact_golden() {
+    let expected = b"SELECTOR         TYPE  METHOD  NAME    URL\nitems/0          http  GET     Alpha   https://example.com/alpha\nitems/1/items/0  http  POST    Nested  https://example.com/nested\n";
+    for columns in ["1", "999", "invalid"] {
+        let output = probe()
+            .args(["request", "list"])
+            .arg(fixture("phase16-bundled.yml"))
+            .env("COLUMNS", columns)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        assert_eq!(output.stdout, expected);
+    }
+}
+
+#[test]
+fn folder_parent_selectors_are_capped_without_changing_json() {
+    let workspace = temporary_path("parent-column-cap.yml");
+    let mut items = Vec::new();
+    for depth in (0..8).rev() {
+        items = vec![
+            serde_json::json!({"info": {"name": format!("Level {depth}"), "type": "folder"}, "items": items}),
+        ];
+    }
+    let source = serde_json::json!({"opencollection": "1.0.0", "info": {"name": "Parents"}, "bundled": true, "items": items});
+    fs::write(&workspace, serde_json::to_vec(&source).unwrap()).unwrap();
+    let output = probe()
+        .args(["folder", "list"])
+        .arg(&workspace)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let human = String::from_utf8(output.stdout).unwrap();
+    for line in human.lines().skip(2) {
+        let parent = line.split_whitespace().last().unwrap();
+        assert!(parent.width() <= 28, "{parent}");
+    }
+    let deepest_parent = human
+        .lines()
+        .last()
+        .unwrap()
+        .split_whitespace()
+        .last()
+        .unwrap();
+    assert!(deepest_parent.contains('…'));
+    assert!(deepest_parent.ends_with("items/0"));
+    let listed = run_json(&["folder", "list", workspace.to_str().unwrap()]);
+    assert_eq!(listed["folders"][7]["parent"], ["items/0"; 7].join("/"));
+    fs::remove_file(workspace).unwrap();
+}
+
 // util-linux script supplies a controlled terminal on Linux, independent of the
 // developer's terminal. The portable formatter tests cover every width directly.
 #[cfg(target_os = "linux")]

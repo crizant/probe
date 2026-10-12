@@ -142,7 +142,7 @@ pub(crate) fn list_folders(
     let columns = [
         Column::selector("SELECTOR", 28),
         Column::text("NAME", 36),
-        Column::selector("PARENT", usize::MAX),
+        Column::selector("PARENT", 28),
     ];
     let mut rows = Vec::new();
     let mut folders = Vec::with_capacity(loaded.folders().len());
@@ -167,7 +167,7 @@ pub(crate) fn list_folders(
         }));
     }
     Ok(CommandOutput {
-        human: table::render(&columns, &rows, table::terminal_width()),
+        human: table::render_terminal(&columns, &rows),
         json: json!({ "folders": folders }),
     })
 }
