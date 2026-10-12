@@ -305,6 +305,10 @@ impl ProbeApp {
                             ("websocket-draft", key.slot()).into(),
                             state.map(|s| s.draft.clone()).unwrap_or_default(),
                             connected,
+                            match state.map(|s| s.input_format).unwrap_or_default() {
+                                WebSocketInputFormat::Text => "Type a message…",
+                                WebSocketInputFormat::Binary => "Enter Base64…",
+                            },
                             move |value, _, cx| {
                                 let _ = draft_view.update(cx, |view, cx| {
                                     if let Some(state) = view.websocket.sessions.get_mut(&key) {

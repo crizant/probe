@@ -54,6 +54,7 @@ pub(crate) fn websocket_composer(
     id: ElementId,
     value: String,
     enabled: bool,
+    placeholder: &'static str,
     on_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui::AnyElement {
     ProbeEditor {
@@ -61,7 +62,7 @@ pub(crate) fn websocket_composer(
         id,
         value: value.into(),
         placeholder: if enabled {
-            "Type a message…"
+            placeholder
         } else {
             "Connect to type a message…"
         }
