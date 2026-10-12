@@ -59,6 +59,8 @@ pub struct SurfaceColors {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextColors {
     pub primary: Rgba,
+    /// Accent text on lightly tinted surfaces.
+    pub accent: Rgba,
     pub secondary: Rgba,
     pub muted: Rgba,
     pub placeholder: Rgba,
@@ -394,6 +396,7 @@ fn porcelain_honey() -> Colors {
         },
         text: TextColors {
             primary: rgba(0x4b4641ff),     // warm graphite
+            accent: rgba(0xae4d00ff),      // deep orange for tinted surfaces
             secondary: rgba(0x6c655eff),   // soft graphite
             muted: rgba(0x756e66ff),       // stone graphite
             placeholder: rgba(0xa9a199ff), // stone
@@ -473,6 +476,7 @@ fn graphite_honey() -> Colors {
         },
         text: TextColors {
             primary: rgba(0xe9e6e0ff),     // soft off-white
+            accent: rgba(0xd98e26ff),      // golden orange for tinted surfaces
             secondary: rgba(0xcac5bdff),   // muted text
             muted: rgba(0xa7a19aff),       // graphite text
             placeholder: rgba(0x807c76ff), // stone

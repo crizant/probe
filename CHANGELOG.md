@@ -25,6 +25,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Active request tab text in light mode uses a darker orange that meets WCAG AA contrast.
+
 - WebSocket `Cmd + Enter` on macOS and `Ctrl + Enter` on Windows/Linux follow
   keyboard focus: connect from the request area, or send from the message composer.
   Disconnected composers preserve the draft and prompt you to connect first rather
