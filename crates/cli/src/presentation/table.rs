@@ -163,10 +163,9 @@ impl vte::Perform for Sanitized {
     }
 }
 
-// Whole-string width can contract across grapheme boundaries (e.g. Arabic
-// lam-alef). Use the same grapheme sum for measurement, clipping, and padding.
+// Preserve unicode-width's cross-grapheme shaping rules in every layout check.
 fn display_width(value: &str) -> usize {
-    value.graphemes(true).map(UnicodeWidthStr::width).sum()
+    UnicodeWidthStr::width(value)
 }
 
 fn truncate(value: &str, width: usize, policy: Truncation) -> String {
@@ -176,36 +175,34 @@ fn truncate(value: &str, width: usize, policy: Truncation) -> String {
     if width == 0 {
         return String::new();
     }
-    let available = width - 1; // The ellipsis occupies one display cell.
-    let (prefix_budget, suffix_budget) = match policy {
-        Truncation::End => (available, 0),
-        Truncation::Middle => (available.div_ceil(2), available / 2),
+    // Reserve roughly half the text space for the suffix in middle truncation.
+    // The prefix limit includes the ellipsis; measure complete candidates so
+    // ligatures across grapheme boundaries retain their whole-string width.
+    let prefix_limit = match policy {
+        Truncation::End => width,
+        Truncation::Middle => width / 2 + 1,
     };
     let mut prefix = String::new();
-    let mut used = 0;
     for grapheme in value.graphemes(true) {
-        if used + display_width(grapheme) > prefix_budget {
+        let candidate = format!("{prefix}{grapheme}…");
+        if display_width(&candidate) > prefix_limit {
             break;
         }
         prefix.push_str(grapheme);
-        used += display_width(grapheme);
     }
-    let mut suffix = Vec::new();
-    used = 0;
-    if suffix_budget > 0 {
-        for grapheme in value.graphemes(true).rev() {
-            if used + display_width(grapheme) > suffix_budget {
+    let mut output = format!("{prefix}…");
+    if matches!(policy, Truncation::Middle) {
+        let mut suffix = String::new();
+        for grapheme in value[prefix.len()..].graphemes(true).rev() {
+            let candidate = format!("{prefix}…{grapheme}{suffix}");
+            if display_width(&candidate) > width {
                 break;
             }
-            suffix.push(grapheme);
-            used += display_width(grapheme);
+            suffix.insert_str(0, grapheme);
+            output = candidate;
         }
     }
-    prefix.push('…');
-    for grapheme in suffix.into_iter().rev() {
-        prefix.push_str(grapheme);
-    }
-    prefix
+    output
 }
 
 #[cfg(test)]
@@ -332,24 +329,25 @@ mod tests {
     }
 
     #[test]
-    fn fit_and_clipping_share_the_grapheme_budget() {
+    fn fit_and_clipping_use_whole_string_width() {
         // These separate graphemes contract to one cell in whole-string width.
         let lam_alef = "لا";
         assert_eq!(lam_alef.width(), 1);
-        assert_eq!(display_width(lam_alef), 2);
-        assert_eq!(truncate(lam_alef, 1, Truncation::End), "…");
+        assert_eq!(display_width(lam_alef), 1);
+        assert_eq!(truncate(lam_alef, 1, Truncation::End), lam_alef);
         assert_eq!(truncate(lam_alef, 2, Truncation::End), lam_alef);
         assert_eq!(
             truncate(&format!("{lam_alef}abcd"), 3, Truncation::End),
-            "لا…"
+            "لاa…"
         );
+        assert_eq!(truncate("abcdلا", 3, Truncation::Middle), "a…لا");
     }
 
     #[test]
     fn lam_alef_measurement_fit_and_padding_agree() {
         let columns = [Column::remaining("X"), Column::remaining("Y")];
         let rows = [row(["لا", "L"]), row(["a", "A"])];
-        assert_eq!(render(&columns, &rows, Some(5)), "X   Y\nلا  L\na   A\n");
+        assert_eq!(render(&columns, &rows, Some(5)), "X  Y\nلا  L\na  A\n");
         assert_eq!(
             render(&[Column::remaining("X")], &[row(["لا"])], Some(2)),
             "X\nلا\n"
@@ -357,8 +355,32 @@ mod tests {
         assert_eq!(render(&[Column::remaining("لا")], &[], Some(2)), "لا\n");
         assert_eq!(
             render(&[Column::remaining("X")], &[row(["لا"])], Some(1)),
-            "X\n…\n"
+            "X\nلا\n"
         );
+    }
+
+    #[test]
+    fn shaped_text_stays_within_column_and_row_bounds() {
+        let values = [
+            "لا".repeat(40),
+            "لاabcd".repeat(10),
+            "abcdلا".repeat(10),
+            "🇦🇺👍🏽لاe\u{301}".repeat(10),
+        ];
+        for width in 0..34 {
+            for value in &values {
+                for policy in [Truncation::End, Truncation::Middle] {
+                    let cell = truncate(value, width, policy);
+                    assert!(display_width(&cell) <= width, "width {width}: {cell:?}");
+                }
+                let columns = [Column::selector("SELECTOR", 28), Column::remaining("VALUE")];
+                let table = render(&columns, &[[value.clone(), value.clone()]], Some(width));
+                assert!(
+                    table.lines().all(|line| line.width() <= width),
+                    "width {width}: {table:?}"
+                );
+            }
+        }
     }
 
     #[test]
