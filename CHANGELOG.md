@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-12
+
 ### Added
 
 - Send runtime WebSocket binary messages with repeatable `--send-binary <BASE64>`
@@ -502,6 +504,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[0.11.0]: https://github.com/crizant/probe/releases/tag/v0.11.0
 [0.10.8]: https://github.com/crizant/probe/releases/tag/v0.10.8
 [0.10.7]: https://github.com/crizant/probe/releases/tag/v0.10.7
 [0.10.6]: https://github.com/crizant/probe/releases/tag/v0.10.6
