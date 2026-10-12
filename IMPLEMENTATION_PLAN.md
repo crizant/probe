@@ -26,8 +26,11 @@ than OpenCollection content. The design contract lives in
 
 ### Streaming Protocols
 
-WebSocket message variant management, configured binary encoding and runtime binary
-sending, and persisted session history remain deferred.
+Runtime WebSocket binary sending is implemented through explicit CLI Base64 inputs
+and the desktop Text/Binary composer selector, using the existing session boundary.
+See [docs/CLI.md](docs/CLI.md) for CLI input semantics.
+WebSocket message variant management, configured binary encoding (pending an official
+OpenCollection encoding contract), and persisted session history remain deferred.
 SSE and streaming gRPC remain future work and may reuse the common session concepts
 where they fit. Protocol implementations stay independent of stdin/stdout and GPUI.
 

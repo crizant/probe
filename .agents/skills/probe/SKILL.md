@@ -27,7 +27,7 @@ Do not manually edit OpenCollection YAML unless Probe cannot perform the require
 
 Before inventing a command, flag, or behavior, consult the full Probe CLI documentation.
 
-- In the Probe repository: `docs/CLI.md`
+- In the Probe repository: [docs/CLI.md](../../../docs/CLI.md)
 - When installed as an agent skill: `references/cli.md`
 
 Treat that documentation as the source of truth for CLI syntax and edge cases.
@@ -307,8 +307,7 @@ output streams interactively (`>` actual outbound messages, `<` inbound messages
 For agent execution, prefer `--max-messages 1 --timeout 10 --json`: live WebSocket
 `--json` is NDJSON, one versioned SessionEvent per line, and terminal errors retain
 nonzero exit status. HTTP/GraphQL and dry-run JSON remain single objects.
-Repeatable `--send` sends literal text without interpolation after the configured
-message. Stdin lines can send more messages; EOF does not close the session.
+See [docs/CLI.md](../../../docs/CLI.md) for runtime message input and error rules.
 `--max-messages` counts inbound data only. `--timeout` is the CLI live-run bound,
 separate from persisted connection timeout. `--expect`, `--output`, and
 `--show-headers` are HTTP/GraphQL-only. Configured binary messages lack an encoding

@@ -2,7 +2,7 @@ use super::*;
 use crate::websocket::{
     ConnectionState, DisconnectLine, disconnect_severity, disconnect_severity_color,
 };
-use probe_application::SessionEvent;
+use probe_application::{SessionEvent, WebSocketInputFormat};
 impl ProbeApp {
     pub(in crate::app) fn render_websocket_panel(
         &self,
@@ -26,6 +26,7 @@ impl ProbeApp {
         let clear = cx.weak_entity();
         let draft_view = cx.weak_entity();
         let send = cx.weak_entity();
+        let message_type = cx.weak_entity();
         let mut panel = div()
             .flex_none()
             .flex()
@@ -281,6 +282,10 @@ impl ProbeApp {
                             ("websocket-draft", key.slot()).into(),
                             state.map(|s| s.draft.clone()).unwrap_or_default(),
                             connected,
+                            match state.map(|s| s.input_format).unwrap_or_default() {
+                                WebSocketInputFormat::Text => "Type a message…",
+                                WebSocketInputFormat::Binary => "Enter Base64…",
+                            },
                             move |value, _, cx| {
                                 let _ = draft_view.update(cx, |view, cx| {
                                     if let Some(state) = view.websocket.sessions.get_mut(&key) {
@@ -292,34 +297,67 @@ impl ProbeApp {
                         )),
                 )
                 .child(
-                    components::primary_button_with_disabled(
-                        theme,
-                        "websocket-send",
-                        "Send",
-                        !connected || state.is_some_and(|s| s.sending),
-                        move |_, _, cx| {
-                            let _ =
-                                send.update(cx, |view, cx| view.send_websocket_message(key, cx));
-                        },
-                    )
-                    .self_start()
-                    .tooltip(move |window, cx| {
-                        let shortcut = components::shortcut_label_for_action_in_context(
-                            window,
-                            &SendWebSocketMessage,
-                            "WebSocketComposer",
-                        );
-                        let label = shortcut.map_or_else(
-                            || "Send message".to_owned(),
-                            |shortcut| format!("Send message ({})", shortcut.replace('⏎', "↵")),
-                        );
-                        cx.new(|_| components::ActionTooltip {
-                            id: "websocket-send-tooltip",
-                            theme,
-                            label,
-                        })
-                        .into()
-                    }),
+                    div()
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .gap(px(theme.metrics.spacing_1))
+                        .child(
+                            components::dropdown(
+                                theme,
+                                "websocket-message-type",
+                                "WebSocket message type",
+                                Some(state.map(|s| s.input_format).unwrap_or_default()),
+                                vec![
+                                    (WebSocketInputFormat::Text, "Text".into()),
+                                    (WebSocketInputFormat::Binary, "Binary".into()),
+                                ],
+                                100.0,
+                                move |value, _, cx| {
+                                    let format = value.copied().unwrap_or_default();
+                                    let _ = message_type.update(cx, |view, cx| {
+                                        if let Some(state) = view.websocket.sessions.get_mut(&key) {
+                                            state.input_format = format;
+                                        }
+                                        cx.notify();
+                                    });
+                                },
+                            )
+                            .disabled(!connected || state.is_some_and(|s| s.sending)),
+                        )
+                        .child(
+                            components::primary_button_with_disabled(
+                                theme,
+                                "websocket-send",
+                                "Send",
+                                !connected || state.is_some_and(|s| s.sending),
+                                move |_, _, cx| {
+                                    let _ = send.update(cx, |view, cx| {
+                                        view.send_websocket_message(key, cx)
+                                    });
+                                },
+                            )
+                            .self_start()
+                            .tooltip(move |window, cx| {
+                                let shortcut = components::shortcut_label_for_action_in_context(
+                                    window,
+                                    &SendWebSocketMessage,
+                                    "WebSocketComposer",
+                                );
+                                let label = shortcut.map_or_else(
+                                    || "Send message".to_owned(),
+                                    |shortcut| {
+                                        format!("Send message ({})", shortcut.replace('⏎', "↵"))
+                                    },
+                                );
+                                cx.new(|_| components::ActionTooltip {
+                                    id: "websocket-send-tooltip",
+                                    theme,
+                                    label,
+                                })
+                                .into()
+                            }),
+                        ),
                 ),
         )
     }

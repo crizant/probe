@@ -238,7 +238,8 @@ pub(crate) struct RunOptions<'a> {
     pub(crate) secret_provider_env: bool,
     pub(crate) expectations: &'a [StatusExpectation],
     pub(crate) mode: crate::streaming::OutputMode,
-    pub(crate) sends: &'a [String],
+    pub(crate) sends: &'a [probe_application::SessionData],
+    pub(crate) stdin_format: Option<probe_application::WebSocketInputFormat>,
     pub(crate) timeout: Option<u64>,
     pub(crate) max_messages: Option<u64>,
 }
@@ -269,11 +270,12 @@ pub(crate) fn run(
             ));
         }
     } else if !options.sends.is_empty()
+        || options.stdin_format.is_some()
         || options.timeout.is_some()
         || options.max_messages.is_some()
     {
         return Err(CliError::invalid_arguments(
-            "--send, --timeout and --max-messages are WebSocket-only",
+            "--send, --send-binary, --stdin-format, --timeout and --max-messages are WebSocket-only",
         ));
     }
     let provider: &dyn SecretProvider = if options.secret_provider_env {

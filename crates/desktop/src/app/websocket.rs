@@ -98,14 +98,25 @@ impl ProbeApp {
         let Some(sender) = state.sender.clone() else {
             return;
         };
-        let text = state.draft.clone();
+        let draft = state.draft.clone();
+        let data = match state.input_format.decode(&draft) {
+            Ok(data) => data,
+            Err(_) => {
+                self.show_toast(
+                    ToastIntent::Error,
+                    "Binary messages require valid standard Base64.",
+                    cx,
+                );
+                return;
+            }
+        };
         let generation = state.generation;
         state.sending = true;
         let result = self
             .execution_service
             .as_ref()
             .unwrap()
-            .send_websocket(sender, text.clone());
+            .send_websocket(sender, data);
         cx.spawn(async move |view, cx| {
             let result = result
                 .await
@@ -118,7 +129,7 @@ impl ProbeApp {
                     .find(|s| s.generation == generation)
                 {
                     state.sending = false;
-                    if result.is_ok() && state.draft == text {
+                    if result.is_ok() && state.draft == draft {
                         state.draft.clear();
                     }
                     if let Err(error) = result {

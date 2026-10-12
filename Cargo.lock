@@ -4973,6 +4973,7 @@ dependencies = [
 name = "probe-application"
 version = "0.10.8"
 dependencies = [
+ "base64",
  "futures-util",
  "probe-core",
  "probe-http",

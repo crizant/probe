@@ -264,11 +264,12 @@ pub(crate) fn run(
         output.started = true;
         let sender = session.sender();
         let sends = options.sends.to_vec();
+        let stdin_format = options.stdin_format.unwrap_or_default();
         // A separate task may wait for command capacity without preventing the
         // consumer from draining the bounded event queue. EOF only ends this task.
         let mut producer = tokio::spawn(async move {
-            for text in sends {
-                match sender.send(SessionData::Text(text)).await {
+            for data in sends {
+                match sender.send(data).await {
                     Ok(()) => {}
                     Err(SessionError::Closed) => return Ok(()),
                     Err(error) => return Err(CliError::session(error)),
@@ -276,7 +277,12 @@ pub(crate) fn run(
             }
             while let Some(line) = input.recv().await {
                 let text = line.map_err(|_| input_error())?;
-                match sender.send(SessionData::Text(text)).await {
+                let data = stdin_format.decode(&text).map_err(|_| CliError {
+                    message: "invalid standard Base64 in WebSocket stdin (--stdin-format binary)"
+                        .into(),
+                    ..input_error()
+                })?;
+                match sender.send(data).await {
                     Ok(()) => {}
                     Err(SessionError::Closed) => return Ok(()),
                     Err(error) => return Err(CliError::session(error)),

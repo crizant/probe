@@ -6,6 +6,9 @@
 #![forbid(unsafe_code)]
 
 mod execution;
+mod websocket_input;
+
+pub use websocket_input::WebSocketInputFormat;
 
 pub use execution::{
     ExecutedResponse, HttpExecution, NoSecrets, PreparedRequest, RequestResolution,

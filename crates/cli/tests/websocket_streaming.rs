@@ -381,12 +381,25 @@ fn options_are_rejected_without_network_io_and_dry_run_is_a_document() {
         fs::write(&http, format!("opencollection: 1.0.0\ninfo:\n  name: Protocol\nbundled: true\nitems:\n- info:\n    name: Request\n    type: {protocol}\n  {protocol}:\n    method: GET\n    url: http://{}\n", address)).unwrap();
         for extra in [
             vec!["--send", "hello"],
+            vec!["--send-binary", "AAEC"],
+            vec!["--stdin-format", "text"],
+            vec!["--stdin-format", "binary"],
             vec!["--timeout", "1"],
             vec!["--max-messages", "1"],
         ] {
             let mut args = vec!["request", "run", http.to_str().unwrap(), "items/0"];
             args.extend(extra);
-            assert_eq!(probe_cli::run(args).exit_code, 2);
+            args.push("--json");
+            let output = probe_cli::run(args);
+            assert_eq!(output.exit_code, 2);
+            let value: Value = serde_json::from_str(&output.stdout).unwrap();
+            assert_eq!(value["error"]["category"], "invalid_arguments");
+            assert!(
+                value["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("WebSocket-only")
+            );
         }
         let get = probe_cli::run(["request", "get", http.to_str().unwrap(), "items/0"]);
         assert!(get.stdout.contains("Method: GET\n"));
@@ -394,6 +407,9 @@ fn options_are_rejected_without_network_io_and_dry_run_is_a_document() {
     }
     for extra in [
         vec!["--send", "hello"],
+        vec!["--send-binary", "AAEC"],
+        vec!["--stdin-format", "text"],
+        vec!["--stdin-format", "binary"],
         vec!["--timeout", "1"],
         vec!["--max-messages", "1"],
         vec!["--output", "response.txt"],
@@ -407,7 +423,21 @@ fn options_are_rejected_without_network_io_and_dry_run_is_a_document() {
             "--dry-run",
         ];
         args.extend(extra);
-        assert_eq!(probe_cli::run(args).exit_code, 2);
+        args.push("--json");
+        let output = probe_cli::run(args);
+        assert_eq!(output.exit_code, 2);
+        let value: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("--dry-run")
+                || value["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("live WebSocket session")
+        );
     }
     for option in ["--max-messages", "--timeout"] {
         for value in ["0", "-1", "abc", ""] {
@@ -1153,4 +1183,284 @@ fn unsupported_wall_clock_duration_is_rejected_before_network_io() {
     );
     assert!(listener.accept().is_err());
     fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn mixed_send_arguments_and_binary_stdin_preserve_order_and_exact_bytes() {
+    let (url, server) = server(|mut socket| async move {
+        for expected in [
+            Message::Text("hello".into()),
+            Message::Binary(vec![0, 1, 2].into()),
+            Message::Text("world".into()),
+            Message::Binary(vec![255].into()),
+            Message::Binary(vec![0, 1, 2].into()),
+            Message::Binary(vec![1, 2, 3].into()),
+            Message::Binary(vec![].into()),
+        ] {
+            assert_eq!(socket.next().await.unwrap().unwrap(), expected);
+        }
+        close(&mut socket).await;
+    });
+    let path = workspace(&url, None);
+    let mut child = probe()
+        .args(["request", "run"])
+        .arg(&path)
+        .args([
+            "items/0",
+            "--send",
+            "hello",
+            "--send-binary",
+            "AAEC",
+            "--send",
+            "world",
+            "--send-binary",
+            "/w==",
+            "--stdin-format",
+            "binary",
+            "--json",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"AAEC\r\nAQID\n\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let sent: Vec<_> = records(&stdout)
+        .into_iter()
+        .filter(|v| v["event"] == "sent")
+        .map(|v| v["data"].clone())
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            serde_json::json!({"type":"text","value":"hello"}),
+            serde_json::json!({"type":"binary","encoding":"base64","value":"AAEC"}),
+            serde_json::json!({"type":"text","value":"world"}),
+            serde_json::json!({"type":"binary","encoding":"base64","value":"/w=="}),
+            serde_json::json!({"type":"binary","encoding":"base64","value":"AAEC"}),
+            serde_json::json!({"type":"binary","encoding":"base64","value":"AQID"}),
+            serde_json::json!({"type":"binary","encoding":"base64","value":""}),
+        ]
+    );
+    server.join().unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn stdin_defaults_to_text_and_explicit_text_keeps_lines_literal() {
+    for extra in [vec![], vec!["--stdin-format", "text"]] {
+        let (url, server) = server(|mut socket| async move {
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Binary(vec![0, 1, 2].into())
+            );
+            for expected in ["AAEC", "/binary", "", "{{token}}"] {
+                assert_eq!(
+                    socket.next().await.unwrap().unwrap(),
+                    Message::Text(expected.into())
+                );
+            }
+            close(&mut socket).await;
+        });
+        let path = workspace(&url, None);
+        let mut args = vec![
+            "request",
+            "run",
+            path.to_str().unwrap(),
+            "items/0",
+            "--send-binary",
+            "AAEC",
+        ];
+        args.extend(extra);
+        let output = probe_cli::run_with_stdin(args, &mut &b"AAEC\r\n/binary\n\n{{token}}"[..]);
+        assert_eq!(output.exit_code, 0, "{output:?}");
+        assert!(
+            output
+                .stdout
+                .contains("> AAEC\n> /binary\n> \n> {{token}}\n")
+        );
+        server.join().unwrap();
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn invalid_binary_arguments_are_input_errors_before_any_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let path = workspace(&format!("ws://{}", listener.local_addr().unwrap()), None);
+    for value in ["!", "_w==", "/w", "/x==", "--help", "--json", "--quiet"] {
+        let output = probe_cli::run([
+            "request",
+            "run",
+            path.to_str().unwrap(),
+            "items/0",
+            "--json",
+            "--send",
+            "must not send",
+            "--send-binary",
+            value,
+        ]);
+        assert_eq!(output.exit_code, 2, "{output:?}");
+        let value: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("standard Base64")
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+    for position in 1..=3 {
+        let mut args = vec![
+            "request",
+            "run",
+            path.to_str().unwrap(),
+            "items/0",
+            "--json",
+        ];
+        for _ in 1..position {
+            args.extend(["--send-binary", "AAEC", "--send", "literal"]);
+        }
+        args.extend(["--send-binary", "private-invalid!"]);
+        let output = probe_cli::run(args);
+        assert_eq!(output.exit_code, 2);
+        let error: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("value #{position}"))
+        );
+        assert!(!output.stdout.contains("private-invalid!"));
+        assert!(!output.stderr.contains("private-invalid!"));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+    for extra in [
+        vec!["--send-binary"],
+        vec!["--stdin-format"],
+        vec!["--stdin-format", "hex"],
+        vec!["--stdin-format", "text", "--stdin-format", "binary"],
+    ] {
+        let mut args = vec!["request", "run", path.to_str().unwrap(), "items/0"];
+        args.extend(extra);
+        assert_eq!(probe_cli::run(args).exit_code, 2);
+    }
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn invalid_binary_stdin_stops_sending_and_closes_with_stdin_error() {
+    for json in [false, true] {
+        let (url, server) = server(|mut socket| async move {
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Binary(vec![0, 1, 2].into())
+            );
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Close(_)
+            ));
+            socket.flush().await.unwrap();
+        });
+        let path = workspace(&url, None);
+        let mut args = vec![
+            "request",
+            "run",
+            path.to_str().unwrap(),
+            "items/0",
+            "--stdin-format",
+            "binary",
+        ];
+        if json {
+            args.push("--json");
+        }
+        let output = probe_cli::run_with_stdin(args, &mut &b"AAEC\nprivate-invalid!\nAQID\n"[..]);
+        assert_eq!(output.exit_code, 6, "{output:?}");
+        assert!(!output.stdout.contains("private-invalid"));
+        assert!(!output.stderr.contains("private-invalid"));
+        if json {
+            let values = records(&output.stdout);
+            assert_eq!(values.iter().filter(|v| v["event"] == "sent").count(), 1);
+            assert_eq!(
+                values.iter().filter(|v| v.get("error").is_some()).count(),
+                1,
+                "a bad Base64 stdin line must produce exactly one error"
+            );
+            let error = values.last().unwrap();
+            assert_eq!(error["error"]["category"], "stdin_error");
+            assert!(
+                error["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("standard Base64")
+            );
+            assert_eq!(values[values.len() - 2]["event"], "closed");
+            assert_eq!(values[values.len() - 2]["origin"], "local");
+            assert!(output.stderr.is_empty());
+        } else {
+            assert!(output.stdout.contains("> [binary/base64] AAEC\n"));
+            assert!(output.stdout.contains("Closed: local"));
+            assert!(output.stderr.contains("error[stdin_error]"));
+            assert_eq!(
+                output.stderr.lines().count(),
+                1,
+                "a bad Base64 stdin line must produce exactly one diagnostic"
+            );
+            assert!(output.stderr.contains("standard Base64"));
+        }
+        server.join().unwrap();
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn stdin_format_is_rejected_before_consuming_a_workspace_from_stdin() {
+    for format in ["text", "binary"] {
+        let mut stdin = std::io::Cursor::new(b"must not consume this workspace input");
+        let output = probe_cli::run_with_stdin(
+            [
+                "request",
+                "run",
+                "-",
+                "items/0",
+                "--stdin-format",
+                format,
+                "--json",
+            ],
+            &mut stdin,
+        );
+        assert_eq!(output.exit_code, 2, "{output:?}");
+        let value: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("--stdin-format")
+        );
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("stdin is consumed by the workspace")
+        );
+        assert_eq!(stdin.position(), 0);
+    }
 }
