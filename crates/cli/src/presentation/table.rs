@@ -89,8 +89,8 @@ pub(crate) fn render<const N: usize>(
         .collect();
     let mut widths: [usize; N] = std::array::from_fn(|index| {
         rows.iter()
-            .map(|row| row[index].width())
-            .chain(std::iter::once(columns[index].header.width()))
+            .map(|row| display_width(&row[index]))
+            .chain(std::iter::once(display_width(columns[index].header)))
             .max()
             .unwrap_or(0)
             .min(columns[index].maximum)
@@ -104,7 +104,7 @@ pub(crate) fn render<const N: usize>(
         }
     });
     let header_floors: [usize; N] = std::array::from_fn(|index| {
-        compact_floors[index].max(columns[index].header.width().min(widths[index]))
+        compact_floors[index].max(display_width(columns[index].header).min(widths[index]))
     });
     // Preserve compact data and flexible headers, then compact data alone, then
     // allow every column to shrink. Fixed floors make those priorities explicit.
@@ -125,7 +125,7 @@ pub(crate) fn render<const N: usize>(
             let cell = truncate(&row[index], widths[index], columns[index].truncation);
             line.push_str(&cell);
             // Pad uniformly; the row's final trim removes unused trailing cells.
-            line.push_str(&" ".repeat(widths[index] - cell.width() + gap));
+            line.push_str(&" ".repeat(widths[index] - display_width(&cell) + gap));
         }
         output.push_str(line.trim_end());
         output.push('\n');
@@ -163,15 +163,14 @@ impl vte::Perform for Sanitized {
     }
 }
 
+// Whole-string width can contract across grapheme boundaries (e.g. Arabic
+// lam-alef). Use the same grapheme sum for measurement, clipping, and padding.
+fn display_width(value: &str) -> usize {
+    value.graphemes(true).map(UnicodeWidthStr::width).sum()
+}
+
 fn truncate(value: &str, width: usize, policy: Truncation) -> String {
-    // Whole-string width can contract across grapheme boundaries (e.g. Arabic
-    // lam-alef). Fit and clipping must use the same sum of grapheme widths.
-    if value
-        .graphemes(true)
-        .map(UnicodeWidthStr::width)
-        .sum::<usize>()
-        <= width
-    {
+    if display_width(value) <= width {
         return value.to_owned();
     }
     if width == 0 {
@@ -185,21 +184,21 @@ fn truncate(value: &str, width: usize, policy: Truncation) -> String {
     let mut prefix = String::new();
     let mut used = 0;
     for grapheme in value.graphemes(true) {
-        if used + grapheme.width() > prefix_budget {
+        if used + display_width(grapheme) > prefix_budget {
             break;
         }
         prefix.push_str(grapheme);
-        used += grapheme.width();
+        used += display_width(grapheme);
     }
     let mut suffix = Vec::new();
     used = 0;
     if suffix_budget > 0 {
         for grapheme in value.graphemes(true).rev() {
-            if used + grapheme.width() > suffix_budget {
+            if used + display_width(grapheme) > suffix_budget {
                 break;
             }
             suffix.push(grapheme);
-            used += grapheme.width();
+            used += display_width(grapheme);
         }
     }
     prefix.push('…');
@@ -337,11 +336,28 @@ mod tests {
         // These separate graphemes contract to one cell in whole-string width.
         let lam_alef = "لا";
         assert_eq!(lam_alef.width(), 1);
+        assert_eq!(display_width(lam_alef), 2);
         assert_eq!(truncate(lam_alef, 1, Truncation::End), "…");
         assert_eq!(truncate(lam_alef, 2, Truncation::End), lam_alef);
         assert_eq!(
             truncate(&format!("{lam_alef}abcd"), 3, Truncation::End),
             "لا…"
+        );
+    }
+
+    #[test]
+    fn lam_alef_measurement_fit_and_padding_agree() {
+        let columns = [Column::remaining("X"), Column::remaining("Y")];
+        let rows = [row(["لا", "L"]), row(["a", "A"])];
+        assert_eq!(render(&columns, &rows, Some(5)), "X   Y\nلا  L\na   A\n");
+        assert_eq!(
+            render(&[Column::remaining("X")], &[row(["لا"])], Some(2)),
+            "X\nلا\n"
+        );
+        assert_eq!(render(&[Column::remaining("لا")], &[], Some(2)), "لا\n");
+        assert_eq!(
+            render(&[Column::remaining("X")], &[row(["لا"])], Some(1)),
+            "X\n…\n"
         );
     }
 
