@@ -584,7 +584,7 @@ fn sets_and_unsets_environment_description() {
         .unwrap();
     assert_eq!(
         String::from_utf8(human_list.stdout).unwrap(),
-        "NAME\tEXTENDS\nbase\t\ndevelopment\tbase\n"
+        "NAME         EXTENDS\nbase\ndevelopment  base\n"
     );
 
     let object = run_environment(

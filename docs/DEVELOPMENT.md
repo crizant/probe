@@ -76,6 +76,10 @@ without explicit approval.
 Keep shared fixtures under `tests/fixtures/`. CLI integration tests cover command
 behavior, JSON output, and exit codes.
 
+On Linux, CLI terminal-width integration tests use util-linux `script` and coreutils
+`stty` to create a terminal with an explicit size, independent of the developer's
+terminal. Install these utilities before running CLI tests on a minimal system.
+
 Before writing a new test, inspect the existing tests for the affected behavior.
 Prefer extending an existing test with focused assertions or additional cases when
 it already exercises the relevant setup and contract. Add a separate test when the

@@ -1,3 +1,5 @@
+pub(crate) mod table;
+
 use std::path::Path;
 
 use crate::CommandOutput;

@@ -16,7 +16,9 @@ use crate::{
     load,
     presentation::{
         dry_run_human, dry_run_json, request_human, request_json, response_human, response_json,
-        run_request_json, unset_documentation,
+        run_request_json,
+        table::{self, Column},
+        unset_documentation,
     },
 };
 
@@ -25,7 +27,14 @@ pub(crate) fn list(
     stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
     let loaded = load(input, stdin)?;
-    let mut lines = vec!["SELECTOR\tTYPE\tMETHOD\tNAME\tURL".to_owned()];
+    let columns = [
+        Column::selector("SELECTOR", 28),
+        Column::compact("TYPE"),
+        Column::compact("METHOD"),
+        Column::text("NAME", 36),
+        Column::remaining("URL"),
+    ];
+    let mut rows = Vec::new();
     let mut requests = Vec::with_capacity(loaded.requests().len());
     for located in loaded.requests() {
         let request = loaded
@@ -36,10 +45,13 @@ pub(crate) fn list(
         let request_type = request.kind.as_str();
         let method = request.method.as_deref().unwrap_or("");
         let url = request.url.as_deref().unwrap_or("");
-        lines.push(format!(
-            "{}\t{request_type}\t{method}\t{name}\t{url}",
-            located.selector()
-        ));
+        rows.push([
+            located.selector().to_owned(),
+            request_type.to_owned(),
+            method.to_owned(),
+            name.to_owned(),
+            url.to_owned(),
+        ]);
         requests.push(json!({
             "method": request.method,
             "name": request.metadata.name,
@@ -49,7 +61,7 @@ pub(crate) fn list(
         }));
     }
     Ok(CommandOutput {
-        human: format!("{}\n", lines.join("\n")),
+        human: table::render(&columns, &rows, table::terminal_width()),
         json: json!({ "requests": requests }),
     })
 }
@@ -90,7 +102,13 @@ pub(crate) fn variables(
 }
 
 fn variable_output(variables: &[RequestVariableInfo]) -> CommandOutput {
-    let mut lines = vec!["NAME\tDEFINED\tSECRET\tUSED IN".to_owned()];
+    let columns = [
+        Column::text("NAME", 32),
+        Column::compact("DEFINED"),
+        Column::compact("SECRET"),
+        Column::remaining("USED IN"),
+    ];
+    let mut rows = Vec::new();
     let json_variables = variables
         .iter()
         .map(|variable| {
@@ -99,18 +117,17 @@ fn variable_output(variables: &[RequestVariableInfo]) -> CommandOutput {
                 .iter()
                 .map(variable_usage_json)
                 .collect::<Vec<_>>();
-            lines.push(format!(
-                "{}\t{}\t{}\t{}",
-                variable.name,
-                variable.defined,
-                variable.secret,
+            rows.push([
+                variable.name.clone(),
+                variable.defined.to_string(),
+                variable.secret.to_string(),
                 variable
                     .usages
                     .iter()
                     .map(variable_usage_human)
                     .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+                    .join(", "),
+            ]);
             json!({
                 "name": variable.name,
                 "defined": variable.defined,
@@ -120,7 +137,7 @@ fn variable_output(variables: &[RequestVariableInfo]) -> CommandOutput {
         })
         .collect::<Vec<_>>();
     CommandOutput {
-        human: format!("{}\n", lines.join("\n")),
+        human: table::render(&columns, &rows, table::terminal_width()),
         json: json!({ "variables": json_variables }),
     }
 }

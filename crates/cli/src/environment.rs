@@ -5,7 +5,10 @@ use serde_json::json;
 
 use crate::{
     CliError, CommandOutput, WorkspaceInput, load,
-    presentation::{append_documentation, documentation_json},
+    presentation::{
+        append_documentation, documentation_json,
+        table::{self, Column},
+    },
 };
 
 pub(crate) fn create(
@@ -78,11 +81,12 @@ pub(crate) fn list(
     stdin: &mut impl Read,
 ) -> Result<CommandOutput, CliError> {
     let loaded = load(input, stdin)?;
-    let mut lines = vec!["NAME\tEXTENDS".to_owned()];
+    let columns = [Column::text("NAME", 32), Column::remaining("EXTENDS")];
+    let mut rows = Vec::new();
     let mut environments = Vec::with_capacity(loaded.workspace().environments().len());
     for environment in loaded.workspace().environments() {
         let parent = environment.extends.as_deref().unwrap_or("");
-        lines.push(format!("{}\t{parent}", environment.name));
+        rows.push([environment.name.clone(), parent.to_owned()]);
         let mut entry = json!({
             "extends": environment.extends,
             "name": environment.name,
@@ -93,7 +97,7 @@ pub(crate) fn list(
         environments.push(entry);
     }
     Ok(CommandOutput {
-        human: format!("{}\n", lines.join("\n")),
+        human: table::render(&columns, &rows, table::terminal_width()),
         json: json!({ "environments": environments }),
     })
 }

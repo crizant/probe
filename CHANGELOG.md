@@ -6,6 +6,12 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- CLI request, folder, and environment lists and request variable tables now align
+  columns by Unicode display width, bound long values with ellipses, and adapt to
+  terminal width. Redirected tables use a deterministic width; JSON is unchanged.
+
 ## [0.11.0] - 2026-10-12
 
 ### Added

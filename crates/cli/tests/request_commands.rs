@@ -353,6 +353,21 @@ fn lists_requests_deterministically_as_json() {
     let value: Value = serde_json::from_slice(&first.stdout).expect("stdout should be JSON");
     assert_eq!(value["requests"][0]["selector"], "health.yml");
     assert_eq!(value["requests"][1]["selector"], "users/list-users.yml");
+
+    let human = probe()
+        .args(["request", "list"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(!human.contains('\t'));
+    let lines: Vec<_> = human.lines().collect();
+    assert_eq!(lines.len(), 3);
+    let type_start = lines[0].find("TYPE").unwrap();
+    for line in &lines[1..] {
+        assert_eq!(line.find("http").unwrap(), type_start);
+    }
 }
 
 #[test]
@@ -1036,7 +1051,7 @@ fn renders_request_variables_for_humans_and_rejects_runtime_values() {
     assert!(output.stderr.is_empty());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "NAME\tDEFINED\tSECRET\tUSED IN\nbaseUrl\ttrue\tfalse\turl\nsecretToken\ttrue\ttrue\theader: Authorization\n"
+        "NAME         DEFINED  SECRET  USED IN\nbaseUrl      true     false   url\nsecretToken  true     true    header: Authorization\n"
     );
 
     let rejected = probe()
