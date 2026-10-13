@@ -226,13 +226,13 @@ impl ProbeApp {
         };
         self.request_editor.remove(key);
         self.websocket.remove(key);
+        self.execution.remove(key);
+        self.response_viewer.remove(key);
         self.response_viewer.remove_selection(key);
-        if self.detached_requests.remove(&key) {
-            if let Some(loaded) = self.loaded_workspace.as_mut() {
-                loaded.remove_detached_request(key);
-            }
-            self.execution.remove(key);
-            self.response_viewer.remove(key);
+        if self.detached_requests.remove(&key)
+            && let Some(loaded) = self.loaded_workspace.as_mut()
+        {
+            loaded.remove_detached_request(key);
         }
     }
 

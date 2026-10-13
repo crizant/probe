@@ -3,6 +3,112 @@ use crate::app::{NewGraphqlRequest, NewRequest, documentation::OverviewTarget};
 use probe_core::ItemKind;
 use probe_opencollection::ItemLocator;
 
+fn tab_response() -> HttpResponse {
+    let body = br#"{"ok":true}"#.to_vec();
+    HttpResponse {
+        status: 200,
+        initial_url: "https://example.test".into(),
+        url_changed: false,
+        reason: "OK".into(),
+        url: "https://example.test".into(),
+        duration: Duration::ZERO,
+        size: body.len(),
+        headers: vec![ResponseHeader {
+            name: "content-type".into(),
+            value: "application/json".into(),
+        }],
+        body,
+        body_complete: true,
+        body_file: None,
+        body_retention_error: None,
+    }
+}
+
+#[gpui::test]
+fn closing_saved_request_unloads_response_and_reopening_starts_fresh(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = workspace.requests()[0].key();
+    let other = workspace.requests()[1].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(key, cx);
+            let (cancel, _) = oneshot::channel();
+            let generation = view.execution.begin(key, cancel);
+            view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+            view.response_viewer.set_tab(key, ResponseViewerTab::Raw);
+            view.response_viewer.set_raw_view(key, RawBodyView::Base64);
+            view.request_editor.set_section(key, EditorSection::Headers);
+
+            view.select_request(other, cx);
+            view.select_request(key, cx);
+            assert!(matches!(
+                view.execution.response(key),
+                Some(crate::execution::ResponseState::Complete { .. })
+            ));
+            assert!(view.response_viewer.document(key).is_some());
+            assert_eq!(view.response_viewer.tab(key), ResponseViewerTab::Raw);
+
+            view.close_tab_now(key, cx);
+            assert!(view.execution.response(key).is_none());
+            assert!(view.response_viewer.document(key).is_none());
+            assert_eq!(view.response_viewer.tab(key), ResponseViewerTab::Pretty);
+            assert_eq!(view.response_viewer.raw_view(key), RawBodyView::Text);
+            assert_eq!(view.request_editor.section(key), EditorSection::Path);
+            assert!(
+                view.loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .workspace()
+                    .request(key)
+                    .is_some()
+            );
+
+            view.select_request(key, cx);
+            assert_eq!(view.shell.active_tab(), Some(key));
+            assert!(view.execution.response(key).is_none());
+            assert!(view.response_viewer.document(key).is_none());
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.execution.response(key).is_none());
+            assert!(view.response_viewer.document(key).is_none());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn closing_saved_request_cancels_execution_and_ignores_late_completion(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            view.select_request(key, cx);
+            let (cancel, mut cancelled) = oneshot::channel();
+            let generation = view.execution.begin(key, cancel);
+            view.close_tab_now(key, cx);
+            assert_eq!(cancelled.try_recv(), Ok(()));
+            assert!(view.execution.response(key).is_none());
+
+            view.select_request(key, cx);
+            view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+            assert!(view.execution.response(key).is_none());
+            assert!(view.response_viewer.document(key).is_none());
+        })
+        .unwrap();
+}
+
 #[gpui::test]
 fn request_creation_dialog_uses_the_selected_protocol(cx: &mut TestAppContext) {
     cx.update(Theme::init);
@@ -88,7 +194,14 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
                 original_count
             );
             assert_eq!(view.dirty_keys().len(), 2);
+            let (cancel, _) = oneshot::channel();
+            let generation = view.execution.begin(http_key, cancel);
+            view.complete_execution(http_key, generation, Ok(tab_response()), None, cx);
+            assert!(view.response_viewer.document(http_key).is_some());
             view.close_tab_now(http_key, cx);
+            assert!(!view.detached_requests.contains(&http_key));
+            assert!(view.execution.response(http_key).is_none());
+            assert!(view.response_viewer.document(http_key).is_none());
             assert!(
                 view.loaded_workspace
                     .as_ref()
