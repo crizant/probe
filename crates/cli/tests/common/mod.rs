@@ -34,6 +34,26 @@ pub(crate) fn probe() -> Command {
     Command::new(env!("CARGO_BIN_EXE_probe"))
 }
 
+// Mask only the elapsed time and its effect on column padding. Validate the
+// original alignment first, and retain every other byte for golden comparisons.
+pub(crate) fn mask_response_timing(human: &str) -> String {
+    let mut lines: Vec<_> = human.split_inclusive('\n').map(str::to_owned).collect();
+    let time_start = lines[2].find("TIME").unwrap();
+    let size_start = lines[2].find("SIZE").unwrap();
+    let time_end = time_start + lines[3][time_start..].find(" ms").unwrap();
+    let milliseconds = &lines[3][time_start..time_end];
+    assert!(milliseconds.parse::<u128>().is_ok(), "{human}");
+    let width = milliseconds.len() + 3;
+    assert_eq!(
+        &lines[2][time_start..size_start],
+        format!("TIME{}", " ".repeat(width - 4 + 2))
+    );
+    assert_eq!(&lines[3][time_end..time_end + 5], " ms  ");
+    lines[2].replace_range(time_start..size_start, "TIME    ");
+    lines[3].replace_range(time_start..time_end + 5, "128 ms  ");
+    lines.concat()
+}
+
 #[derive(Debug)]
 pub(crate) struct CapturedRequest {
     pub(crate) head: String,

@@ -36,7 +36,7 @@ pub(super) fn response_human(
         rendered.push_str(&format!("Final URL: {}\n", response.url));
     }
     if show_headers {
-        rendered.push_str("Headers:\n");
+        rendered.push_str("Headers\n");
         if response.headers.is_empty() {
             rendered.push_str("  (none)\n");
         } else {
@@ -746,7 +746,7 @@ mod response_url_tests {
                     format!("Final URL: {final_url}\n")
                 };
                 let headers = if show_headers {
-                    "Headers:\n  X-Debug: true\n"
+                    "Headers\n  X-Debug: true\n"
                 } else {
                     ""
                 };

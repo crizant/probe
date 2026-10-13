@@ -145,7 +145,8 @@ STATUS  TIME    SIZE
 `Final URL:` appears only when redirects change the effective URL
 initially sent by the HTTP engine. Path/query parameters and URL normalization
 alone do not show it. Response headers are hidden by default; add `--show-headers`
-to include them as `name: value` lines. `--json` always includes response headers and is unaffected by this
+to include them under a `Headers` section title as `name: value` lines.
+`--json` always includes response headers and is unaffected by this
 flag. `--show-headers` does not change dry-run output.
 
 Native WebSocket requests execute through the same `request run` command:
@@ -351,7 +352,11 @@ Human success output is a single line, such as `Updated request: items/0`.
 `request get` keeps top-level metadata, documentation, body/protocol summaries,
 and authentication as detail lines. Headers, path parameters, and query parameters
 have separate tables; enabled entries have a blank STATE and disabled entries show
-`disabled`. Empty sections show `(none)` without an empty table. For example:
+`disabled`. The former `Headers:` heading is now the `Headers` section title,
+path parameter names have no `:` prefix, and the former ` [disabled]` suffix is
+now in STATE. Long header/parameter names and values truncate with an ellipsis
+to fit the terminal; piped tables use a fixed 120-column limit. Scripts should use
+`--json` for full values. Empty sections show `(none)` without an empty table. For example:
 
 ```text
 Name: Get user

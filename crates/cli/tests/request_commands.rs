@@ -6,6 +6,85 @@ use common::*;
 const TEST_SECRET: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
 
 #[test]
+fn request_get_keeps_secret_and_missing_header_and_auth_placeholders() {
+    let workspace = run_url_fixture(
+        "https://example.com",
+        concat!(
+            "      headers:\n        - name: Authorization\n          value: 'Bearer {{token}}'\n",
+            "        - name: X-Missing\n          value: '{{missing}}'\n",
+            "      auth:\n        type: bearer\n        token: '{{token}}'\n",
+        ),
+    );
+    let mut source = fs::read_to_string(&workspace).unwrap();
+    source.push_str("config:\n  environments:\n    - name: local\n      variables:\n        - name: token\n          secret: true\n");
+    fs::write(&workspace, source).unwrap();
+    for flags in [&[][..], &["--environment", "local"][..]] {
+        let output = probe()
+            .args(["request", "get"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(flags)
+            .env("token", TEST_SECRET)
+            .output()
+            .unwrap();
+        // Selecting an environment with an unavailable secret must still fail
+        // closed; request get does not accept a runtime secret provider.
+        if !flags.is_empty() {
+            assert_eq!(output.status.code(), Some(5), "{output:?}");
+            assert!(output.stdout.is_empty());
+            assert_eq!(output.stderr, b"error[secret_variable_unavailable]: secret variable has no runtime value: token\n");
+            let json = probe()
+                .args(["request", "get"])
+                .arg(&workspace)
+                .arg("items/0")
+                .args(flags)
+                .arg("--json")
+                .env("token", TEST_SECRET)
+                .output()
+                .unwrap();
+            assert_eq!(json.status.code(), Some(5), "{json:?}");
+            assert!(json.stderr.is_empty());
+            assert!(!String::from_utf8_lossy(&json.stdout).contains(TEST_SECRET));
+            let json: Value = serde_json::from_slice(&json.stdout).unwrap();
+            assert_eq!(json["error"]["category"], "secret_variable_unavailable");
+            continue;
+        }
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        let environment = "<none>";
+        let expected = format!(
+            concat!(
+                "Name: Request\nSelector: items/0\nType: http\nEnvironment: {}\n",
+                "Method: GET\nURL: https://example.com\nDescription: <unset>\nDocs: <unset>\n",
+                "Headers\nNAME           VALUE             STATE\n",
+                "Authorization  Bearer {{{{token}}}}\nX-Missing      {{{{missing}}}}\n",
+                "Path parameters\n  (none)\nQuery parameters\n  (none)\n",
+                "Body: <unset>\nAuthentication: bearer\n",
+            ),
+            environment
+        );
+        assert_eq!(output.stdout, expected.as_bytes());
+        let json = probe()
+            .args(["request", "get"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(flags)
+            .arg("--json")
+            .env("token", TEST_SECRET)
+            .output()
+            .unwrap();
+        assert!(json.status.success(), "{json:?}");
+        assert!(json.stderr.is_empty());
+        assert!(!String::from_utf8_lossy(&json.stdout).contains(TEST_SECRET));
+        let json: Value = serde_json::from_slice(&json.stdout).unwrap();
+        assert_eq!(json["headers"][0]["value"], "Bearer {{token}}");
+        assert_eq!(json["headers"][1]["value"], "{{missing}}");
+        assert_eq!(json["authentication"]["properties"]["token"], "{{token}}");
+    }
+    fs::remove_file(workspace).unwrap();
+}
+
+#[test]
 fn header_only_secrets_do_not_hide_the_effective_initial_url() {
     let (base, server) = serve_once(b"hello".to_vec(), "text/plain");
     let workspace = run_url_fixture(
@@ -1238,38 +1317,53 @@ fn relative_file_body_is_read_from_the_workspace_directory() {
 
 #[test]
 fn executes_graphql_json_envelopes_and_preserves_application_errors() {
-    let response =
-        r#"{"data":{"viewer":{"login":"octocat"}},"errors":[{"message":"viewer is unavailable"}]}"#;
-    let (server_url, server) = serve_once(response.as_bytes().to_vec(), "application/json");
-    let workspace = graphql_runtime_fixture(&server_url);
-    let output = probe()
-        .args(["request", "run"])
-        .arg(&workspace)
-        .arg("items/0")
-        .args(["--environment", "local", "--json"])
-        .output()
-        .expect("GraphQL request should run");
+    for json in [false, true] {
+        let response = r#"{"data":{"viewer":{"login":"octocat"}},"errors":[{"message":"viewer is unavailable"}]}"#;
+        let (server_url, server) = serve_once(response.as_bytes().to_vec(), "application/json");
+        let workspace = graphql_runtime_fixture(&server_url);
+        let mut command = probe();
+        command
+            .args(["request", "run"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(["--environment", "local"]);
+        if json {
+            command.arg("--json");
+        }
+        let output = command.output().expect("GraphQL request should run");
 
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
-    assert_eq!(value["request"]["method"], "POST");
-    assert_eq!(value["request"]["graphql"]["operationName"], "Viewer");
-    assert_eq!(value["response"]["status"], 200);
-    assert_eq!(value["response"]["body"]["content"], response);
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        if json {
+            let value: Value =
+                serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+            assert_eq!(value["request"]["method"], "POST");
+            assert_eq!(value["request"]["graphql"]["operationName"], "Viewer");
+            assert_eq!(value["response"]["status"], 200);
+            assert_eq!(value["response"]["body"]["content"], response);
+        } else {
+            let body = concat!(
+                "{\n  \"data\": {\n    \"viewer\": {\n      \"login\": \"octocat\"\n    }\n  },\n",
+                "  \"errors\": [\n    {\n      \"message\": \"viewer is unavailable\"\n    }\n  ]\n}\n",
+            );
+            assert_eq!(mask_response_timing(std::str::from_utf8(&output.stdout).unwrap()).as_bytes(), format!(
+            "POST {server_url}/graphql\n\nSTATUS  TIME    SIZE\n200 OK  128 ms  {} B\n\n{body}", response.len()
+        ).as_bytes());
+        }
 
-    let captured = server.join().unwrap();
-    assert!(captured.head.starts_with("POST /graphql HTTP/1.1\r\n"));
-    assert!(captured.head.contains("content-type: application/json\r\n"));
-    let envelope: Value =
-        serde_json::from_slice(&captured.body).expect("request should be a JSON envelope");
-    assert_eq!(
-        envelope["query"],
-        "query Viewer($login: String!) { viewer(login: $login) { login } }"
-    );
-    assert_eq!(envelope["variables"]["login"], "octocat");
-    assert_eq!(envelope["operationName"], "Viewer");
-    fs::remove_file(workspace).unwrap();
+        let captured = server.join().unwrap();
+        assert!(captured.head.starts_with("POST /graphql HTTP/1.1\r\n"));
+        assert!(captured.head.contains("content-type: application/json\r\n"));
+        let envelope: Value =
+            serde_json::from_slice(&captured.body).expect("request should be a JSON envelope");
+        assert_eq!(
+            envelope["query"],
+            "query Viewer($login: String!) { viewer(login: $login) { login } }"
+        );
+        assert_eq!(envelope["variables"]["login"], "octocat");
+        assert_eq!(envelope["operationName"], "Viewer");
+        fs::remove_file(workspace).unwrap();
+    }
 }
 
 #[test]
@@ -1579,24 +1673,19 @@ fn run_url_fixture(url: &str, parameters: &str) -> PathBuf {
 fn human_response_headers_are_opt_in() {
     for flags in [&[][..], &["--show-headers"][..]] {
         let output = run_response_with_flags("hello", "text/plain", flags);
-        assert!(output.starts_with("POST http://127.0.0.1:"), "{output}");
-        let mut lines = output.lines().skip(2);
+        let request = output.lines().next().unwrap();
+        assert!(request.starts_with("POST http://127.0.0.1:"), "{output}");
+        assert!(request.ends_with("/echo?mode=cli"), "{output}");
+        let headers = if flags.is_empty() {
+            ""
+        } else {
+            "Headers\n  connection: close\n  content-length: 5\n  content-type: text/plain\n"
+        };
         assert_eq!(
-            lines.next().unwrap().split_whitespace().collect::<Vec<_>>(),
-            ["STATUS", "TIME", "SIZE"]
+            mask_response_timing(&output).as_bytes(),
+            format!("{request}\n\nSTATUS  TIME    SIZE\n200 OK  128 ms  5 B\n{headers}\nhello\n")
+                .as_bytes()
         );
-        let summary = lines.next().unwrap().split_whitespace().collect::<Vec<_>>();
-        assert_eq!(&summary[..2], ["200", "OK"]);
-        assert!(summary[2].parse::<u128>().is_ok(), "{output}");
-        assert_eq!(&summary[3..], ["ms", "5", "B"]);
-        assert!(!output.contains("Final URL:"), "{output}");
-        assert!(output.ends_with("\n\nhello\n"), "{output}");
-        assert_eq!(output.contains("Headers:\n"), !flags.is_empty());
-        assert_eq!(
-            output.contains("  content-type: text/plain\n"),
-            !flags.is_empty()
-        );
-        assert_eq!(output.contains("  content-length: 5\n"), !flags.is_empty());
     }
 }
 
@@ -1719,55 +1808,114 @@ fn run_response_with_flags(body: &str, content_type: &'static str, flags: &[&str
 
 #[test]
 fn writes_response_body_to_an_explicit_file() {
-    let response_body = vec![0, 159, 146, 150];
-    let (server_url, server) = serve_once(response_body.clone(), "application/octet-stream");
-    let workspace = runtime_fixture(&server_url);
-    let body_output = temporary_path("response.bin");
-    let output = probe()
-        .args(["request", "run"])
-        .arg(&workspace)
-        .arg("items/0")
-        .args(["--environment", "local", "--output"])
-        .arg(&body_output)
-        .arg("--json")
-        .output()
-        .expect("run command should run");
+    for json in [false, true] {
+        let response_body = vec![0, 159, 146, 150];
+        let (server_url, server) = serve_once(response_body.clone(), "application/octet-stream");
+        let workspace = runtime_fixture(&server_url);
+        let body_output = temporary_path("response.bin");
+        let mut command = probe();
+        command
+            .args(["request", "run"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(["--environment", "local", "--output"])
+            .arg(&body_output);
+        if json {
+            command.arg("--json");
+        }
+        let output = command.output().expect("run command should run");
 
-    assert!(output.status.success());
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["response"]["body"]["content"], Value::Null);
-    assert_eq!(value["response"]["body"]["omitted"], false);
-    assert_eq!(
-        value["response"]["body"]["outputPath"],
-        body_output.to_string_lossy().as_ref()
-    );
-    assert_eq!(fs::read(&body_output).unwrap(), response_body);
-    server.join().unwrap();
-    fs::remove_file(workspace).unwrap();
-    fs::remove_file(body_output).unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        if json {
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(value["response"]["body"]["content"], Value::Null);
+            assert_eq!(value["response"]["body"]["omitted"], false);
+            assert_eq!(
+                value["response"]["body"]["outputPath"],
+                body_output.to_string_lossy().as_ref()
+            );
+        } else {
+            assert_eq!(mask_response_timing(std::str::from_utf8(&output.stdout).unwrap()).as_bytes(), format!(
+            "POST {server_url}/echo?mode=cli\n\nSTATUS  TIME    SIZE\n200 OK  128 ms  4 B\n\nResponse body written to {}\n", body_output.display()
+        ).as_bytes());
+        }
+        assert_eq!(fs::read(&body_output).unwrap(), response_body);
+        server.join().unwrap();
+        fs::remove_file(workspace).unwrap();
+        fs::remove_file(body_output).unwrap();
+    }
 }
 
 #[test]
 fn omits_large_response_body_from_stdout() {
-    let response_body = vec![b'x'; MAX_IN_MEMORY_RESPONSE_BYTES + 1];
-    let (server_url, server) = serve_once(response_body, "text/plain");
-    let workspace = runtime_fixture(&server_url);
-    let output = probe()
-        .args(["request", "run"])
-        .arg(&workspace)
-        .arg("items/0")
-        .args(["--environment", "local", "--json"])
-        .output()
-        .expect("run command should run");
+    for json in [false, true] {
+        let response_body = vec![b'x'; MAX_IN_MEMORY_RESPONSE_BYTES + 1];
+        let (server_url, server) = serve_once(response_body, "text/plain");
+        let workspace = runtime_fixture(&server_url);
+        let mut command = probe();
+        command
+            .args(["request", "run"])
+            .arg(&workspace)
+            .arg("items/0")
+            .args(["--environment", "local"]);
+        if json {
+            command.arg("--json");
+        }
+        let output = command.output().expect("run command should run");
 
-    assert!(output.status.success());
-    assert!(output.stdout.len() < 10_000);
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["response"]["body"]["content"], Value::Null);
-    assert_eq!(value["response"]["body"]["omitted"], true);
-    assert_eq!(value["response"]["body"]["omissionReason"], "too_large");
-    server.join().unwrap();
-    fs::remove_file(workspace).unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert!(output.stdout.len() < 10_000);
+        if json {
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(value["response"]["body"]["content"], Value::Null);
+            assert_eq!(value["response"]["body"]["omitted"], true);
+            assert_eq!(value["response"]["body"]["omissionReason"], "too_large");
+        } else {
+            assert_eq!(mask_response_timing(std::str::from_utf8(&output.stdout).unwrap()).as_bytes(), format!(
+            "POST {server_url}/echo?mode=cli\n\nSTATUS  TIME    SIZE\n200 OK  128 ms  16.0 MiB\n\nResponse body omitted because it exceeds {MAX_IN_MEMORY_RESPONSE_BYTES} bytes; use --output <file>.\n"
+        ).as_bytes());
+        }
+        server.join().unwrap();
+        fs::remove_file(workspace).unwrap();
+    }
+}
+
+#[test]
+fn binary_response_body_is_omitted_without_changing_json() {
+    for json in [false, true] {
+        let (server_url, server) = serve_once(vec![0, 159, 146, 150], "application/octet-stream");
+        let workspace = runtime_fixture(&server_url);
+        let mut command = probe();
+        command.args(["request", "run"]).arg(&workspace).args([
+            "items/0",
+            "--environment",
+            "local",
+        ]);
+        if json {
+            command.arg("--json");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        if json {
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                value["response"]["body"],
+                serde_json::json!({
+                    "content": null, "encoding": null, "omissionReason": "binary",
+                    "omitted": true, "outputPath": null,
+                })
+            );
+        } else {
+            assert_eq!(mask_response_timing(std::str::from_utf8(&output.stdout).unwrap()).as_bytes(), format!(
+                "POST {server_url}/echo?mode=cli\n\nSTATUS  TIME    SIZE\n200 OK  128 ms  4 B\n\nBinary response body omitted; use --output <file>.\n"
+            ).as_bytes());
+        }
+        server.join().unwrap();
+        fs::remove_file(workspace).unwrap();
+    }
 }
 
 #[test]
