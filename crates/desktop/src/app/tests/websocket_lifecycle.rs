@@ -3,6 +3,82 @@ use super::*;
 use crate::websocket::ConnectionState;
 
 #[gpui::test]
+fn closing_active_websocket_tab_removes_session_and_sends_close(cx: &mut TestAppContext) {
+    use futures_util::{SinkExt, StreamExt};
+    let (address_tx, address_rx) = std::sync::mpsc::channel();
+    let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+    let peer = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                address_tx.send(listener.local_addr().unwrap()).unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let message = socket.next().await.unwrap().unwrap();
+                assert!(
+                    message.is_close(),
+                    "tab close should reach the peer as a close frame"
+                );
+                socket.flush().await.unwrap();
+                closed_tx.send(()).unwrap();
+            })
+            .await
+            .unwrap();
+        });
+    });
+    let address = address_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = writable_bundled_fixture("websocket-active-tab-close");
+    let mut loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = loaded.requests()[0].key();
+    loaded.request_mut(key).unwrap().kind = probe_core::RequestKind::WebSocket { message: None };
+    loaded.request_mut(key).unwrap().url = Some(format!("ws://{address}"));
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), loaded);
+            view.select_request(key, cx);
+            view.websocket_control(key, cx);
+        })
+        .unwrap();
+    wait(cx, |cx| {
+        window
+            .update(cx, |view, _, _| {
+                view.websocket.sessions[&key].state == ConnectionState::Connected
+            })
+            .unwrap()
+    });
+    window
+        .update(cx, |view, _, cx| {
+            let generation = view.websocket.sessions[&key].generation;
+            view.close_tab_now(key, cx);
+            assert!(!view.websocket.sessions.contains_key(&key));
+            view.websocket.apply(
+                generation,
+                crate::websocket::Update::Event(crate::websocket::TimelineEntry::new(
+                    probe_application::SessionEvent::Received(
+                        probe_application::SessionData::Text("late message".into()),
+                    ),
+                )),
+            );
+            assert!(!view.websocket.sessions.contains_key(&key));
+            view.select_request(key, cx);
+            assert!(!view.websocket.sessions.contains_key(&key));
+        })
+        .unwrap();
+    closed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    peer.join().unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(!view.websocket.sessions.contains_key(&key));
+        })
+        .unwrap();
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui::test]
 fn websocket_disconnect_reconnect_and_workspace_replacement_cleanup(cx: &mut TestAppContext) {
     use futures_util::{SinkExt, StreamExt};
     let (address_tx, address_rx) = std::sync::mpsc::channel();
