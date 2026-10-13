@@ -101,8 +101,170 @@ fn closing_saved_request_cancels_execution_and_ignores_late_completion(cx: &mut 
             assert_eq!(cancelled.try_recv(), Ok(()));
             assert!(view.execution.response(key).is_none());
 
+            view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+            assert!(view.execution.response(key).is_none());
+            assert!(view.response_viewer.document(key).is_none());
             view.select_request(key, cx);
             view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+            assert!(view.execution.response(key).is_none());
+            assert!(view.response_viewer.document(key).is_none());
+        })
+        .unwrap();
+}
+
+fn response_tab_window(
+    cx: &mut TestAppContext,
+) -> (gpui::WindowHandle<ProbeApp>, Vec<probe_core::RequestKey>) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let keys = workspace
+        .requests()
+        .iter()
+        .map(|request| request.key())
+        .collect();
+    window
+        .update(cx, |view, _, _| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+        })
+        .unwrap();
+    (window, keys)
+}
+
+#[gpui::test]
+fn close_other_tabs_unloads_other_responses_and_preserves_the_kept_response(
+    cx: &mut TestAppContext,
+) {
+    let (window, keys) = response_tab_window(cx);
+    window
+        .update(cx, |view, _, cx| {
+            for &key in &keys {
+                view.select_request(key, cx);
+                let (cancel, _) = oneshot::channel();
+                let generation = view.execution.begin(key, cancel);
+                view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+                assert!(view.response_viewer.document(key).is_some());
+            }
+            let keep = keys[0];
+            view.close_other_tabs_now(keep, cx);
+            assert_eq!(view.shell.active_tab(), Some(keep));
+            assert!(matches!(
+                view.execution.response(keep),
+                Some(crate::execution::ResponseState::Complete { .. })
+            ));
+            assert!(view.response_viewer.document(keep).is_some());
+            for &key in &keys[1..] {
+                assert!(!view.shell.open_tabs().contains(&key.into()));
+                assert!(view.execution.response(key).is_none());
+                assert!(view.response_viewer.document(key).is_none());
+            }
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            for &key in &keys[1..] {
+                assert!(view.execution.response(key).is_none());
+                assert!(view.response_viewer.document(key).is_none());
+            }
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn closing_response_tab_unloads_image_and_encoded_documents(cx: &mut TestAppContext) {
+    let (window, keys) = response_tab_window(cx);
+    let key = keys[0];
+    window
+        .update(cx, |view, _, cx| {
+            view.select_request(key, cx);
+            let mut response = tab_response();
+            response.headers[0].value = "image/png".into();
+            response.body = include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/app-icon/windows/png/probe-16.png"
+            ))
+            .to_vec();
+            response.size = response.body.len();
+            let (cancel, _) = oneshot::channel();
+            let generation = view.execution.begin(key, cancel);
+            view.complete_execution(key, generation, Ok(response), None, cx);
+            assert!(matches!(
+                view.response_viewer.document(key).unwrap().image_preview,
+                Some(crate::response_viewer::ResponseImagePreview::Ready(_))
+            ));
+            assert!(view.response_viewer.image_scroll(key).is_some());
+            view.close_tab_now(key, cx);
+            assert!(view.execution.response(key).is_none());
+            assert!(view.response_viewer.document(key).is_none());
+            assert!(view.response_viewer.image_scroll(key).is_none());
+
+            for raw_view in [RawBodyView::Base64, RawBodyView::Hex] {
+                view.select_request(key, cx);
+                let (cancel, _) = oneshot::channel();
+                let generation = view.execution.begin(key, cancel);
+                view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+                view.response_viewer.set_tab(key, ResponseViewerTab::Raw);
+                view.response_viewer.set_raw_view(key, raw_view);
+                view.start_base64_encoding(key, cx);
+                view.start_hex_encoding(key, cx);
+                let document = view.response_viewer.document(key).unwrap();
+                match raw_view {
+                    RawBodyView::Base64 => assert!(!document.base64_text.is_empty()),
+                    RawBodyView::Hex => assert!(!document.hex_text.is_empty()),
+                    RawBodyView::Text => unreachable!(),
+                }
+                view.close_tab_now(key, cx);
+                assert!(view.execution.response(key).is_none());
+                assert!(view.response_viewer.document(key).is_none());
+                assert_eq!(view.response_viewer.raw_view(key), RawBodyView::Text);
+            }
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn response_jobs_finishing_after_tab_close_do_not_recreate_documents(cx: &mut TestAppContext) {
+    let (window, keys) = response_tab_window(cx);
+    let key = keys[0];
+    window
+        .update(cx, |view, _, cx| {
+            view.select_request(key, cx);
+            let mut response = tab_response();
+            response.body = format!(
+                "{{\"value\":\"{}\"}}",
+                "x".repeat(crate::response_viewer::SYNC_PRETTY_BYTES)
+            )
+            .into_bytes();
+            response.size = response.body.len();
+            let (cancel, _) = oneshot::channel();
+            let execution = view.execution.begin(key, cancel);
+            view.execution
+                .finish(key, execution, Ok(response.clone()), None);
+            let generation = view.response_viewer.allocate_generation();
+            let (document, pretty_pending, inspection_pending) =
+                crate::response_viewer::prepare_document(&response, generation);
+            assert!(pretty_pending && inspection_pending);
+            let syntax = document.syntax;
+            view.response_viewer.insert(key, document);
+            // Deliver the same completion payloads as the background jobs, in a
+            // controlled order after close, without depending on worker timing.
+            view.close_tab_now(key, cx);
+            view.response_viewer.apply_pretty(
+                key,
+                generation,
+                crate::response_viewer::pretty_body(&response.body, syntax),
+            );
+            view.response_viewer.apply_inspection(
+                key,
+                generation,
+                crate::response_inspector::inspect_response_body(&response.body),
+            );
+            assert!(view.execution.response(key).is_none());
+            assert!(view.response_viewer.document(key).is_none());
+            view.select_request(key, cx);
             assert!(view.execution.response(key).is_none());
             assert!(view.response_viewer.document(key).is_none());
         })

@@ -13,6 +13,11 @@ Release dates use Australia/Brisbane time (UTC+10).
   terminal width. Piped output is now space-aligned and truncated at a deterministic
   120-column width instead of tab-separated. Scripts should use `--json`.
 
+### Fixed
+
+- Closing a request tab now unloads its response and cancels any running request.
+  Reopening a saved request starts fresh; switching tabs still preserves responses.
+
 ## [0.11.0] - 2026-10-12
 
 ### Added
