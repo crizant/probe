@@ -1,4 +1,5 @@
-//! One-line human tables. JSON and detail views never pass through this module.
+//! One-line human tables for list, summary, and structured detail sections.
+//! JSON output never passes through this module.
 
 use std::io::{IsTerminal, stdout};
 
