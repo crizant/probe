@@ -6,7 +6,11 @@ use serde_json::json;
 
 use crate::{
     CliError, CommandOutput, WorkspaceInput, load,
-    presentation::{append_documentation, documentation_json, unset_documentation},
+    presentation::{
+        append_documentation, documentation_json,
+        table::{self, Column},
+        unset_documentation,
+    },
 };
 
 pub(crate) fn edit(
@@ -135,7 +139,12 @@ pub(crate) fn list_folders(
     let loaded = load(input, stdin)?;
     let mut parents = BTreeMap::new();
     collect_folder_parents(&loaded, loaded.workspace().root_items(), None, &mut parents);
-    let mut lines = vec!["SELECTOR\tNAME\tPARENT".to_owned()];
+    let columns = [
+        Column::selector("SELECTOR", 28),
+        Column::text("NAME", 36),
+        Column::selector("PARENT", 28),
+    ];
+    let mut rows = Vec::new();
     let mut folders = Vec::with_capacity(loaded.folders().len());
     for located in loaded.folders() {
         let folder = loaded
@@ -146,11 +155,11 @@ pub(crate) fn list_folders(
         let parent = parents
             .get(&located.key())
             .and_then(|parent| parent.as_deref());
-        lines.push(format!(
-            "{}\t{name}\t{}",
-            located.selector(),
-            parent.unwrap_or("")
-        ));
+        rows.push([
+            located.selector().to_owned(),
+            name.to_owned(),
+            parent.unwrap_or("").to_owned(),
+        ]);
         folders.push(json!({
             "name": folder.metadata.name,
             "parent": parent,
@@ -158,7 +167,7 @@ pub(crate) fn list_folders(
         }));
     }
     Ok(CommandOutput {
-        human: format!("{}\n", lines.join("\n")),
+        human: table::render_terminal(&columns, &rows),
         json: json!({ "folders": folders }),
     })
 }

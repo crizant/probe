@@ -6,6 +6,13 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- CLI request, folder, and environment lists and request variable tables now align
+  columns by Unicode display width, bound long values with ellipses, and adapt to
+  terminal width. Piped output is now space-aligned and truncated at a deterministic
+  120-column width instead of tab-separated. Scripts should use `--json`.
+
 ## [0.11.0] - 2026-10-12
 
 ### Added

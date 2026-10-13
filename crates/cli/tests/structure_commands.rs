@@ -17,6 +17,12 @@ fn structural_cli_commands_share_repository_operations() {
     assert_eq!(folders["folders"][0]["selector"], "items/1");
     assert_eq!(folders["folders"][1]["selector"], "items/2");
     assert!(folders["folders"][1]["parent"].is_null());
+    let human = probe().args(["folder", "list", path]).output().unwrap();
+    assert!(human.status.success());
+    assert_eq!(
+        String::from_utf8(human.stdout).unwrap(),
+        "SELECTOR  NAME         PARENT\nitems/1   Folder\nitems/2   Destination\n"
+    );
 
     let request = run_json(&[
         "request",
