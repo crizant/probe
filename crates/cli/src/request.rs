@@ -217,10 +217,7 @@ pub(crate) fn update(
         .request(key)
         .expect("repository request key must resolve");
     Ok(CommandOutput {
-        human: format!(
-            "Updated request\n{}",
-            request_human(selector, None, request).map_err(CliError::request_protocol)?
-        ),
+        human: format!("Updated request: {selector}\n"),
         json: request_json(selector, None, request).map_err(CliError::request_protocol)?,
     })
 }

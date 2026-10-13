@@ -6,6 +6,14 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- CLI HTTP/GraphQL response summaries now show status, time, and size in a compact
+  table. `request get` uses tables for headers and path/query parameters, including
+  disabled states, while keeping metadata and documentation as detail lines.
+  `request set` now confirms the selector without repeating the entire request.
+  JSON output contracts remain unchanged.
+
 ## [1.0.0] - 2026-10-13
 
 ### Changed

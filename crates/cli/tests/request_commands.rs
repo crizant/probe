@@ -1580,8 +1580,15 @@ fn human_response_headers_are_opt_in() {
     for flags in [&[][..], &["--show-headers"][..]] {
         let output = run_response_with_flags("hello", "text/plain", flags);
         assert!(output.starts_with("POST http://127.0.0.1:"), "{output}");
-        assert!(output.contains("\n200 OK\n"), "{output}");
-        assert!(output.contains(" ms\n5 B\n"), "{output}");
+        let mut lines = output.lines().skip(2);
+        assert_eq!(
+            lines.next().unwrap().split_whitespace().collect::<Vec<_>>(),
+            ["STATUS", "TIME", "SIZE"]
+        );
+        let summary = lines.next().unwrap().split_whitespace().collect::<Vec<_>>();
+        assert_eq!(&summary[..2], ["200", "OK"]);
+        assert!(summary[2].parse::<u128>().is_ok(), "{output}");
+        assert_eq!(&summary[3..], ["ms", "5", "B"]);
         assert!(!output.contains("Final URL:"), "{output}");
         assert!(output.ends_with("\n\nhello\n"), "{output}");
         assert_eq!(output.contains("Headers:\n"), !flags.is_empty());

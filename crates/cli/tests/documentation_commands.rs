@@ -154,6 +154,12 @@ fn reads_and_writes_documentation_without_listing_docs_or_flattening_objects() {
         .output()
         .unwrap();
     assert!(multiline.status.success(), "{multiline:?}");
+    assert_eq!(multiline.stdout, b"Updated request: items/0/items/0\n");
+    let multiline = probe()
+        .args(["request", "get", path_arg, "items/0/items/0"])
+        .output()
+        .unwrap();
+    assert!(multiline.status.success(), "{multiline:?}");
     let human = String::from_utf8(multiline.stdout).unwrap();
     assert!(human.contains("Docs:\none\ntwo\n"));
     assert!(!human.contains("Docs: one\ntwo"));
