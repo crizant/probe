@@ -1,0 +1,56 @@
+opencollection: 1.0.0
+info:
+  name: Certificate variables
+bundled: true
+config:
+  environments:
+    - name: parent
+      variables:
+        - name: mtlsDomain
+          value: '*.example.com'
+        - name: directory
+          value: inherited
+        - name: certPath
+          value: '{{directory}}/client.pem'
+        - name: keyPath
+          value: '{{directory}}/client-key.pem'
+        - name: certPassword
+          secret: true
+        - name: unused
+          secret: true
+        - name: passwordAlias
+          value: '{{certPassword}}'
+      clientCertificates:
+        - domain: api.example.com
+          type: pkcs12
+          pkcs12FilePath: parent-must-not-be-inherited.p12
+    - name: child
+      extends: parent
+  clientCertificates:
+    - domain: '{{unused}}'
+      type: pem
+      certificateFilePath: '{{unused}}'
+      privateKeyFilePath: '{{unused}}'
+      passphrase: '{{unused}}'
+      disabled: true
+    - domain: elsewhere.test
+      type: pem
+      certificateFilePath: '{{unused}}'
+      privateKeyFilePath: '{{unused}}'
+      passphrase: '{{unused}}'
+    - domain: '{{mtlsDomain}}'
+      type: pem
+      certificateFilePath: '{{certPath}}'
+      privateKeyFilePath: '{{keyPath}}'
+      passphrase: '{{passwordAlias}}'
+    - domain: '{{unused}}'
+      type: pem
+      certificateFilePath: '{{unused}}'
+      privateKeyFilePath: '{{unused}}'
+items:
+  - info:
+      name: Request
+      type: http
+    http:
+      method: GET
+      url: https://api.example.com/private

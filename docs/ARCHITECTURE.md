@@ -697,8 +697,8 @@ refresh the baseline, so their watcher events reconcile as no-ops.
 Collection and environment `clientCertificates` project into the core
 `ClientCertificate` enum (PEM or PKCS#12). `Workspace::client_certificates()` exposes
 collection declarations; each `Environment` retains its own declarations in source
-order. Paths and passphrases remain literal configuration strings, and debug output
-redacts passphrases. Persistence writes the native schema and keeps unchanged
+order. Paths and passphrases retain their source templates, and debug output redacts
+passphrases. Persistence writes the native schema and keeps unchanged
 environment certificate YAML during other edits.
 
 HTTP and GraphQL execution snapshots certificate scopes through `RequestResolution`.

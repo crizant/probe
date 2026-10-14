@@ -3,7 +3,7 @@ use probe_core::PreparedHttpRequest;
 use probe_http::HttpError;
 
 /// Only the selected environment's direct declarations are retained. This never
-/// traverses `extends`, resolves certificate variables, or reads identity files.
+/// traverses `extends` or reads identity files.
 pub(crate) struct CertificateScopes<'a> {
     environment: &'a [probe_core::ClientCertificate],
     collection: &'a [probe_core::ClientCertificate],
@@ -26,6 +26,7 @@ impl<'a> CertificateScopes<'a> {
     pub(crate) fn select(
         &self,
         request: &PreparedHttpRequest,
+        mut interpolate: impl FnMut(&str) -> Result<String, HttpError>,
     ) -> Result<Option<probe_http::PemClientIdentity>, HttpError> {
         let request = request.request();
         let Some(raw_url) = request.url.as_deref() else {
@@ -51,21 +52,24 @@ impl<'a> CertificateScopes<'a> {
                     domain, disabled, ..
                 } => (domain, disabled),
             };
-            if *disabled || !probe_core::client_certificate_domain_matches(domain, host, port) {
+            if *disabled {
+                continue;
+            }
+            let domain = interpolate(domain)?;
+            if !probe_core::client_certificate_domain_matches(&domain, host, port) {
                 continue;
             }
             return match certificate {
                 probe_core::ClientCertificate::Pem {
-                    domain,
                     certificate_file_path,
                     private_key_file_path,
                     passphrase,
                     ..
                 } => Ok(Some(probe_http::PemClientIdentity::new(
-                    domain.clone(),
-                    certificate_file_path.clone(),
-                    private_key_file_path.clone(),
-                    passphrase.clone(),
+                    domain,
+                    interpolate(certificate_file_path)?,
+                    interpolate(private_key_file_path)?,
+                    passphrase.as_deref().map(&mut interpolate).transpose()?,
                 ))),
                 probe_core::ClientCertificate::Pkcs12 { .. } => {
                     Err(HttpError::ClientConfiguration(
@@ -122,7 +126,7 @@ mod tests {
             environment,
             ..RequestResolution::default()
         })
-        .select(&request)
+        .select(&request, |value| Ok(value.to_owned()))
     }
 
     fn identity(domain: &str, path: &str) -> Option<probe_http::PemClientIdentity> {
@@ -323,7 +327,7 @@ mod tests {
                 client_certificates: &certificates,
                 ..RequestResolution::default()
             })
-            .select(&request)
+            .select(&request, |value| Ok(value.to_owned()))
             .unwrap(),
             identity("localhost:8443", "missing.pem")
         );
@@ -359,7 +363,7 @@ mod tests {
                 client_certificates: &certificates,
                 ..RequestResolution::default()
             })
-            .select(&request)
+            .select(&request, |value| Ok(value.to_owned()))
             .unwrap(),
             identity("localhost:8443", "missing-cert.pem")
         );

@@ -585,6 +585,51 @@ pub fn resolve_environment_for_request_with_provider(
     provider: &dyn SecretProvider,
     workspace_identity: Option<&str>,
 ) -> Result<ResolvedEnvironment, EnvironmentResolutionError> {
+    resolve_environment_for_references(
+        crate::request_resolution::request_references(request)?,
+        environments,
+        selected,
+        overrides,
+        provider,
+        workspace_identity,
+    )
+}
+
+/// Resolves only secrets reachable from the supplied templates, following the same
+/// inheritance, invocation overrides, and nested references as request resolution.
+/// Callers may use this for execution configuration outside a request's fields.
+pub fn resolve_environment_for_templates_with_provider<'a>(
+    templates: impl IntoIterator<Item = &'a str>,
+    environments: &[Environment],
+    selected: Option<&str>,
+    overrides: &[(String, String)],
+    provider: &dyn SecretProvider,
+    workspace_identity: Option<&str>,
+) -> Result<ResolvedEnvironment, EnvironmentResolutionError> {
+    let mut needed = BTreeSet::new();
+    for template in templates {
+        needed.extend(crate::request_resolution::interpolation_references(
+            template,
+        )?);
+    }
+    resolve_environment_for_references(
+        needed,
+        environments,
+        selected,
+        overrides,
+        provider,
+        workspace_identity,
+    )
+}
+
+fn resolve_environment_for_references(
+    mut needed: BTreeSet<String>,
+    environments: &[Environment],
+    selected: Option<&str>,
+    overrides: &[(String, String)],
+    provider: &dyn SecretProvider,
+    workspace_identity: Option<&str>,
+) -> Result<ResolvedEnvironment, EnvironmentResolutionError> {
     let mut raw = if let Some(name) = selected {
         raw_variables(environments, name)?
     } else {
@@ -596,7 +641,6 @@ pub fn resolve_environment_for_request_with_provider(
             raw.insert(name.clone(), RawVariable::Value(value.clone()));
         }
     }
-    let mut needed = crate::request_resolution::request_references(request)?;
     let mut pending = needed.iter().cloned().collect::<Vec<_>>();
     while let Some(name) = pending.pop() {
         if let Some(RawVariable::Value(value)) = raw.get(&name) {

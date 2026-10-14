@@ -4,7 +4,7 @@
 //! secret material, a presentation request that keeps secret references, and a
 //! private disclosure context used only to redact what execution returns.
 
-use std::{fmt, future::Future, path::Path};
+use std::{cell::RefCell, collections::BTreeMap, fmt, future::Future, path::Path};
 
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Environment, EnvironmentResolutionError,
@@ -63,14 +63,16 @@ impl SecretProvider for NoSecrets {
 pub fn prepare_request<'a>(
     request: &Request,
     resolution: &RequestResolution<'a>,
-    secrets: &dyn SecretProvider,
+    secrets: &'a dyn SecretProvider,
 ) -> Result<PreparedRequest<'a>, EnvironmentResolutionError> {
+    let secrets = CachedSecrets::new(secrets);
     if !resolution.resolves_variables() {
         return Ok(PreparedRequest {
             execution: request.clone(),
             presentation: request.clone(),
             disclosure: SecretDisclosure::default(),
             resolution: *resolution,
+            provider: secrets,
         });
     }
     let environment = resolve_environment_for_request_with_provider(
@@ -78,7 +80,7 @@ pub fn prepare_request<'a>(
         resolution.environments,
         resolution.environment,
         resolution.overrides,
-        secrets,
+        &secrets,
         resolution.workspace_identity,
     )?;
     let execution = if resolution.strict_variables {
@@ -94,12 +96,43 @@ pub fn prepare_request<'a>(
         presentation,
         disclosure,
         resolution: *resolution,
+        provider: secrets,
     })
+}
+
+/// Each reachable provider value (or failure) is read at most once per preparation,
+/// including when request and certificate fields share nested variable references.
+struct CachedSecrets<'a> {
+    provider: &'a dyn SecretProvider,
+    values: RefCell<BTreeMap<String, Result<Option<SecretValue>, SecretError>>>,
+}
+
+impl<'a> CachedSecrets<'a> {
+    fn new(provider: &'a dyn SecretProvider) -> Self {
+        Self {
+            provider,
+            values: RefCell::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl SecretProvider for CachedSecrets<'_> {
+    fn resolve_secret(
+        &self,
+        context: &SecretContext<'_>,
+    ) -> Result<Option<SecretValue>, SecretError> {
+        self.values
+            .borrow_mut()
+            .entry(context.variable_name.to_owned())
+            .or_insert_with(|| self.provider.resolve_secret(context))
+            .clone()
+    }
 }
 
 /// A resolved request whose secret-bearing execution form is not observable.
 pub struct PreparedRequest<'a> {
     resolution: RequestResolution<'a>,
+    provider: CachedSecrets<'a>,
     execution: Request,
     presentation: Request,
     disclosure: SecretDisclosure,
@@ -120,13 +153,49 @@ impl PreparedRequest<'_> {
 
     /// Converts the execution request into HTTP engine input.
     pub fn into_http(mut self) -> Result<HttpExecution, RequestProtocolError> {
+        let mut templates = Vec::new();
+        if self.resolution.resolves_variables() {
+            // Seed reachability with the original symbolic request, so rebuilding
+            // the environment for certificate fields retains request disclosure.
+            templates = probe_core::discover_request_variables(
+                &self.presentation,
+                self.resolution.environments,
+                self.resolution.environment,
+            )
+            .expect("prepared request references were validated during resolution")
+            .into_iter()
+            .map(|variable| format!("{{{{{}}}}}", variable.name))
+            .collect();
+        }
         let request = self.execution.into_http()?;
+        let client_identity = CertificateScopes::new(&self.resolution).select(&request, |value| {
+            if !self.resolution.resolves_variables() {
+                return Ok(value.to_owned());
+            }
+            templates.push(value.to_owned());
+            let environment = probe_core::resolve_environment_for_templates_with_provider(
+                templates.iter().map(String::as_str),
+                self.resolution.environments,
+                self.resolution.environment,
+                self.resolution.overrides,
+                &self.provider,
+                self.resolution.workspace_identity,
+            )
+            .map_err(|error| HttpError::ClientConfiguration(error.to_string()))?;
+            let result = if self.resolution.strict_variables {
+                environment.interpolate_strict(value)
+            } else {
+                environment.interpolate(value)
+            };
+            self.disclosure = SecretDisclosure::new(environment, self.presentation.url.as_deref());
+            result.map_err(|error| HttpError::ClientConfiguration(error.to_string()))
+        });
         if let Some(environment) = &self.disclosure.secrets {
             self.disclosure.initial_url_uses_secrets =
                 initial_url_depends_on_secret(self.presentation, request.request(), environment)?;
         }
         Ok(HttpExecution {
-            client_identity: CertificateScopes::new(&self.resolution).select(&request),
+            client_identity,
             request,
             disclosure: self.disclosure,
         })
@@ -218,7 +287,9 @@ impl HttpExecution {
         C: Future + Send,
         P: FnMut(HttpProgress) + Send,
     {
-        options.client_identity = self.client_identity?;
+        options.client_identity = self
+            .client_identity
+            .map_err(|error| self.disclosure.redact_error(error))?;
         if self.disclosure.uses_secrets() {
             // Cache spool files would retain unredacted response bytes.
             options.response_cache = None;
@@ -376,3 +447,296 @@ pub use session::{
     CloseOrigin, Session, SessionData, SessionError, SessionEvent, SessionSender,
     WebSocketExecution,
 };
+
+#[cfg(test)]
+mod certificate_variable_tests {
+    use super::*;
+    use probe_core::ClientCertificate;
+
+    const PASSWORD: &str = "certificate-password-marker";
+
+    #[derive(Default)]
+    struct Provider {
+        calls: RefCell<Vec<String>>,
+        unavailable: bool,
+        failure: bool,
+    }
+    impl SecretProvider for Provider {
+        fn resolve_secret(
+            &self,
+            context: &SecretContext<'_>,
+        ) -> Result<Option<SecretValue>, SecretError> {
+            assert_eq!(context.environment_name, Some("child"));
+            assert_eq!(context.workspace_identity, Some("workspace"));
+            self.calls.borrow_mut().push(context.variable_name.into());
+            assert_eq!(context.variable_name, "certPassword");
+            if self.failure {
+                return Err(SecretError);
+            }
+            Ok((!self.unavailable).then(|| SecretValue::new(PASSWORD.into())))
+        }
+    }
+
+    fn fixture() -> probe_opencollection::LoadedWorkspace {
+        probe_opencollection::load_workspace_from_str(include_str!(
+            "../../../tests/fixtures/opencollection/mtls-variables.yml"
+        ))
+        .unwrap()
+    }
+
+    fn resolution(loaded: &probe_opencollection::LoadedWorkspace) -> RequestResolution<'_> {
+        RequestResolution {
+            environments: loaded.workspace().environments(),
+            client_certificates: loaded.workspace().client_certificates(),
+            environment: Some("child"),
+            workspace_identity: Some("workspace"),
+            ..RequestResolution::default()
+        }
+    }
+
+    fn request() -> Request {
+        Request {
+            method: Some("GET".into()),
+            url: Some("https://api.example.com/private".into()),
+            ..Request::default()
+        }
+    }
+
+    #[test]
+    fn inherited_nested_variables_resolve_only_selected_certificate_and_join_disclosure() {
+        let loaded = fixture();
+        let provider = Provider::default();
+        let prepared = prepare_request(&request(), &resolution(&loaded), &provider).unwrap();
+        assert!(!prepared.uses_secrets());
+        assert!(provider.calls.borrow().is_empty());
+        assert!(!format!("{prepared:?}").contains(PASSWORD));
+        let execution = prepared.into_http().unwrap();
+        assert!(execution.uses_secrets());
+        assert_eq!(*provider.calls.borrow(), ["certPassword"]);
+        assert_eq!(
+            execution.client_identity,
+            Ok(Some(probe_http::PemClientIdentity::new(
+                "*.example.com".into(),
+                "inherited/client.pem".into(),
+                "inherited/client-key.pem".into(),
+                Some(PASSWORD.into()),
+            )))
+        );
+        assert!(!format!("{execution:?}").contains(PASSWORD));
+        let error = execution
+            .disclosure
+            .redact_error(HttpError::ClientConfiguration(PASSWORD.into()));
+        assert_eq!(
+            error,
+            HttpError::InvalidRequest(SECRET_DIAGNOSTIC_WITHHELD.into())
+        );
+        assert_eq!(
+            execution
+                .disclosure
+                .secrets
+                .as_ref()
+                .unwrap()
+                .redact_secrets(PASSWORD),
+            "[REDACTED]"
+        );
+    }
+
+    #[test]
+    fn invocation_overrides_apply_to_domain_paths_and_secret_passphrase() {
+        let loaded = fixture();
+        let provider = Provider::default();
+        let overrides = [
+            ("mtlsDomain".into(), "api.example.com:443".into()),
+            ("directory".into(), "override".into()),
+            ("certPassword".into(), "override-password".into()),
+        ];
+        let prepared = prepare_request(
+            &request(),
+            &RequestResolution {
+                overrides: &overrides,
+                ..resolution(&loaded)
+            },
+            &provider,
+        )
+        .unwrap();
+        let execution = prepared.into_http().unwrap();
+        assert_eq!(
+            execution.client_identity,
+            Ok(Some(probe_http::PemClientIdentity::new(
+                "api.example.com:443".into(),
+                "override/client.pem".into(),
+                "override/client-key.pem".into(),
+                Some("override-password".into()),
+            )))
+        );
+        assert!(execution.uses_secrets());
+        assert!(provider.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn request_and_certificate_shared_secrets_are_read_once() {
+        let loaded = fixture();
+        let provider = Provider::default();
+        let mut request = request();
+        request.headers.push(probe_core::Header {
+            name: "X-Secret".into(),
+            value: "{{passwordAlias}}".into(),
+            disabled: false,
+        });
+        let execution = prepare_request(&request, &resolution(&loaded), &provider)
+            .unwrap()
+            .into_http()
+            .unwrap();
+        assert!(execution.uses_secrets());
+        assert_eq!(*provider.calls.borrow(), ["certPassword"]);
+        assert!(execution.client_identity.is_ok());
+        assert_eq!(
+            execution
+                .disclosure
+                .secrets
+                .as_ref()
+                .unwrap()
+                .redact_secrets(PASSWORD),
+            "[REDACTED]"
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_certificate_secret_fails_before_file_or_network_access() {
+        let loaded = fixture();
+        for failure in [false, true] {
+            let provider = Provider {
+                unavailable: true,
+                failure,
+                ..Provider::default()
+            };
+            let execution = prepare_request(&request(), &resolution(&loaded), &provider)
+                .unwrap()
+                .into_http()
+                .unwrap();
+            let error = execution
+                .execute(
+                    &HttpEngine::new().unwrap(),
+                    ExecutionOptions::default(),
+                    None,
+                    std::future::pending::<()>(),
+                    |_| {},
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(error, HttpError::ClientConfiguration(_)));
+            assert!(error.to_string().contains("certPassword"));
+            assert!(!format!("{error:?}").contains(PASSWORD));
+            assert_eq!(*provider.calls.borrow(), ["certPassword"]);
+        }
+    }
+
+    #[test]
+    fn presentation_and_curl_do_not_resolve_certificate_only_secrets_or_read_files() {
+        let loaded = fixture();
+        let provider = Provider::default();
+        let prepared = prepare_request(&request(), &resolution(&loaded), &provider).unwrap();
+        assert_eq!(prepared.presentation(), &request());
+        let curl = copy_as_curl(
+            &request(),
+            &resolution(&loaded),
+            &HttpEngine::new().unwrap(),
+            &ExecutionOptions::default(),
+        )
+        .unwrap();
+        assert!(curl.contains("https://api.example.com/private"));
+        assert!(!curl.contains(PASSWORD));
+        assert!(provider.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn interpolation_preserves_domain_matching_and_pkcs12_rejection() {
+        let loaded = fixture();
+        let provider = Provider::default();
+        for host in [
+            "example.com",
+            "api.example.com.evil.test",
+            "elsewhere.invalid",
+        ] {
+            let request = Request {
+                url: Some(format!("https://{host}")),
+                ..request()
+            };
+            // Remove the trailing enabled variable-domain entry: an unknown domain
+            // necessarily needs its own secret to decide whether it matches.
+            let certificates = &loaded.workspace().client_certificates()[..3];
+            let execution = prepare_request(
+                &request,
+                &RequestResolution {
+                    client_certificates: certificates,
+                    ..resolution(&loaded)
+                },
+                &provider,
+            )
+            .unwrap()
+            .into_http()
+            .unwrap();
+            assert_eq!(execution.client_identity, Ok(None));
+        }
+        assert!(provider.calls.borrow().is_empty());
+        let certificates = [ClientCertificate::Pkcs12 {
+            domain: "{{mtlsDomain}}".into(),
+            pkcs12_file_path: "{{unused}}".into(),
+            passphrase: Some("{{unused}}".into()),
+            disabled: false,
+        }];
+        let execution = prepare_request(
+            &request(),
+            &RequestResolution {
+                client_certificates: &certificates,
+                ..resolution(&loaded)
+            },
+            &provider,
+        )
+        .unwrap()
+        .into_http()
+        .unwrap();
+        assert_eq!(
+            execution.client_identity,
+            Err(HttpError::ClientConfiguration(
+                "PKCS#12 client certificate execution is not supported yet".into()
+            ))
+        );
+        assert!(provider.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn missing_certificate_variables_follow_strict_and_nonstrict_semantics() {
+        let certificates = [ClientCertificate::Pem {
+            domain: "{{missing}}".into(),
+            certificate_file_path: "{{unused}}".into(),
+            private_key_file_path: "unused".into(),
+            passphrase: None,
+            disabled: false,
+        }];
+        for strict_variables in [false, true] {
+            let overrides = [("unrelated".into(), "value".into())];
+            let execution = prepare_request(
+                &request(),
+                &RequestResolution {
+                    client_certificates: &certificates,
+                    overrides: &overrides,
+                    strict_variables,
+                    ..RequestResolution::default()
+                },
+                &NoSecrets,
+            )
+            .unwrap()
+            .into_http()
+            .unwrap();
+            if strict_variables {
+                assert!(matches!(
+                    execution.client_identity,
+                    Err(HttpError::ClientConfiguration(_))
+                ));
+            } else {
+                assert_eq!(execution.client_identity, Ok(None));
+            }
+        }
+    }
+}

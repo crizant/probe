@@ -268,3 +268,59 @@ fn binary_response_redaction_preserves_other_bytes() {
     assert_eq!(redacted, b"\xff\x00[REDACTED]\xfe[REDACTED]");
     assert!(!redacted.windows(secret.len()).any(|part| part == secret));
 }
+
+#[test]
+fn execution_templates_share_request_reachability_and_interpolation_semantics() {
+    use probe_core::resolve_environment_for_templates_with_provider;
+    let environments = environment();
+    let provider = Provider {
+        calls: RefCell::new(Vec::new()),
+        fail: false,
+    };
+    // These can be PEM paths, archive paths, domains, or passphrases: the resolver
+    // deliberately knows nothing about certificate formats or filesystem access.
+    let templates = [
+        "{{ordinary}}/client.p12",
+        "{{outer}}",
+        "{{outer}}",
+        "{{missing}}",
+    ];
+    let resolved = resolve_environment_for_templates_with_provider(
+        templates,
+        &environments,
+        Some("production"),
+        &[],
+        &provider,
+        None,
+    )
+    .unwrap();
+    assert_eq!(*provider.calls.borrow(), ["token"]);
+    assert_eq!(
+        resolved.interpolate(templates[0]).unwrap(),
+        "plain/client.p12"
+    );
+    assert_eq!(
+        resolved.interpolate(templates[1]).unwrap(),
+        "Bearer SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR"
+    );
+    assert_eq!(resolved.interpolate(templates[3]).unwrap(), "{{missing}}");
+    assert!(resolved.interpolate_strict(templates[3]).is_err());
+    assert_eq!(
+        resolved
+            .interpolate_for_presentation(templates[1], true)
+            .unwrap(),
+        "{{outer}}"
+    );
+    assert!(resolved.has_resolved_secrets());
+    assert!(
+        resolve_environment_for_templates_with_provider(
+            ["{{unclosed"],
+            &environments,
+            Some("production"),
+            &[],
+            &provider,
+            None,
+        )
+        .is_err()
+    );
+}

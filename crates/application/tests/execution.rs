@@ -381,12 +381,8 @@ async fn initial_url_disclosure_tracks_secret_provenance_and_http_placement() {
                 | "graphql-extensions"
         );
         let environments = environments();
-        let prepared = prepare_request(
-            &request,
-            &local(&environments),
-            &RecordingProvider::default(),
-        )
-        .unwrap();
+        let provider = RecordingProvider::default();
+        let prepared = prepare_request(&request, &local(&environments), &provider).unwrap();
         let safe_url = prepared.presentation().url.clone().unwrap();
         let execution = prepared.into_http().unwrap();
         assert!(execution.uses_secrets(), "{case}");
