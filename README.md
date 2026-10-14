@@ -9,8 +9,8 @@
 
 A fast, native, local-first API client for macOS, Windows, and Linux.
 
-Built with Rust, GPUI, and Longbridge gpui-base, with OpenCollection YAML as the
-primary workspace format.
+Built with Rust, GPUI, and Longbridge GPUI Kit's unstyled base layer, with
+OpenCollection YAML as the primary workspace format.
 
 The project provides two first-class interfaces:
 
@@ -210,16 +210,15 @@ schemas, and exit codes.
 
 - Rust
 - GPUI
-- Longbridge [gpui-base](https://longbridge.github.io/gpui-component/base/)
+- Longbridge [GPUI Kit](https://github.com/longbridge/gpui-kit) (unstyled base layer)
 - OpenCollection YAML
 - Git-compatible filesystem storage
 
 GPUI provides the native application and rendering framework.
 
-Probe uses Longbridge `gpui-base` (`crates/base` in
-[`longbridge/gpui-component`](https://github.com/longbridge/gpui-component))
-for interaction, focus, accessibility, and default chrome tokens. That crate
-is not `gpui-component` (Longbridge's pre-styled façade).
+Probe uses GPUI Kit's unstyled `gpui_kit::base` layer for interaction, focus,
+accessibility, and default chrome tokens. GPUI Kit coordinates the GPUI and base
+versions; see the [dependency policy](docs/DEVELOPMENT.md#dependencies).
 
 Desktop chrome uses Probe's Porcelain Honey light theme and Graphite Honey dark
 theme through Probe's semantic theme. Domain colors (HTTP methods, status,
@@ -238,7 +237,8 @@ cargo fmt --check
 ```
 
 On macOS, desktop builds also require the full Xcode developer tools (not only the
-standalone Command Line Tools), because pinned GPUI compiles Metal shaders.
+standalone Command Line Tools), because GPUI resolved through GPUI Kit compiles
+Metal shaders.
 
 The repository is a Cargo workspace. Read [AGENTS.md](AGENTS.md) before changing
 code; it routes each task to the relevant reference without requiring the entire

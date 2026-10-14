@@ -205,20 +205,20 @@ impl Theme {
         }
     }
 
-    /// Install gpui-base infrastructure and the library's default semantic tokens.
+    /// Initialize GPUI Kit's base layer and Probe's default semantic tokens.
     pub fn init(cx: &mut gpui_kit::App) {
         gpui_kit::init(cx);
         crate::syntax::init_language_config(cx);
         load_bundled_fonts(cx);
-        Self::sync_gpui_base(WindowAppearance::Light, cx);
+        Self::sync_base_theme(WindowAppearance::Light, cx);
     }
 
-    /// Project the theme for `appearance` into gpui-base's global `Theme`.
-    pub fn sync_gpui_base(appearance: WindowAppearance, cx: &mut gpui_kit::App) {
+    /// Project the theme for `appearance` into `gpui_kit::base::Theme`.
+    pub fn sync_base_theme(appearance: WindowAppearance, cx: &mut gpui_kit::App) {
         Self::sync_theme(Self::for_window_appearance(appearance), cx);
     }
 
-    /// Project this theme into gpui-base's global `Theme` so primitives and
+    /// Project this theme into `gpui_kit::base::Theme` so primitives and
     /// infrastructure (scrollbars, resize handles) share the same tokens.
     pub(crate) fn sync_theme(theme: Self, cx: &mut gpui_kit::App) {
         let gpui_theme = gpui_kit::base::Theme::global_mut(cx);

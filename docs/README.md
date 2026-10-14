@@ -8,7 +8,7 @@ apply to every code change and routes task-specific work here.
 | [Architecture](ARCHITECTURE.md) | Crate boundaries, data flow, workspace identity, persistence, synchronization, HTTP, imports, desktop runtime behavior, desktop user configuration, and secret storage, credential identity, and presence metadata | Changing shared behavior, boundaries, secret handling, or desktop user configuration |
 | [CLI](CLI.md) | Commands, selectors, JSON schemas, secret providers, error categories, and exit codes | Changing or consuming the CLI contract |
 | [Desktop design](DESIGN.md) | Platform behavior, components, semantic tokens, themes, accessibility, variable placeholder presentation, and secret value interaction | Changing desktop presentation or interaction |
-| [Development](DEVELOPMENT.md) | Rust ownership, async work, dependencies, pinned GPUI guidance, test design, completion checks, and coverage, CRAP, and mutation review | Implementing code or changing dependencies |
+| [Development](DEVELOPMENT.md) | Rust ownership, async work, dependencies, GPUI Kit guidance, test design, completion checks, and coverage, CRAP, and mutation review | Implementing code or changing dependencies |
 | [Errors and logging](ERRORS_AND_LOGGING.md) | Typed-error ownership and interface logging boundaries | Adding or mapping failures and diagnostics |
 | [Performance](PERFORMANCE.md) | Benchmark commands, fixtures, measurement policy, and reference results | Measuring or optimizing performance |
 | [Roadmap](../IMPLEMENTATION_PLAN.md) | Explicitly deferred product work | Planning scope or starting a deferred feature |

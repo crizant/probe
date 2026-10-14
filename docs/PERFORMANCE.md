@@ -47,9 +47,10 @@ the same machine and build profile; absolute timings from different machines are
 directly comparable.
 
 Criterion 0.7 remains pinned with the original baseline. The workspace minimum is
-Rust 1.95 to match the exact GPUI revision. Production release artifacts use Rust
-1.99.0; record the compiler version when comparing benchmarks, since it can affect
-results. Handle dependency upgrades separately from performance measurement.
+Rust 1.95; GPUI is resolved transitively through `gpui-kit` and recorded in
+Cargo.lock. Production release artifacts use Rust 1.99.0; record the compiler
+version when comparing benchmarks, since it can affect results. Handle dependency
+upgrades separately from performance measurement.
 
 ## Representative fixture files
 
