@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-14
+
 ### Changed
 
 - CLI HTTP/GraphQL response summaries now show status, time, and size in a compact
@@ -532,6 +534,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[1.0.1]: https://github.com/crizant/probe/releases/tag/v1.0.1
 [1.0.0]: https://github.com/crizant/probe/releases/tag/v1.0.0
 [0.11.0]: https://github.com/crizant/probe/releases/tag/v0.11.0
 [0.10.8]: https://github.com/crizant/probe/releases/tag/v0.10.8
