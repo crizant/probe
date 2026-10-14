@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Desktop Copy as cURL no longer starts the HTTP execution runtime. The copied
+  command is unchanged.
+
 ### Added
 
 - OpenCollection PEM and PKCS#12 client certificate configuration now loads and
