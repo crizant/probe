@@ -73,10 +73,15 @@ bypass all proxies, including explicit, environment and system proxies.
 No new flag is required. For example,
 `domain: localhost:8443` matches `https://localhost:8443/private`; relative
 `certificateFilePath` and `privateKeyFilePath` resolve from the workspace base
-directory. `--dry-run` reads no identity files and performs no key decryption.
-Certificate configuration strings remain literal. PKCS#12 execution and certificate
-inheritance through `extends` are unsupported. Matching and redirect rules are
-specified in [Architecture](ARCHITECTURE.md#client-certificates-for-http-and-graphql).
+directory after interpolation. Certificate domain, path, and passphrase strings
+accept Probe environment variables, `--var` overrides, and secret variables.
+`--dry-run` does not resolve secrets used only by certificates, read identity
+files, or decrypt keys. Variables and `--var` overrides can resolve a domain to a
+broad pattern such as `*.com`, so control those values carefully. A domain that
+resolves to an empty or whitespace-only string silently matches nothing.
+PKCS#12 execution and certificate inheritance through `extends` are unsupported.
+Matching and redirect rules are specified in
+[Architecture](ARCHITECTURE.md#client-certificates-for-http-and-graphql).
 
 `agent skill install` installs the Probe agent skill in the current user's
 `~/.agents/skills/probe/`, with `SKILL.md` and `references/cli.md`. Both the

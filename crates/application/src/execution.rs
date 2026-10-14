@@ -629,7 +629,17 @@ mod certificate_variable_tests {
                 .await
                 .unwrap_err();
             assert!(matches!(error, HttpError::ClientConfiguration(_)));
-            assert!(error.to_string().contains("certPassword"));
+            let message = error.to_string();
+            let diagnostic = if failure {
+                "secret provider failed for variable: certPassword"
+            } else {
+                "secret variable has no runtime value: certPassword"
+            };
+            assert_eq!(
+                message,
+                format!("cannot configure HTTP client: {diagnostic}")
+            );
+            assert!(!message.contains(PASSWORD));
             assert!(!format!("{error:?}").contains(PASSWORD));
             assert_eq!(*provider.calls.borrow(), ["certPassword"]);
         }
@@ -706,6 +716,60 @@ mod certificate_variable_tests {
                 "PKCS#12 client certificate execution is not supported yet".into()
             ))
         );
+        assert!(provider.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn interpolated_domains_ignore_blank_values_and_accept_broad_patterns() {
+        let loaded = fixture();
+        let provider = Provider::default();
+        let certificates = [ClientCertificate::Pem {
+            domain: "{{mtlsDomain}}".into(),
+            certificate_file_path: "missing-cert.pem".into(),
+            private_key_file_path: "missing-key.pem".into(),
+            passphrase: None,
+            disabled: false,
+        }];
+        for (domain, host, matches) in [
+            ("", "api.example.com", false),
+            (" \t\r\n", "api.example.com", false),
+            ("*.com", "api.example.com", true),
+            ("*.com", "example.com", true),
+            ("*.com", "com", false),
+            ("*.com", "api.example.net", false),
+        ] {
+            let overrides = [("mtlsDomain".into(), domain.into())];
+            let request = Request {
+                url: Some(format!("https://{host}/private")),
+                ..request()
+            };
+            let execution = prepare_request(
+                &request,
+                &RequestResolution {
+                    client_certificates: &certificates,
+                    overrides: &overrides,
+                    strict_variables: true,
+                    ..resolution(&loaded)
+                },
+                &provider,
+            )
+            .unwrap()
+            .into_http()
+            .unwrap();
+            let expected = matches.then(|| {
+                probe_http::PemClientIdentity::new(
+                    domain.into(),
+                    "missing-cert.pem".into(),
+                    "missing-key.pem".into(),
+                    None,
+                )
+            });
+            assert_eq!(
+                execution.client_identity,
+                Ok(expected),
+                "domain={domain:?}, host={host}"
+            );
+        }
         assert!(provider.calls.borrow().is_empty());
     }
 

@@ -8,9 +8,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
-- Client certificate domains, PEM paths, and passphrases now support environment
-  variables and `--var` overrides, including secret variables. Dry-run and Copy as
-  cURL leave certificate-only secrets unresolved.
+- Client certificate domains, PEM paths, and passphrases now support Probe
+  environment variables and `--var` overrides, including secret variables.
+  Dry-run and Copy as cURL leave certificate-only secrets unresolved.
 
 - OpenCollection PEM and PKCS#12 client certificate configuration now loads and
   persists at collection and environment scope, with strict entry validation and

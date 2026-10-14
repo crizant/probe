@@ -711,8 +711,9 @@ Preparation retains borrowed resolution inputs and the provider. Certificate sco
 are built only when converting to HTTP/GraphQL execution. Each enabled domain is
 interpolated before matching, then only the winning PEM entry's paths and passphrase
 are interpolated. The format-independent core template resolver follows the existing
-selected/inherited environment variables, invocation overrides, nested references,
-secret declarations, and strict/non-strict semantics; it adds no variable scopes.
+selected/inherited Probe environment variables, invocation overrides, nested
+references, secret declarations, and strict/non-strict semantics; it adds no
+variable scopes.
 PKCS#12 material is not resolved while execution is unsupported; its paths and
 passphrases can use the same resolver when execution is added.
 
@@ -735,6 +736,9 @@ leftmost label: `*.example.com` matches one or more subdomain labels, including
 nested subdomains, but does not match the bare apex. Other wildcard placements
 never match: `*example.com` cannot match `evil-example.com`, and standalone `*`,
 `api*.example.com` and `*.*.example.com` are unsupported.
+Variables and `--var` overrides can resolve a domain to a broad pattern such as
+`*.com`, so users should control those values carefully. An empty or
+whitespace-only resolved domain silently matches nothing.
 Trailing dots are significant: `example.com` does not match `example.com.`, while
 `example.com.` does. Probe uses the parsed URL hostname without stripping its dot.
 Portless patterns allow any port; an explicit port must equal the effective HTTPS
@@ -765,6 +769,8 @@ private-key material, paths or passphrases. Rustls checks the cert/key match.
 The core passphrase remains a plain `String`. Application `CertificateScopes`
 borrows declarations; desktop HTTP/GraphQL `ExecutionInput` snapshots still clone
 them, including plain passphrase strings that are not zeroized.
+The interpolated passphrase `String` and secret-value copies retained in the
+invocation cache and resolved environment are also not zeroized.
 The transport passphrase and temporary certificate/key buffers zeroize on drop, but the key
 copy retained inside `reqwest::Identity` is not zeroized. This is memory hygiene,
 not a guarantee that every process-memory copy is erased.
