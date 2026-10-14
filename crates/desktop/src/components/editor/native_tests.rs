@@ -332,3 +332,62 @@ fn unchanged_text_switches_syntect_language_without_resetting_history(cx: &mut T
         "<root id=\"1\"/>"
     );
 }
+
+#[gpui_kit::test]
+fn json_quote_context_preserves_unfinished_and_escaped_strings(cx: &mut TestAppContext) {
+    for (initial, expected) in [
+        ("", "\"\""),
+        ("\"hello", "\"hello\""),
+        ("\"hello ", "\"hello \""),
+        ("\"héllo 🦀 ", "\"héllo 🦀 \""),
+        ("\"hello\\", "\"hello\\\""),
+        ("\"hello\\\\", "\"hello\\\\\""),
+        ("\"hello\\\\\\", "\"hello\\\\\\\""),
+    ] {
+        let (window, editor) = setup(cx, initial, "json", false);
+        window
+            .update(cx, |_, _, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.set_selected_range(initial.len()..initial.len(), cx);
+                })
+            })
+            .unwrap();
+        cx.simulate_input(window.into(), "\"");
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(editor.value(), expected, "initial {initial:?}");
+            let caret = if initial.is_empty() {
+                1
+            } else {
+                expected.len()
+            };
+            assert_eq!(editor.selected_range(), caret..caret);
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn enter_does_not_add_structural_indentation_or_split_pairs(cx: &mut TestAppContext) {
+    for language in ["", "xml", "json"] {
+        for (initial, expected) in [("{", "{\n"), ("{}", "{\n}")] {
+            let (window, editor) = setup(cx, initial, language, false);
+            window
+                .update(cx, |_, _, cx| {
+                    editor.update(cx, |editor, cx| {
+                        editor.set_selected_range(1..1, cx);
+                    })
+                })
+                .unwrap();
+            cx.simulate_keystrokes(window.into(), "enter");
+            cx.run_until_parked();
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(
+                    editor.value(),
+                    expected,
+                    "language {language:?}, initial {initial:?}"
+                );
+                assert_eq!(editor.selected_range(), 2..2);
+            });
+        }
+    }
+}

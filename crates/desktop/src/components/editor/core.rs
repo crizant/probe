@@ -113,6 +113,7 @@ impl RenderOnce for ProbeEditor {
             let state = cx.new(|cx| {
                 let mut editor = EditorState::new(window, cx)
                     .placeholder(placeholder.clone())
+                    .smart_indent(false)
                     .folding(false)
                     // Let the shortcut reach Probe’s search card; the native
                     // session still owns matching, navigation, and painting.
