@@ -1,0 +1,25 @@
+opencollection: 1.0.0
+info:
+  name: PEM execution test
+bundled: true
+config:
+  clientCertificates:
+    - domain: localhost:8443
+      type: pem
+      certificateFilePath: missing-test-cert.pem
+      privateKeyFilePath: missing-test-key.pem
+items:
+  - info:
+      name: HTTP
+      type: http
+    http:
+      method: GET
+      url: https://localhost:8443/private
+  - info:
+      name: GraphQL
+      type: graphql
+    graphql:
+      method: POST
+      url: https://localhost:8443/graphql
+      body:
+        query: 'query { viewer { id } }'

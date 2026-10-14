@@ -18,7 +18,7 @@ mod request_resolution;
 mod secret;
 mod workspace;
 
-pub use client_certificate::ClientCertificate;
+pub use client_certificate::{ClientCertificate, client_certificate_domain_matches};
 pub use collection::{
     Author, Collection, CollectionItem, CollectionMetadata, CollectionUpdate, Documentation,
     Folder, FolderUpdate, ImportDiagnostic, ImportDiagnosticSeverity, ItemMetadata,

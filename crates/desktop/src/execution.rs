@@ -401,6 +401,7 @@ impl ExecutionService {
                 };
                 let resolution = RequestResolution {
                     environments: &input.environments,
+                    client_certificates: &input.client_certificates,
                     environment: input.environment.as_deref(),
                     ..RequestResolution::default()
                 };
@@ -486,6 +487,7 @@ impl ExecutionService {
                     };
                     let resolution = RequestResolution {
                         environments: &input.environments,
+                    client_certificates: &input.client_certificates,
                         environment: input.environment.as_deref(),
                         ..RequestResolution::default()
                     };
@@ -547,6 +549,7 @@ impl ExecutionService {
 pub(crate) struct ExecutionInput {
     pub(crate) request: Request,
     pub(crate) environments: Vec<Environment>,
+    pub(crate) client_certificates: Vec<probe_core::ClientCertificate>,
     pub(crate) environment: Option<String>,
     /// Saved workspace whose native credentials supply secret values.
     pub(crate) credential_workspace: Option<PathBuf>,
@@ -1145,6 +1148,7 @@ mod tests {
                     ..Request::default()
                 },
                 environments: Vec::new(),
+                client_certificates: Vec::new(),
                 environment: None,
                 credential_workspace: None,
             },
@@ -1242,6 +1246,7 @@ mod tests {
         ExecutionInput {
             request,
             environments: native_test_environment(),
+            client_certificates: Vec::new(),
             environment: Some("production".into()),
             credential_workspace: Some(workspace),
         }
@@ -1591,7 +1596,7 @@ mod tests {
         service.runtime.as_ref().unwrap().block_on(async {
             tokio::time::timeout(Duration::from_secs(5), async {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let input = || ExecutionInput { request: Request { url: Some(format!("ws://{}", listener.local_addr().unwrap())), kind: probe_core::RequestKind::WebSocket { message: None }, ..Request::default() }, environments: vec![], environment: None, credential_workspace: None };
+                let input = || ExecutionInput { request: Request { url: Some(format!("ws://{}", listener.local_addr().unwrap())), kind: probe_core::RequestKind::WebSocket { message: None }, ..Request::default() }, environments: vec![], client_certificates: vec![], environment: None, credential_workspace: None };
                 let (cancel, cancellation) = oneshot::channel();
                 let (mut events, _) = service.connect_websocket(input(), cancellation);
                 let (_stream, _) = listener.accept().await.unwrap();

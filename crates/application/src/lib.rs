@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod client_certificate;
 mod execution;
 mod websocket_input;
 

@@ -692,13 +692,81 @@ Accepted reloads rebuild runtime keys and resolve repository selectors for tabs 
 presentation state. Confident file renames may remap selectors. Successful Probe writes
 refresh the baseline, so their watcher events reconcile as no-ops.
 
+### Client certificates for HTTP and GraphQL
+
 Collection and environment `clientCertificates` project into the core
 `ClientCertificate` enum (PEM or PKCS#12). `Workspace::client_certificates()` exposes
 collection declarations; each `Environment` retains its own declarations in source
 order. Paths and passphrases remain literal configuration strings, and debug output
 redacts passphrases. Persistence writes the native schema and keeps unchanged
-environment certificate YAML during other edits. No certificate inheritance,
-precedence, domain matching, file loading, or transport execution is defined here.
+environment certificate YAML during other edits.
+
+HTTP and GraphQL execution snapshots certificate scopes through `RequestResolution`.
+The application selects after resolving the request URL, using only the selected
+environment's direct declarations first, followed by collection declarations. It
+skips disabled entries and takes the first enabled match; disabled entries never
+mask collection entries, and `extends` never inherits certificates. A winning
+PKCS#12 declaration returns an explicit unsupported configuration error.
+Preparation retains borrowed resolution inputs. Certificate scopes are built only
+when converting to HTTP/GraphQL execution; only the winning identity is copied.
+Dry runs and Copy as cURL do not copy, load or decrypt certificates. Desktop
+WebSocket and Copy as cURL snapshots omit certificate declarations, including
+those inside environments. WebSocket transport remains unchanged.
+
+The matching rules below are Probe's own execution contract; OpenCollection does
+not define a matching algorithm. Matching applies only to HTTPS. Hostnames are
+ASCII case-insensitive and anchored at both ends. A wildcard must be the entire
+leftmost label: `*.example.com` matches one or more subdomain labels, including
+nested subdomains, but does not match the bare apex. Other wildcard placements
+never match: `*example.com` cannot match `evil-example.com`, and standalone `*`,
+`api*.example.com` and `*.*.example.com` are unsupported.
+Trailing dots are significant: `example.com` does not match `example.com.`, while
+`example.com.` does. Probe uses the parsed URL hostname without stripping its dot.
+Portless patterns allow any port; an explicit port must equal the effective HTTPS
+port (443 when omitted). IPv4 and bracketed IPv6 literals are supported.
+A valid unbracketed IPv6 literal such as `::1` is interpreted as a whole IPv6 host
+and permits any port; it is never split into host `::` and port 1. Its numeric
+address is compared to the URL's bracketed IPv6 host. Use brackets to specify an
+IPv6 port, for example `[::1]:8443`. Domain patterns contain only ASCII letters,
+digits, dots, hyphens, `*`, colons and brackets;
+schemes, paths, userinfo, queries, fragments and regex syntax are not patterns.
+Thus `example.com` never matches `example.com.evil.test`.
+Probe deliberately restricts wildcard placement and avoids URL prefix matching.
+The upstream OpenCollection schema defines certificate fields but
+no matching algorithm: see [certificate schema](https://github.com/opencollection-dev/opencollection/blob/535a5c5803da7a3fe1d575fff23350b4a7c43c6a/packages/oc-schema/src/opencollection.schema.json)
+and [Bruno transport](https://github.com/usebruno/bruno/blob/fd0e623bb6a1cf62a08bfd06c7ea9b61e25f303e/packages/bruno-electron/src/ipc/network/cert-utils.js).
+Bruno interpolates certificate strings with broader variable scopes than Probe;
+certificate interpolation is deferred until it can reuse Probe's reachable-secret
+resolution safely. Probe keeps every certificate configuration string literal.
+
+`probe-http` receives only a selected `PemClientIdentity`. Absolute paths remain
+absolute; relative paths use `ExecutionOptions.base_directory`, shared with body
+files, and require a nonempty base directory. No cwd changes or canonicalization
+occur. Certificate chains are leaf-first. RSA PKCS#1, EC SEC1 and PKCS#8 unencrypted
+PEM keys are supported. Encrypted PKCS#8 uses RustCrypto `pkcs8` and the configured
+literal passphrase; legacy OpenSSL encrypted PEM is rejected. Key derivation runs
+on a blocking worker, with zeroizing key and combined PEM buffers, and decrypted
+material is never written to disk. Diagnostics do not include parser output,
+private-key material, paths or passphrases. Rustls checks the cert/key match.
+The core passphrase remains a plain `String`. Application `CertificateScopes`
+borrows declarations; desktop HTTP/GraphQL `ExecutionInput` snapshots still clone
+them, including plain passphrase strings that are not zeroized.
+The transport passphrase and temporary certificate/key buffers zeroize on drop, but the key
+copy retained inside `reqwest::Identity` is not zeroized. This is memory hygiene,
+not a guarantee that every process-memory copy is erased.
+
+Certificate-bearing executions construct a fresh reqwest/rustls client and disable
+all proxies before installing the identity (`ClientBuilder::no_proxy()`), including
+system/environment proxies and explicit builder proxies. HTTPS proxy TLS must not
+receive a resolver for a certificate scoped to the destination host. These
+executions connect directly; ordinary requests retain existing proxy behavior and
+the reusable default client. Redirects follow existing limits
+only when the target is HTTPS and matches the selected pattern; otherwise the
+request fails with a clear, secret-safe "redirect blocked" diagnostic without
+connecting to the target. HTTPS-to-HTTP redirects are blocked by the same rule.
+Server certificate and hostname verification remain enabled. No native TLS, PKCS#12 execution,
+certificate-management UI, environment inheritance, or proprietary YAML fields
+are introduced.
 
 ## OpenCollection Validation
 

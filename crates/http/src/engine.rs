@@ -49,7 +49,7 @@ impl HttpEngine {
     /// Creates an engine with the default redirect policy.
     pub fn new() -> Result<Self, HttpError> {
         Ok(Self {
-            default_client: build_client(true, DEFAULT_MAX_REDIRECTS)?,
+            default_client: build_client(true, DEFAULT_MAX_REDIRECTS, None)?,
         })
     }
 
@@ -189,11 +189,22 @@ impl HttpEngine {
     where
         P: FnMut(HttpProgress),
     {
-        let client = self.client_for(&request.request().settings)?;
+        let client = self
+            .client_for(&request.request().settings, options)
+            .await?;
         let builder = build_request(&client, request, options).await?;
         let started = Instant::now();
         let built = builder.build().map_err(map_reqwest_error)?;
         let initial_url = built.url().clone();
+        if options
+            .client_identity
+            .as_ref()
+            .is_some_and(|identity| !identity.matches(&initial_url))
+        {
+            return Err(HttpError::ClientConfiguration(
+                "client identity does not match the execution URL".into(),
+            ));
+        }
         let mut response = client.execute(built).await.map_err(map_reqwest_error)?;
         let expected_size = response.content_length();
         let status = response.status();
@@ -242,13 +253,24 @@ impl HttpEngine {
         })
     }
 
-    fn client_for(&self, settings: &RequestSettings) -> Result<Client, HttpError> {
+    async fn client_for(
+        &self,
+        settings: &RequestSettings,
+        options: &ExecutionOptions,
+    ) -> Result<Client, HttpError> {
         let follow = settings.follow_redirects.unwrap_or(true);
         let maximum = settings.max_redirects.unwrap_or(DEFAULT_MAX_REDIRECTS);
+        if let Some(identity) = &options.client_identity {
+            return build_client(
+                follow,
+                maximum,
+                Some((identity.load(options).await?, identity.clone())),
+            );
+        }
         if follow && maximum == DEFAULT_MAX_REDIRECTS {
             Ok(self.default_client.clone())
         } else {
-            build_client(follow, maximum)
+            build_client(follow, maximum, None)
         }
     }
 }
@@ -258,16 +280,40 @@ struct ExecutedHttpResponse {
     body_sha256: Option<[u8; 32]>,
 }
 
-fn build_client(follow_redirects: bool, maximum: usize) -> Result<Client, HttpError> {
-    let policy = if follow_redirects {
-        Policy::limited(maximum)
-    } else {
+fn build_client(
+    follow_redirects: bool,
+    maximum: usize,
+    identity: Option<(reqwest::Identity, crate::PemClientIdentity)>,
+) -> Result<Client, HttpError> {
+    configure_client(Client::builder(), follow_redirects, maximum, identity)
+}
+
+fn configure_client(
+    builder: reqwest::ClientBuilder,
+    follow_redirects: bool,
+    maximum: usize,
+    identity: Option<(reqwest::Identity, crate::PemClientIdentity)>,
+) -> Result<Client, HttpError> {
+    let authenticated = identity.is_some();
+    let policy = if !follow_redirects {
         Policy::none()
+    } else if let Some((_, identity)) = &identity {
+        identity_redirect_policy(maximum, identity.for_redirects())
+    } else {
+        Policy::limited(maximum)
     };
-    Client::builder()
-        .redirect(policy)
-        .build()
-        .map_err(|error| HttpError::ClientConfiguration(error.to_string()))
+    let mut builder = builder.redirect(policy);
+    if let Some((identity, _)) = identity {
+        // Proxy TLS must never inherit the host-scoped client certificate resolver.
+        builder = builder.no_proxy().identity(identity);
+    }
+    builder.build().map_err(|error| {
+        HttpError::ClientConfiguration(if authenticated {
+            "HTTP client construction failed".into()
+        } else {
+            error.to_string()
+        })
+    })
 }
 
 fn response_headers(headers: &HeaderMap) -> Vec<ResponseHeader> {
@@ -281,3 +327,17 @@ fn response_headers(headers: &HeaderMap) -> Vec<ResponseHeader> {
     headers.sort_by(|left, right| (&left.name, &left.value).cmp(&(&right.name, &right.value)));
     headers
 }
+
+fn identity_redirect_policy(maximum: usize, identity: crate::PemClientIdentity) -> Policy {
+    let limit = Policy::limited(maximum);
+    Policy::custom(move |attempt| {
+        if identity.matches(attempt.url()) {
+            limit.redirect(attempt)
+        } else {
+            attempt.error(HttpError::ClientCertificateRedirectBlocked)
+        }
+    })
+}
+
+#[cfg(test)]
+mod mtls_tests;

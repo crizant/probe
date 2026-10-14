@@ -1,4 +1,4 @@
-//! Native OpenCollection client-certificate configuration. No execution or selection rules.
+//! Native OpenCollection client-certificate configuration and pure domain matching.
 
 use std::fmt;
 
@@ -64,5 +64,52 @@ impl fmt::Debug for ClientCertificate {
                 .field("disabled", disabled)
                 .finish(),
         }
+    }
+}
+
+/// Matches a literal hostname/authority glob against an HTTPS URL's parsed host.
+/// A wildcard must be the whole leftmost label (`*.example.com`). It matches
+/// one or more subdomain labels; other wildcard placements never match.
+/// A portless pattern permits any port. An explicit port matches the effective
+/// HTTPS port (including 443). Paths, userinfo, and regex syntax are rejected.
+#[must_use]
+pub fn client_certificate_domain_matches(pattern: &str, host: &str, port: u16) -> bool {
+    if pattern.is_empty()
+        || pattern
+            .bytes()
+            .any(|byte| !byte.is_ascii_alphanumeric() && !b".-*:[]".contains(&byte))
+    {
+        return false;
+    }
+    // An unbracketed IPv6 literal is a whole host, never a host:port pair.
+    if let Ok(address) = pattern.parse::<std::net::Ipv6Addr>() {
+        return host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .and_then(|host| host.parse::<std::net::Ipv6Addr>().ok())
+            == Some(address);
+    }
+    let (pattern, configured_port) = match pattern.rsplit_once(':') {
+        Some((hostname, value)) if !value.contains(']') => {
+            let Ok(port) = value.parse::<u16>() else {
+                return false;
+            };
+            (hostname, Some(port))
+        }
+        _ => (pattern, None),
+    };
+    if configured_port.is_some_and(|value| value != port) {
+        return false;
+    }
+    let pattern = pattern.to_ascii_lowercase();
+    let host = host.to_ascii_lowercase();
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        if suffix.is_empty() || suffix.contains('*') {
+            return false;
+        }
+        host.strip_suffix(&format!(".{suffix}"))
+            .is_some_and(|prefix| !prefix.is_empty())
+    } else {
+        !pattern.contains('*') && pattern == host
     }
 }

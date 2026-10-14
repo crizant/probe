@@ -19,6 +19,22 @@ pub struct Environment {
     pub client_certificates: Vec<crate::ClientCertificate>,
 }
 
+impl Environment {
+    /// Copies variable-resolution metadata without certificate paths or passphrases.
+    #[must_use]
+    pub fn clone_without_client_certificates(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            color: self.color.clone(),
+            description: self.description.clone(),
+            extends: self.extends.clone(),
+            dot_env_file_path: self.dot_env_file_path.clone(),
+            variables: self.variables.clone(),
+            client_certificates: Vec::new(),
+        }
+    }
+}
+
 /// A normal or secret environment variable.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EnvironmentVariable {

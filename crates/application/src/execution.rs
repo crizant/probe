@@ -15,6 +15,8 @@ use probe_core::{
 };
 use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse};
 
+use crate::client_certificate::CertificateScopes;
+
 /// Diagnostic reported instead of HTTP failure details when a runtime secret was used.
 pub const SECRET_DIAGNOSTIC_WITHHELD: &str =
     "diagnostic withheld because the request used a secret variable";
@@ -27,6 +29,8 @@ pub const SECRET_DIAGNOSTIC_WITHHELD: &str =
 /// may supply a declared secret.
 #[derive(Clone, Copy, Default)]
 pub struct RequestResolution<'a> {
+    /// Certificates declared at collection scope, in source order.
+    pub client_certificates: &'a [probe_core::ClientCertificate],
     pub environments: &'a [Environment],
     pub environment: Option<&'a str>,
     pub overrides: &'a [(String, String)],
@@ -56,16 +60,17 @@ impl SecretProvider for NoSecrets {
 /// The provider is asked only for secrets the request can reach, including through
 /// plain variables. It may block, so interactive interfaces must call this away from
 /// their UI thread.
-pub fn prepare_request(
+pub fn prepare_request<'a>(
     request: &Request,
-    resolution: &RequestResolution<'_>,
+    resolution: &RequestResolution<'a>,
     secrets: &dyn SecretProvider,
-) -> Result<PreparedRequest, EnvironmentResolutionError> {
+) -> Result<PreparedRequest<'a>, EnvironmentResolutionError> {
     if !resolution.resolves_variables() {
         return Ok(PreparedRequest {
             execution: request.clone(),
             presentation: request.clone(),
             disclosure: SecretDisclosure::default(),
+            resolution: *resolution,
         });
     }
     let environment = resolve_environment_for_request_with_provider(
@@ -88,17 +93,19 @@ pub fn prepare_request(
         execution,
         presentation,
         disclosure,
+        resolution: *resolution,
     })
 }
 
 /// A resolved request whose secret-bearing execution form is not observable.
-pub struct PreparedRequest {
+pub struct PreparedRequest<'a> {
+    resolution: RequestResolution<'a>,
     execution: Request,
     presentation: Request,
     disclosure: SecretDisclosure,
 }
 
-impl PreparedRequest {
+impl PreparedRequest<'_> {
     /// The request with secret references retained, safe for dry runs and summaries.
     #[must_use]
     pub const fn presentation(&self) -> &Request {
@@ -119,6 +126,7 @@ impl PreparedRequest {
                 initial_url_depends_on_secret(self.presentation, request.request(), environment)?;
         }
         Ok(HttpExecution {
+            client_identity: CertificateScopes::new(&self.resolution).select(&request),
             request,
             disclosure: self.disclosure,
         })
@@ -168,7 +176,7 @@ fn initial_url_depends_on_secret(
     }))
 }
 
-impl fmt::Debug for PreparedRequest {
+impl fmt::Debug for PreparedRequest<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PreparedRequest")
@@ -180,6 +188,7 @@ impl fmt::Debug for PreparedRequest {
 
 /// HTTP engine input whose results are redacted before they are returned.
 pub struct HttpExecution {
+    client_identity: Result<Option<probe_http::PemClientIdentity>, HttpError>,
     request: PreparedHttpRequest,
     disclosure: SecretDisclosure,
 }
@@ -209,7 +218,8 @@ impl HttpExecution {
         C: Future + Send,
         P: FnMut(HttpProgress) + Send,
     {
-        if self.uses_secrets() {
+        options.client_identity = self.client_identity?;
+        if self.disclosure.uses_secrets() {
             // Cache spool files would retain unredacted response bytes.
             options.response_cache = None;
         }
@@ -315,7 +325,8 @@ impl SecretDisclosure {
             HttpError::MissingMethod
             | HttpError::MissingUrl
             | HttpError::Timeout
-            | HttpError::Cancelled => error,
+            | HttpError::Cancelled
+            | HttpError::ClientCertificateRedirectBlocked => error,
             HttpError::ResponseOutput { path, .. } => HttpError::ResponseOutput {
                 path,
                 message: SECRET_DIAGNOSTIC_WITHHELD.to_owned(),

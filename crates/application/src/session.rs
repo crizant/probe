@@ -125,7 +125,7 @@ impl fmt::Debug for WebSocketExecution {
             .finish_non_exhaustive()
     }
 }
-impl PreparedRequest {
+impl PreparedRequest<'_> {
     /// Validate the native protocol and selected message before any network I/O.
     /// Binary collection data is deliberately rejected: its String representation
     /// does not establish a binary encoding contract.

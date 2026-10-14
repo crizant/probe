@@ -11,7 +11,16 @@ Release dates use Australia/Brisbane time (UTC+10).
 - OpenCollection PEM and PKCS#12 client certificate configuration now loads and
   persists at collection and environment scope, with strict entry validation and
   indexed errors. Passphrases must be strings when present; explicit null is
-  rejected. Certificate execution is not yet supported.
+  rejected.
+- HTTP and GraphQL requests now use matching OpenCollection PEM client certificates
+  for mTLS from CLI and desktop. Certificate-bearing requests connect directly,
+  bypassing proxies. Domains match exact hosts or whole leftmost wildcard labels
+  such as `*.example.com`. Direct selected-environment certificates take
+  precedence over collection certificates. RSA, EC, PKCS#8, certificate chains,
+  and encrypted PKCS#8 keys are supported. Redirects outside the selected domain
+  fail with a clear diagnostic before connecting. PKCS#12 execution and
+  environment certificate inheritance remain unsupported; no certificate editor
+  or proprietary fields are added.
 
 ### Changed
 

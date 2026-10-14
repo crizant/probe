@@ -66,6 +66,18 @@ probe environment delete <path> --environment <name> [--json]
 probe environment rename <path> --environment <name> --name <new> [--json]
 ```
 
+HTTP/GraphQL `request run` automatically uses the first enabled matching PEM
+client certificate from the selected environment's direct `clientCertificates`,
+then collection `config.clientCertificates`. Requests using a client certificate
+bypass all proxies, including explicit, environment and system proxies.
+No new flag is required. For example,
+`domain: localhost:8443` matches `https://localhost:8443/private`; relative
+`certificateFilePath` and `privateKeyFilePath` resolve from the workspace base
+directory. `--dry-run` reads no identity files and performs no key decryption.
+Certificate configuration strings remain literal. PKCS#12 execution and certificate
+inheritance through `extends` are unsupported. Matching and redirect rules are
+specified in [Architecture](ARCHITECTURE.md#client-certificates-for-http-and-graphql).
+
 `agent skill install` installs the Probe agent skill in the current user's
 `~/.agents/skills/probe/`, with `SKILL.md` and `references/cli.md`. Both the
 canonical skill and this CLI reference are embedded in the executable, so the
