@@ -152,6 +152,9 @@ impl PreparedRequest<'_> {
     }
 
     /// Converts the execution request into HTTP engine input.
+    ///
+    /// Resolves reachable certificate variables, including secrets, without reading
+    /// identity files. The provider may block; call this away from the UI thread.
     pub fn into_http(mut self) -> Result<HttpExecution, RequestProtocolError> {
         let mut templates = Vec::new();
         if self.resolution.resolves_variables() {

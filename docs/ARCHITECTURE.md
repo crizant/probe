@@ -707,9 +707,24 @@ environment's direct declarations first, followed by collection declarations. It
 skips disabled entries and takes the first enabled match; disabled entries never
 mask collection entries, and `extends` never inherits certificates. A winning
 PKCS#12 declaration returns an explicit unsupported configuration error.
-Preparation retains borrowed resolution inputs. Certificate scopes are built only
-when converting to HTTP/GraphQL execution; only the winning identity is copied.
-Dry runs and Copy as cURL do not copy, load or decrypt certificates. Desktop
+Preparation retains borrowed resolution inputs and the provider. Certificate scopes
+are built only when converting to HTTP/GraphQL execution. Each enabled domain is
+interpolated before matching, then only the winning PEM entry's paths and passphrase
+are interpolated. The format-independent core template resolver follows the existing
+selected/inherited environment variables, invocation overrides, nested references,
+secret declarations, and strict/non-strict semantics; it adds no variable scopes.
+PKCS#12 material is not resolved while execution is unsupported; its paths and
+passphrases can use the same resolver when execution is added.
+
+HTTP conversion may block on the provider and must run away from the UI thread.
+An invocation-local provider cache reads shared request/certificate secrets once.
+Certificate secrets join the existing disclosure context, making
+`HttpExecution::uses_secrets()` true and activating response redaction, cache bypass,
+and desktop direct-output safeguards even for certificate-only secrets. Disabled
+entries, unmatched entries' material, and entries after the winner require no
+lookups. An enabled secret domain must be resolved to decide whether it matches.
+Dry runs and Copy as cURL do not resolve certificate-only secrets, load or decrypt
+certificates. Desktop
 WebSocket and Copy as cURL snapshots omit certificate declarations, including
 those inside environments. WebSocket transport remains unchanged.
 
@@ -736,15 +751,14 @@ The upstream OpenCollection schema defines certificate fields but
 no matching algorithm: see [certificate schema](https://github.com/opencollection-dev/opencollection/blob/535a5c5803da7a3fe1d575fff23350b4a7c43c6a/packages/oc-schema/src/opencollection.schema.json)
 and [Bruno transport](https://github.com/usebruno/bruno/blob/fd0e623bb6a1cf62a08bfd06c7ea9b61e25f303e/packages/bruno-electron/src/ipc/network/cert-utils.js).
 Bruno interpolates certificate strings with broader variable scopes than Probe;
-certificate interpolation is deferred until it can reuse Probe's reachable-secret
-resolution safely. Probe keeps every certificate configuration string literal.
+Probe uses only its existing environment and invocation variable system.
 
 `probe-http` receives only a selected `PemClientIdentity`. Absolute paths remain
 absolute; relative paths use `ExecutionOptions.base_directory`, shared with body
 files, and require a nonempty base directory. No cwd changes or canonicalization
 occur. Certificate chains are leaf-first. RSA PKCS#1, EC SEC1 and PKCS#8 unencrypted
-PEM keys are supported. Encrypted PKCS#8 uses RustCrypto `pkcs8` and the configured
-literal passphrase; legacy OpenSSL encrypted PEM is rejected. Key derivation runs
+PEM keys are supported. Encrypted PKCS#8 uses RustCrypto `pkcs8` and the resolved
+passphrase; legacy OpenSSL encrypted PEM is rejected. Key derivation runs
 on a blocking worker, with zeroizing key and combined PEM buffers, and decrypted
 material is never written to disk. Diagnostics do not include parser output,
 private-key material, paths or passphrases. Rustls checks the cert/key match.
