@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::controls::TextContextMenuLabel;
-use gpui::ClipboardItem;
+use gpui_kit::ClipboardItem;
 use std::cell::RefCell;
 
 type ResponseValueCache = RefCell<
@@ -23,7 +23,7 @@ pub(crate) fn documentation_text_input(
     value: String,
     placeholder: &'static str,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     ProbeEditor {
         theme,
         id,
@@ -38,7 +38,6 @@ pub(crate) fn documentation_text_input(
         soft_wrap: true,
         text_color: theme.colors.text.primary,
         scroll_to_range: None,
-        search_matches: Vec::new(),
         on_change: Some(Rc::new(on_value_change)),
         on_mouse_down: None,
         on_visible_range: None,
@@ -56,7 +55,7 @@ pub(crate) fn websocket_composer(
     enabled: bool,
     placeholder: &'static str,
     on_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     ProbeEditor {
         theme,
         id,
@@ -76,7 +75,6 @@ pub(crate) fn websocket_composer(
         soft_wrap: true,
         text_color: theme.colors.text.primary,
         scroll_to_range: None,
-        search_matches: Vec::new(),
         on_change: Some(Rc::new(on_change)),
         on_mouse_down: None,
         on_visible_range: None,
@@ -94,7 +92,7 @@ pub(crate) fn body_text_input(
     syntax: BodySyntax,
     variables: VariableContext,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let value = value.into();
     let ranges = variable_ranges(&value);
     let decorations = body_text_highlights(
@@ -121,7 +119,6 @@ pub(crate) fn body_text_input(
         soft_wrap: true,
         text_color: theme.colors.text.primary,
         scroll_to_range: None,
-        search_matches: Vec::new(),
         on_change: Some(Rc::new(on_value_change)),
         on_mouse_down: None,
         on_visible_range: None,
@@ -136,20 +133,22 @@ pub(crate) fn response_body_input(
     theme: Theme,
     id: impl Into<ElementId>,
     text: SharedString,
-    options: ResponseBodyInputOptions<'_>,
-) -> gpui::AnyElement {
+    options: ResponseBodyInputOptions,
+) -> gpui_kit::AnyElement {
     let inspection_reveal = options.inspection_reveal;
-    let search_matches = response_highlights(
-        options.matches,
-        options.active_match,
-        inspection_reveal.as_ref(),
-    );
-    let (decorations, scroll_to_range) = response_decorations(
-        theme,
-        options.matches,
-        options.active_match,
-        inspection_reveal,
-    );
+    let scroll_to_range = inspection_reveal
+        .as_ref()
+        .and_then(|(range, should_scroll)| should_scroll.then(|| range.clone()));
+    let decorations = inspection_reveal
+        .into_iter()
+        .map(|(range, _)| {
+            text_decoration(
+                range,
+                None,
+                Some(theme.colors.selection.active_background.into()),
+            )
+        })
+        .collect();
 
     let mut actions = vec![TextContextMenuExtraAction {
         id: "inspect",
@@ -212,7 +211,6 @@ pub(crate) fn response_body_input(
             soft_wrap: options.soft_wrap,
             text_color: theme.colors.syntax.plain,
             scroll_to_range,
-            search_matches,
         },
         options.on_visible_range,
         Some(options.on_mouse_down),
@@ -241,10 +239,8 @@ pub(crate) fn response_headers_input(
     theme: Theme,
     id: impl Into<ElementId>,
     headers: &[probe_http::ResponseHeader],
-    matches: &[SearchMatch],
-    active_match: usize,
     on_visible_range: impl Fn(Range<usize>, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let joined = join_header_lines(headers);
     let mut decorations = Vec::new();
     for (offset, name_len) in joined.line_offsets.iter().zip(&joined.name_lens) {
@@ -254,9 +250,6 @@ pub(crate) fn response_headers_input(
             None,
         ));
     }
-    let (search_decorations, scroll_to_range) =
-        response_decorations(theme, matches, active_match, None);
-    decorations.extend(search_decorations);
     response_editor(
         theme,
         id,
@@ -266,8 +259,7 @@ pub(crate) fn response_headers_input(
             language: SharedString::default(),
             soft_wrap: true,
             text_color: theme.colors.text.primary,
-            scroll_to_range,
-            search_matches: response_highlights(matches, active_match, None),
+            scroll_to_range: None,
         },
         Rc::new(on_visible_range),
         None,
@@ -280,7 +272,7 @@ pub(crate) fn response_inspector_input(
     id: impl Into<ElementId>,
     text: impl Into<SharedString>,
     on_visible_range: impl Fn(Range<usize>, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     response_editor(
         theme,
         id,
@@ -291,7 +283,6 @@ pub(crate) fn response_inspector_input(
             soft_wrap: true,
             text_color: theme.colors.text.primary,
             scroll_to_range: None,
-            search_matches: Vec::new(),
         },
         Rc::new(on_visible_range),
         None,
@@ -299,55 +290,13 @@ pub(crate) fn response_inspector_input(
     )
 }
 
-fn response_decorations(
-    theme: Theme,
-    matches: &[SearchMatch],
-    active_match: usize,
-    inspection_reveal: Option<(Range<usize>, bool)>,
-) -> (Vec<TextDecoration>, Option<Range<usize>>) {
-    let mut decorations =
-        Vec::with_capacity(matches.len() + usize::from(inspection_reveal.is_some()));
-    let mut scroll_to_range = None;
-    for (index, found) in matches.iter().enumerate() {
-        let active = index == active_match;
-        if active {
-            scroll_to_range = Some(found.range.start..found.range.start);
-        }
-        decorations.push(search_match_decoration(theme, found.range.clone(), active));
-    }
-    if let Some((range, should_scroll)) = inspection_reveal {
-        if should_scroll {
-            scroll_to_range = Some(range.clone());
-        }
-        decorations.push(search_match_decoration(theme, range, true));
-    }
-    (decorations, scroll_to_range)
-}
-
-fn response_highlights(
-    matches: &[SearchMatch],
-    active_match: usize,
-    inspection_reveal: Option<&(Range<usize>, bool)>,
-) -> Vec<(Range<usize>, bool)> {
-    let mut highlights = matches
-        .iter()
-        .enumerate()
-        .map(|(index, found)| (found.range.clone(), index == active_match))
-        .collect::<Vec<_>>();
-    if let Some((range, _)) = inspection_reveal {
-        highlights.push((range.clone(), true));
-    }
-    highlights
-}
-
 struct ResponseEditorPresentation {
     value: SharedString,
     decorations: Vec<TextDecoration>,
     language: SharedString,
     soft_wrap: bool,
-    text_color: gpui::Rgba,
+    text_color: gpui_kit::Rgba,
     scroll_to_range: Option<Range<usize>>,
-    search_matches: Vec<(Range<usize>, bool)>,
 }
 
 fn response_editor(
@@ -357,7 +306,7 @@ fn response_editor(
     on_visible_range: VisibleRangeHandler,
     on_mouse_down: Option<EditorMouseDownHandler>,
     extra_context_menu_actions: Vec<TextContextMenuExtraAction>,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     ProbeEditor {
         theme,
         id: id.into(),
@@ -372,7 +321,6 @@ fn response_editor(
         soft_wrap: presentation.soft_wrap,
         text_color: presentation.text_color,
         scroll_to_range: presentation.scroll_to_range,
-        search_matches: presentation.search_matches,
         on_change: None,
         on_mouse_down,
         on_visible_range: Some(on_visible_range),

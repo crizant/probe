@@ -2,7 +2,7 @@ use super::websocket::wait;
 use super::*;
 use crate::websocket::ConnectionState;
 
-#[gpui::test]
+#[gpui_kit::test]
 fn closing_active_websocket_tab_removes_session_and_sends_close(cx: &mut TestAppContext) {
     use futures_util::{SinkExt, StreamExt};
     let (address_tx, address_rx) = std::sync::mpsc::channel();
@@ -78,7 +78,7 @@ fn closing_active_websocket_tab_removes_session_and_sends_close(cx: &mut TestApp
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn websocket_disconnect_reconnect_and_workspace_replacement_cleanup(cx: &mut TestAppContext) {
     use futures_util::{SinkExt, StreamExt};
     let (address_tx, address_rx) = std::sync::mpsc::channel();

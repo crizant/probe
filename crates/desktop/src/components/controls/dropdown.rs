@@ -96,15 +96,15 @@ impl DropdownController {
 struct DropdownSelection {
     index: usize,
     label: String,
-    color: gpui::Rgba,
+    color: gpui_kit::Rgba,
 }
 
 /// Index, label, and color for the current value.
 /// An empty or unmatched value keeps the first row highlighted and shows "None".
 fn dropdown_selection<T: PartialEq>(
     value: Option<&T>,
-    options: &[(T, String, Option<gpui::Rgba>)],
-    fallback_color: gpui::Rgba,
+    options: &[(T, String, Option<gpui_kit::Rgba>)],
+    fallback_color: gpui_kit::Rgba,
 ) -> DropdownSelection {
     value
         .and_then(|value| {
@@ -131,9 +131,9 @@ fn dropdown_row(
     row_id: String,
     index: usize,
     highlighted: bool,
-    color: gpui::Rgba,
+    color: gpui_kit::Rgba,
     controller: DropdownController,
-) -> gpui::Stateful<gpui::Div> {
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     let highlight_background = theme.colors.selection.inactive_background;
     let debug_id = row_id.clone();
     div()
@@ -174,7 +174,7 @@ struct DropdownOption<T: Clone + Eq + 'static> {
     index: usize,
     value: T,
     label: String,
-    color: gpui::Rgba,
+    color: gpui_kit::Rgba,
     selected: bool,
     highlighted: bool,
     controller: DropdownController,
@@ -281,7 +281,7 @@ pub(crate) fn dropdown_with_option_colors<T: Clone + Eq + 'static>(
     id: &'static str,
     aria_label: &'static str,
     value: Option<T>,
-    options: Vec<(T, String, Option<gpui::Rgba>)>,
+    options: Vec<(T, String, Option<gpui_kit::Rgba>)>,
     width: f32,
     on_value_change: impl Fn(Option<&T>, &mut Window, &mut App) + 'static,
 ) -> ProbeDropdown<T> {
@@ -304,7 +304,7 @@ pub(crate) struct ProbeDropdown<T: Clone + Eq + 'static> {
     id: &'static str,
     aria_label: &'static str,
     value: Option<T>,
-    options: Vec<(T, String, Option<gpui::Rgba>)>,
+    options: Vec<(T, String, Option<gpui_kit::Rgba>)>,
     width: f32,
     actions: Vec<DropdownAction>,
     disabled: bool,
@@ -548,7 +548,7 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
 #[cfg(test)]
 mod tests {
     use super::dropdown_selection;
-    use gpui::rgba;
+    use gpui_kit::rgba;
 
     #[test]
     fn selected_option_resolves_index_label_and_color_together() {

@@ -47,7 +47,7 @@ impl ProbeApp {
                 .unwrap_or_else(|_| Err("request export ended without a result".into()));
             let _ = view.update(cx, |view, cx| match result {
                 Ok(command) => {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(command));
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(command));
                     view.show_toast(ToastIntent::Success, "Request copied as cURL.", cx);
                 }
                 Err(error) => {

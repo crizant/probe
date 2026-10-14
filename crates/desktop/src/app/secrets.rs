@@ -4,8 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use gpui::{AppContext as _, Context, FocusHandle, Window};
-use gpui_base::input::{InputEvent, InputState};
+use gpui_kit::base::input::{InputEvent, InputState};
+use gpui_kit::{AppContext as _, Context, FocusHandle, Window};
 
 use super::{ApplicationDialog, ProbeApp, SecretUiStatus, ToastIntent};
 use crate::components;
@@ -48,10 +48,10 @@ pub(super) struct SecretValueDialog {
     pub(super) restore_focus: FocusHandle,
     pub(super) from_manager: bool,
     pub(super) replacing: bool,
-    pub(super) input: gpui::Entity<InputState>,
+    pub(super) input: gpui_kit::Entity<InputState>,
     pub(super) busy: bool,
     pub(super) error: Option<&'static str>,
-    pub(super) _subscription: gpui::Subscription,
+    pub(super) _subscription: gpui_kit::Subscription,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

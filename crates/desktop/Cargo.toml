@@ -26,15 +26,8 @@ linux_startup_wm_class = "dev.probe.desktop"
 atomic-write-file = "0.3.1"
 directories = "6.0.0"
 icondata = { version = "0.7.0", default-features = false, features = ["lucide"] }
-# Longbridge gpui-base from longbridge/gpui-component. This is the unstyled
-# `gpui-base` crate, not the styled `gpui-component` façade.
-#
-# Do not add `rev` to the GPUI git URL. gpui-base uses the same unpinned git
-# source; a mismatched revision compiles two GPUIs and fails type check. Pin
-# the Zed commit in Cargo.lock to the revision required by this gpui-base
-# commit (see that revision's Cargo.lock `gpui` source).
-gpui-base = { git = "https://github.com/longbridge/gpui-component", rev = "d598c6c0a61c23650dd933d58d046c0708085531" }
-gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed" }
+# Kit coordinates GPUI and the unstyled base; Probe owns all presentation.
+gpui-kit = { version = "0.7.3", default-features = false }
 probe-application = { path = "../application" }
 probe-core = { path = "../core" }
 probe-http = { path = "../http" }
@@ -63,16 +56,7 @@ keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 futures-util = "0.3.34"
 tempfile = "3.27.0"
-gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["test-support"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-gpui_platform = { version = "0.1.0", git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-gpui_platform = { version = "0.1.0", git = "https://github.com/zed-industries/zed" }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-gpui_platform = { version = "0.1.0", git = "https://github.com/zed-industries/zed", features = ["wayland", "x11"] }
+gpui-kit = { version = "0.7.3", default-features = false, features = ["test-support"] }
 
 [lints]
 workspace = true

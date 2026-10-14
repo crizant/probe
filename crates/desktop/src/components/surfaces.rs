@@ -1,16 +1,16 @@
 use super::*;
 use crate::components::controls::TextContextMenuLabel;
 
-pub(crate) fn truncated_label(text: impl Into<String>) -> gpui::Div {
+pub(crate) fn truncated_label(text: impl Into<String>) -> gpui_kit::Div {
     div().min_w(px(0.0)).truncate().child(text.into())
 }
 
 pub(crate) fn breadcrumb_header(
     theme: Theme,
-    icon: impl IntoElement + gpui::Styled,
+    icon: impl IntoElement + gpui_kit::Styled,
     title: impl IntoElement,
     save_button: impl IntoElement,
-) -> gpui::Div {
+) -> gpui_kit::Div {
     div()
         .h(px(theme.metrics.control_height))
         .w_full()
@@ -29,7 +29,7 @@ pub(crate) fn popup_surface(
     theme: Theme,
     id: impl Into<ElementId>,
     width: f32,
-) -> gpui::Stateful<gpui::Div> {
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
         .id(id)
         .w(px(width))
@@ -59,7 +59,7 @@ pub(crate) fn dialog_surface(
     theme: Theme,
     id: impl Into<ElementId>,
     width: f32,
-) -> gpui::Stateful<gpui::Div> {
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
         .id(id)
         .w(px(width))
@@ -78,7 +78,7 @@ pub(crate) fn context_menu_surface(
     id: impl Into<ElementId>,
     width: f32,
     on_dismiss: impl Fn(&mut App) + 'static,
-) -> gpui::Stateful<gpui::Div> {
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     popup_surface(theme, id, width)
         .gap(px(theme.metrics.spacing_1))
         .occlude()
@@ -106,7 +106,7 @@ fn text_context_menu_action(
     enabled: bool,
     state: Entity<TextContextMenuState>,
     window: &Window,
-    action: fn() -> Box<dyn gpui::Action>,
+    action: fn() -> Box<dyn gpui_kit::Action>,
 ) -> impl IntoElement {
     let shortcut = shortcut_label_for_action(window, action().as_ref());
     menu_button_with_style(
@@ -159,7 +159,7 @@ pub(super) fn with_text_context_menu(
     fill_parent: bool,
     window: &Window,
     cx: &App,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let mut wrapper = div()
         .relative()
         .min_w(px(0.0))
@@ -290,14 +290,14 @@ pub(super) fn with_text_context_menu(
     wrapper.into_any_element()
 }
 
-pub(crate) fn dialog_field_label(theme: Theme, label: impl Into<String>) -> gpui::Div {
+pub(crate) fn dialog_field_label(theme: Theme, label: impl Into<String>) -> gpui_kit::Div {
     div()
         .text_size(px(theme.typography.caption_size))
         .font_weight(FontWeight::SEMIBOLD)
         .child(label.into())
 }
 
-pub(crate) fn dialog_title(theme: Theme, title: impl Into<String>) -> gpui::Div {
+pub(crate) fn dialog_title(theme: Theme, title: impl Into<String>) -> gpui_kit::Div {
     div()
         .text_size(px(theme.typography.dialog_title_size))
         .font_weight(FontWeight::SEMIBOLD)
@@ -305,7 +305,7 @@ pub(crate) fn dialog_title(theme: Theme, title: impl Into<String>) -> gpui::Div 
         .child(title.into())
 }
 
-pub(crate) fn dialog_description(theme: Theme, description: impl Into<String>) -> gpui::Div {
+pub(crate) fn dialog_description(theme: Theme, description: impl Into<String>) -> gpui_kit::Div {
     div()
         .text_size(px(theme.typography.body_size))
         .text_color(theme.colors.text.secondary)
@@ -316,7 +316,7 @@ pub(crate) fn dialog_field(
     theme: Theme,
     label: impl Into<String>,
     control: impl IntoElement,
-) -> gpui::Div {
+) -> gpui_kit::Div {
     div()
         .flex()
         .flex_col()
@@ -325,7 +325,7 @@ pub(crate) fn dialog_field(
         .child(control)
 }
 
-pub(crate) fn dialog_actions(theme: Theme) -> gpui::Div {
+pub(crate) fn dialog_actions(theme: Theme) -> gpui_kit::Div {
     div()
         .mt(px(theme.metrics.spacing_4))
         .flex()
@@ -772,7 +772,7 @@ fn variable_value_input(
     value: impl Into<SharedString>,
     placeholder: impl Into<SharedString>,
     editable: bool,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let mut input = text_input_base(theme, id, value, placeholder);
     input.font_family = theme.typography.monospace_family;
     input.text_size = theme.typography.caption_size;

@@ -1,6 +1,6 @@
 use super::*;
 
-#[gpui::test]
+#[gpui_kit::test]
 fn folder_breadcrumbs_navigate_to_reusable_overviews_and_preserve_drafts(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -98,7 +98,7 @@ fn folder_breadcrumbs_navigate_to_reusable_overviews_and_preserve_drafts(cx: &mu
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -159,7 +159,7 @@ fn request_editor_sections_render_for_an_open_request(cx: &mut TestAppContext) {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -200,7 +200,7 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
                 },
                 cx,
             );
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(String::new()));
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
         })
         .expect("test window should be open");
     cx.run_until_parked();
@@ -308,7 +308,7 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn response_progress_renders_after_headers_arrive(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -353,7 +353,7 @@ fn response_progress_renders_after_headers_arrive(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("response-receiving-body").is_some());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -613,7 +613,7 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         .expect("test window should remain open");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn image_response_replaces_pretty_with_scrollable_preview(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -720,11 +720,11 @@ fn image_response_replaces_pretty_with_scrollable_preview(cx: &mut TestAppContex
         .expect("test window should remain open");
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_event(gpui::ScrollWheelEvent {
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
         position: preview_bounds.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
         modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
+        touch_phase: gpui_kit::TouchPhase::Moved,
     });
     let image_after = visual
         .debug_bounds("response-preview-image")
@@ -732,7 +732,7 @@ fn image_response_replaces_pretty_with_scrollable_preview(cx: &mut TestAppContex
     assert!(image_after.origin.y < image_before.origin.y);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn xml_response_inspects_values_and_keeps_syntax_after_visiting_raw(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -836,7 +836,7 @@ fn xml_response_inspects_values_and_keeps_syntax_after_visiting_raw(cx: &mut Tes
     assert!(visual.debug_bounds("response-body").is_some());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn large_response_body_only_renders_visible_rows(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {

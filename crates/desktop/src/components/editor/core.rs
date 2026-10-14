@@ -1,7 +1,6 @@
-use super::auto_edit::{apply_auto_edit, apply_editor_auto_edit, detect_auto_edit};
 use super::*;
 use crate::app::{ShiftTabOrOutdent, TabOrIndent};
-use gpui::EntityInputHandler as _;
+use gpui_kit::EntityInputHandler as _;
 
 struct EditorField {
     state: Entity<EditorState>,
@@ -12,20 +11,7 @@ struct EditorField {
     last_scroll_range: Option<Range<usize>>,
     language: SharedString,
     soft_wrap: bool,
-    readonly: bool,
     _subscription: Subscription,
-}
-
-pub(in crate::components) fn editor_value_needs_refresh(
-    language_changed: bool,
-    current_value: &SharedString,
-    next_value: &SharedString,
-) -> bool {
-    language_changed
-        || (!std::ptr::eq(
-            current_value.as_ref() as *const str,
-            next_value.as_ref() as *const str,
-        ) && current_value != next_value)
 }
 
 impl EditorField {
@@ -38,31 +24,8 @@ impl EditorField {
     ) {
         if matches!(event, InputEvent::Change) {
             let value = input.read(cx).value();
-            let selection = input.read(cx).selected_range();
 
-            // Inserting or deleting below emits another Change. Once last_value
-            // is the final text, that follow-up compares equal and returns
-            // without pairing, overtyping, deleting the other side of an empty
-            // pair, or calling on_change again.
             if value == this.last_value {
-                return;
-            }
-
-            if !this.readonly
-                && this.language == "json"
-                && let Some(edit) = detect_auto_edit(&this.last_value, &value, selection)
-            {
-                let (final_text, _) = apply_auto_edit(&value, &edit);
-                this.last_value = SharedString::from(final_text);
-                input.update(cx, |editor, cx| {
-                    apply_editor_auto_edit(editor, &edit, window, cx);
-                });
-                let current_value = input.read(cx).value();
-                this.last_value = current_value.clone();
-
-                if let Some(on_change) = this.on_change.clone() {
-                    on_change(current_value, window, cx);
-                }
                 return;
             }
 
@@ -107,9 +70,8 @@ pub(in crate::components) struct ProbeEditor {
     pub(in crate::components) min_height: Option<f32>,
     pub(in crate::components) padding: EditorInsets,
     pub(in crate::components) soft_wrap: bool,
-    pub(in crate::components) text_color: gpui::Rgba,
+    pub(in crate::components) text_color: gpui_kit::Rgba,
     pub(in crate::components) scroll_to_range: Option<Range<usize>>,
-    pub(in crate::components) search_matches: Vec<(Range<usize>, bool)>,
     pub(in crate::components) on_change: Option<InputChangeHandler>,
     pub(in crate::components) on_mouse_down: Option<EditorMouseDownHandler>,
     pub(in crate::components) on_visible_range: Option<VisibleRangeHandler>,
@@ -151,8 +113,11 @@ impl RenderOnce for ProbeEditor {
             let state = cx.new(|cx| {
                 let mut editor = EditorState::new(window, cx)
                     .placeholder(placeholder.clone())
+                    .smart_indent(false)
                     .folding(false)
-                    .searchable(true)
+                    // Let the shortcut reach Probe’s search card; the native
+                    // session still owns matching, navigation, and painting.
+                    .searchable(false)
                     .soft_wrap(soft_wrap)
                     .language(language.clone());
                 editor.set_highlighter_factory(crate::syntax::factory(), cx);
@@ -176,13 +141,11 @@ impl RenderOnce for ProbeEditor {
                 last_scroll_range: None,
                 language: language.clone(),
                 soft_wrap,
-                readonly: self.readonly,
                 _subscription: subscription,
             }
         });
         field.update(cx, |field, cx| {
             field.on_change = self.on_change.clone();
-            field.readonly = self.readonly;
             let language_changed = field.language != self.language;
             if language_changed {
                 field.language = self.language.clone();
@@ -194,8 +157,7 @@ impl RenderOnce for ProbeEditor {
             let context_focus = field.state.read(cx).focus_handle(cx);
             let open_context_menu = context_menu.clone();
             let context_editor = field.state.clone();
-            let value_changed =
-                editor_value_needs_refresh(language_changed, &field.last_value, &self.value);
+            let value_changed = field.last_value != self.value;
             if value_changed {
                 field.last_value = self.value.clone();
             }
@@ -222,25 +184,8 @@ impl RenderOnce for ProbeEditor {
                 if language_changed {
                     editor.set_highlighter(self.language.clone(), cx);
                 }
-                // gpui-base clears its parser when the language changes and
-                // rebuilds it on the next text update. Pretty and Raw XML are
-                // often byte-identical, so force that update when only the
-                // language changed as well.
                 if value_changed {
                     editor.set_value(self.value.clone(), window, cx);
-                }
-                if editor.search_session().open {
-                    let query = editor.search_session().query.clone();
-                    let active_match = editor.search_session().matcher.current_match_index();
-                    search_state.update(cx, |search, cx| {
-                        search.open();
-                        if !query.is_empty() {
-                            search.set_query(query);
-                        }
-                        search.set_active_match(active_match);
-                        cx.notify();
-                    });
-                    editor.close_search(cx);
                 }
             });
             if field.last_decorations != self.decorations {
@@ -265,24 +210,6 @@ impl RenderOnce for ProbeEditor {
             }
         });
         let state = field.read(cx).state.clone();
-        let (matches, active_match) = if search_state.read(cx).is_open() {
-            let matches = state.read(cx).search_session().matcher.matched_ranges();
-            let active_match = search_state
-                .read(cx)
-                .active_match()
-                .min(matches.len().saturating_sub(1));
-            if active_match != search_state.read(cx).active_match() {
-                search_state.update(cx, |search, _| search.set_active_match(active_match));
-            }
-            (matches, active_match)
-        } else {
-            (Rc::new(Vec::new()), 0)
-        };
-        let local_search_matches = matches
-            .iter()
-            .enumerate()
-            .map(|(index, range)| (range.clone(), index == active_match))
-            .collect::<Vec<_>>();
         if let Some(on_visible_range) = self.on_visible_range {
             match state.read(cx).visible_row_range() {
                 Some(range) => on_visible_range(range, cx),
@@ -327,7 +254,17 @@ impl RenderOnce for ProbeEditor {
             })
             .on_action({
                 let search_state = search_state.clone();
+                let state = state.clone();
                 move |_: &Search, window, cx| {
+                    state.update(cx, |editor, cx| {
+                        let selected = editor.selected_text().to_string();
+                        let query = if selected.is_empty() {
+                            editor.search_session().query.clone()
+                        } else {
+                            selected
+                        };
+                        editor.set_search_query(query, true, cx);
+                    });
                     search_state.update(cx, |search, cx| {
                         search.open();
                         cx.notify();
@@ -344,13 +281,16 @@ impl RenderOnce for ProbeEditor {
                             search.close();
                             cx.notify();
                         });
-                        state.update(cx, |editor, cx| editor.focus(window, cx));
+                        state.update(cx, |editor, cx| {
+                            editor.close_search(cx);
+                            editor.focus(window, cx);
+                        });
                         window.refresh();
                     } else {
                         // Blur the editor by clearing window focus
                         let focus_handle = state.read(cx).focus_handle(cx);
                         if focus_handle.is_focused(window) {
-                            window.blur();
+                            window.blur(cx);
                         }
                     }
                 }
@@ -391,13 +331,6 @@ impl RenderOnce for ProbeEditor {
                 }
             })
             .child(Editor::new(&state));
-        let editor = response_search_highlight_overlay(
-            self.theme,
-            state.clone(),
-            editor,
-            self.value.clone(),
-            [self.search_matches, local_search_matches].concat(),
-        );
         let editor = editor_search_card_overlay(
             self.theme,
             editor,
@@ -406,8 +339,6 @@ impl RenderOnce for ProbeEditor {
                 SharedString::from("search-card"),
             ),
             search_state,
-            matches,
-            active_match,
             state.clone(),
             cx,
         );
@@ -442,6 +373,9 @@ fn byte_range_to_utf16(value: &str, range: Range<usize>) -> Range<usize> {
     value[..range.start].encode_utf16().count()..value[..range.end].encode_utf16().count()
 }
 
+// Kit 0.7.3 block indentation includes a line whose start ends the selection,
+// and uses a fixed tab size. Probe excludes that line and detects existing
+// indentation. Keep these edits until native behavior can express both rules.
 /// Apply indent to the current selection or line using undo-preserving edit.
 pub(super) fn apply_indent(
     editor: &mut EditorState,
@@ -647,3 +581,7 @@ pub(super) fn detect_indentation(text: &str) -> String {
     }
     "  ".to_string()
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;

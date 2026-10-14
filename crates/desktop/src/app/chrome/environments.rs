@@ -12,7 +12,7 @@ impl ProbeApp {
         busy: bool,
         dirty: bool,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         let mut selected_background: Hsla = theme.colors.actions.accent.into();
         selected_background.a = 0.12;
         let mut environment_list = div()
@@ -164,7 +164,7 @@ impl ProbeApp {
         row_id: EnvironmentVariableRowId,
         kind: EnvironmentFieldKind,
         cx: &Context<Self>,
-    ) -> impl Fn(gpui::Entity<components::FieldInput>, bool, &mut App) + 'static {
+    ) -> impl Fn(gpui_kit::Entity<components::FieldInput>, bool, &mut App) + 'static {
         let view = cx.weak_entity();
         let environment = dialog.original_name.clone();
         move |field, focused, cx| {
@@ -202,7 +202,7 @@ impl ProbeApp {
         busy: bool,
         dirty: bool,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let row_index = row.direct_index.unwrap_or(0);
         let stable_row_id = match row.direct_index {
             Some(index) => EnvironmentVariableRowId::Direct(dialog.variable_row_ids[index]),
@@ -507,7 +507,7 @@ impl ProbeApp {
         busy: bool,
         dirty: bool,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let credential_ready = !dirty && !busy && !name.is_empty();
         let current_status = dialog.secret_statuses.get(&name).copied();
         let status = if dirty {
@@ -599,7 +599,7 @@ impl ProbeApp {
         theme: Theme,
         busy: bool,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let add_variable_view = cx.weak_entity();
         let add_secret_view = cx.weak_entity();
         div()
@@ -664,7 +664,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         // Focus-out is based on rendered ancestry and cannot observe an already offscreen editor.
         if let Some(dialog) = self.environment_manager_dialog.as_mut() {
             dialog.sync_variable_row_ids();
@@ -869,7 +869,7 @@ impl ProbeApp {
             )
             .child({
                 let description_view = cx.weak_entity();
-                let description_id = gpui::ElementId::Name(
+                let description_id = gpui_kit::ElementId::Name(
                     format!("environment-description-{}", dialog.original_name).into(),
                 );
                 super::super::render::documentation::documentation_text_field(
@@ -965,7 +965,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(context_menu) = self.transient.environment_manager_context_menu.as_ref() else {
             return div().into_any_element();
         };
@@ -1018,7 +1018,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(dialog) = &self.secret_value_dialog else {
             return div().into_any_element();
         };

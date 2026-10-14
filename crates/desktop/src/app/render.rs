@@ -16,7 +16,7 @@ pub(super) fn response_page_button(
     id: &'static str,
     label: &'static str,
     disabled: bool,
-    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
     Button::new(id)
         .disabled(disabled)

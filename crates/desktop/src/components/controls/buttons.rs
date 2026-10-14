@@ -112,7 +112,7 @@ pub(crate) fn editor_add_button(
         .child(label.into())
 }
 
-pub(crate) fn editor_key_value_row(theme: Theme) -> gpui::Div {
+pub(crate) fn editor_key_value_row(theme: Theme) -> gpui_kit::Div {
     div().flex().items_center().gap(px(theme.metrics.spacing_1))
 }
 

@@ -1,7 +1,7 @@
 use super::*;
 
 /// Give icon-only controls a hint using the same wording as their accessible name.
-pub(crate) trait IconButtonHint: gpui::StatefulInteractiveElement + Sized {
+pub(crate) trait IconButtonHint: gpui_kit::StatefulInteractiveElement + Sized {
     fn hint(self, theme: Theme, label: impl Into<SharedString>) -> Self {
         let label = label.into();
         self.tooltip(move |_, cx| {
@@ -15,7 +15,7 @@ pub(crate) trait IconButtonHint: gpui::StatefulInteractiveElement + Sized {
     }
 }
 
-impl<T: gpui::StatefulInteractiveElement> IconButtonHint for T {}
+impl<T: gpui_kit::StatefulInteractiveElement> IconButtonHint for T {}
 
 pub(crate) struct ActionTooltip {
     pub(crate) id: &'static str,
@@ -25,7 +25,7 @@ pub(crate) struct ActionTooltip {
 
 impl Render for ActionTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui_base::Tooltip::new(self.id)
+        gpui_kit::base::Tooltip::new(self.id)
             .px(px(self.theme.metrics.spacing_2))
             .py(px(self.theme.metrics.spacing_1))
             .rounded(px(self.theme.metrics.radius_small))
@@ -74,7 +74,7 @@ pub(crate) fn primary_button_with_disabled(
 
 type DropdownButtonClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type DropdownButtonOpenHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
-type DropdownButtonTooltipBuilder = Rc<dyn Fn(&mut Window, &mut App) -> gpui::AnyView>;
+type DropdownButtonTooltipBuilder = Rc<dyn Fn(&mut Window, &mut App) -> gpui_kit::AnyView>;
 
 /// A primary action with an attached menu trigger, presented as one control.
 #[derive(IntoElement)]
@@ -116,7 +116,7 @@ impl DropdownButton {
 
     pub(crate) fn tooltip(
         mut self,
-        builder: impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static,
+        builder: impl Fn(&mut Window, &mut App) -> gpui_kit::AnyView + 'static,
     ) -> Self {
         self.tooltip = Some(Rc::new(builder));
         self
@@ -424,7 +424,7 @@ fn action_button(
             )),
         ActionButtonKind::DialogSecondary => button
             .text_color(theme.colors.text.secondary)
-            .bg(gpui::transparent_black())
+            .bg(gpui_kit::transparent_black())
             .border_color(theme.colors.borders.standard)
             .when(!disabled, |button| {
                 button.hover(move |button| {
@@ -445,7 +445,7 @@ fn action_button(
             .styles(move |styles| {
                 styles.disabled(move |button| {
                     button
-                        .bg(gpui::transparent_black())
+                        .bg(gpui_kit::transparent_black())
                         .text_color(theme.colors.actions.disabled_foreground)
                         .border_color(theme.colors.borders.subtle)
                 })
@@ -467,7 +467,7 @@ fn action_button(
             };
             button
                 .text_color(theme.colors.status.error)
-                .bg(gpui::transparent_black())
+                .bg(gpui_kit::transparent_black())
                 .border_color(border)
                 .when(!disabled, |button| {
                     button.hover(move |button| {
@@ -490,7 +490,7 @@ fn action_button(
                 .styles(move |styles| {
                     styles.disabled(move |button| {
                         button
-                            .bg(gpui::transparent_black())
+                            .bg(gpui_kit::transparent_black())
                             .text_color(theme.colors.actions.disabled_foreground)
                             .border_color(theme.colors.borders.subtle)
                     })

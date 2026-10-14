@@ -6,7 +6,7 @@ impl ProbeApp {
         theme: Theme,
         window_height: f32,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         if self.active_request().is_some_and(|r| r.kind.is_websocket()) {
             return self.render_websocket_panel(theme, window_height, cx);
         }
@@ -274,7 +274,7 @@ impl ProbeApp {
         theme: Theme,
         document: &PreparedDocument,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let key = self
             .shell
             .active_tab()
@@ -328,7 +328,7 @@ impl ProbeApp {
         &self,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let key = self
             .shell
             .active_tab()
@@ -367,7 +367,7 @@ impl ProbeApp {
         theme: Theme,
         document: Option<&PreparedDocument>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(key) = self.shell.active_tab() else {
             return div().into_any_element();
         };
@@ -520,7 +520,7 @@ impl ProbeApp {
         theme: Theme,
         key: probe_core::RequestKey,
         document: &PreparedDocument,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         match document.image_preview.as_ref() {
             Some(ResponseImagePreview::Ready(image)) => {
                 let Some(scroll) = self.response_viewer.image_scroll(key) else {
@@ -570,7 +570,7 @@ impl ProbeApp {
         }
     }
 
-    pub(super) fn response_tab_content_spacing(theme: Theme) -> gpui::Div {
+    pub(super) fn response_tab_content_spacing(theme: Theme) -> gpui_kit::Div {
         div()
             .px(px(theme.metrics.spacing_2))
             .pb(px(theme.metrics.spacing_2))
@@ -578,8 +578,8 @@ impl ProbeApp {
 
     pub(super) fn inspect_tab_content_boundary(
         theme: Theme,
-        content: impl gpui::IntoElement,
-    ) -> gpui::Div {
+        content: impl gpui_kit::IntoElement,
+    ) -> gpui_kit::Div {
         div().flex_1().min_h(px(0.0)).flex().flex_col().child(
             div()
                 .flex_1()
@@ -598,7 +598,7 @@ impl ProbeApp {
         key: probe_core::RequestKey,
         document: &PreparedDocument,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         if document.binary
             && (self.response_viewer.tab(key) == ResponseViewerTab::Pretty
                 || self.response_viewer.raw_view(key) == RawBodyView::Text)
@@ -664,8 +664,6 @@ impl ProbeApp {
                 "response-body-editor",
                 text,
                 components::ResponseBodyInputOptions::new(
-                    &[],
-                    0,
                     if self.response_viewer.tab(key) == ResponseViewerTab::Pretty {
                         document.syntax.language()
                     } else {
@@ -749,7 +747,7 @@ impl ProbeApp {
         theme: Theme,
         document: &PreparedDocument,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         if document.headers.is_empty() {
             return placeholder_message(theme, "No response headers");
         }
@@ -763,8 +761,6 @@ impl ProbeApp {
                 theme,
                 "response-headers-editor",
                 &document.headers,
-                &[],
-                0,
                 move |range, cx| {
                     #[cfg(test)]
                     {
@@ -787,7 +783,7 @@ impl ProbeApp {
         key: probe_core::RequestKey,
         document: &PreparedDocument,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let rows = inspect_list_rows(document);
         if let Some(selection) = self.pending_inspector_reveal.take()
             && let Some(index) = inspect_row_index(&rows, selection)
@@ -963,7 +959,7 @@ impl ProbeApp {
         document: &PreparedDocument,
         selected: Option<InspectSelection>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         match row {
             InspectListRow::Group { label, count } => div()
                 .w_full()
@@ -1030,7 +1026,7 @@ impl ProbeApp {
         window: &Window,
         window_height: f32,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         if let Some(tab) = self.shell.active_overview() {
             return self.render_overview(tab, theme, cx);
         }
@@ -1092,14 +1088,14 @@ impl ProbeApp {
             .set(self.environment_resolution_count.get() + 1);
         let on_manage_environments = self.loaded_workspace.is_some().then(|| {
             let view = cx.weak_entity();
-            Rc::new(move |window: &mut Window, cx: &mut gpui::App| {
+            Rc::new(move |window: &mut Window, cx: &mut gpui_kit::App| {
                 let view = view.clone();
                 window.defer(cx, move |window, cx| {
                     let _ = view.update(cx, |view, cx| {
                         view.open_environment_manager_dialog(window, cx);
                     });
                 });
-            }) as Rc<dyn Fn(&mut Window, &mut gpui::App)>
+            }) as Rc<dyn Fn(&mut Window, &mut gpui_kit::App)>
         });
         let Some(selected) = self.shell.selected_environment() else {
             return components::VariableContext {
@@ -1141,7 +1137,7 @@ impl ProbeApp {
                             move |name: &str,
                                   focus: FocusHandle,
                                   window: &mut Window,
-                                  cx: &mut gpui::App| {
+                                  cx: &mut gpui_kit::App| {
                                 let name = name.to_owned();
                                 let view = view.clone();
                                 let selected_environment = selected_environment.clone();

@@ -112,7 +112,7 @@ Both interfaces depend on `probe-application`, `probe-core`, the repository and
 import adapters, and `probe-http` for engine construction and response types.
 `probe-application` coordinates `probe-core`, `probe-http`, and `probe-websocket`.
 Both transports depend inward on `probe-core`, never on each other or on interfaces.
-Only `probe-desktop` depends on GPUI, gpui-base, and `keyring`.
+Only `probe-desktop` depends on `gpui-kit` (GPUI and gpui-base) and `keyring`.
 
 Domain must not depend on:
 
@@ -159,7 +159,7 @@ GPUI owns:
 - events
 - application lifecycle
 
-gpui-base (Longbridge `gpui-base` from `longbridge/gpui-component`) provides
+gpui-base (Longbridge `gpui_kit::base`, with Kit default features disabled) provides
 reusable component behavior and default chrome tokens. Do not use
 `gpui-component`.
 

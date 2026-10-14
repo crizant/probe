@@ -3,7 +3,7 @@ use probe_opencollection::StructureOperation;
 
 use super::*;
 
-#[gpui::test]
+#[gpui_kit::test]
 fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -131,7 +131,7 @@ fn graphql_request_creation_and_persistence(cx: &mut TestAppContext) {
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn graphql_variables_extensions_and_operation_name_persist(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -239,7 +239,7 @@ fn graphql_variables_extensions_and_operation_name_persist(cx: &mut TestAppConte
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -330,7 +330,7 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn closing_graphql_tab_resets_unavailable_editor_section(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {

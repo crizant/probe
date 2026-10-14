@@ -9,7 +9,7 @@ impl ProbeApp {
         theme: Theme,
         height: f32,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         let key = self.shell.active_tab().unwrap();
         let state = self.websocket.sessions.get(&key);
         let connected = state.is_some_and(|s| s.state == ConnectionState::Connected);
@@ -101,7 +101,7 @@ impl ProbeApp {
                                         .flex_none()
                                         .text_size(px(theme.typography.caption_size))
                                         .text_color(theme.colors.text.muted)
-                                        .font_features(gpui::FontFeatures(std::sync::Arc::new(
+                                        .font_features(gpui_kit::FontFeatures(std::sync::Arc::new(
                                             vec![("tnum".into(), 1)],
                                         )))
                                         .child(format!(
@@ -146,7 +146,7 @@ impl ProbeApp {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(
-                        gpui::list(state.list.clone(), move |index, _, cx| {
+                        gpui_kit::list(state.list.clone(), move |index, _, cx| {
                             view.update(cx, |view, _| {
                                 let Some(entry) = view
                                     .websocket
@@ -213,7 +213,7 @@ impl ProbeApp {
                                             false,
                                             move |_, _, cx| {
                                                 cx.write_to_clipboard(
-                                                    gpui::ClipboardItem::new_string(
+                                                    gpui_kit::ClipboardItem::new_string(
                                                         original.clone(),
                                                     ),
                                                 )
@@ -363,7 +363,7 @@ impl ProbeApp {
     }
 }
 
-fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gpui::Div {
+fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gpui_kit::Div {
     let SessionEvent::Closed {
         origin,
         code,
@@ -382,11 +382,11 @@ fn timeline_message(theme: Theme, entry: &crate::websocket::TimelineEntry) -> gp
     let Some(status) = rendered.status else {
         return message.child(rendered.text);
     };
-    let color: gpui::Hsla =
+    let color: gpui_kit::Hsla =
         disconnect_severity_color(theme, disconnect_severity(*origin, *code)).into();
-    message.child(gpui::StyledText::new(rendered.text).with_highlights([(
+    message.child(gpui_kit::StyledText::new(rendered.text).with_highlights([(
         status,
-        gpui::HighlightStyle {
+        gpui_kit::HighlightStyle {
             color: Some(color),
             ..Default::default()
         },

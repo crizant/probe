@@ -1,8 +1,8 @@
-use gpui::{
+use gpui_kit::base::Button;
+use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window,
     div, prelude::FluentBuilder as _, px,
 };
-use gpui_base::Button;
 use probe_core::{ItemKind, Workspace, WorkspaceItemRef};
 
 use crate::{
@@ -58,7 +58,7 @@ impl Render for TreeDrag {
 
 pub(crate) fn tree_row_button(
     theme: Theme,
-    id: impl Into<gpui::ElementId>,
+    id: impl Into<gpui_kit::ElementId>,
     depth: usize,
     selected: bool,
 ) -> Button {
@@ -93,7 +93,7 @@ pub(crate) fn tree_level_indent(theme: Theme, depth: usize) -> f32 {
     theme.metrics.spacing_1 + depth as f32 * tree_disclosure_width(theme)
 }
 
-pub(crate) fn tree_hierarchy_guides(theme: Theme, depth: usize, selected: bool) -> gpui::Div {
+pub(crate) fn tree_hierarchy_guides(theme: Theme, depth: usize, selected: bool) -> gpui_kit::Div {
     let mut guides = div().absolute().top(px(0.0)).bottom(px(0.0)).left(px(0.0));
     let color = if selected {
         theme.colors.selection.active_foreground.opacity(0.22)

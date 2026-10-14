@@ -7,11 +7,13 @@
 
 use std::{collections::HashMap, ops::Range, rc::Rc, sync::LazyLock};
 
-use gpui::{Context, HighlightStyle, SharedString, Window};
-use gpui_base::input::{
-    EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter,
-    InputHighlighterFactory, Rope,
+use gpui_kit::base::input::language_config::LanguageConfig;
+use gpui_kit::base::input::{
+    AutoClosingPair, BracketPair, EditorState, FoldRange, HighlightStyleResolver, InputEdit,
+    InputHighlighter, InputHighlighterFactory, LanguageProvider, Rope, SyntaxContext,
+    SyntaxContextProvider, set_language_config, set_language_provider,
 };
+use gpui_kit::{Context, HighlightStyle, SharedString, Window};
 use syntect::{
     parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet},
     util::LinesWithEndings,
@@ -29,6 +31,70 @@ fn should_highlight(text: &Rope) -> bool {
 
 fn within_highlight_budget(len: usize) -> bool {
     len <= MAX_HIGHLIGHT_BYTES
+}
+
+/// Editing rules are independent of Probe's Syntect presentation adapter.
+pub(crate) fn init_language_config(cx: &mut gpui_kit::App) {
+    set_language_provider(Rc::new(ProbeLanguages), cx);
+    let defaults = LanguageConfig::default();
+    set_language_config(
+        "json",
+        defaults
+            .clone()
+            .brackets([BracketPair::new("{", "}"), BracketPair::new("[", "]")])
+            .auto_closing_pairs([
+                AutoClosingPair::new("{", "}").not_in([SyntaxContext::String]),
+                AutoClosingPair::new("[", "]").not_in([SyntaxContext::String]),
+                AutoClosingPair::new("\"", "\"").not_in([SyntaxContext::String]),
+            ]),
+        cx,
+    );
+    for language in ["", "xml"] {
+        set_language_config(
+            language,
+            defaults.clone().brackets([]).auto_closing_pairs([]),
+            cx,
+        );
+    }
+}
+
+struct ProbeLanguages;
+
+impl LanguageProvider for ProbeLanguages {
+    fn syntax_context_provider(&self, name: &str) -> Option<Rc<dyn SyntaxContextProvider>> {
+        (self.language_name(name) == "json")
+            .then(|| Rc::new(JsonSyntaxContext) as Rc<dyn SyntaxContextProvider>)
+    }
+}
+
+struct JsonSyntaxContext;
+
+impl SyntaxContextProvider for JsonSyntaxContext {
+    fn context_at(&self, text: &Rope, offset: usize) -> SyntaxContext {
+        let mut end = offset.min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        // Base requests syntax only for delimiter editing decisions, not ordinary
+        // characters. Scan the relevant prefix without copying or parsing the
+        // document, including unfinished strings that Syntect may not classify.
+        let mut in_string = false;
+        let mut escaped = false;
+        for ch in text.slice(..end).chars() {
+            if escaped {
+                escaped = false;
+            } else if ch == '"' {
+                in_string = !in_string;
+            } else if in_string && ch == '\\' {
+                escaped = true;
+            }
+        }
+        if in_string {
+            SyntaxContext::String
+        } else {
+            SyntaxContext::Code
+        }
+    }
 }
 
 pub(crate) fn factory() -> InputHighlighterFactory {
@@ -293,6 +359,36 @@ mod tests {
             .filter(|(_, role)| *role == name)
             .map(|(range, _)| &source[range.clone()])
             .collect()
+    }
+
+    #[test]
+    fn json_syntax_context_tracks_string_state() {
+        for (text, expected) in [
+            ("{\"value\": ", SyntaxContext::Code),
+            ("\"hello ", SyntaxContext::String),
+            ("\"hello\\\"", SyntaxContext::String),
+            ("\"hello\\\\\"", SyntaxContext::Code),
+            ("\"hello\\\\\\\"", SyntaxContext::String),
+            (
+                "{\"a\":\"h\\\"i\", \"b\":\"unfinished ",
+                SyntaxContext::String,
+            ),
+        ] {
+            let rope = Rope::from(text);
+            assert_eq!(
+                JsonSyntaxContext.context_at(&rope, rope.len()),
+                expected,
+                "{text:?}"
+            );
+        }
+        let text = Rope::from("\"🦀");
+        assert_eq!(JsonSyntaxContext.context_at(&text, 0), SyntaxContext::Code);
+        for offset in 1..=text.len() + 1 {
+            assert_eq!(
+                JsonSyntaxContext.context_at(&text, offset),
+                SyntaxContext::String
+            );
+        }
     }
 
     #[test]

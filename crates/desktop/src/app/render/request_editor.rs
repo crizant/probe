@@ -1,5 +1,5 @@
 use super::*;
-use gpui::SharedString;
+use gpui_kit::SharedString;
 use probe_core::FolderKey;
 
 mod authentication;
@@ -20,7 +20,7 @@ impl ProbeApp {
         id: &'static str,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let mut path = div()
             .id(SharedString::from(format!("{id}-path")))
             .flex_1()
@@ -93,7 +93,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         let Some(key) = self.shell.active_tab() else {
             return div()
                 .flex_1()
@@ -466,7 +466,7 @@ impl ProbeApp {
         theme: Theme,
         list_scroll: Option<&components::ListScroll>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         match self.request_editor.section(key) {
             EditorSection::Docs => {
                 let view = cx.weak_entity();

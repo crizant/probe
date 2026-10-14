@@ -40,7 +40,7 @@ pub(super) fn environment_variant_value(
     row_index: usize,
     value: String,
     inherited: bool,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let selector = if name.is_empty() {
         format!("environment-variable-variant-{row_index}")
     } else {

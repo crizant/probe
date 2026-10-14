@@ -11,7 +11,7 @@ mod search;
 
 use std::{ops::Range, sync::Arc};
 
-use gpui::{Image, ScrollHandle, SharedString};
+use gpui_kit::{Image, ScrollHandle, SharedString};
 
 use crate::response_inspector::{
     InspectSelection, InspectionRange, ResponseInspection, first_inspection_selection,
@@ -95,6 +95,7 @@ impl RawBodyView {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SearchMatch {
     pub range: Range<usize>,

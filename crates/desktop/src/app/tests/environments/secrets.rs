@@ -1,5 +1,5 @@
 use super::*;
-use gpui::Focusable as _;
+use gpui_kit::Focusable as _;
 use probe_core::VariableStatus::{Resolved, SecretWithoutValue};
 use std::path::Path;
 
@@ -22,7 +22,7 @@ fn set_manager_status(
     });
 }
 
-fn secret_input_is_focused(view: &ProbeApp, window: &Window, cx: &gpui::App) -> bool {
+fn secret_input_is_focused(view: &ProbeApp, window: &Window, cx: &gpui_kit::App) -> bool {
     view.secret_value_dialog
         .as_ref()
         .unwrap()
@@ -32,7 +32,7 @@ fn secret_input_is_focused(view: &ProbeApp, window: &Window, cx: &gpui::App) -> 
         .is_focused(window)
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_secret_status_comes_from_presence_for_the_effective_environment(
     cx: &mut TestAppContext,
 ) {
@@ -83,7 +83,7 @@ fn manager_secret_status_comes_from_presence_for_the_effective_environment(
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_secret_row_actions_follow_presence_and_saved_state(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "base");
@@ -159,7 +159,7 @@ fn manager_secret_row_actions_follow_presence_and_saved_state(cx: &mut TestAppCo
     ));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_new_secret_must_be_saved_before_credential_can_be_set(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "new-secret");
     workspace.open_manager(cx, "development");
@@ -232,7 +232,7 @@ fn manager_new_secret_must_be_saved_before_credential_can_be_set(cx: &mut TestAp
     assert!(!workspace.yaml().contains(SECRET_SENTINEL));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_replaces_and_deletes_native_value_without_changing_declaration(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "replace-delete-secret");
     let before = workspace.yaml();
@@ -292,7 +292,7 @@ fn manager_replaces_and_deletes_native_value_without_changing_declaration(cx: &m
     assert_eq!(workspace.yaml(), before);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_trash_removes_declaration_without_deleting_native_value(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "remove-secret-declaration");
     let id = workspace.credential("base", "secretToken");
@@ -324,7 +324,7 @@ fn manager_trash_removes_declaration_without_deleting_native_value(cx: &mut Test
     assert_eq!(workspace.store.value(&id).as_deref(), Some("private"));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_set_failure_reports_error_without_recording_presence(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "secret-failure");
     let before = workspace.yaml();
@@ -354,7 +354,7 @@ fn manager_set_failure_reports_error_without_recording_presence(cx: &mut TestApp
     assert_eq!(workspace.yaml(), before);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_renames_change_credential_identity_without_migration(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "secret-identity-rename");
     let old_id = workspace.development_secret();
@@ -448,7 +448,7 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
     assert!(workspace.yaml().contains("renamedToken"));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_close_save_confirms_secret_rename_before_closing(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "secret-rename-close");
     workspace.open_manager(cx, "development");
@@ -482,7 +482,7 @@ fn environment_manager_close_save_confirms_secret_rename_before_closing(cx: &mut
     assert!(workspace.yaml().contains("name: production"));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn in_flight_set_survives_closing_its_dialog_and_the_manager(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let id = workspace.development_secret();
@@ -529,7 +529,7 @@ fn in_flight_set_survives_closing_its_dialog_and_the_manager(cx: &mut TestAppCon
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_secret_keyboard_enter_submits_and_escape_discards(cx: &mut TestAppContext) {
     cx.update(bind_platform_hotkeys);
     let workspace = EnvironmentWorkspace::open(cx);
@@ -573,7 +573,7 @@ fn manager_secret_keyboard_enter_submits_and_escape_discards(cx: &mut TestAppCon
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_secret_dialog_cannot_save_after_draft_becomes_dirty(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "development");
@@ -600,7 +600,7 @@ fn manager_secret_dialog_cannot_save_after_draft_becomes_dirty(cx: &mut TestAppC
     assert!(workspace.store.values.lock().unwrap().is_empty());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn manager_delete_failure_restores_status_and_reports_error(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let id = workspace.development_secret();
@@ -647,7 +647,7 @@ fn open_editor_secret_dialog(
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn editor_delete_failure_reports_error_without_changing_presence(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let id = workspace.development_secret();
@@ -671,7 +671,7 @@ fn editor_delete_failure_reports_error_without_changing_presence(cx: &mut TestAp
     assert_eq!(workspace.store.value(&id).as_deref(), Some("keep-me"));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn editor_secret_dialog_rejects_stale_environment_and_workspace(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let other = http_environment_fixture().canonicalize().unwrap();
@@ -699,7 +699,7 @@ fn editor_secret_dialog_rejects_stale_environment_and_workspace(cx: &mut TestApp
     assert!(workspace.store.values.lock().unwrap().is_empty());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn editor_replace_dialog_rejects_mismatched_and_stale_delete_targets(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let id = workspace.development_secret();
@@ -747,7 +747,7 @@ fn editor_replace_dialog_rejects_mismatched_and_stale_delete_targets(cx: &mut Te
     assert_eq!(workspace.store.value(&id).as_deref(), Some("keep-me"));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn editor_secret_tooltip_sets_replaces_and_deletes_in_effective_environment(
     cx: &mut TestAppContext,
 ) {
@@ -885,17 +885,17 @@ fn assert_delete_marks_placeholder_unresolved(cx: &mut TestAppContext, native: O
     assert!(workspace.store.value(&id).is_none());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn deleting_a_stored_secret_marks_its_placeholder_unresolved(cx: &mut TestAppContext) {
     assert_delete_marks_placeholder_unresolved(cx, Some(SECRET_SENTINEL));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn deleting_an_already_absent_secret_still_marks_it_missing(cx: &mut TestAppContext) {
     assert_delete_marks_placeholder_unresolved(cx, None);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn secret_placeholder_status_follows_presence_without_reading_the_store(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "editor-secret-a");
     let other = writable_environment_fixture("editor-secret-b")
@@ -964,7 +964,7 @@ fn secret_placeholder_status_follows_presence_without_reading_the_store(cx: &mut
     fs::remove_file(other).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn restored_session_presence_highlights_without_reading_the_store(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let id = workspace.development_secret();

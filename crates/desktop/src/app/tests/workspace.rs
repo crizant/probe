@@ -24,7 +24,7 @@ fn tab_response() -> HttpResponse {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn closing_saved_request_unloads_response_and_reopening_starts_fresh(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
@@ -83,7 +83,7 @@ fn closing_saved_request_unloads_response_and_reopening_starts_fresh(cx: &mut Te
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn closing_saved_request_cancels_execution_and_ignores_late_completion(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
@@ -114,7 +114,10 @@ fn closing_saved_request_cancels_execution_and_ignores_late_completion(cx: &mut 
 
 fn response_tab_window(
     cx: &mut TestAppContext,
-) -> (gpui::WindowHandle<ProbeApp>, Vec<probe_core::RequestKey>) {
+) -> (
+    gpui_kit::WindowHandle<ProbeApp>,
+    Vec<probe_core::RequestKey>,
+) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
     let fixture = bundled_fixture().canonicalize().unwrap();
@@ -133,7 +136,7 @@ fn response_tab_window(
     (window, keys)
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn close_other_tabs_unloads_other_responses_and_preserves_the_kept_response(
     cx: &mut TestAppContext,
 ) {
@@ -173,7 +176,7 @@ fn close_other_tabs_unloads_other_responses_and_preserves_the_kept_response(
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn closing_response_tab_unloads_image_and_encoded_documents(cx: &mut TestAppContext) {
     let (window, keys) = response_tab_window(cx);
     let key = keys[0];
@@ -225,7 +228,7 @@ fn closing_response_tab_unloads_image_and_encoded_documents(cx: &mut TestAppCont
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn response_jobs_finishing_after_tab_close_do_not_recreate_documents(cx: &mut TestAppContext) {
     let (window, keys) = response_tab_window(cx);
     let key = keys[0];
@@ -271,7 +274,7 @@ fn response_jobs_finishing_after_tab_close_do_not_recreate_documents(cx: &mut Te
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn request_creation_dialog_uses_the_selected_protocol(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -288,11 +291,11 @@ fn request_creation_dialog_uses_the_selected_protocol(cx: &mut TestAppContext) {
     cx.run_until_parked();
     for (action, protocol) in [
         (
-            Box::new(NewRequest) as Box<dyn gpui::Action>,
+            Box::new(NewRequest) as Box<dyn gpui_kit::Action>,
             probe_core::RequestProtocol::Http,
         ),
         (
-            Box::new(NewGraphqlRequest) as Box<dyn gpui::Action>,
+            Box::new(NewGraphqlRequest) as Box<dyn gpui_kit::Action>,
             probe_core::RequestProtocol::Graphql,
         ),
     ] {
@@ -311,7 +314,7 @@ fn request_creation_dialog_uses_the_selected_protocol(cx: &mut TestAppContext) {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -377,7 +380,7 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -458,11 +461,11 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
                     field.size.height / 2.0,
                 );
             // Each adapter only needs to prove that its field reaches the shared coordinator.
-            visual.simulate_event(gpui::ScrollWheelEvent {
+            visual.simulate_event(gpui_kit::ScrollWheelEvent {
                 position,
-                delta: gpui::ScrollDelta::Pixels(point(px(2.0), px(-8.0))),
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(2.0), px(-8.0))),
                 modifiers: Modifiers::default(),
-                touch_phase: gpui::TouchPhase::Started,
+                touch_phase: gpui_kit::TouchPhase::Started,
             });
             assert_eq!(
                 window
@@ -475,7 +478,7 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn key_value_editor_row_controls_update_their_rows_and_restore_focus(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -527,13 +530,13 @@ fn key_value_editor_row_controls_update_their_rows_and_restore_focus(cx: &mut Te
     cx.run_until_parked();
     cx.simulate_keystrokes(window.into(), "tab");
     visual.run_until_parked();
-    let keystroke = gpui::Keystroke::parse("space").unwrap();
-    visual.simulate_event(gpui::KeyDownEvent {
+    let keystroke = gpui_kit::Keystroke::parse("space").unwrap();
+    visual.simulate_event(gpui_kit::KeyDownEvent {
         keystroke: keystroke.clone(),
         is_held: false,
         prefer_character_input: false,
     });
-    visual.simulate_event(gpui::KeyUpEvent { keystroke });
+    visual.simulate_event(gpui_kit::KeyUpEvent { keystroke });
     visual.run_until_parked();
     window
         .update(cx, |view, _, _| {
@@ -599,7 +602,7 @@ fn key_value_editor_row_controls_update_their_rows_and_restore_focus(cx: &mut Te
     assert!(visual.debug_bounds("add-form-field").is_some());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn saving_detached_request_preserves_edited_fields(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -644,7 +647,7 @@ fn saving_detached_request_preserves_edited_fields(cx: &mut TestAppContext) {
     assert_eq!(created.headers[0].name, "X-Test");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn saving_detached_request_keeps_the_persisted_sequence(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -731,7 +734,7 @@ fn copy_unbundled_fixture(source: &std::path::Path, destination: &std::path::Pat
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn saving_detached_graphql_request_preserves_query(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -785,7 +788,7 @@ fn saving_detached_graphql_request_preserves_query(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn saving_background_draft_keeps_the_user_selected_tab(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -817,7 +820,7 @@ fn saving_background_draft_keeps_the_user_selected_tab(cx: &mut TestAppContext) 
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn saving_detached_request_keeps_unrelated_request_dirty(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -858,7 +861,7 @@ fn saving_detached_request_keeps_unrelated_request_dirty(cx: &mut TestAppContext
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn editing_detached_request_during_save_keeps_the_edit_dirty(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -912,7 +915,7 @@ fn editing_detached_request_during_save_keeps_the_edit_dirty(cx: &mut TestAppCon
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn unchanged_active_folder_survives_reconciliation_in_mixed_tab_order(cx: &mut TestAppContext) {
     let (window, [request, _, folder]) = mixed_tab_window(cx);
     window
@@ -958,7 +961,7 @@ fn unchanged_active_folder_survives_reconciliation_in_mixed_tab_order(cx: &mut T
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn close_other_tabs_keeps_a_detached_tab_after_key_remap(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -991,7 +994,7 @@ fn close_other_tabs_keeps_a_detached_tab_after_key_remap(cx: &mut TestAppContext
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn save_dialog_survives_workspace_reload(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1055,7 +1058,7 @@ fn save_dialog_survives_workspace_reload(cx: &mut TestAppContext) {
     }));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn save_dialog_records_the_selected_parent(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1096,7 +1099,7 @@ fn save_dialog_records_the_selected_parent(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn creating_a_folder_from_the_save_dialog_keeps_the_draft_and_saves_into_it(
     cx: &mut TestAppContext,
 ) {
@@ -1207,7 +1210,7 @@ fn creating_a_folder_from_the_save_dialog_keeps_the_draft_and_saves_into_it(
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn enter_in_the_save_folder_field_creates_the_folder_without_saving(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -1253,7 +1256,7 @@ fn enter_in_the_save_folder_field_creates_the_folder_without_saving(cx: &mut Tes
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn new_request_tab_accepts_save_shortcut(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -1303,7 +1306,7 @@ fn new_request_tab_accepts_save_shortcut(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn enter_on_a_save_destination_selects_that_folder(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -1364,7 +1367,7 @@ fn enter_on_a_save_destination_selects_that_folder(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn creating_a_folder_keeps_open_tab_order(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1435,7 +1438,7 @@ fn creating_a_folder_keeps_open_tab_order(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn save_dialog_stays_open_when_a_save_is_already_running(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1511,7 +1514,7 @@ fn save_dialog_stays_open_when_a_save_is_already_running(cx: &mut TestAppContext
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1546,7 +1549,7 @@ fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn move_dialog_keeps_a_destination_parent(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1601,7 +1604,7 @@ fn move_dialog_keeps_a_destination_parent(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn request_tab_add_button_stays_with_the_open_tabs(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
@@ -1644,7 +1647,7 @@ fn folder_selector_named(view: &ProbeApp, name: &str) -> Option<String> {
     })
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn unified_session_tabs_take_precedence_over_legacy_fields(cx: &mut TestAppContext) {
     let (window, [request, _, folder]) = mixed_tab_window(cx);
     window
@@ -1684,7 +1687,7 @@ fn unified_session_tabs_take_precedence_over_legacy_fields(cx: &mut TestAppConte
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn reconciliation_preserves_interleaved_detached_tab_and_its_selection(cx: &mut TestAppContext) {
     let (window, [request, _, _]) = mixed_tab_window(cx);
     window
@@ -1721,7 +1724,7 @@ fn reconciliation_preserves_interleaved_detached_tab_and_its_selection(cx: &mut 
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn close_other_tabs_preserves_the_kept_overview_draft(cx: &mut TestAppContext) {
     let (window, [_, collection, _]) = mixed_tab_window(cx);
     window
@@ -1741,7 +1744,7 @@ fn close_other_tabs_preserves_the_kept_overview_draft(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn close_other_tabs_prompts_for_a_draft_on_another_overview(cx: &mut TestAppContext) {
     let (window, tabs @ [_, _, folder]) = mixed_tab_window(cx);
     window
@@ -1771,7 +1774,7 @@ fn close_other_tabs_prompts_for_a_draft_on_another_overview(cx: &mut TestAppCont
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn switching_workspaces_restores_each_tabs_active_tab_and_folders(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1834,7 +1837,7 @@ fn switching_workspaces_restores_each_tabs_active_tab_and_folders(cx: &mut TestA
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn loading_existing_workspaces_restores_tabs_after_switching(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1899,7 +1902,7 @@ fn loading_existing_workspaces_restores_tabs_after_switching(cx: &mut TestAppCon
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn add_menu_renders_compact_request_and_folder_markers(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1937,7 +1940,7 @@ fn add_menu_renders_compact_request_and_folder_markers(cx: &mut TestAppContext) 
     assert!(visual.debug_bounds("tree-new-folder-leading").is_some());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn dismissing_transient_surfaces_closes_the_request_execution_menu(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1953,7 +1956,7 @@ fn dismissing_transient_surfaces_closes_the_request_execution_menu(cx: &mut Test
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn unbundled_graphql_rename_dialog_keeps_open_tab_and_dirty_draft(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
@@ -2018,7 +2021,7 @@ fn unbundled_graphql_rename_dialog_keeps_open_tab_and_dirty_draft(cx: &mut TestA
     fs::remove_dir_all(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn structural_rename_keeps_open_tab_and_dirty_draft(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2066,7 +2069,7 @@ fn structural_rename_keeps_open_tab_and_dirty_draft(cx: &mut TestAppContext) {
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn structural_move_remaps_tabs_and_preserves_dirty_drafts(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2139,7 +2142,7 @@ fn structural_move_remaps_tabs_and_preserves_dirty_drafts(cx: &mut TestAppContex
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn creating_root_request_without_selection_selects_opens_and_reveals_it(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2200,7 +2203,7 @@ fn creating_root_request_without_selection_selects_opens_and_reveals_it(cx: &mut
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn creating_request_in_selected_folder_selects_child_and_expands_parent(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2260,8 +2263,8 @@ fn creating_request_in_selected_folder_selects_child_and_expands_parent(cx: &mut
 
 fn simulate_tree_drag(
     visual: &mut VisualTestContext,
-    from: gpui::Bounds<gpui::Pixels>,
-    to: gpui::Point<gpui::Pixels>,
+    from: gpui_kit::Bounds<gpui_kit::Pixels>,
+    to: gpui_kit::Point<gpui_kit::Pixels>,
 ) {
     visual.simulate_mouse_down(from.center(), MouseButton::Left, Modifiers::default());
     visual.simulate_mouse_move(
@@ -2273,7 +2276,7 @@ fn simulate_tree_drag(
     visual.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn tree_drag_moves_a_request_into_a_folder(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2317,7 +2320,7 @@ fn tree_drag_moves_a_request_into_a_folder(cx: &mut TestAppContext) {
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn tree_drag_reorders_a_folder_before_its_sibling(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2365,7 +2368,7 @@ fn tree_drag_reorders_a_folder_before_its_sibling(cx: &mut TestAppContext) {
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn tree_drag_moves_a_nested_request_to_root_end(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2419,7 +2422,7 @@ fn tree_drag_moves_a_nested_request_to_root_end(cx: &mut TestAppContext) {
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn tree_drag_rejects_dropping_a_folder_into_itself(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2456,7 +2459,7 @@ fn tree_drag_rejects_dropping_a_folder_into_itself(cx: &mut TestAppContext) {
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn failed_structure_edit_keeps_the_previous_workspace(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2514,7 +2517,7 @@ fn failed_structure_edit_keeps_the_previous_workspace(cx: &mut TestAppContext) {
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn request_save_runs_in_background_and_clears_dirty_state(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2599,7 +2602,7 @@ fn request_save_runs_in_background_and_clears_dirty_state(cx: &mut TestAppContex
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn websocket_url_edits_stay_raw_and_save(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -2713,7 +2716,7 @@ items:
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn save_shortcut_after_clicking_remove_query_row_persists_removal(cx: &mut TestAppContext) {
     assert_save_shortcut_after_clicking_remove_row_persists_removal(
         cx,
@@ -2728,7 +2731,7 @@ fn save_shortcut_after_clicking_remove_query_row_persists_removal(cx: &mut TestA
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn save_shortcut_after_clicking_remove_header_row_persists_removal(cx: &mut TestAppContext) {
     assert_save_shortcut_after_clicking_remove_row_persists_removal(
         cx,
@@ -2744,7 +2747,7 @@ fn save_shortcut_after_clicking_remove_header_row_persists_removal(cx: &mut Test
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn workspace_reload_preserves_running_request_execution(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2796,7 +2799,7 @@ fn workspace_reload_preserves_running_request_execution(cx: &mut TestAppContext)
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn saving_after_removing_empty_query_parameter_during_in_flight_save_clears_dirty_state(
     cx: &mut TestAppContext,
 ) {
@@ -2873,7 +2876,7 @@ fn saving_after_removing_empty_query_parameter_during_in_flight_save_clears_dirt
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn discarding_a_dirty_tab_restores_the_workspace_request(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2944,7 +2947,7 @@ fn discarding_a_dirty_tab_restores_the_workspace_request(cx: &mut TestAppContext
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn unsaved_changes_use_the_custom_dialog_and_cancel_preserves_the_tab(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -2989,7 +2992,7 @@ fn unsaved_changes_use_the_custom_dialog_and_cancel_preserves_the_tab(cx: &mut T
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn enter_triggers_application_dialog_primary_action(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -3018,7 +3021,7 @@ fn enter_triggers_application_dialog_primary_action(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn enter_triggers_create_environment_dialog_primary_action(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -3060,7 +3063,7 @@ fn enter_triggers_create_environment_dialog_primary_action(cx: &mut TestAppConte
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn destructive_shortcut_triggers_application_dialog_destructive_action(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -3102,7 +3105,7 @@ fn destructive_shortcut_triggers_application_dialog_destructive_action(cx: &mut 
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn application_dialogs_queue_without_repeating_the_same_filesystem_conflict(
     cx: &mut TestAppContext,
 ) {
@@ -3152,7 +3155,7 @@ fn application_dialogs_queue_without_repeating_the_same_filesystem_conflict(
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
     cx: &mut TestAppContext,
 ) {
@@ -3226,7 +3229,7 @@ fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn save_conflict_keeps_the_request_dirty_and_visible(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3272,7 +3275,7 @@ fn save_conflict_keeps_the_request_dirty_and_visible(cx: &mut TestAppContext) {
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn recent_collection_in_sidebar_loads_the_workspace(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3309,7 +3312,7 @@ fn recent_collection_in_sidebar_loads_the_workspace(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn recent_collection_can_be_removed_from_the_sidebar(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3354,7 +3357,7 @@ fn recent_collection_can_be_removed_from_the_sidebar(cx: &mut TestAppContext) {
         .expect("next recent collection should receive focus");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn removing_the_last_recent_collection_restores_sidebar_focus(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3388,7 +3391,7 @@ fn removing_the_last_recent_collection_restores_sidebar_focus(cx: &mut TestAppCo
         .expect("sidebar import trigger should receive focus");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn recent_collection_focus_handles_are_pruned(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3427,7 +3430,7 @@ fn recent_collection_focus_handles_are_pruned(cx: &mut TestAppContext) {
         .expect("stale focus handles should be pruned");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3518,7 +3521,7 @@ fn empty_sidebar_new_collection_creates_and_loads_a_workspace(cx: &mut TestAppCo
     fs::remove_dir_all(destination_dir).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn empty_sidebar_import_menu_lists_postman_and_yaak(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3548,7 +3551,7 @@ fn empty_sidebar_import_menu_lists_postman_and_yaak(cx: &mut TestAppContext) {
         .expect("provider menu should include Yaak");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn workspace_switcher_includes_new_collection(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3608,7 +3611,7 @@ fn workspace_switcher_includes_new_collection(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn large_sidebar_virtualizes_rows_and_reveals_the_restored_request(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3698,7 +3701,7 @@ fn large_sidebar_virtualizes_rows_and_reveals_the_restored_request(cx: &mut Test
         .expect("test window should remain open");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn sidebar_folder_selection_and_search_reveal_behavior(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3895,7 +3898,7 @@ fn sidebar_folder_selection_and_search_reveal_behavior(cx: &mut TestAppContext) 
     assert_eq!(folder_only, ["Folder", "Nested"]);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn restored_active_tab_highlights_matching_sidebar_request(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -3949,7 +3952,7 @@ fn restored_active_tab_highlights_matching_sidebar_request(cx: &mut TestAppConte
         .expect("active sidebar request label should render");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps(
     cx: &mut TestAppContext,
 ) {
@@ -4025,7 +4028,7 @@ fn writable_documentation_fixture(name: &str) -> PathBuf {
     path
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn committed_documentation_save_keeps_drafts_until_recovery_integrates(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     for (folder, reload_fails, later_edit) in [
@@ -4141,7 +4144,7 @@ fn committed_documentation_save_keeps_drafts_until_recovery_integrates(cx: &mut 
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn documentation_editors_save_preserve_media_types_and_keep_later_edits_dirty(
     cx: &mut TestAppContext,
 ) {
@@ -4301,7 +4304,7 @@ fn documentation_editors_save_preserve_media_types_and_keep_later_edits_dirty(
     fs::remove_file(path).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -4395,7 +4398,7 @@ fn documentation_close_prompts_and_save_failures_preserve_drafts(cx: &mut TestAp
 }
 
 fn wait_for_shortcut_request(
-    window: gpui::WindowHandle<ProbeApp>,
+    window: gpui_kit::WindowHandle<ProbeApp>,
     key: probe_core::RequestKey,
     cx: &mut TestAppContext,
 ) {
@@ -4420,7 +4423,7 @@ fn wait_for_shortcut_request(
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn send_request_shortcut_sends_the_active_request(cx: &mut TestAppContext) {
     // Real HTTP runs on Tokio; permit external wakes before dispatching Send.
     cx.executor().allow_parking();
@@ -4463,7 +4466,7 @@ fn send_request_shortcut_sends_the_active_request(cx: &mut TestAppContext) {
     cx.run_until_parked();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn send_request_shortcut_works_when_input_focused(cx: &mut TestAppContext) {
     // Real HTTP runs on Tokio; permit external wakes before dispatching Send.
     cx.executor().allow_parking();
@@ -4512,7 +4515,7 @@ fn send_request_shortcut_works_when_input_focused(cx: &mut TestAppContext) {
     cx.run_until_parked();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn send_request_shortcut_does_nothing_on_overview_tab(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -4545,7 +4548,7 @@ fn send_request_shortcut_does_nothing_on_overview_tab(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn send_request_shortcut_does_nothing_when_dialog_is_open(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -4582,7 +4585,7 @@ fn send_request_shortcut_does_nothing_when_dialog_is_open(cx: &mut TestAppContex
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn send_request_shortcut_does_nothing_when_create_environment_dialog_is_open(
     cx: &mut TestAppContext,
 ) {
@@ -4616,7 +4619,7 @@ fn send_request_shortcut_does_nothing_when_create_environment_dialog_is_open(
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn send_request_shortcut_does_not_duplicate_when_already_running(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -4671,7 +4674,7 @@ fn send_request_shortcut_does_not_duplicate_when_already_running(cx: &mut TestAp
     assert_eq!(cancellation_receiver.try_recv(), Ok(()));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn send_request_shortcut_from_body_editor_preserves_multiline_body(cx: &mut TestAppContext) {
     let body_text = |view: &ProbeApp| {
         let Some(probe_core::RequestBody::Single(probe_core::Body::Raw(raw))) =

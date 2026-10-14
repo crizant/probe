@@ -3,13 +3,13 @@ use crate::app::{SendRequest, SendWebSocketMessage};
 use crate::websocket::ConnectionState;
 use probe_application::{SessionData, SessionEvent, WebSocketInputFormat};
 
-#[gpui::test]
+#[gpui_kit::test]
 fn websocket_shortcut_routes_by_focus_context(cx: &mut TestAppContext) {
     cx.update(bind_platform_hotkeys);
     cx.update(|cx| {
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
-        let shortcut = gpui::Keystroke::parse(send_shortcut()).unwrap();
+        let shortcut = gpui_kit::Keystroke::parse(send_shortcut()).unwrap();
         for (contexts, composer) in [
             (vec!["Probe"], false),
             (vec!["Input"], false),
@@ -22,7 +22,7 @@ fn websocket_shortcut_routes_by_focus_context(cx: &mut TestAppContext) {
         ] {
             let contexts: Vec<_> = contexts
                 .into_iter()
-                .map(|context| gpui::KeyContext::parse(context).unwrap())
+                .map(|context| gpui_kit::KeyContext::parse(context).unwrap())
                 .collect();
             let (bindings, _) =
                 keymap.bindings_for_input(std::slice::from_ref(&shortcut), &contexts);
@@ -42,7 +42,7 @@ fn websocket_shortcut_routes_by_focus_context(cx: &mut TestAppContext) {
                 assert!(action.as_any().is::<SendRequest>());
             }
             for text_key in ["enter", "shift-enter"] {
-                let key = gpui::Keystroke::parse(text_key).unwrap();
+                let key = gpui_kit::Keystroke::parse(text_key).unwrap();
                 let (bindings, _) = keymap.bindings_for_input(&[key], &contexts);
                 assert!(bindings.iter().all(|binding| {
                     !binding.action().as_any().is::<SendRequest>()
@@ -69,7 +69,7 @@ pub(super) fn wait(cx: &mut TestAppContext, mut ready: impl FnMut(&mut TestAppCo
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn websocket_message_editor_controls_warn_without_deleting_variants(cx: &mut TestAppContext) {
     use probe_core::{WebSocketMessageKind as Kind, WebSocketMessageSet, WebSocketMessageVariant};
     cx.update(Theme::init);
@@ -189,7 +189,7 @@ fn websocket_message_editor_controls_warn_without_deleting_variants(cx: &mut Tes
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_history(
     cx: &mut TestAppContext,
 ) {

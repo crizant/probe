@@ -1,12 +1,12 @@
 use super::*;
 use crate::toast::{TOAST_MOTION_DURATION, ToastId, ToastIntent, ToastMessage};
-use gpui_base::{Toast, ToastTransitionStatus};
+use gpui_kit::base::{Toast, ToastTransitionStatus};
 
 pub(crate) const TOAST_STACK_WIDTH: f32 = 360.0;
 const TOAST_ACCENT_STRIP_WIDTH: f32 = 4.0;
 const TOAST_BORDER_WIDTH: f32 = 1.0;
 
-fn intent_color(theme: Theme, intent: ToastIntent) -> gpui::Rgba {
+fn intent_color(theme: Theme, intent: ToastIntent) -> gpui_kit::Rgba {
     match intent {
         ToastIntent::Success => theme.colors.status.success,
         ToastIntent::Info => theme.colors.status.informational,
@@ -15,7 +15,7 @@ fn intent_color(theme: Theme, intent: ToastIntent) -> gpui::Rgba {
     }
 }
 
-fn accent_strip(color: gpui::Rgba, radius: f32) -> gpui::Div {
+fn accent_strip(color: gpui_kit::Rgba, radius: f32) -> gpui_kit::Div {
     // GPUI clips overflow to a rectangle, so a 4px child would poke out of the
     // toast's rounded corners. Paint a matching rounded fill and clip it to the
     // accent column so it stays inside the card.
@@ -44,7 +44,7 @@ pub(crate) fn toast(
     notification: &ToastMessage,
     status: ToastTransitionStatus,
     on_dismiss: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let intent = notification.intent;
     let intent_label = intent.label();
     let color = intent_color(theme, intent);
