@@ -230,3 +230,51 @@ async fn https_to_http_redirect_never_connects_even_when_hostname_matches() {
         std::io::ErrorKind::WouldBlock
     );
 }
+
+#[tokio::test]
+async fn engine_checks_identity_scope_against_built_url_before_connecting() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("https://{}/private", listener.local_addr().unwrap());
+    let request = probe_core::Request {
+        method: Some("GET".into()),
+        url: Some(url),
+        settings: RequestSettings {
+            timeout: Some(Duration::from_millis(500)),
+            ..RequestSettings::default()
+        },
+        ..probe_core::Request::default()
+    }
+    .into_http()
+    .unwrap();
+    let engine = HttpEngine::new().unwrap();
+    let options = |domain: &str| ExecutionOptions {
+        client_identity: Some(PemClientIdentity::new(
+            domain.into(),
+            fixture("client.pem").to_str().unwrap().into(),
+            fixture("client-key.pem").to_str().unwrap().into(),
+            None,
+        )),
+        ..ExecutionOptions::default()
+    };
+    let error = engine
+        .execute(&request, &options("other.example.com"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        HttpError::ClientConfiguration("client identity does not match the execution URL".into())
+    );
+    assert_eq!(
+        listener.accept().err().unwrap().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    // A matching identity may connect. With no TLS server answering the socket,
+    // execution reaches the request timeout rather than rejecting configuration.
+    let error = engine
+        .execute(&request, &options("127.0.0.1"))
+        .await
+        .unwrap_err();
+    assert_eq!(error, HttpError::Timeout);
+    assert!(listener.accept().is_ok());
+}
