@@ -16,11 +16,13 @@ fn park_until(
         if ready(cx) {
             return;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "timed out waiting for {waiting_for}"
+        let now = std::time::Instant::now();
+        assert!(now < deadline, "timed out waiting for {waiting_for}");
+        std::thread::park_timeout(
+            deadline
+                .saturating_duration_since(now)
+                .min(Duration::from_millis(10)),
         );
-        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -30,6 +32,8 @@ fn send_secret_request(
     workspace: &EnvironmentWorkspace,
     cx: &mut TestAppContext,
 ) -> probe_core::RequestKey {
+    // Permit external Tokio thread wakes before dispatching the request.
+    cx.executor().allow_parking();
     workspace.store.allow_execution_reads();
     workspace.update(cx, |view, _, cx| {
         let key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
@@ -130,13 +134,11 @@ fn assert_stale_execution_cannot_override(cx: &mut TestAppContext, write: Creden
     if matches!(write, CredentialWrite::Delete) {
         workspace.store_secret(cx, &id, SECRET_SENTINEL);
     }
-    let release = workspace.store.hold_reads();
+    let (entered, release) = workspace.store.hold_reads();
     let key = send_secret_request(&workspace, cx);
-    park_until(
-        cx,
-        |_| workspace.store.get_calls() >= 1,
-        "execution to read the credential",
-    );
+    entered
+        .recv_timeout(Duration::from_secs(5))
+        .expect("execution should read the credential");
 
     workspace.open_manager(cx, "development");
     workspace.update(cx, |view, window, cx| {

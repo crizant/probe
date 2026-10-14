@@ -61,11 +61,13 @@ pub(super) fn wait(cx: &mut TestAppContext, mut ready: impl FnMut(&mut TestAppCo
         if ready(cx) {
             return;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "WebSocket desktop operation timed out"
+        let now = std::time::Instant::now();
+        assert!(now < deadline, "WebSocket desktop operation timed out");
+        std::thread::park_timeout(
+            deadline
+                .saturating_duration_since(now)
+                .min(Duration::from_millis(10)),
         );
-        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -215,7 +217,9 @@ fn websocket_tabs_keep_live_sessions_composer_is_literal_and_close_releases_hist
             .unwrap();
         });
     });
-    let address = address_rx.recv().unwrap();
+    let address = address_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    // WebSocket execution runs on Tokio; permit external wakes before connecting.
+    cx.executor().allow_parking();
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
     let window = cx.open_window(size(px(1180.0), px(780.0)), ProbeApp::new);

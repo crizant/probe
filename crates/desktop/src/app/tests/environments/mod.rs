@@ -25,7 +25,7 @@ struct FakeCredentials {
     allow_get: AtomicBool,
     fail_set: AtomicBool,
     fail_delete: AtomicBool,
-    read_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    read_gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl FakeCredentials {
@@ -41,11 +41,13 @@ impl FakeCredentials {
         self.allow_get.store(true, Ordering::SeqCst);
     }
 
-    /// Blocks reads after they capture a value until the returned sender fires.
-    fn hold_reads(&self) -> mpsc::Sender<()> {
-        let (release, gate) = mpsc::channel();
-        *self.read_gate.lock().unwrap() = Some(gate);
-        release
+    /// Blocks reads after they capture a value, returning a receiver that
+    /// fires once a read enters the gate and a sender that releases it.
+    fn hold_reads(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *self.read_gate.lock().unwrap() = Some((entered_tx, release_rx));
+        (entered_rx, release_tx)
     }
 }
 
@@ -83,8 +85,10 @@ impl CredentialStore for FakeCredentials {
         );
         let value = self.value(id);
         self.get_calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(gate) = self.read_gate.lock().unwrap().as_ref() {
-            let _ = gate.recv_timeout(Duration::from_secs(10));
+        let gate = self.read_gate.lock().unwrap().take();
+        if let Some((entered, release)) = gate {
+            let _ = entered.send(());
+            let _ = release.recv_timeout(Duration::from_secs(10));
         }
         Ok(value.map(probe_core::SecretValue::new))
     }

@@ -27,6 +27,8 @@ fn closing_active_websocket_tab_removes_session_and_sends_close(cx: &mut TestApp
         });
     });
     let address = address_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    // WebSocket execution runs on Tokio; permit external wakes before connecting.
+    cx.executor().allow_parking();
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
     let fixture = writable_bundled_fixture("websocket-active-tab-close");
@@ -101,7 +103,9 @@ fn websocket_disconnect_reconnect_and_workspace_replacement_cleanup(cx: &mut Tes
             .unwrap();
         });
     });
-    let address = address_rx.recv().unwrap();
+    let address = address_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    // WebSocket execution runs on Tokio; permit external wakes before connecting.
+    cx.executor().allow_parking();
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
     let fixture = writable_bundled_fixture("websocket-cleanup");
