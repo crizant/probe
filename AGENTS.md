@@ -79,3 +79,16 @@ Implement only the requested feature. Do not add cloud sync, accounts, telemetry
 analytics, plugins, GraphQL, streaming protocols, Git provider APIs, or MCP without
 explicit scope. Avoid unrelated refactors, inspect source instead of guessing, and
 make the smallest coherent change.
+
+## Cursor Cloud specific instructions
+
+Cloud agents use Rust 1.95.0 from `rust-toolchain.toml`. Linux builds need the
+GPUI packages from CI (`.github/workflows/ci.yml`) plus `mesa-vulkan-drivers`, so
+`probe-desktop` can open on a software Vulkan device, and `xdg-desktop-portal`
+with `xdg-desktop-portal-gtk`, so desktop file dialogs work. Unset
+`CARGO_TARGET_DIR` and use the workspace `target/` directory. See
+[Development](docs/DEVELOPMENT.md).
+
+The CLI is the headless check: `target/debug/probe collection validate` and
+`target/debug/probe request run`. `target/debug/probe-desktop` needs `DISPLAY`.
+CLI terminal-width tests need `script` and `stty`, which Ubuntu already provides.
