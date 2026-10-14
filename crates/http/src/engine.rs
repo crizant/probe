@@ -333,7 +333,7 @@ fn identity_redirect_policy(maximum: usize, identity: crate::PemClientIdentity) 
         if identity.matches(attempt.url()) {
             limit.redirect(attempt)
         } else {
-            attempt.stop()
+            attempt.error(HttpError::ClientCertificateRedirectBlocked)
         }
     })
 }

@@ -74,7 +74,7 @@ then collection `config.clientCertificates`. No new flag is required. For exampl
 directory. `--dry-run` reads no identity files and performs no key decryption.
 Certificate configuration strings remain literal. PKCS#12 execution and certificate
 inheritance through `extends` are unsupported. Matching and redirect rules are
-specified in [Architecture](ARCHITECTURE.md#persistence-and-filesystem-synchronization).
+specified in [Architecture](ARCHITECTURE.md#client-certificates-for-http-and-graphql).
 
 `agent skill install` installs the Probe agent skill in the current user's
 `~/.agents/skills/probe/`, with `SKILL.md` and `references/cli.md`. Both the

@@ -41,6 +41,8 @@ pub enum HttpError {
     Timeout,
     /// Execution was cancelled by the caller.
     Cancelled,
+    /// An authenticated redirect would leave the configured HTTPS certificate domain.
+    ClientCertificateRedirectBlocked,
     /// Connection, protocol, or response-body failure.
     Transport(String),
     /// A response body could not be written to its requested destination.
@@ -104,6 +106,9 @@ impl fmt::Display for HttpError {
             }
             Self::Timeout => formatter.write_str("HTTP request timed out"),
             Self::Cancelled => formatter.write_str("HTTP request was cancelled"),
+            Self::ClientCertificateRedirectBlocked => formatter.write_str(
+                "redirect blocked: client certificate does not apply to the redirect destination"
+            ),
             Self::Transport(message) => write!(formatter, "HTTP execution failed: {message}"),
             Self::ResponseOutput { path, message } => write!(
                 formatter,

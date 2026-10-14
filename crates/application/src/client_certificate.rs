@@ -1,16 +1,16 @@
-use super::RequestResolution;
+use crate::RequestResolution;
 use probe_core::PreparedHttpRequest;
 use probe_http::HttpError;
 
 /// Only the selected environment's direct declarations are retained. This never
 /// traverses `extends`, resolves certificate variables, or reads identity files.
-pub(super) struct CertificateScopes {
+pub(crate) struct CertificateScopes {
     environment: Vec<probe_core::ClientCertificate>,
     collection: Vec<probe_core::ClientCertificate>,
 }
 
 impl CertificateScopes {
-    pub(super) fn new(resolution: &RequestResolution<'_>) -> Self {
+    pub(crate) fn new(resolution: &RequestResolution<'_>) -> Self {
         Self {
             environment: resolution
                 .environments
@@ -23,7 +23,7 @@ impl CertificateScopes {
         }
     }
 
-    pub(super) fn select(
+    pub(crate) fn select(
         &self,
         request: &PreparedHttpRequest,
     ) -> Result<Option<probe_http::PemClientIdentity>, HttpError> {
@@ -69,7 +69,7 @@ impl CertificateScopes {
                 ))),
                 probe_core::ClientCertificate::Pkcs12 { .. } => {
                     Err(HttpError::ClientConfiguration(
-                        "PKCS#12 client certificate execution is not supported yet (PR3)".into(),
+                        "PKCS#12 client certificate execution is not supported yet".into(),
                     ))
                 }
             };
@@ -114,10 +114,14 @@ mod tests {
             },
             &NoSecrets,
         )
-        .unwrap()
-        .into_http()
         .unwrap();
-        prepared.certificates.select(&prepared.request)
+        let request = prepared.presentation().clone().into_http().unwrap();
+        CertificateScopes::new(&RequestResolution {
+            client_certificates: certificates,
+            environments,
+            environment,
+            ..RequestResolution::default()
+        }).select(&request)
     }
 
     fn identity(domain: &str, path: &str) -> Option<probe_http::PemClientIdentity> {
@@ -165,6 +169,17 @@ mod tests {
             .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn parsed_trailing_dot_and_ipv6_hosts_follow_probe_matching_rules() {
+        let localhost = [pem("localhost", "plain", false)];
+        assert_eq!(select("https://localhost./", &localhost, &[], None).unwrap(), None);
+        let dotted = [pem("localhost.", "dotted", false)];
+        assert_eq!(select("https://localhost./", &dotted, &[], None).unwrap(), identity("localhost.", "dotted"));
+        let ipv6 = [pem("::1", "ipv6", false)];
+        assert_eq!(select("https://[::1]:8443/", &ipv6, &[], None).unwrap(), identity("::1", "ipv6"));
+        assert_eq!(select("https://[::2]/", &ipv6, &[], None).unwrap(), None);
     }
 
     #[test]
@@ -237,7 +252,7 @@ mod tests {
         assert_eq!(
             error,
             HttpError::ClientConfiguration(
-                "PKCS#12 client certificate execution is not supported yet (PR3)".into()
+                "PKCS#12 client certificate execution is not supported yet".into()
             )
         );
         assert!(!format!("{error:?} {error}").contains("secret-marker"));
@@ -284,11 +299,13 @@ mod tests {
             },
             &NoSecrets,
         )
-        .unwrap()
-        .into_http()
         .unwrap();
+        let request = prepared.presentation().clone().into_http().unwrap();
         assert_eq!(
-            prepared.certificates.select(&prepared.request).unwrap(),
+            CertificateScopes::new(&RequestResolution {
+                client_certificates: &certificates,
+                ..RequestResolution::default()
+            }).select(&request).unwrap(),
             identity("localhost:8443", "missing-cert.pem")
         );
     }

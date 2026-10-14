@@ -131,8 +131,7 @@ fn identity_from_pem(
         }
         _ => configuration("invalid client certificate PEM"),
     })?;
-    let mut combined = Zeroizing::new(Vec::with_capacity(cert.len() + key.len() + 1));
-    combined.extend_from_slice(cert);
+    let mut combined = Zeroizing::new(cert.to_vec());
     combined.push(b'\n');
     combined.extend_from_slice(key.as_bytes());
     Identity::from_pem(&combined).map_err(|_| configuration("invalid client PEM identity"))
@@ -264,6 +263,17 @@ mod tests {
                 assert!(!formatted.contains(marker));
             }
         }
+        // Either legacy encryption header is sufficient to reject that format,
+        // including a truncated or malformed legacy PEM envelope.
+        for header in ["Proc-Type: 4,ENCRYPTED", "DEK-Info: AES-256-CBC,00"] {
+            let malformed = format!("-----BEGIN RSA PRIVATE KEY-----\n{header}\n");
+            assert_eq!(
+                unencrypted_key(malformed.as_bytes(), None).err(),
+                Some(configuration(
+                    "legacy OpenSSL encrypted PEM keys are unsupported; use encrypted PKCS#8"
+                ))
+            );
+        }
         let identity = PemClientIdentity::new(
             "localhost".into(),
             "client.pem".into(),
@@ -288,6 +298,16 @@ mod tests {
         assert!(identity.load(&options).await.is_ok());
         assert_eq!(
             identity.load(&ExecutionOptions::default()).await.err(),
+            Some(configuration(
+                "relative client certificate/key path requires a base directory"
+            ))
+        );
+        let empty_base = ExecutionOptions {
+            base_directory: Some(PathBuf::new()),
+            ..ExecutionOptions::default()
+        };
+        assert_eq!(
+            identity.load(&empty_base).await.err(),
             Some(configuration(
                 "relative client certificate/key path requires a base directory"
             ))

@@ -692,6 +692,8 @@ Accepted reloads rebuild runtime keys and resolve repository selectors for tabs 
 presentation state. Confident file renames may remap selectors. Successful Probe writes
 refresh the baseline, so their watcher events reconcile as no-ops.
 
+### Client certificates for HTTP and GraphQL
+
 Collection and environment `clientCertificates` project into the core
 `ClientCertificate` enum (PEM or PKCS#12). `Workspace::client_certificates()` exposes
 collection declarations; each `Environment` retains its own declarations in source
@@ -704,14 +706,22 @@ The application selects after resolving the request URL, using only the selected
 environment's direct declarations first, followed by collection declarations. It
 skips disabled entries and takes the first enabled match; disabled entries never
 mask collection entries, and `extends` never inherits certificates. A winning
-PKCS#12 declaration returns an explicit unsupported configuration error (PR3).
+PKCS#12 declaration returns an explicit unsupported configuration error.
 Dry runs and Copy as cURL do not load or decrypt certificates; WebSockets are unchanged.
 
-Matching applies only to HTTPS. Hostnames are ASCII case-insensitive and anchored
+The matching rules below are Probe's own execution contract; OpenCollection does
+not define a matching algorithm. Matching applies only to HTTPS. Hostnames are ASCII case-insensitive and anchored
 at both ends; `*` matches zero or more hostname characters, including dots.
 `*.example.com` matches nested subdomains but does not match the bare apex.
+`*example.com` also matches `evil-example.com`; wildcard patterns require care.
+Trailing dots are significant: `example.com` does not match `example.com.`, while
+`example.com.` does. Probe uses the parsed URL hostname without stripping its dot.
 Portless patterns allow any port; an explicit port must equal the effective HTTPS
-port (443 when omitted). IPv4 and bracketed IPv6 literals are supported. Domain
+port (443 when omitted). IPv4 and bracketed IPv6 literals are supported.
+A valid unbracketed IPv6 literal such as `::1` is interpreted as a whole IPv6 host
+and permits any port; it is never split into host `::` and port 1. Its numeric
+address is compared to the URL's bracketed IPv6 host. Use brackets to specify an
+IPv6 port, for example `[::1]:8443`. Domain
 patterns contain only ASCII letters, digits, dots, hyphens, `*`, colons and brackets;
 schemes, paths, userinfo, queries, fragments and regex syntax are not patterns.
 Thus `example.com` never matches `example.com.evil.test`.
@@ -721,7 +731,7 @@ no matching algorithm: see [certificate schema](https://github.com/opencollectio
 and [Bruno transport](https://github.com/usebruno/bruno/blob/fd0e623bb6a1cf62a08bfd06c7ea9b61e25f303e/packages/bruno-electron/src/ipc/network/cert-utils.js).
 Bruno interpolates certificate strings with broader variable scopes than Probe;
 certificate interpolation is deferred until it can reuse Probe's reachable-secret
-resolution safely. PR2 keeps every certificate configuration string literal.
+resolution safely. Probe keeps every certificate configuration string literal.
 
 `probe-http` receives only a selected `PemClientIdentity`. Absolute paths remain
 absolute; relative paths use `ExecutionOptions.base_directory`, shared with body
@@ -732,11 +742,17 @@ literal passphrase; legacy OpenSSL encrypted PEM is rejected. Key derivation run
 on a blocking worker, with zeroizing key and combined PEM buffers, and decrypted
 material is never written to disk. Diagnostics do not include parser output,
 private-key material, paths or passphrases. Rustls checks the cert/key match.
+The core passphrase remains a plain `String` and is cloned into application
+`CertificateScopes` and desktop `ExecutionInput`; these copies are not zeroized.
+The transport passphrase and temporary key buffers zeroize on drop, but the key
+copy retained inside `reqwest::Identity` is not zeroized. This is memory hygiene,
+not a guarantee that every process-memory copy is erased.
 
 Certificate-bearing executions construct a fresh reqwest/rustls client. The default
 client remains reusable for ordinary requests. Redirects follow existing limits
 only when the target is HTTPS and matches the selected pattern; otherwise the
-redirect response is returned without connecting to the target. Server certificate
+request fails with a clear, secret-safe "redirect blocked" diagnostic without
+connecting to the target. HTTPS-to-HTTP redirects are blocked by the same rule. Server certificate
 and hostname verification remain enabled. No native TLS, PKCS#12 execution,
 certificate-management UI, environment inheritance, or proprietary YAML fields
 are introduced.

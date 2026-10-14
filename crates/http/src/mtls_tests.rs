@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::PemClientIdentity;
-use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -98,7 +98,7 @@ async fn client(
     let ca = reqwest::Certificate::from_pem(&bytes("ca.pem")).unwrap();
     configure_client(
         Client::builder()
-            .add_root_certificate(ca)
+            .tls_certs_only([ca])
             .no_proxy()
             .timeout(Duration::from_secs(5)),
         follow,
@@ -141,7 +141,7 @@ async fn redirect_outside_identity_domain_never_connects_to_destination() {
     let (port, worker) = server(format!(
         "HTTP/1.1 302 Found\r\nLocation: https://{target}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     ));
-    let response = client(
+    let error = client(
         Some(("client.pem", "client-key.pem")),
         "localhost",
         true,
@@ -151,8 +151,10 @@ async fn redirect_outside_identity_domain_never_connects_to_destination() {
     .get(format!("https://localhost:{port}/private"))
     .send()
     .await
-    .unwrap();
-    assert_eq!(response.status(), 302);
+    .map_err(map_reqwest_error)
+    .unwrap_err();
+    assert_eq!(error, HttpError::ClientCertificateRedirectBlocked);
+    assert!(error.to_string().contains("redirect blocked"));
     assert!(worker.join().unwrap());
     assert_eq!(
         unrelated.accept().err().unwrap().kind(),
@@ -199,4 +201,24 @@ async fn matching_redirects_continue_and_redirect_settings_remain_effective() {
         }
         assert!(worker.join().unwrap());
     }
+}
+
+#[tokio::test]
+async fn https_to_http_redirect_never_connects_even_when_hostname_matches() {
+    let plaintext = TcpListener::bind("127.0.0.1:0").unwrap();
+    plaintext.set_nonblocking(true).unwrap();
+    let target_port = plaintext.local_addr().unwrap().port();
+    let (port, worker) = server(format!(
+        "HTTP/1.1 302 Found\r\nLocation: http://localhost:{target_port}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    ));
+    let error = client(Some(("client.pem", "client-key.pem")), "localhost", true, 10)
+        .await
+        .get(format!("https://localhost:{port}/private"))
+        .send()
+        .await
+        .map_err(map_reqwest_error)
+        .unwrap_err();
+    assert_eq!(error, HttpError::ClientCertificateRedirectBlocked);
+    assert!(worker.join().unwrap());
+    assert_eq!(plaintext.accept().err().unwrap().kind(), std::io::ErrorKind::WouldBlock);
 }

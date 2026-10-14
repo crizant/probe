@@ -15,9 +15,7 @@ use probe_core::{
 };
 use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse};
 
-#[path = "client_certificate.rs"]
-mod client_certificate;
-use client_certificate::CertificateScopes;
+use crate::client_certificate::CertificateScopes;
 
 /// Diagnostic reported instead of HTTP failure details when a runtime secret was used.
 pub const SECRET_DIAGNOSTIC_WITHHELD: &str =
@@ -327,7 +325,8 @@ impl SecretDisclosure {
             HttpError::MissingMethod
             | HttpError::MissingUrl
             | HttpError::Timeout
-            | HttpError::Cancelled => error,
+            | HttpError::Cancelled
+            | HttpError::ClientCertificateRedirectBlocked => error,
             HttpError::ResponseOutput { path, .. } => HttpError::ResponseOutput {
                 path,
                 message: SECRET_DIAGNOSTIC_WITHHELD.to_owned(),
