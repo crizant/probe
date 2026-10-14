@@ -68,7 +68,9 @@ probe environment rename <path> --environment <name> --name <new> [--json]
 
 HTTP/GraphQL `request run` automatically uses the first enabled matching PEM
 client certificate from the selected environment's direct `clientCertificates`,
-then collection `config.clientCertificates`. No new flag is required. For example,
+then collection `config.clientCertificates`. Requests using a client certificate
+bypass all proxies, including explicit, environment and system proxies.
+No new flag is required. For example,
 `domain: localhost:8443` matches `https://localhost:8443/private`; relative
 `certificateFilePath` and `privateKeyFilePath` resolve from the workspace base
 directory. `--dry-run` reads no identity files and performs no key decryption.

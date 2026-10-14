@@ -731,7 +731,8 @@ IPv6 port, for example `[::1]:8443`. Domain patterns contain only ASCII letters,
 digits, dots, hyphens, `*`, colons and brackets;
 schemes, paths, userinfo, queries, fragments and regex syntax are not patterns.
 Thus `example.com` never matches `example.com.evil.test`.
-Probe deliberately restricts wildcard placement and avoids URL prefix matching. The upstream OpenCollection schema defines certificate fields but
+Probe deliberately restricts wildcard placement and avoids URL prefix matching.
+The upstream OpenCollection schema defines certificate fields but
 no matching algorithm: see [certificate schema](https://github.com/opencollection-dev/opencollection/blob/535a5c5803da7a3fe1d575fff23350b4a7c43c6a/packages/oc-schema/src/opencollection.schema.json)
 and [Bruno transport](https://github.com/usebruno/bruno/blob/fd0e623bb6a1cf62a08bfd06c7ea9b61e25f303e/packages/bruno-electron/src/ipc/network/cert-utils.js).
 Bruno interpolates certificate strings with broader variable scopes than Probe;

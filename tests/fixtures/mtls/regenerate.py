@@ -42,8 +42,7 @@ with tempfile.TemporaryDirectory(prefix="probe-mtls-") as temporary:
             openssl(
                 "req", "-x509", "-key", key, "-out", certificate,
                 "-subj", "/CN=Probe untrusted test-only client", "-days", "36500",
-                "-addext", "basicConstraints=critical,CA:FALSE",
-                "-addext", "extendedKeyUsage=clientAuth",
+                "-addext", "basicConstraints=critical,CA:TRUE",
             )
         else:
             openssl(
