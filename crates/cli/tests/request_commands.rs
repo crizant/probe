@@ -512,7 +512,7 @@ fn gets_request_by_repository_selector() {
 }
 
 #[test]
-fn gets_path_parameters_in_json_output() {
+fn gets_complete_request_json_contract() {
     let output = probe()
         .args(["request", "get"])
         .arg(fixture("phase1-bundled.yml"))
@@ -522,9 +522,23 @@ fn gets_path_parameters_in_json_output() {
         .expect("get command should run");
 
     assert!(output.status.success());
+    assert!(output.stderr.is_empty());
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
-    assert_eq!(value["pathParameters"][0]["name"], "ownerId");
-    assert_eq!(value["pathParameters"][0]["value"], "42");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "schemaVersion": 1,
+            "name": "List pets", "selector": "items/0/items/0", "type": "http",
+            "environment": null, "method": "GET", "url": "https://api.example.com/pets",
+            "authentication": null, "body": null, "description": null, "docs": null, "graphql": null,
+            "headers": [
+                { "name": "Accept", "value": "application/json", "disabled": false },
+                { "name": "X-Debug", "value": "true", "disabled": true }
+            ],
+            "pathParameters": [{ "name": "ownerId", "value": "42", "disabled": false }],
+            "queryParameters": [{ "name": "limit", "value": "25", "disabled": false }],
+        })
+    );
 }
 
 #[test]
@@ -582,6 +596,7 @@ fn sets_and_persists_request_fields_as_json() {
         .expect("saved request should be inspectable");
     assert!(inspect.status.success());
     let reloaded: Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(value, reloaded);
     assert_eq!(reloaded["name"], "Replace pet");
     assert_eq!(reloaded["method"], "PUT");
     assert_eq!(reloaded["url"], "https://api.example.com/pets/42");
