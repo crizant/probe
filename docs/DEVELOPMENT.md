@@ -34,8 +34,8 @@ Tagged releases publish upstream binary RPMs next to the Linux `.tar.gz`
 archives. Packaging reuses the x86_64 binaries already built for those archives.
 `scripts/build-rpm.sh` reads the version from `Cargo.toml`. A prerelease such
 as `0.11.0-beta.1` uses `~` in the RPM `Version` field (`0.11.0~beta.1`).
-This is not a mock or COPR source build: Probe's GPUI dependencies are git
-crates, and the spec does not compile them. `scripts/test-rpm.sh` checks
+This is not a mock or COPR source build: the spec packages prebuilt Probe
+binaries rather than compiling them. `scripts/test-rpm.sh` checks
 packaging with stand-in binaries.
 `scripts/build-rpm.sh` runs `scripts/verify-rpm.sh` before copying packages
 into the release output.
@@ -58,15 +58,15 @@ Before adding a crate, check the standard library and existing dependencies. Pre
 actively maintained, cross-platform crates and avoid large dependencies for trivial
 work. Do not replace dependencies without a task-specific reason.
 
-Probe depends on `gpui-kit` with default features disabled and uses its unstyled
-`gpui_kit::base` layer. Never enable the separate, pre-styled `component` layer or
-copy its APIs. Initialize the theme once through
-`probe_desktop::theme::Theme::init(cx)`.
+Probe depends on `gpui-kit` with `default-features = false` and imports through
+`gpui_kit` / its unstyled `gpui_kit::base` layer. Do not enable the pre-styled
+`component` layer or copy its APIs unless explicitly scoped. Initialize the theme
+once through `crate::theme::Theme::init(cx)` within `probe-desktop`.
 
 GPUI Kit coordinates the matching GPUI and base versions. Keep its resolved version
-in Cargo.lock; do not add independent GPUI dependencies or upgrade Kit during
-unrelated work. Inspect the exact pinned source and examples before using
-unfamiliar APIs.
+in Cargo.lock; do not add independent `gpui`, `gpui-base`, `gpui-component`, or
+platform dependencies or upgrade Kit during unrelated work. Inspect the exact
+resolved gpui-kit/GPUI source and examples before using unfamiliar APIs.
 
 Do not introduce Electron, Tauri, WebView, React, Flutter, or another GUI framework
 without explicit approval.

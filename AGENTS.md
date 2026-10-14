@@ -1,8 +1,8 @@
 # Project Instructions
 
 Probe is a native, local-first API client built with Rust, GPUI, Longbridge
-gpui-base, and OpenCollection YAML. The CLI and desktop are equal adapters over
-the same application and domain implementation.
+GPUI Kit's unstyled base layer, and OpenCollection YAML. The CLI and desktop are
+equal adapters over the same application and domain implementation.
 
 ## Read Only What the Task Needs
 
@@ -20,8 +20,8 @@ After this file, inspect the affected code and read only the matching reference:
 
 Do not read every document by default. The [documentation index](docs/README.md)
 identifies the canonical source for each topic. README is product onboarding, not
-required implementation context. For unfamiliar GPUI APIs, inspect the exact pinned
-source and examples; pinned revisions are authoritative.
+required implementation context. For unfamiliar APIs, inspect the exact resolved
+gpui-kit/GPUI source and examples; resolved versions are authoritative.
 
 ## Priorities
 
@@ -36,7 +36,7 @@ maintainability, memory efficiency, visual polish.
 - Business logic belongs in application/core code, never a frontend. CLI, GPUI, and
   future interfaces must share OpenCollection parsing, environment resolution,
   request construction and execution, authentication, and persistence operations.
-- The domain must not depend on GPUI, gpui-base, CLI libraries, YAML, HTTP-client
+- The domain must not depend on GPUI, gpui-kit, CLI libraries, YAML, HTTP-client
   types, or filesystem APIs. Keep crate dependencies directed inward.
 - OpenCollection YAML is canonical. Do not duplicate collection structure in a
   proprietary database or invent format extensions without approval.
@@ -51,9 +51,9 @@ maintainability, memory efficiency, visual polish.
 - The CLI is non-interactive by default. Structured stdout is deterministic,
   versioned JSON; diagnostics go to stderr. Keep stable error categories and exit
   codes and bound large output.
-- Desktop components consume Probe semantic tokens. Use Longbridge gpui-base
-  (crate gpui-base / import gpui_base), never the separate gpui-component crate.
-  Do not change pinned GPUI dependencies during unrelated work.
+- Desktop components consume Probe semantic tokens and import through `gpui_kit`
+  / `gpui_kit::base`. Follow the coordinated dependency policy in
+  [Development](docs/DEVELOPMENT.md#dependencies).
 
 ## Data Safety and Tests
 
