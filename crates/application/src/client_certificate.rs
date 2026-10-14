@@ -121,7 +121,8 @@ mod tests {
             environments,
             environment,
             ..RequestResolution::default()
-        }).select(&request)
+        })
+        .select(&request)
     }
 
     fn identity(domain: &str, path: &str) -> Option<probe_http::PemClientIdentity> {
@@ -174,11 +175,20 @@ mod tests {
     #[test]
     fn parsed_trailing_dot_and_ipv6_hosts_follow_probe_matching_rules() {
         let localhost = [pem("localhost", "plain", false)];
-        assert_eq!(select("https://localhost./", &localhost, &[], None).unwrap(), None);
+        assert_eq!(
+            select("https://localhost./", &localhost, &[], None).unwrap(),
+            None
+        );
         let dotted = [pem("localhost.", "dotted", false)];
-        assert_eq!(select("https://localhost./", &dotted, &[], None).unwrap(), identity("localhost.", "dotted"));
+        assert_eq!(
+            select("https://localhost./", &dotted, &[], None).unwrap(),
+            identity("localhost.", "dotted")
+        );
         let ipv6 = [pem("::1", "ipv6", false)];
-        assert_eq!(select("https://[::1]:8443/", &ipv6, &[], None).unwrap(), identity("::1", "ipv6"));
+        assert_eq!(
+            select("https://[::1]:8443/", &ipv6, &[], None).unwrap(),
+            identity("::1", "ipv6")
+        );
         assert_eq!(select("https://[::2]/", &ipv6, &[], None).unwrap(), None);
     }
 
@@ -305,7 +315,9 @@ mod tests {
             CertificateScopes::new(&RequestResolution {
                 client_certificates: &certificates,
                 ..RequestResolution::default()
-            }).select(&request).unwrap(),
+            })
+            .select(&request)
+            .unwrap(),
             identity("localhost:8443", "missing-cert.pem")
         );
     }

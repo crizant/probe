@@ -107,7 +107,7 @@ impl fmt::Display for HttpError {
             Self::Timeout => formatter.write_str("HTTP request timed out"),
             Self::Cancelled => formatter.write_str("HTTP request was cancelled"),
             Self::ClientCertificateRedirectBlocked => formatter.write_str(
-                "redirect blocked: client certificate does not apply to the redirect destination"
+                "redirect blocked: client certificate does not apply to the redirect destination",
             ),
             Self::Transport(message) => write!(formatter, "HTTP execution failed: {message}"),
             Self::ResponseOutput { path, message } => write!(

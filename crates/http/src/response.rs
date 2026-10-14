@@ -345,7 +345,10 @@ impl Drop for TemporaryOutput {
 pub(crate) fn map_reqwest_error(error: reqwest::Error) -> HttpError {
     let mut cause = std::error::Error::source(&error);
     while let Some(source) = cause {
-        if matches!(source.downcast_ref::<HttpError>(), Some(HttpError::ClientCertificateRedirectBlocked)) {
+        if matches!(
+            source.downcast_ref::<HttpError>(),
+            Some(HttpError::ClientCertificateRedirectBlocked)
+        ) {
             return HttpError::ClientCertificateRedirectBlocked;
         }
         cause = source.source();

@@ -23,5 +23,7 @@ jobs:
           patch = subprocess.check_output(['git', 'diff', '--binary'])
           print('PEM_PATCH_START' + base64.b64encode(zlib.compress(patch)).decode() + 'PEM_PATCH_END')
           PY
+      - name: Locked build
+        run: cargo build --locked -p probe-cli
       - name: Scoped behavior tests
-        run: cargo test -p probe-core -p probe-http -p probe-application -p probe-cli
+        run: cargo test --locked -p probe-core -p probe-http -p probe-application -p probe-cli

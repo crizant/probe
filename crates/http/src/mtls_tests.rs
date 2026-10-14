@@ -211,14 +211,22 @@ async fn https_to_http_redirect_never_connects_even_when_hostname_matches() {
     let (port, worker) = server(format!(
         "HTTP/1.1 302 Found\r\nLocation: http://localhost:{target_port}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     ));
-    let error = client(Some(("client.pem", "client-key.pem")), "localhost", true, 10)
-        .await
-        .get(format!("https://localhost:{port}/private"))
-        .send()
-        .await
-        .map_err(map_reqwest_error)
-        .unwrap_err();
+    let error = client(
+        Some(("client.pem", "client-key.pem")),
+        "localhost",
+        true,
+        10,
+    )
+    .await
+    .get(format!("https://localhost:{port}/private"))
+    .send()
+    .await
+    .map_err(map_reqwest_error)
+    .unwrap_err();
     assert_eq!(error, HttpError::ClientCertificateRedirectBlocked);
     assert!(worker.join().unwrap());
-    assert_eq!(plaintext.accept().err().unwrap().kind(), std::io::ErrorKind::WouldBlock);
+    assert_eq!(
+        plaintext.accept().err().unwrap().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
 }

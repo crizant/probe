@@ -710,8 +710,8 @@ PKCS#12 declaration returns an explicit unsupported configuration error.
 Dry runs and Copy as cURL do not load or decrypt certificates; WebSockets are unchanged.
 
 The matching rules below are Probe's own execution contract; OpenCollection does
-not define a matching algorithm. Matching applies only to HTTPS. Hostnames are ASCII case-insensitive and anchored
-at both ends; `*` matches zero or more hostname characters, including dots.
+not define a matching algorithm. Matching applies only to HTTPS. Hostnames are
+ASCII case-insensitive and anchored at both ends; `*` matches zero or more hostname characters, including dots.
 `*.example.com` matches nested subdomains but does not match the bare apex.
 `*example.com` also matches `evil-example.com`; wildcard patterns require care.
 Trailing dots are significant: `example.com` does not match `example.com.`, while
@@ -721,8 +721,8 @@ port (443 when omitted). IPv4 and bracketed IPv6 literals are supported.
 A valid unbracketed IPv6 literal such as `::1` is interpreted as a whole IPv6 host
 and permits any port; it is never split into host `::` and port 1. Its numeric
 address is compared to the URL's bracketed IPv6 host. Use brackets to specify an
-IPv6 port, for example `[::1]:8443`. Domain
-patterns contain only ASCII letters, digits, dots, hyphens, `*`, colons and brackets;
+IPv6 port, for example `[::1]:8443`. Domain patterns contain only ASCII letters,
+digits, dots, hyphens, `*`, colons and brackets;
 schemes, paths, userinfo, queries, fragments and regex syntax are not patterns.
 Thus `example.com` never matches `example.com.evil.test`.
 This preserves Bruno's hostname wildcard behavior while avoiding its unsafe URL
@@ -752,8 +752,8 @@ Certificate-bearing executions construct a fresh reqwest/rustls client. The defa
 client remains reusable for ordinary requests. Redirects follow existing limits
 only when the target is HTTPS and matches the selected pattern; otherwise the
 request fails with a clear, secret-safe "redirect blocked" diagnostic without
-connecting to the target. HTTPS-to-HTTP redirects are blocked by the same rule. Server certificate
-and hostname verification remain enabled. No native TLS, PKCS#12 execution,
+connecting to the target. HTTPS-to-HTTP redirects are blocked by the same rule.
+Server certificate and hostname verification remain enabled. No native TLS, PKCS#12 execution,
 certificate-management UI, environment inheritance, or proprietary YAML fields
 are introduced.
 

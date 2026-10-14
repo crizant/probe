@@ -82,8 +82,11 @@ pub fn client_certificate_domain_matches(pattern: &str, host: &str, port: u16) -
     }
     // An unbracketed IPv6 literal is a whole host, never a host:port pair.
     if let Ok(address) = pattern.parse::<std::net::Ipv6Addr>() {
-        return host.strip_prefix('[').and_then(|host| host.strip_suffix(']'))
-            .and_then(|host| host.parse::<std::net::Ipv6Addr>().ok()) == Some(address);
+        return host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .and_then(|host| host.parse::<std::net::Ipv6Addr>().ok())
+            == Some(address);
     }
     let (pattern, configured_port) = match pattern.rsplit_once(':') {
         Some((hostname, value)) if !value.contains(']') => {
