@@ -362,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn json_context_handles_backslash_parity_and_unicode_offsets() {
+    fn json_syntax_context_tracks_string_state() {
         for (text, expected) in [
             ("{\"value\": ", SyntaxContext::Code),
             ("\"hello ", SyntaxContext::String),

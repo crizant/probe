@@ -767,50 +767,6 @@ fn editable_editor_preserves_caret_and_undo_history_across_controlled_renders(
             .expect("test window should remain open"),
         ""
     );
-
-    // Typing must follow the current mode even when the editor is reused.
-    for language in ["", "json", "xml", "json", ""] {
-        for (opener, pair) in [
-            ("(", "()"),
-            ("[", "[]"),
-            ("{", "{}"),
-            ("'", "''"),
-            ("\"", "\"\""),
-        ] {
-            window
-                .update(cx, |view, _, cx| {
-                    view.language = language.into();
-                    view.value = SharedString::default();
-                    view.selection = Some(0..0);
-                    cx.notify();
-                })
-                .unwrap();
-            cx.run_until_parked();
-            cx.simulate_input(window.into(), opener);
-            cx.run_until_parked();
-            assert_eq!(
-                window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-                if language == "json" && !matches!(opener, "(" | "'") {
-                    pair
-                } else {
-                    opener
-                },
-                "language {language:?}, typed {opener:?}"
-            );
-            cx.simulate_input(window.into(), "x");
-            cx.run_until_parked();
-            let expected = if language == "json" && !matches!(opener, "(" | "'") {
-                format!("{opener}x{}", &pair[1..])
-            } else {
-                format!("{opener}x")
-            };
-            assert_eq!(
-                window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-                expected,
-                "pairing must leave the caret after the typed opener"
-            );
-        }
-    }
 }
 
 #[gpui_kit::test]

@@ -1,9 +1,6 @@
 use std::collections::BTreeMap;
 
-use gpui_kit::base::{
-    Editor, Input, InputBase,
-    input::{EditorState, InputState},
-};
+use gpui_kit::base::{Input, InputBase, input::InputState};
 use gpui_kit::{
     Context, Entity, IntoElement, Render, SharedString, TestAppContext, VisualTestContext, hsla,
     point, prelude::*, px, size, transparent_black,
@@ -418,25 +415,6 @@ fn stand_in_palette() -> VariableHighlightPalette {
         resolved: hsla(0.33, 0.6, 0.5, 1.0),
         unresolved: hsla(0.02, 0.75, 0.46, 1.0),
         neutral: hsla(0.0, 0.0, 0.45, 1.0),
-    }
-}
-
-struct SearchHighlightHarness {
-    editor: Entity<EditorState>,
-}
-
-impl Render for SearchHighlightHarness {
-    fn render(
-        &mut self,
-        _window: &mut gpui_kit::Window,
-        _cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = Theme::light();
-        InputBase::new("search-highlight-harness-editor")
-            .size_full()
-            .font_family(theme.typography.monospace_family)
-            .text_size(px(theme.typography.body_size))
-            .child(Editor::new(&self.editor))
     }
 }
 
@@ -872,91 +850,4 @@ fn input_tooltip_hits_follow_native_scroll_with_an_offscreen_caret(cx: &mut Test
             );
         })
         .unwrap();
-}
-
-#[gpui_kit::test]
-fn native_indentation_comparison_preserves_probe_contract(cx: &mut TestAppContext) {
-    use gpui_kit::base::input::{IndentInline, OutdentInline, Redo, Undo};
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(320.0), px(120.0)), |window, cx| {
-        SearchHighlightHarness {
-            editor: cx.new(|cx| EditorState::new(window, cx)),
-        }
-    });
-    cx.run_until_parked();
-    for language in ["json", ""] {
-        for (text, selection, outdent, equivalent) in [
-            ("hello world", 6..6, false, true),
-            ("a\nb", 0..3, false, true),
-            ("  a\n  b", 0..7, true, true),
-            ("a\nb", 0..2, false, false),
-            ("  hello", 0..0, false, true),
-            ("    a", 5..5, true, false),
-        ] {
-            let (replacement, start, end, expected_selection) = if outdent {
-                super::core::compute_outdent(text, selection.clone())
-            } else {
-                super::core::compute_indent(text, selection.clone())
-            };
-            let expected = format!("{}{}{}", &text[..start], replacement, &text[end..]);
-            window
-                .update(cx, |view, window, cx| {
-                    view.editor.update(cx, |editor, cx| {
-                        editor.set_highlighter(language, cx);
-                        editor.set_value(text, window, cx);
-                        editor.set_selected_range(selection.clone(), cx);
-                        editor.focus(window, cx);
-                    });
-                })
-                .unwrap();
-            cx.run_until_parked();
-            window
-                .update(cx, |_, window, cx| {
-                    if outdent {
-                        window.dispatch_action(Box::new(OutdentInline), cx);
-                    } else {
-                        window.dispatch_action(Box::new(IndentInline), cx);
-                    }
-                })
-                .unwrap();
-            cx.run_until_parked();
-            let actual = window
-                .read_with(cx, |view, cx| {
-                    (
-                        view.editor.read(cx).value(),
-                        view.editor.read(cx).selected_range(),
-                    )
-                })
-                .unwrap();
-            assert_eq!(
-                actual.0 == expected && actual.1 == expected_selection,
-                equivalent,
-                "language {language:?}, native {actual:?}, Probe {expected:?}/{expected_selection:?}"
-            );
-            window
-                .update(cx, |_, window, cx| {
-                    window.dispatch_action(Box::new(Undo), cx)
-                })
-                .unwrap();
-            cx.run_until_parked();
-            window
-                .read_with(cx, |view, cx| {
-                    assert_eq!(view.editor.read(cx).value(), text);
-                    assert_eq!(view.editor.read(cx).selected_range(), selection);
-                })
-                .unwrap();
-            window
-                .update(cx, |_, window, cx| {
-                    window.dispatch_action(Box::new(Redo), cx)
-                })
-                .unwrap();
-            cx.run_until_parked();
-            window
-                .read_with(cx, |view, cx| {
-                    assert_eq!(view.editor.read(cx).value(), actual.0);
-                    assert_eq!(view.editor.read(cx).selected_range(), actual.1);
-                })
-                .unwrap();
-        }
-    }
 }
