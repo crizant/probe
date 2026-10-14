@@ -338,6 +338,6 @@ fn identity_redirect_policy(maximum: usize, identity: crate::PemClientIdentity) 
     })
 }
 
-#[cfg(test)]
 #[path = "mtls_tests.rs"]
+#[cfg(test)]
 mod mtls_tests;
