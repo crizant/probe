@@ -158,8 +158,9 @@ impl PreparedRequest<'_> {
     pub fn into_http(mut self) -> Result<HttpExecution, RequestProtocolError> {
         let mut templates = Vec::new();
         if self.resolution.resolves_variables() {
-            // Seed reachability with the original symbolic request, so rebuilding
-            // the environment for certificate fields retains request disclosure.
+            // Seed reachability from the presentation request's retained references,
+            // so rebuilding the environment for certificate fields retains request
+            // disclosure.
             templates = probe_core::discover_request_variables(
                 &self.presentation,
                 self.resolution.environments,
