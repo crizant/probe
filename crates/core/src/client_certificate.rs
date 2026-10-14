@@ -1,4 +1,4 @@
-//! Native OpenCollection client-certificate configuration. No execution or selection rules.
+//! Native OpenCollection client-certificate configuration and pure domain matching.
 
 use std::fmt;
 
@@ -65,4 +65,43 @@ impl fmt::Debug for ClientCertificate {
                 .finish(),
         }
     }
+}
+
+/// Matches a literal hostname/authority glob against an HTTPS URL's parsed host.
+/// `*` matches zero or more hostname characters; other characters are literal.
+/// A portless pattern permits any port. An explicit port matches the effective
+/// HTTPS port (including 443). Paths, userinfo, and regex syntax are rejected.
+#[must_use]
+pub fn client_certificate_domain_matches(pattern: &str, host: &str, port: u16) -> bool {
+    if pattern.is_empty() || pattern.bytes().any(|byte| !byte.is_ascii_alphanumeric()
+        && !b".-*:[]".contains(&byte)) {
+        return false;
+    }
+    let (pattern, configured_port) = match pattern.rsplit_once(':') {
+        Some((hostname, value)) if !value.contains(']') => {
+            let Ok(port) = value.parse::<u16>() else { return false; };
+            (hostname, Some(port))
+        }
+        _ => (pattern, None),
+    };
+    if configured_port.is_some_and(|value| value != port) {
+        return false;
+    }
+    let pattern = pattern.to_ascii_lowercase();
+    let host = host.to_ascii_lowercase();
+    let mut parts = pattern.split('*');
+    let prefix = parts.next().unwrap_or_default();
+    let Some(mut remaining) = host.strip_prefix(prefix) else { return false; };
+    let mut parts = parts.peekable();
+    if parts.peek().is_none() {
+        return remaining.is_empty();
+    }
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            return remaining.ends_with(part);
+        }
+        let Some(index) = remaining.find(part) else { return false; };
+        remaining = &remaining[index + part.len()..];
+    }
+    false
 }

@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 base64 = "0.22.1"
+url = "2.5.8"
 probe-core = { path = "../core" }
 probe-http = { path = "../http" }
 probe-websocket = { path = "../websocket" }

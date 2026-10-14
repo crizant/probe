@@ -15,6 +15,10 @@ use probe_core::{
 };
 use probe_http::{ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse};
 
+#[path = "client_certificate.rs"]
+mod client_certificate;
+use client_certificate::CertificateScopes;
+
 /// Diagnostic reported instead of HTTP failure details when a runtime secret was used.
 pub const SECRET_DIAGNOSTIC_WITHHELD: &str =
     "diagnostic withheld because the request used a secret variable";
@@ -27,6 +31,8 @@ pub const SECRET_DIAGNOSTIC_WITHHELD: &str =
 /// may supply a declared secret.
 #[derive(Clone, Copy, Default)]
 pub struct RequestResolution<'a> {
+    /// Certificates declared at collection scope, in source order.
+    pub client_certificates: &'a [probe_core::ClientCertificate],
     pub environments: &'a [Environment],
     pub environment: Option<&'a str>,
     pub overrides: &'a [(String, String)],
@@ -66,6 +72,7 @@ pub fn prepare_request(
             execution: request.clone(),
             presentation: request.clone(),
             disclosure: SecretDisclosure::default(),
+            certificates: CertificateScopes::new(resolution),
         });
     }
     let environment = resolve_environment_for_request_with_provider(
@@ -88,11 +95,13 @@ pub fn prepare_request(
         execution,
         presentation,
         disclosure,
+        certificates: CertificateScopes::new(resolution),
     })
 }
 
 /// A resolved request whose secret-bearing execution form is not observable.
 pub struct PreparedRequest {
+    certificates: CertificateScopes,
     execution: Request,
     presentation: Request,
     disclosure: SecretDisclosure,
@@ -120,6 +129,7 @@ impl PreparedRequest {
         }
         Ok(HttpExecution {
             request,
+            certificates: self.certificates,
             disclosure: self.disclosure,
         })
     }
@@ -180,6 +190,7 @@ impl fmt::Debug for PreparedRequest {
 
 /// HTTP engine input whose results are redacted before they are returned.
 pub struct HttpExecution {
+    certificates: CertificateScopes,
     request: PreparedHttpRequest,
     disclosure: SecretDisclosure,
 }
@@ -209,6 +220,7 @@ impl HttpExecution {
         C: Future + Send,
         P: FnMut(HttpProgress) + Send,
     {
+        options.client_identity = self.certificates.select(&self.request)?;
         if self.uses_secrets() {
             // Cache spool files would retain unredacted response bytes.
             options.response_cache = None;

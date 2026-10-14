@@ -305,6 +305,7 @@ pub(crate) fn run(
         source,
         &RequestResolution {
             environments: loaded.workspace().environments(),
+            client_certificates: loaded.workspace().client_certificates(),
             environment: options.environment,
             overrides: options.variables,
             strict_variables: options.strict_variables,

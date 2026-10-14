@@ -1,0 +1,43 @@
+use probe_core::client_certificate_domain_matches;
+
+#[test]
+fn hostname_globs_are_literal_anchored_case_insensitive_and_port_aware() {
+    for (pattern, host, port, expected) in [
+        ("api.example.com", "api.example.com", 443, true),
+        ("API.EXAMPLE.COM", "api.example.com", 8443, true),
+        ("*.example.com", "api.example.com", 443, true),
+        ("*.example.com", "deep.api.example.com", 443, true),
+        ("*.example.com", "example.com", 443, false),
+        ("api*.example.com", "api.example.com", 443, true),
+        ("api*.example.com", "api2.example.com", 443, true),
+        ("*api*.example.com", "myapi2.example.com", 443, true),
+        ("*api*.example.com", "myother.example.com", 443, false),
+        ("api.example.com", "other.example.com", 443, false),
+        ("example.com", "example.com.evil.test", 443, false),
+        ("*.example.com", "api.example.com.evil.test", 443, false),
+        ("localhost", "localhost", 8443, true),
+        ("localhost:8443", "localhost", 8443, true),
+        ("localhost:8443", "localhost", 443, false),
+        ("localhost:443", "localhost", 443, true),
+        ("localhost:bad", "localhost", 443, false),
+        ("localhost:65536", "localhost", 443, false),
+        ("[::1]:8443", "[::1]", 8443, true),
+        ("[::1]", "[::1]", 443, true),
+        ("127.0.0.1", "127.0.0.1", 443, true),
+        ("*", "localhost", 443, true),
+        ("", "localhost", 443, false),
+        ("example.com/path", "example.com", 443, false),
+        ("example.com?query", "example.com", 443, false),
+        ("example.com#fragment", "example.com", 443, false),
+        ("user@example.com", "example.com", 443, false),
+        ("(api|www).example.com", "api.example.com", 443, false),
+        ("https://localhost", "localhost", 443, false),
+        ("éxample.com", "example.com", 443, false),
+    ] {
+        assert_eq!(
+            client_certificate_domain_matches(pattern, host, port),
+            expected,
+            "pattern={pattern}, host={host}, port={port}"
+        );
+    }
+}

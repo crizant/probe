@@ -697,8 +697,49 @@ Collection and environment `clientCertificates` project into the core
 collection declarations; each `Environment` retains its own declarations in source
 order. Paths and passphrases remain literal configuration strings, and debug output
 redacts passphrases. Persistence writes the native schema and keeps unchanged
-environment certificate YAML during other edits. No certificate inheritance,
-precedence, domain matching, file loading, or transport execution is defined here.
+environment certificate YAML during other edits.
+
+HTTP and GraphQL execution snapshots certificate scopes through `RequestResolution`.
+The application selects after resolving the request URL, using only the selected
+environment's direct declarations first, followed by collection declarations. It
+skips disabled entries and takes the first enabled match; disabled entries never
+mask collection entries, and `extends` never inherits certificates. A winning
+PKCS#12 declaration returns an explicit unsupported configuration error (PR3).
+Dry runs and Copy as cURL do not load or decrypt certificates; WebSockets are unchanged.
+
+Matching applies only to HTTPS. Hostnames are ASCII case-insensitive and anchored
+at both ends; `*` matches zero or more hostname characters, including dots.
+`*.example.com` matches nested subdomains but does not match the bare apex.
+Portless patterns allow any port; an explicit port must equal the effective HTTPS
+port (443 when omitted). IPv4 and bracketed IPv6 literals are supported. Domain
+patterns contain only ASCII letters, digits, dots, hyphens, `*`, colons and brackets;
+schemes, paths, userinfo, queries, fragments and regex syntax are not patterns.
+Thus `example.com` never matches `example.com.evil.test`.
+This preserves Bruno's hostname wildcard behavior while avoiding its unsafe URL
+prefix match. The upstream OpenCollection schema defines certificate fields but
+no matching algorithm: see [certificate schema](https://github.com/opencollection-dev/opencollection/blob/535a5c5803da7a3fe1d575fff23350b4a7c43c6a/packages/oc-schema/src/opencollection.schema.json)
+and [Bruno transport](https://github.com/usebruno/bruno/blob/fd0e623bb6a1cf62a08bfd06c7ea9b61e25f303e/packages/bruno-electron/src/ipc/network/cert-utils.js).
+Bruno interpolates certificate strings with broader variable scopes than Probe;
+certificate interpolation is deferred until it can reuse Probe's reachable-secret
+resolution safely. PR2 keeps every certificate configuration string literal.
+
+`probe-http` receives only a selected `PemClientIdentity`. Absolute paths remain
+absolute; relative paths use `ExecutionOptions.base_directory`, shared with body
+files, and require a nonempty base directory. No cwd changes or canonicalization
+occur. Certificate chains are leaf-first. RSA PKCS#1, EC SEC1 and PKCS#8 unencrypted
+PEM keys are supported. Encrypted PKCS#8 uses RustCrypto `pkcs8` and the configured
+literal passphrase; legacy OpenSSL encrypted PEM is rejected. Key derivation runs
+on a blocking worker, with zeroizing key and combined PEM buffers, and decrypted
+material is never written to disk. Diagnostics do not include parser output,
+private-key material, paths or passphrases. Rustls checks the cert/key match.
+
+Certificate-bearing executions construct a fresh reqwest/rustls client. The default
+client remains reusable for ordinary requests. Redirects follow existing limits
+only when the target is HTTPS and matches the selected pattern; otherwise the
+redirect response is returned without connecting to the target. Server certificate
+and hostname verification remain enabled. No native TLS, PKCS#12 execution,
+certificate-management UI, environment inheritance, or proprietary YAML fields
+are introduced.
 
 ## OpenCollection Validation
 

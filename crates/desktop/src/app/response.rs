@@ -13,6 +13,7 @@ impl ProbeApp {
         let input = ExecutionInput {
             request,
             environments: loaded.workspace().environments().to_vec(),
+            client_certificates: loaded.workspace().client_certificates().to_vec(),
             environment: self.shell.selected_environment().map(str::to_owned),
             credential_workspace: None,
         };
@@ -81,6 +82,7 @@ impl ProbeApp {
         let input = ExecutionInput {
             request,
             environments: loaded.workspace().environments().to_vec(),
+            client_certificates: loaded.workspace().client_certificates().to_vec(),
             environment: self.shell.selected_environment().map(str::to_owned),
             credential_workspace: loaded.source_path().map(Path::to_owned),
         };
@@ -90,6 +92,7 @@ impl ProbeApp {
                 .as_deref()
                 .and_then(workspace_base_directory),
             response_cache: Some(self.response_cache.clone()),
+            ..ExecutionOptions::default()
         };
         if self.execution_service.is_none() {
             match ExecutionService::with_credentials(Arc::clone(&self.credential_store)) {

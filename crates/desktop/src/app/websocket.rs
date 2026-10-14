@@ -33,6 +33,7 @@ impl ProbeApp {
         let input = ExecutionInput {
             request,
             environments: loaded.workspace().environments().to_vec(),
+            client_certificates: loaded.workspace().client_certificates().to_vec(),
             environment: self.shell.selected_environment().map(str::to_owned),
             credential_workspace: loaded.source_path().map(Path::to_owned),
         };

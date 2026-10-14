@@ -1,0 +1,1 @@
+These certificates and private keys are public, test-only fixtures. Never use them in production. The encrypted keys use `probe-test-only-password`. The CA private key is not retained. Fixtures expire in 2126. RSA keys use PKCS#1, the EC key uses SEC1, and the PKCS#8 variants derive from the same RSA client key. The wrong client is self-signed and untrusted.

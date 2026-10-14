@@ -5,12 +5,14 @@
 mod cache;
 mod engine;
 mod error;
+mod identity;
 mod request;
 mod response;
 
 pub use cache::{ResponseBodyFile, ResponseCache};
 pub use engine::{HttpEngine, HttpProgress, StreamedHttpResponse};
 pub use error::HttpError;
+pub use identity::PemClientIdentity;
 pub use response::{HttpResponse, ResponseHeader};
 
 use std::path::PathBuf;
@@ -23,6 +25,8 @@ pub const MAX_IN_MEMORY_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub struct ExecutionOptions {
     /// Base directory for relative request-body file paths.
     pub base_directory: Option<PathBuf>,
+    /// Selected PEM identity; each authenticated execution gets its own client.
+    pub client_identity: Option<PemClientIdentity>,
     /// Shared cache used for automatically managed large-response spool files.
     ///
     /// When absent, the complete large body is drained without being retained.

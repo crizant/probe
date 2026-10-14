@@ -1,0 +1,150 @@
+use probe_core::PreparedHttpRequest;
+use probe_http::HttpError;
+use super::RequestResolution;
+
+/// Only the selected environment's direct declarations are retained. This never
+/// traverses `extends`, resolves certificate variables, or reads identity files.
+pub(super) struct CertificateScopes {
+    environment: Vec<probe_core::ClientCertificate>,
+    collection: Vec<probe_core::ClientCertificate>,
+}
+
+impl CertificateScopes {
+    pub(super) fn new(resolution: &RequestResolution<'_>) -> Self {
+        Self {
+            environment: resolution.environments.iter()
+                .find(|environment| Some(environment.name.as_str()) == resolution.environment)
+                .map_or_else(Vec::new, |environment| environment.client_certificates.clone()),
+            collection: resolution.client_certificates.to_vec(),
+        }
+    }
+
+    pub(super) fn select(&self, request: &PreparedHttpRequest) -> Result<Option<probe_http::PemClientIdentity>, HttpError> {
+        let request = request.request();
+        let Some(raw_url) = request.url.as_deref() else { return Ok(None); };
+        let resolved = probe_core::apply_path_parameters(raw_url, &request.path_parameters);
+        let Ok(url) = url::Url::parse(&resolved) else { return Ok(None); };
+        if url.scheme() != "https" { return Ok(None); }
+        let Some(host) = url.host_str() else { return Ok(None); };
+        let port = url.port_or_known_default().unwrap_or(443);
+        for certificate in self.environment.iter().chain(&self.collection) {
+            let (domain, disabled) = match certificate {
+                probe_core::ClientCertificate::Pem { domain, disabled, .. }
+                | probe_core::ClientCertificate::Pkcs12 { domain, disabled, .. } => (domain, disabled),
+            };
+            if *disabled || !probe_core::client_certificate_domain_matches(domain, host, port) {
+                continue;
+            }
+            return match certificate {
+                probe_core::ClientCertificate::Pem { domain, certificate_file_path, private_key_file_path, passphrase, .. } =>
+                    Ok(Some(probe_http::PemClientIdentity::new(domain.clone(), certificate_file_path.clone(), private_key_file_path.clone(), passphrase.clone()))),
+                probe_core::ClientCertificate::Pkcs12 { .. } => Err(HttpError::ClientConfiguration(
+                    "PKCS#12 client certificate execution is not supported yet (PR3)".into())),
+            };
+        }
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use probe_core::{ClientCertificate, Environment, Request};
+    use crate::{NoSecrets, prepare_request};
+
+    fn pem(domain: &str, path: &str, disabled: bool) -> ClientCertificate {
+        ClientCertificate::Pem {
+            domain: domain.into(),
+            certificate_file_path: path.into(),
+            private_key_file_path: "unused-key.pem".into(),
+            passphrase: None,
+            disabled,
+        }
+    }
+
+    fn select(url: &str, certificates: &[ClientCertificate], environments: &[Environment], environment: Option<&str>) -> Result<Option<probe_http::PemClientIdentity>, HttpError> {
+        let prepared = prepare_request(
+            &Request { method: Some("GET".into()), url: Some(url.into()), ..Request::default() },
+            &RequestResolution { client_certificates: certificates, environments, environment, ..RequestResolution::default() },
+            &NoSecrets,
+        ).unwrap().into_http().unwrap();
+        prepared.certificates.select(&prepared.request)
+    }
+
+    fn identity(domain: &str, path: &str) -> Option<probe_http::PemClientIdentity> {
+        Some(probe_http::PemClientIdentity::new(domain.into(), path.into(), "unused-key.pem".into(), None))
+    }
+
+    #[test]
+    fn selection_skips_disabled_and_uses_first_matching_declaration() {
+        let certificates = [pem("*.example.com", "disabled", true), pem("elsewhere.test", "unrelated", false), pem("*.example.com", "first", false), pem("api.example.com", "second", false)];
+        assert_eq!(select("https://api.example.com/path?host=elsewhere.test", &certificates, &[], None).unwrap(), identity("*.example.com", "first"));
+        assert_eq!(select("http://api.example.com", &certificates, &[], None).unwrap(), None);
+        assert_eq!(select("https://elsewhere.invalid", &certificates, &[], None).unwrap(), None);
+        assert_eq!(select("https://api.example.com.evil.test", &certificates, &[], None).unwrap(), None);
+    }
+
+    #[test]
+    fn only_direct_selected_environment_precedes_collection() {
+        let certificates = [pem("localhost", "collection", false)];
+        let mut environments = vec![
+            Environment { name: "parent".into(), client_certificates: vec![pem("localhost", "parent", false)], color: None, description: None, dot_env_file_path: None, variables: Vec::new(), extends: None },
+            Environment { name: "child".into(), extends: Some("parent".into()), client_certificates: vec![pem("localhost", "direct", false)], color: None, description: None, dot_env_file_path: None, variables: Vec::new() },
+        ];
+        assert_eq!(select("https://localhost", &certificates, &environments, Some("child")).unwrap(), identity("localhost", "direct"));
+        assert_eq!(select("https://localhost", &certificates, &environments, None).unwrap(), identity("localhost", "collection"));
+        environments[1].client_certificates = vec![pem("localhost", "disabled", true), pem("unrelated.test", "unrelated", false)];
+        assert_eq!(select("https://localhost", &certificates, &environments, Some("child")).unwrap(), identity("localhost", "collection"));
+        assert_eq!(select("https://localhost", &[], &environments, Some("child")).unwrap(), None);
+    }
+
+    #[test]
+    fn winning_pkcs12_is_an_error_and_never_falls_through() {
+        let pkcs12 = ClientCertificate::Pkcs12 { domain: "localhost".into(), pkcs12_file_path: "unused.p12".into(), passphrase: Some("secret-marker".into()), disabled: false };
+        let certificates = [pkcs12.clone(), pem("localhost", "fallback", false)];
+        let error = select("https://localhost", &certificates, &[], None).unwrap_err();
+        assert_eq!(error, HttpError::ClientConfiguration("PKCS#12 client certificate execution is not supported yet (PR3)".into()));
+        assert!(!format!("{error:?} {error}").contains("secret-marker"));
+        let environments = [Environment { name: "local".into(), client_certificates: vec![pkcs12], color: None, description: None, dot_env_file_path: None, variables: Vec::new(), extends: None }];
+        assert!(select("https://localhost", &certificates[1..], &environments, Some("local")).is_err());
+    }
+
+    #[test]
+    fn selection_uses_resolved_variables_and_path_parameters_without_reading_files() {
+        let certificates = [pem("localhost:8443", "missing-cert.pem", false)];
+        let request = Request {
+            method: Some("GET".into()), url: Some("https://{{host}}:8443/:resource".into()),
+            path_parameters: vec![probe_core::QueryParameter { name: "resource".into(), value: "private".into(), disabled: false }],
+            ..Request::default()
+        };
+        let overrides = [("host".into(), "localhost".into())];
+        let prepared = prepare_request(&request, &RequestResolution { client_certificates: &certificates, overrides: &overrides, ..RequestResolution::default() }, &NoSecrets).unwrap().into_http().unwrap();
+        assert_eq!(prepared.certificates.select(&prepared.request).unwrap(), identity("localhost:8443", "missing-cert.pem"));
+    }
+}
+
+#[cfg(test)]
+mod execution_tests {
+    use super::*;
+    use crate::{NoSecrets, prepare_request};
+    use probe_http::{ExecutionOptions, HttpEngine};
+
+    #[tokio::test]
+    async fn opencollection_http_and_graphql_share_selection_and_defer_file_io() {
+        let loaded = probe_opencollection::load_workspace_from_str(include_str!("../../../tests/fixtures/opencollection/mtls-execution.yml")).unwrap();
+        let engine = HttpEngine::new().unwrap();
+        for item in loaded.requests() {
+            let prepared = prepare_request(
+                loaded.workspace().request(item.key()).unwrap(),
+                &RequestResolution { client_certificates: loaded.workspace().client_certificates(), ..RequestResolution::default() },
+                &NoSecrets,
+            ).unwrap();
+            // Presentation succeeds even though both configured identity files are absent.
+            assert!(prepared.presentation().url.as_ref().unwrap().contains("localhost:8443"));
+            let error = prepared.into_http().unwrap().execute(
+                &engine, ExecutionOptions::default(), None, std::future::pending::<()>(), |_| {},
+            ).await.unwrap_err();
+            assert_eq!(error, HttpError::ClientConfiguration("relative client certificate/key path requires a base directory".into()));
+        }
+    }
+}
