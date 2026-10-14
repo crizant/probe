@@ -2,7 +2,7 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui_kit::base::{
     Button, Popover,
-    input::{Copy, Cut, InputState, Paste, SelectAll, Undo},
+    input::{Copy, Cut, InputState, Paste, Redo, SelectAll, Undo},
 };
 use gpui_kit::{
     AppContext as _, Axis, ClipboardItem, Context, Entity, Focusable as _, Image,
@@ -13,7 +13,7 @@ use gpui_kit::{
 use super::{
     DropdownButton, EditorInsets, ProbeEditor, SecretTooltipState, VariableContext,
     VariableHoverState, VariableTooltipPresentation, clipboard_has_pasteable_text, dropdown,
-    editor_value_needs_refresh, menu_button, pane_splitter,
+    menu_button, pane_splitter,
 };
 use crate::app::{FocusNextControl, FocusPreviousControl, ShiftTabOrOutdent, TabOrIndent};
 use crate::theme::Theme;
@@ -660,17 +660,6 @@ fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut 
         .unwrap();
 }
 
-#[test]
-fn changing_editor_language_refreshes_unchanged_text() {
-    let xml: SharedString = r#"<root id="1"/>"#.into();
-    assert!(editor_value_needs_refresh(true, &xml, &xml));
-    assert!(!editor_value_needs_refresh(false, &xml, &xml));
-    let same_ptr = xml.clone();
-    assert!(!editor_value_needs_refresh(false, &xml, &same_ptr));
-    let same_text: SharedString = r#"<root id="1"/>"#.into();
-    assert!(!editor_value_needs_refresh(false, &xml, &same_text));
-}
-
 struct EditableEditorHarness {
     value: SharedString,
     language: SharedString,
@@ -712,7 +701,6 @@ impl Render for EditableEditorHarness {
                     soft_wrap: self.soft_wrap,
                     text_color: theme.colors.text.primary,
                     scroll_to_range: self.selection.clone(),
-                    search_matches: Vec::new(),
                     on_change: Some(Rc::new(move |value, _, cx| {
                         let _ = view.update(cx, |view, cx| {
                             view.value = value;
@@ -802,12 +790,16 @@ fn editable_editor_preserves_caret_and_undo_history_across_controlled_renders(
             cx.run_until_parked();
             assert_eq!(
                 window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-                if language == "json" { pair } else { opener },
+                if language == "json" && !matches!(opener, "(" | "'") {
+                    pair
+                } else {
+                    opener
+                },
                 "language {language:?}, typed {opener:?}"
             );
             cx.simulate_input(window.into(), "x");
             cx.run_until_parked();
-            let expected = if language == "json" {
+            let expected = if language == "json" && !matches!(opener, "(" | "'") {
                 format!("{opener}x{}", &pair[1..])
             } else {
                 format!("{opener}x")
@@ -832,128 +824,140 @@ fn editable_editor_dispatches_tab_actions_and_undo_atomically(cx: &mut TestAppCo
             KeyBinding::new("ctrl-shift-tab", FocusPreviousControl, None),
             KeyBinding::new("ctrl-a", SelectAll, None),
             KeyBinding::new("ctrl-z", Undo, None),
+            KeyBinding::new("ctrl-shift-z", Redo, None),
         ])
     });
-    let window = cx.open_window(size(px(420.0), px(220.0)), |window, cx| {
-        EditableEditorHarness {
-            value: "😀\n  beta".into(),
-            language: "json".into(),
-            readonly: false,
-            soft_wrap: true,
-            next: cx.new(|cx| InputState::new(window, cx)),
-            selection: None,
-        }
-    });
-    cx.run_until_parked();
+    for language in ["json", ""] {
+        let window = cx.open_window(size(px(420.0), px(220.0)), |window, cx| {
+            EditableEditorHarness {
+                value: "😀\n  beta".into(),
+                language: language.into(),
+                readonly: false,
+                soft_wrap: true,
+                next: cx.new(|cx| InputState::new(window, cx)),
+                selection: None,
+            }
+        });
+        cx.run_until_parked();
 
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let bounds = visual
-        .debug_bounds("editable-editor-regression")
-        .expect("editable editor should render");
-    visual.simulate_click(bounds.center(), Modifiers::default());
-    visual.run_until_parked();
-    let editor_focus = window
-        .update(cx, |_, window, cx| window.focused(cx).unwrap())
-        .unwrap();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let bounds = visual
+            .debug_bounds("editable-editor-regression")
+            .expect("editable editor should render");
+        visual.simulate_click(bounds.center(), Modifiers::default());
+        visual.run_until_parked();
+        let editor_focus = window
+            .update(cx, |_, window, cx| window.focused(cx).unwrap())
+            .unwrap();
 
-    cx.simulate_keystrokes(window.into(), "ctrl-a tab");
-    cx.run_until_parked();
-    assert_eq!(
-        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-        "  😀\n    beta"
-    );
+        cx.simulate_keystrokes(window.into(), "ctrl-a tab");
+        cx.run_until_parked();
+        assert_eq!(
+            window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+            "  😀\n    beta"
+        );
 
-    cx.simulate_keystrokes(window.into(), "ctrl-z");
-    cx.run_until_parked();
-    assert_eq!(
-        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-        "😀\n  beta"
-    );
+        cx.simulate_keystrokes(window.into(), "ctrl-z");
+        cx.run_until_parked();
+        assert_eq!(
+            window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+            "😀\n  beta"
+        );
 
-    cx.simulate_keystrokes(window.into(), "ctrl-a shift-tab");
-    cx.run_until_parked();
-    assert_eq!(
-        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-        "😀\nbeta"
-    );
+        cx.simulate_keystrokes(window.into(), "ctrl-shift-z");
+        cx.run_until_parked();
+        assert_eq!(
+            window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+            "  😀\n    beta"
+        );
+        cx.simulate_keystrokes(window.into(), "ctrl-z");
+        cx.run_until_parked();
 
-    window
-        .update(cx, |view, _, cx| {
-            view.value = "😀\n  beta".into();
-            view.selection = Some(view.value.len()..view.value.len());
-            cx.notify();
-        })
-        .unwrap();
-    cx.run_until_parked();
-    cx.simulate_keystrokes(window.into(), "shift-tab ctrl-z");
-    cx.simulate_input(window.into(), "X");
-    cx.run_until_parked();
-    assert_eq!(
-        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-        "😀\n  betaX",
-        "undo should restore the collapsed caret after the outdent"
-    );
+        cx.simulate_keystrokes(window.into(), "ctrl-a shift-tab");
+        cx.run_until_parked();
+        assert_eq!(
+            window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+            "😀\nbeta"
+        );
 
-    cx.simulate_keystrokes(window.into(), "ctrl-tab");
-    cx.run_until_parked();
-    assert_eq!(
-        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-        "😀\n  betaX",
-        "Ctrl-Tab navigation must not edit the body"
-    );
+        window
+            .update(cx, |view, _, cx| {
+                view.value = "😀\n  beta".into();
+                view.selection = Some(view.value.len()..view.value.len());
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "shift-tab ctrl-z");
+        cx.simulate_input(window.into(), "X");
+        cx.run_until_parked();
+        assert_eq!(
+            window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+            "😀\n  betaX",
+            "undo should restore the collapsed caret after the outdent"
+        );
 
-    window
-        .update(cx, |view, window, cx| {
-            assert!(view.next.read(cx).focus_handle(cx).is_focused(window));
-        })
-        .unwrap();
-    cx.simulate_keystrokes(window.into(), "ctrl-shift-tab");
-    cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "ctrl-tab");
+        cx.run_until_parked();
+        assert_eq!(
+            window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+            "😀\n  betaX",
+            "Ctrl-Tab navigation must not edit the body"
+        );
 
-    let focused_after_ctrl_tab = window
-        .update(cx, |view, window, cx| {
-            view.soft_wrap = false;
-            cx.notify();
-            window.focused(cx)
-        })
-        .unwrap();
-    assert_eq!(focused_after_ctrl_tab, Some(editor_focus));
-    cx.run_until_parked();
+        window
+            .update(cx, |view, window, cx| {
+                assert!(view.next.read(cx).focus_handle(cx).is_focused(window));
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "ctrl-shift-tab");
+        cx.run_until_parked();
 
-    cx.simulate_keystrokes(window.into(), "ctrl-a tab");
-    cx.run_until_parked();
-    assert_eq!(
-        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-        "  😀\n    betaX",
-        "editable editors should indent even when soft wrapping is disabled"
-    );
-    cx.simulate_keystrokes(window.into(), "ctrl-z");
-    cx.run_until_parked();
-    window
-        .update(cx, |view, _, cx| {
-            view.readonly = true;
-            cx.notify();
-        })
-        .unwrap();
-    cx.run_until_parked();
+        let focused_after_ctrl_tab = window
+            .update(cx, |view, window, cx| {
+                view.soft_wrap = false;
+                cx.notify();
+                window.focused(cx)
+            })
+            .unwrap();
+        assert_eq!(focused_after_ctrl_tab, Some(editor_focus));
+        cx.run_until_parked();
 
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_click(bounds.center(), Modifiers::default());
-    visual.run_until_parked();
-    let readonly_focus = window
-        .update(cx, |_, window, cx| window.focused(cx))
-        .unwrap();
-    cx.simulate_keystrokes(window.into(), "tab");
-    cx.run_until_parked();
-    let next_focus = window
-        .update(cx, |_, window, cx| window.focused(cx))
-        .unwrap();
-    assert_ne!(next_focus, readonly_focus);
-    assert_eq!(
-        window.read_with(cx, |view, _| view.value.clone()).unwrap(),
-        "😀\n  betaX",
-        "readonly Tab should navigate without editing"
-    );
+        cx.simulate_keystrokes(window.into(), "ctrl-a tab");
+        cx.run_until_parked();
+        assert_eq!(
+            window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+            "  😀\n    betaX",
+            "editable editors should indent even when soft wrapping is disabled"
+        );
+        cx.simulate_keystrokes(window.into(), "ctrl-z");
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                view.readonly = true;
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_click(bounds.center(), Modifiers::default());
+        visual.run_until_parked();
+        let readonly_focus = window
+            .update(cx, |_, window, cx| window.focused(cx))
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "tab");
+        cx.run_until_parked();
+        let next_focus = window
+            .update(cx, |_, window, cx| window.focused(cx))
+            .unwrap();
+        assert_ne!(next_focus, readonly_focus);
+        assert_eq!(
+            window.read_with(cx, |view, _| view.value.clone()).unwrap(),
+            "😀\n  betaX",
+            "readonly Tab should navigate without editing"
+        );
+    }
 }
 
 impl Render for TextContextMenuHarness {
@@ -989,7 +993,6 @@ impl Render for TextContextMenuHarness {
                 soft_wrap: true,
                 text_color: theme.colors.text.primary,
                 scroll_to_range: None,
-                search_matches: Vec::new(),
                 on_change: None,
                 on_mouse_down: None,
                 on_visible_range: None,
@@ -1012,7 +1015,6 @@ impl Render for TextContextMenuHarness {
                 soft_wrap: false,
                 text_color: theme.colors.text.primary,
                 scroll_to_range: None,
-                search_matches: Vec::new(),
                 on_change: None,
                 on_mouse_down: None,
                 on_visible_range: None,

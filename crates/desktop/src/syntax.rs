@@ -8,8 +8,8 @@
 use std::{collections::HashMap, ops::Range, rc::Rc, sync::LazyLock};
 
 use gpui_kit::base::input::{
-    EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter,
-    InputHighlighterFactory, Rope,
+    AutoClosingPair, BracketPair, EditorState, FoldRange, HighlightStyleResolver, InputEdit,
+    InputHighlighter, InputHighlighterFactory, LanguageProvider, Rope, set_language_config,
 };
 use gpui_kit::{Context, HighlightStyle, SharedString, Window};
 use syntect::{
@@ -29,6 +29,35 @@ fn should_highlight(text: &Rope) -> bool {
 
 fn within_highlight_budget(len: usize) -> bool {
     len <= MAX_HIGHLIGHT_BYTES
+}
+
+/// Editing rules are independent of Probe's Syntect presentation adapter.
+pub(crate) fn init_language_config(cx: &mut gpui_kit::App) {
+    // Kit 0.7.3 exposes config builders but omits the LanguageConfig re-export.
+    // Its public provider supplies the default without naming the hidden type.
+    struct EditingLanguages;
+    impl LanguageProvider for EditingLanguages {}
+    let defaults = EditingLanguages.config("");
+    set_language_config(
+        "json",
+        defaults
+            .as_ref()
+            .clone()
+            .brackets([BracketPair::new("{", "}"), BracketPair::new("[", "]")])
+            .auto_closing_pairs([
+                AutoClosingPair::new("{", "}"),
+                AutoClosingPair::new("[", "]"),
+                AutoClosingPair::new("\"", "\""),
+            ]),
+        cx,
+    );
+    for language in ["", "xml"] {
+        set_language_config(
+            language,
+            defaults.as_ref().clone().auto_closing_pairs([]),
+            cx,
+        );
+    }
 }
 
 pub(crate) fn factory() -> InputHighlighterFactory {

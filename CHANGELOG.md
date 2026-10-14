@@ -6,6 +6,12 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- JSON body editors auto-close braces, brackets, and double quotes using tracked
+  pairs; single quotes, parentheses, and backticks no longer auto-close. Plain
+  text and XML remain unpaired.
+
 ## [1.0.1] - 2026-10-14
 
 ### Changed

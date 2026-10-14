@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::response_viewer::{SearchMatch, join_header_lines};
+use crate::response_viewer::join_header_lines;
 use crate::shell::PaneLayout;
 use crate::theme::Theme;
 use gpui_kit::base::{
@@ -29,8 +29,8 @@ use gpui_kit::{
     InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton,
     ParentElement as _, Pixels, Point, Render, RenderOnce, Role, ScrollHandle, ScrollWheelEvent,
     ShapedLine, SharedString, StatefulInteractiveElement as _, Style, Styled as _, Subscription,
-    Task, TextAlign, TextRun, TransformationMatrix, Window, canvas, deferred, div, fill, font,
-    point, prelude::FluentBuilder as _, px, relative, size, transparent_black,
+    Task, TextAlign, TextRun, TransformationMatrix, Window, canvas, deferred, div, point,
+    prelude::FluentBuilder as _, px, relative, size, transparent_black,
 };
 use probe_core::path_variable_spans;
 
@@ -48,14 +48,14 @@ pub(crate) use controls::{
 
 mod icons;
 #[cfg(test)]
+use editor::ProbeEditor;
+#[cfg(test)]
 use editor::SecretTooltipState;
 pub(crate) use editor::editor_paint_style;
 pub(crate) use editor::{
     BodySyntax, body_text_input, documentation_text_input, response_body_input,
     response_headers_input, response_inspector_input, single_line, websocket_composer,
 };
-#[cfg(test)]
-use editor::{ProbeEditor, editor_value_needs_refresh};
 use editor::{VariableTooltipPresentation, input_variable_ranges, variable_input_overlay};
 mod menus;
 mod splitter;

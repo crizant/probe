@@ -56,9 +56,7 @@ pub(in crate::components) enum TextContextMenuLabel {
     Dynamic(TextContextLabelHandler),
 }
 
-pub(crate) struct ResponseBodyInputOptions<'a> {
-    pub(in crate::components) matches: &'a [SearchMatch],
-    pub(in crate::components) active_match: usize,
+pub(crate) struct ResponseBodyInputOptions {
     pub(in crate::components) inspection_reveal: Option<(Range<usize>, bool)>,
     pub(in crate::components) language: SharedString,
     pub(in crate::components) soft_wrap: bool,
@@ -68,10 +66,8 @@ pub(crate) struct ResponseBodyInputOptions<'a> {
     pub(in crate::components) on_inspect: TextContextActionHandler,
 }
 
-impl<'a> ResponseBodyInputOptions<'a> {
+impl ResponseBodyInputOptions {
     pub(crate) fn new(
-        matches: &'a [SearchMatch],
-        active_match: usize,
         language: impl Into<SharedString>,
         on_visible_range: impl Fn(Range<usize>, &mut App) + 'static,
         on_mouse_down: impl Fn(&mut Window, &mut App) + 'static,
@@ -79,8 +75,6 @@ impl<'a> ResponseBodyInputOptions<'a> {
         on_inspect: impl Fn(Option<String>, usize, &mut Window, &mut App) + 'static,
     ) -> Self {
         Self {
-            matches,
-            active_match,
             inspection_reveal: None,
             language: language.into(),
             soft_wrap: true,

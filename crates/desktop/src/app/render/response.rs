@@ -664,8 +664,6 @@ impl ProbeApp {
                 "response-body-editor",
                 text,
                 components::ResponseBodyInputOptions::new(
-                    &[],
-                    0,
                     if self.response_viewer.tab(key) == ResponseViewerTab::Pretty {
                         document.syntax.language()
                     } else {
@@ -763,8 +761,6 @@ impl ProbeApp {
                 theme,
                 "response-headers-editor",
                 &document.headers,
-                &[],
-                0,
                 move |range, cx| {
                     #[cfg(test)]
                     {

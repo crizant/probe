@@ -208,6 +208,7 @@ impl Theme {
     /// Install gpui-base infrastructure and the library's default semantic tokens.
     pub fn init(cx: &mut gpui_kit::App) {
         gpui_kit::init(cx);
+        crate::syntax::init_language_config(cx);
         load_bundled_fonts(cx);
         Self::sync_gpui_base(WindowAppearance::Light, cx);
     }

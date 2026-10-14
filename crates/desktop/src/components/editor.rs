@@ -1,6 +1,5 @@
 use super::*;
 
-mod auto_edit;
 mod core;
 mod response;
 mod search;
@@ -10,24 +9,18 @@ mod variables;
 
 #[cfg(not(test))]
 use core::ProbeEditor;
-pub(crate) use core::editor_paint_style;
 #[cfg(test)]
-pub(super) use core::{ProbeEditor, editor_value_needs_refresh};
+pub(super) use core::ProbeEditor;
+pub(crate) use core::editor_paint_style;
 pub(crate) use response::{
     BodySyntax, body_text_input, documentation_text_input, response_body_input,
     response_headers_input, response_inspector_input, websocket_composer,
 };
 #[cfg(not(test))]
 use search::body_text_highlights;
-use search::{
-    EditorSearchState, editor_search_card_overlay, response_search_highlight_overlay,
-    search_match_decoration, text_decoration,
-};
 #[cfg(test)]
-pub(super) use search::{
-    body_text_highlights, normalize_search_char_bounds, search_fallback_char_size,
-    search_match_bounds, search_match_char_ranges,
-};
+pub(super) use search::body_text_highlights;
+use search::{EditorSearchState, editor_search_card_overlay, text_decoration};
 #[cfg(test)]
 pub(super) use variables::SecretTooltipState;
 pub(crate) use variables::single_line;

@@ -95,6 +95,7 @@ impl RawBodyView {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SearchMatch {
     pub range: Range<usize>,
