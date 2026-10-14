@@ -73,13 +73,18 @@ impl fmt::Debug for ClientCertificate {
 /// HTTPS port (including 443). Paths, userinfo, and regex syntax are rejected.
 #[must_use]
 pub fn client_certificate_domain_matches(pattern: &str, host: &str, port: u16) -> bool {
-    if pattern.is_empty() || pattern.bytes().any(|byte| !byte.is_ascii_alphanumeric()
-        && !b".-*:[]".contains(&byte)) {
+    if pattern.is_empty()
+        || pattern
+            .bytes()
+            .any(|byte| !byte.is_ascii_alphanumeric() && !b".-*:[]".contains(&byte))
+    {
         return false;
     }
     let (pattern, configured_port) = match pattern.rsplit_once(':') {
         Some((hostname, value)) if !value.contains(']') => {
-            let Ok(port) = value.parse::<u16>() else { return false; };
+            let Ok(port) = value.parse::<u16>() else {
+                return false;
+            };
             (hostname, Some(port))
         }
         _ => (pattern, None),
@@ -91,7 +96,9 @@ pub fn client_certificate_domain_matches(pattern: &str, host: &str, port: u16) -
     let host = host.to_ascii_lowercase();
     let mut parts = pattern.split('*');
     let prefix = parts.next().unwrap_or_default();
-    let Some(mut remaining) = host.strip_prefix(prefix) else { return false; };
+    let Some(mut remaining) = host.strip_prefix(prefix) else {
+        return false;
+    };
     let mut parts = parts.peekable();
     if parts.peek().is_none() {
         return remaining.is_empty();
@@ -100,7 +107,9 @@ pub fn client_certificate_domain_matches(pattern: &str, host: &str, port: u16) -
         if parts.peek().is_none() {
             return remaining.ends_with(part);
         }
-        let Some(index) = remaining.find(part) else { return false; };
+        let Some(index) = remaining.find(part) else {
+            return false;
+        };
         remaining = &remaining[index + part.len()..];
     }
     false

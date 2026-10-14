@@ -16,7 +16,7 @@ jobs:
       - name: Format and resolve dependencies
         run: |
           cargo fmt
-          cargo generate-lockfile
+          cargo metadata --format-version 1 > /dev/null
           git add -N crates/application/src/client_certificate.rs crates/core/tests/client_certificate_matching.rs crates/http/src/identity.rs crates/http/src/mtls_tests.rs
           python3 - <<'PY'
           import base64, subprocess, zlib

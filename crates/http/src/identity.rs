@@ -1,9 +1,13 @@
 //! PEM identity loading. All diagnostics are fixed strings, never parser output.
 
-use std::{fmt, io::Cursor, path::{Path, PathBuf}};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use pkcs8::{EncryptedPrivateKeyInfo, SecretDocument, der::pem::LineEnding};
 use reqwest::{Identity, Url};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use zeroize::Zeroizing;
 
 use crate::{ExecutionOptions, HttpError};
@@ -19,15 +23,27 @@ pub struct PemClientIdentity {
 
 impl fmt::Debug for PemClientIdentity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("PemClientIdentity").finish_non_exhaustive()
+        formatter
+            .debug_struct("PemClientIdentity")
+            .finish_non_exhaustive()
     }
 }
 
 impl PemClientIdentity {
     /// Retains literal configuration; performs no I/O or decryption.
     #[must_use]
-    pub fn new(domain: String, certificate_file_path: String, private_key_file_path: String, passphrase: Option<String>) -> Self {
-        Self { domain, certificate_file_path, private_key_file_path, passphrase: passphrase.map(Zeroizing::new) }
+    pub fn new(
+        domain: String,
+        certificate_file_path: String,
+        private_key_file_path: String,
+        passphrase: Option<String>,
+    ) -> Self {
+        Self {
+            domain,
+            certificate_file_path,
+            private_key_file_path,
+            passphrase: passphrase.map(Zeroizing::new),
+        }
     }
 
     pub(crate) fn for_redirects(&self) -> Self {
@@ -35,19 +51,34 @@ impl PemClientIdentity {
     }
 
     pub(crate) fn matches(&self, url: &Url) -> bool {
-        url.scheme() == "https" && url.host_str().is_some_and(|host|
-            probe_core::client_certificate_domain_matches(&self.domain, host, url.port_or_known_default().unwrap_or(443)))
+        url.scheme() == "https"
+            && url.host_str().is_some_and(|host| {
+                probe_core::client_certificate_domain_matches(
+                    &self.domain,
+                    host,
+                    url.port_or_known_default().unwrap_or(443),
+                )
+            })
     }
 
     pub(crate) async fn load(&self, options: &ExecutionOptions) -> Result<Identity, HttpError> {
         let cert_path = resolve_path(&self.certificate_file_path, options)?;
         let key_path = resolve_path(&self.private_key_file_path, options)?;
-        let cert = tokio::fs::read(cert_path).await.map_err(|_| configuration("cannot read client certificate file"))?;
-        let key = Zeroizing::new(tokio::fs::read(key_path).await.map_err(|_| configuration("cannot read client private key file"))?);
+        let cert = tokio::fs::read(cert_path)
+            .await
+            .map_err(|_| configuration("cannot read client certificate file"))?;
+        let key = Zeroizing::new(
+            tokio::fs::read(key_path)
+                .await
+                .map_err(|_| configuration("cannot read client private key file"))?,
+        );
         let passphrase = self.passphrase.clone();
         // Key derivation can be expensive. Keep it off async/GPUI executor threads.
-        tokio::task::spawn_blocking(move || identity_from_pem(&cert, &key, passphrase.as_deref().map(String::as_str)))
-            .await.map_err(|_| configuration("client identity loading worker failed"))?
+        tokio::task::spawn_blocking(move || {
+            identity_from_pem(&cert, &key, passphrase.as_deref().map(String::as_str))
+        })
+        .await
+        .map_err(|_| configuration("client identity loading worker failed"))?
     }
 }
 
@@ -57,30 +88,47 @@ fn configuration(message: &'static str) -> HttpError {
 
 fn resolve_path(path: &str, options: &ExecutionOptions) -> Result<PathBuf, HttpError> {
     let path = Path::new(path);
-    if path.is_absolute() { return Ok(path.to_owned()); }
-    let base = options.base_directory.as_ref().filter(|base| !base.as_os_str().is_empty())
-        .ok_or_else(|| configuration("relative client certificate/key path requires a base directory"))?;
+    if path.is_absolute() {
+        return Ok(path.to_owned());
+    }
+    let base = options
+        .base_directory
+        .as_ref()
+        .filter(|base| !base.as_os_str().is_empty())
+        .ok_or_else(|| {
+            configuration("relative client certificate/key path requires a base directory")
+        })?;
     Ok(base.join(path))
 }
 
-fn identity_from_pem(cert: &[u8], key: &[u8], passphrase: Option<&str>) -> Result<Identity, HttpError> {
-    let certificates = rustls_pemfile::certs(&mut Cursor::new(cert)).collect::<Result<Vec<_>, _>>()
+fn identity_from_pem(
+    cert: &[u8],
+    key: &[u8],
+    passphrase: Option<&str>,
+) -> Result<Identity, HttpError> {
+    let certificates = CertificateDer::pem_slice_iter(cert)
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|_| configuration("invalid client certificate PEM"))?;
-    if certificates.is_empty() { return Err(configuration("invalid client certificate PEM")); }
+    if certificates.is_empty() {
+        return Err(configuration("invalid client certificate PEM"));
+    }
     for certificate in &certificates {
         rustls::server::ParsedCertificate::try_from(certificate)
             .map_err(|_| configuration("invalid client certificate PEM"))?;
     }
     let key = unencrypted_key(key, passphrase)?;
-    let private_key = rustls_pemfile::private_key(&mut Cursor::new(key.as_bytes()))
-        .map_err(|_| configuration("invalid client private key PEM"))?
-        .ok_or_else(|| configuration("invalid client private key PEM"))?;
+    let private_key = PrivateKeyDer::from_pem_slice(key.as_bytes())
+        .map_err(|_| configuration("invalid client private key PEM"))?;
     let provider = rustls::crypto::aws_lc_rs::default_provider();
-    let signing_key = provider.key_provider.load_private_key(private_key)
+    let signing_key = provider
+        .key_provider
+        .load_private_key(private_key)
         .map_err(|_| configuration("invalid client private key PEM"))?;
     let certified = rustls::sign::CertifiedKey::new(certificates, signing_key);
     certified.keys_match().map_err(|error| match error {
-        rustls::Error::InconsistentKeys(_) => configuration("client certificate and private key do not match"),
+        rustls::Error::InconsistentKeys(_) => {
+            configuration("client certificate and private key do not match")
+        }
         _ => configuration("invalid client certificate PEM"),
     })?;
     let mut combined = Zeroizing::new(Vec::with_capacity(cert.len() + key.len() + 1));
@@ -91,22 +139,32 @@ fn identity_from_pem(cert: &[u8], key: &[u8], passphrase: Option<&str>) -> Resul
 }
 
 fn unencrypted_key(key: &[u8], passphrase: Option<&str>) -> Result<Zeroizing<String>, HttpError> {
-    let text = std::str::from_utf8(key).map_err(|_| configuration("invalid client private key PEM"))?;
+    let text =
+        std::str::from_utf8(key).map_err(|_| configuration("invalid client private key PEM"))?;
     if text.contains("Proc-Type:") || text.contains("DEK-Info:") {
-        return Err(configuration("legacy OpenSSL encrypted PEM keys are unsupported; use encrypted PKCS#8"));
+        return Err(configuration(
+            "legacy OpenSSL encrypted PEM keys are unsupported; use encrypted PKCS#8",
+        ));
     }
     if !text.contains("-----BEGIN ENCRYPTED PRIVATE KEY-----") {
         return Ok(Zeroizing::new(text.to_owned()));
     }
-    let passphrase = passphrase.ok_or_else(|| configuration("encrypted PKCS#8 private key requires a passphrase"))?;
+    let passphrase = passphrase
+        .ok_or_else(|| configuration("encrypted PKCS#8 private key requires a passphrase"))?;
     let (label, document) = SecretDocument::from_pem(text)
         .map_err(|_| configuration("invalid encrypted PKCS#8 private key"))?;
-    if label != "ENCRYPTED PRIVATE KEY" { return Err(configuration("invalid encrypted PKCS#8 private key")); }
+    if label != "ENCRYPTED PRIVATE KEY" {
+        return Err(configuration("invalid encrypted PKCS#8 private key"));
+    }
     let encrypted = EncryptedPrivateKeyInfo::try_from(document.as_bytes())
         .map_err(|_| configuration("unsupported or invalid encrypted PKCS#8 private key"))?;
-    let decrypted = encrypted.decrypt(passphrase.as_bytes())
-        .map_err(|_| configuration("cannot decrypt PKCS#8 private key: incorrect passphrase or unsupported encryption"))?;
-    decrypted.to_pem("PRIVATE KEY", LineEnding::LF)
+    let decrypted = encrypted.decrypt(passphrase.as_bytes()).map_err(|_| {
+        configuration(
+            "cannot decrypt PKCS#8 private key: incorrect passphrase or unsupported encryption",
+        )
+    })?;
+    decrypted
+        .to_pem("PRIVATE KEY", LineEnding::LF)
         .map_err(|_| configuration("invalid decrypted PKCS#8 private key"))
 }
 
@@ -115,7 +173,9 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/mtls").join(name)
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/mtls")
+            .join(name)
     }
 
     fn read(name: &str) -> Vec<u8> {
@@ -129,10 +189,21 @@ mod tests {
             ("client.pem", "client-pkcs8-key.pem", None),
             ("ec-client.pem", "ec-client-key.pem", None),
             ("client-chain.pem", "client-key.pem", None),
-            ("client.pem", "client-encrypted-key.pem", Some("probe-test-only-password")),
-            ("client.pem", "client-key.pem", Some("unused-passphrase-marker")),
+            (
+                "client.pem",
+                "client-encrypted-key.pem",
+                Some("probe-test-only-password"),
+            ),
+            (
+                "client.pem",
+                "client-key.pem",
+                Some("unused-passphrase-marker"),
+            ),
         ] {
-            assert!(identity_from_pem(&read(cert), &read(key), passphrase).is_ok(), "fixture {cert}, {key}");
+            assert!(
+                identity_from_pem(&read(cert), &read(key), passphrase).is_ok(),
+                "fixture {cert}, {key}"
+            );
         }
     }
 
@@ -141,12 +212,42 @@ mod tests {
         let cert = read("client.pem");
         let encrypted = read("client-encrypted-key.pem");
         for (certificate, key, passphrase, diagnostic) in [
-            (b"not a certificate".as_slice(), read("client-key.pem"), None, "invalid client certificate PEM"),
-            (cert.as_slice(), b"private-key-secret-marker".to_vec(), None, "invalid client private key PEM"),
-            (cert.as_slice(), encrypted.clone(), None, "encrypted PKCS#8 private key requires a passphrase"),
-            (cert.as_slice(), encrypted, Some("wrong-passphrase-marker"), "cannot decrypt PKCS#8 private key: incorrect passphrase or unsupported encryption"),
-            (cert.as_slice(), read("client-legacy-encrypted-key.pem"), Some("probe-test-only-password"), "legacy OpenSSL encrypted PEM keys are unsupported; use encrypted PKCS#8"),
-            (cert.as_slice(), read("ec-client-key.pem"), None, "client certificate and private key do not match"),
+            (
+                b"not a certificate".as_slice(),
+                read("client-key.pem"),
+                None,
+                "invalid client certificate PEM",
+            ),
+            (
+                cert.as_slice(),
+                b"private-key-secret-marker".to_vec(),
+                None,
+                "invalid client private key PEM",
+            ),
+            (
+                cert.as_slice(),
+                encrypted.clone(),
+                None,
+                "encrypted PKCS#8 private key requires a passphrase",
+            ),
+            (
+                cert.as_slice(),
+                encrypted,
+                Some("wrong-passphrase-marker"),
+                "cannot decrypt PKCS#8 private key: incorrect passphrase or unsupported encryption",
+            ),
+            (
+                cert.as_slice(),
+                read("client-legacy-encrypted-key.pem"),
+                Some("probe-test-only-password"),
+                "legacy OpenSSL encrypted PEM keys are unsupported; use encrypted PKCS#8",
+            ),
+            (
+                cert.as_slice(),
+                read("ec-client-key.pem"),
+                None,
+                "client certificate and private key do not match",
+            ),
         ] {
             let error = match identity_from_pem(certificate, &key, passphrase) {
                 Ok(_) => panic!("invalid fixture unexpectedly accepted"),
@@ -154,30 +255,74 @@ mod tests {
             };
             assert_eq!(error, configuration(diagnostic));
             let formatted = format!("{error:?} {error}");
-            for marker in ["private-key-secret-marker", "wrong-passphrase-marker", "probe-test-only-password", "BEGIN PRIVATE KEY"] {
+            for marker in [
+                "private-key-secret-marker",
+                "wrong-passphrase-marker",
+                "probe-test-only-password",
+                "BEGIN PRIVATE KEY",
+            ] {
                 assert!(!formatted.contains(marker));
             }
         }
-        let identity = PemClientIdentity::new("localhost".into(), "client.pem".into(), "client-key.pem".into(), Some("passphrase-marker".into()));
+        let identity = PemClientIdentity::new(
+            "localhost".into(),
+            "client.pem".into(),
+            "client-key.pem".into(),
+            Some("passphrase-marker".into()),
+        );
         assert_eq!(format!("{identity:?}"), "PemClientIdentity { .. }");
     }
 
     #[tokio::test]
     async fn filesystem_paths_are_explicit_and_failures_are_safe() {
-        let options = ExecutionOptions { base_directory: Some(fixture("")), ..ExecutionOptions::default() };
-        let identity = PemClientIdentity::new("localhost".into(), "client.pem".into(), "client-key.pem".into(), None);
+        let options = ExecutionOptions {
+            base_directory: Some(fixture("")),
+            ..ExecutionOptions::default()
+        };
+        let identity = PemClientIdentity::new(
+            "localhost".into(),
+            "client.pem".into(),
+            "client-key.pem".into(),
+            None,
+        );
         assert!(identity.load(&options).await.is_ok());
-        assert_eq!(identity.load(&ExecutionOptions::default()).await.err(), Some(configuration("relative client certificate/key path requires a base directory")));
-        let absolute = PemClientIdentity::new("localhost".into(), fixture("client.pem").to_str().unwrap().into(), fixture("client-key.pem").to_str().unwrap().into(), None);
+        assert_eq!(
+            identity.load(&ExecutionOptions::default()).await.err(),
+            Some(configuration(
+                "relative client certificate/key path requires a base directory"
+            ))
+        );
+        let absolute = PemClientIdentity::new(
+            "localhost".into(),
+            fixture("client.pem").to_str().unwrap().into(),
+            fixture("client-key.pem").to_str().unwrap().into(),
+            None,
+        );
         assert!(absolute.load(&ExecutionOptions::default()).await.is_ok());
         for (cert, key, diagnostic) in [
-            ("absent-secret-path.pem", "client-key.pem", "cannot read client certificate file"),
-            ("client.pem", "absent-secret-path.pem", "cannot read client private key file"),
+            (
+                "absent-secret-path.pem",
+                "client-key.pem",
+                "cannot read client certificate file",
+            ),
+            (
+                "client.pem",
+                "absent-secret-path.pem",
+                "cannot read client private key file",
+            ),
             ("", "client-key.pem", "cannot read client certificate file"),
             ("client.pem", "", "cannot read client private key file"),
         ] {
-            let identity = PemClientIdentity::new("localhost".into(), cert.into(), key.into(), Some("passphrase-marker".into()));
-            assert_eq!(identity.load(&options).await.err(), Some(configuration(diagnostic)));
+            let identity = PemClientIdentity::new(
+                "localhost".into(),
+                cert.into(),
+                key.into(),
+                Some("passphrase-marker".into()),
+            );
+            assert_eq!(
+                identity.load(&options).await.err(),
+                Some(configuration(diagnostic))
+            );
         }
     }
 }

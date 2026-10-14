@@ -189,13 +189,21 @@ impl HttpEngine {
     where
         P: FnMut(HttpProgress),
     {
-        let client = self.client_for(&request.request().settings, options).await?;
+        let client = self
+            .client_for(&request.request().settings, options)
+            .await?;
         let builder = build_request(&client, request, options).await?;
         let started = Instant::now();
         let built = builder.build().map_err(map_reqwest_error)?;
         let initial_url = built.url().clone();
-        if options.client_identity.as_ref().is_some_and(|identity| !identity.matches(&initial_url)) {
-            return Err(HttpError::ClientConfiguration("client identity does not match the execution URL".into()));
+        if options
+            .client_identity
+            .as_ref()
+            .is_some_and(|identity| !identity.matches(&initial_url))
+        {
+            return Err(HttpError::ClientConfiguration(
+                "client identity does not match the execution URL".into(),
+            ));
         }
         let mut response = client.execute(built).await.map_err(map_reqwest_error)?;
         let expected_size = response.content_length();
@@ -245,11 +253,19 @@ impl HttpEngine {
         })
     }
 
-    async fn client_for(&self, settings: &RequestSettings, options: &ExecutionOptions) -> Result<Client, HttpError> {
+    async fn client_for(
+        &self,
+        settings: &RequestSettings,
+        options: &ExecutionOptions,
+    ) -> Result<Client, HttpError> {
         let follow = settings.follow_redirects.unwrap_or(true);
         let maximum = settings.max_redirects.unwrap_or(DEFAULT_MAX_REDIRECTS);
         if let Some(identity) = &options.client_identity {
-            return build_client(follow, maximum, Some((identity.load(options).await?, identity.clone())));
+            return build_client(
+                follow,
+                maximum,
+                Some((identity.load(options).await?, identity.clone())),
+            );
         }
         if follow && maximum == DEFAULT_MAX_REDIRECTS {
             Ok(self.default_client.clone())
@@ -264,11 +280,20 @@ struct ExecutedHttpResponse {
     body_sha256: Option<[u8; 32]>,
 }
 
-fn build_client(follow_redirects: bool, maximum: usize, identity: Option<(reqwest::Identity, crate::PemClientIdentity)>) -> Result<Client, HttpError> {
+fn build_client(
+    follow_redirects: bool,
+    maximum: usize,
+    identity: Option<(reqwest::Identity, crate::PemClientIdentity)>,
+) -> Result<Client, HttpError> {
     configure_client(Client::builder(), follow_redirects, maximum, identity)
 }
 
-fn configure_client(builder: reqwest::ClientBuilder, follow_redirects: bool, maximum: usize, identity: Option<(reqwest::Identity, crate::PemClientIdentity)>) -> Result<Client, HttpError> {
+fn configure_client(
+    builder: reqwest::ClientBuilder,
+    follow_redirects: bool,
+    maximum: usize,
+    identity: Option<(reqwest::Identity, crate::PemClientIdentity)>,
+) -> Result<Client, HttpError> {
     let authenticated = identity.is_some();
     let policy = if !follow_redirects {
         Policy::none()
@@ -281,7 +306,13 @@ fn configure_client(builder: reqwest::ClientBuilder, follow_redirects: bool, max
     if let Some((identity, _)) = identity {
         builder = builder.identity(identity);
     }
-    builder.build().map_err(|error| HttpError::ClientConfiguration(if authenticated { "HTTP client construction failed".into() } else { error.to_string() }))
+    builder.build().map_err(|error| {
+        HttpError::ClientConfiguration(if authenticated {
+            "HTTP client construction failed".into()
+        } else {
+            error.to_string()
+        })
+    })
 }
 
 fn response_headers(headers: &HeaderMap) -> Vec<ResponseHeader> {
