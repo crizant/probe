@@ -61,7 +61,7 @@ work. Do not replace dependencies without a task-specific reason.
 Probe depends on `gpui-kit` with `default-features = false` and imports through
 `gpui_kit` / its unstyled `gpui_kit::base` layer. Do not enable the pre-styled
 `component` layer or copy its APIs unless explicitly scoped. Initialize the theme
-once through `probe_desktop::theme::Theme::init(cx)`.
+once through `crate::theme::Theme::init(cx)` within `probe-desktop`.
 
 GPUI Kit coordinates the matching GPUI and base versions. Keep its resolved version
 in Cargo.lock; do not add independent `gpui`, `gpui-base`, `gpui-component`, or
