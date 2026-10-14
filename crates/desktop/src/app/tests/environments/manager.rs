@@ -11,6 +11,7 @@ fn environment_manager_row_ids_follow_insertions_and_removals() {
         extends: None,
         description: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables: Vec::new(),
     };
     let variable = || {

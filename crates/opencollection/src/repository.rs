@@ -1095,7 +1095,6 @@ enum DocumentationUpdate {
 }
 
 /// A documentation save captured for execution away from the UI thread.
-#[derive(Debug)]
 pub struct PreparedDocumentationSave {
     baseline: PreparedBaseline,
     document_path: PathBuf,
@@ -1130,7 +1129,6 @@ impl PreparedDocumentationSave {
 }
 
 /// Repository state returned by a successful documentation write.
-#[derive(Debug)]
 pub struct CompletedDocumentationSave {
     baseline: WorkspaceBaseline,
     document_path: PathBuf,
@@ -1139,7 +1137,6 @@ pub struct CompletedDocumentationSave {
 }
 
 /// A filesystem save captured from a loaded workspace for background execution.
-#[derive(Debug)]
 pub struct PreparedRequestSave {
     baseline: PreparedBaseline,
     diagnostic_prefix: Option<String>,
@@ -1177,7 +1174,6 @@ impl PreparedRequestSave {
 }
 
 /// The refreshed repository baseline produced by a successful prepared save.
-#[derive(Debug)]
 pub struct CompletedRequestSave {
     baseline: WorkspaceBaseline,
     document_path: PathBuf,
@@ -1187,7 +1183,6 @@ pub struct CompletedRequestSave {
 }
 
 /// A filesystem environment-variable save captured for background execution.
-#[derive(Debug)]
 pub struct PreparedEnvironmentSave {
     baseline: PreparedBaseline,
     persistence: EnvironmentPersistence,
@@ -1210,7 +1205,6 @@ impl PreparedEnvironmentSave {
 }
 
 /// The refreshed repository baseline produced by a successful environment save.
-#[derive(Debug)]
 pub struct CompletedEnvironmentSave {
     baseline: WorkspaceBaseline,
     document_path: PathBuf,
@@ -1218,7 +1212,6 @@ pub struct CompletedEnvironmentSave {
 }
 
 /// A validated environment replacement captured for background persistence.
-#[derive(Debug)]
 pub struct PreparedEnvironmentReplace {
     baseline: PreparedBaseline,
     persistence: EnvironmentPersistence,
@@ -1267,7 +1260,6 @@ impl PreparedEnvironmentReplace {
 }
 
 /// The refreshed repository baseline produced by an environment replacement.
-#[derive(Debug)]
 pub struct CompletedEnvironmentReplace {
     baseline: WorkspaceBaseline,
     original_name: String,
@@ -1278,7 +1270,6 @@ pub struct CompletedEnvironmentReplace {
 }
 
 /// A validated environment deletion captured for background persistence.
-#[derive(Debug)]
 pub struct PreparedEnvironmentDelete {
     baseline: PreparedBaseline,
     name: String,
@@ -1319,7 +1310,6 @@ impl PreparedEnvironmentDelete {
 }
 
 /// The refreshed repository baseline produced by an environment deletion.
-#[derive(Debug)]
 pub struct CompletedEnvironmentDelete {
     baseline: WorkspaceBaseline,
     name: String,
@@ -1336,7 +1326,6 @@ pub struct PreparedEnvironmentCreate {
     kind: EnvironmentCreateKind,
 }
 
-#[derive(Debug)]
 enum EnvironmentCreateKind {
     Bundled {
         document_path: PathBuf,
@@ -1387,7 +1376,6 @@ impl PreparedEnvironmentCreate {
 }
 
 /// The refreshed repository baseline produced by a successful environment create.
-#[derive(Debug)]
 pub struct CompletedEnvironmentCreate {
     baseline: WorkspaceBaseline,
     name: String,
@@ -1430,7 +1418,7 @@ struct FolderPersistence {
     item_path: Vec<usize>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct SourceDocument {
     pub(crate) original_source: Arc<[u8]>,
 }
@@ -1926,6 +1914,96 @@ pub(crate) fn atomic_write(
     }
     file.commit().map_err(map_io)?;
     Ok(())
+}
+
+impl std::fmt::Debug for PreparedDocumentationSave {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedDocumentationSave")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for CompletedDocumentationSave {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletedDocumentationSave")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for PreparedRequestSave {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedRequestSave")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for CompletedRequestSave {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletedRequestSave")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for PreparedEnvironmentSave {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedEnvironmentSave")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for CompletedEnvironmentSave {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletedEnvironmentSave")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for PreparedEnvironmentReplace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedEnvironmentReplace")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for CompletedEnvironmentReplace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletedEnvironmentReplace")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for PreparedEnvironmentDelete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedEnvironmentDelete")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for CompletedEnvironmentDelete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletedEnvironmentDelete")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for EnvironmentCreateKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnvironmentCreateKind")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for CompletedEnvironmentCreate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletedEnvironmentCreate")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for SourceDocument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceDocument").finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]

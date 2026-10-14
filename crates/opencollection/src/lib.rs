@@ -29,12 +29,22 @@ pub use structure::{
 };
 
 /// An OpenCollection document together with its supported domain projection.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ParsedCollection {
     collection: Collection,
     document: Value,
     bundled: bool,
     diagnostics: Vec<ProjectionDiagnostic>,
+}
+
+impl fmt::Debug for ParsedCollection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParsedCollection")
+            .field("collection", &self.collection)
+            .field("bundled", &self.bundled)
+            .field("diagnostics", &self.diagnostics)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ParsedCollection {

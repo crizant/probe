@@ -692,6 +692,14 @@ Accepted reloads rebuild runtime keys and resolve repository selectors for tabs 
 presentation state. Confident file renames may remap selectors. Successful Probe writes
 refresh the baseline, so their watcher events reconcile as no-ops.
 
+Collection and environment `clientCertificates` project into the core
+`ClientCertificate` enum (PEM or PKCS#12). `Workspace::client_certificates()` exposes
+collection declarations; each `Environment` retains its own declarations in source
+order. Paths and passphrases remain literal configuration strings, and debug output
+redacts passphrases. Persistence writes the native schema and keeps unchanged
+environment certificate YAML during other edits. No certificate inheritance,
+precedence, domain matching, file loading, or transport execution is defined here.
+
 ## OpenCollection Validation
 
 Workspace loading requires the OpenCollection `1.0.0` format marker, collection metadata, and

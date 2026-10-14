@@ -141,6 +141,7 @@ async fn initial_text_json_xml_selected_variant_and_event_order() {
                 description: None,
                 extends: None,
                 dot_env_file_path: None,
+                client_certificates: Vec::new(),
                 variables: vec![EnvironmentVariable::Plain(Variable {
                     name: Some("data".into()),
                     value: Some(VariableValueSet::Single(VariableValue::String(
@@ -367,6 +368,7 @@ async fn secrets_are_used_on_wire_and_redacted_at_every_event_boundary() {
             description: None,
             extends: None,
             dot_env_file_path: None,
+            client_certificates: Vec::new(),
             variables: vec![EnvironmentVariable::Secret(SecretVariable {
                 name: Some("token".into()),
                 value_type: None,
@@ -584,6 +586,7 @@ fn secret_bearing_configuration_diagnostics_withhold_all_request_values() {
         description: None,
         extends: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables: vec![EnvironmentVariable::Secret(SecretVariable {
             name: Some("token".into()),
             value_type: None,

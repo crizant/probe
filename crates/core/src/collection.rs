@@ -11,6 +11,8 @@ pub struct Collection {
     pub items: Vec<CollectionItem>,
     /// Environments embedded in collection configuration.
     pub environments: Vec<Environment>,
+    /// Client certificates declared at collection scope, in source order.
+    pub client_certificates: Vec<crate::ClientCertificate>,
 }
 
 /// Severity of a portable-import compatibility diagnostic.

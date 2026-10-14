@@ -323,6 +323,26 @@ pub(super) fn apply_environment_replace(
         }
     }
 
+    // A variable/name edit must retain the original certificate representation and
+    // unknown fields. Replace this scope only when its domain configuration changes.
+    let current: crate::document::EnvironmentDocument =
+        serde_yaml_ng::from_value(Value::Mapping(mapping.clone())).map_err(|_| {
+            SaveError::InvalidDocument("invalid environment configuration".to_owned())
+        })?;
+    let current = current
+        .into_domain()
+        .map_err(|_| SaveError::InvalidDocument("invalid environment configuration".to_owned()))?;
+    if current.client_certificates != replacement.client_certificates {
+        if replacement.client_certificates.is_empty() {
+            mapping.remove(string_key("clientCertificates"));
+        } else {
+            mapping.insert(
+                string_key("clientCertificates"),
+                client_certificates_value(&replacement.client_certificates),
+            );
+        }
+    }
+
     let variables = sequence_child(mapping, "variables")?;
     let mut retained = Vec::new();
     for mut entry in std::mem::take(variables) {
@@ -557,4 +577,55 @@ pub(super) fn yaml_string_field<'a>(
 
 pub(super) fn yaml_bool_field(mapping: &serde_yaml_ng::Mapping, name: &str) -> Option<bool> {
     mapping.get(string_key(name)).and_then(Value::as_bool)
+}
+
+/// Canonical schema fields only; paths and passphrases stay literal strings.
+pub(super) fn client_certificates_value(certificates: &[probe_core::ClientCertificate]) -> Value {
+    Value::Sequence(
+        certificates
+            .iter()
+            .map(|certificate| {
+                let mut value = serde_yaml_ng::Mapping::new();
+                let (domain, passphrase, disabled) = match certificate {
+                    probe_core::ClientCertificate::Pem {
+                        domain,
+                        certificate_file_path,
+                        private_key_file_path,
+                        passphrase,
+                        disabled,
+                    } => {
+                        value.insert(string_key("type"), Value::String("pem".to_owned()));
+                        value.insert(
+                            string_key("certificateFilePath"),
+                            Value::String(certificate_file_path.clone()),
+                        );
+                        value.insert(
+                            string_key("privateKeyFilePath"),
+                            Value::String(private_key_file_path.clone()),
+                        );
+                        (domain, passphrase, disabled)
+                    }
+                    probe_core::ClientCertificate::Pkcs12 {
+                        domain,
+                        pkcs12_file_path,
+                        passphrase,
+                        disabled,
+                    } => {
+                        value.insert(string_key("type"), Value::String("pkcs12".to_owned()));
+                        value.insert(
+                            string_key("pkcs12FilePath"),
+                            Value::String(pkcs12_file_path.clone()),
+                        );
+                        (domain, passphrase, disabled)
+                    }
+                };
+                value.insert(string_key("domain"), Value::String(domain.clone()));
+                if let Some(passphrase) = passphrase {
+                    value.insert(string_key("passphrase"), Value::String(passphrase.clone()));
+                }
+                value.insert(string_key("disabled"), Value::Bool(*disabled));
+                Value::Mapping(value)
+            })
+            .collect(),
+    )
 }

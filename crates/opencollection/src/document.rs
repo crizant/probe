@@ -1,15 +1,15 @@
 use std::time::Duration;
 
 use probe_core::{
-    Author, CollectionMetadata, Documentation, Environment, EnvironmentVariable, FileReference,
-    FormField, Header, ItemMetadata, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBodyKind, RequestProtocol, RequestSettings, SecretVariable, Variable,
-    VariableValue, VariableValueSet, VariableValueType, VariableValueVariant,
+    Author, ClientCertificate, CollectionMetadata, Documentation, Environment, EnvironmentVariable,
+    FileReference, FormField, Header, ItemMetadata, MultipartPart, MultipartPartKind,
+    MultipartValue, QueryParameter, RawBodyKind, RequestProtocol, RequestSettings, SecretVariable,
+    Variable, VariableValue, VariableValueSet, VariableValueType, VariableValueVariant,
 };
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CollectionDocument {
     pub(crate) opencollection: String,
@@ -21,10 +21,82 @@ pub(crate) struct CollectionDocument {
     pub(crate) config: CollectionConfigDocument,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct CollectionConfigDocument {
     #[serde(default)]
     pub(crate) environments: Vec<EnvironmentDocument>,
+    #[serde(default, deserialize_with = "deserialize_client_certificates")]
+    pub(crate) client_certificates: Vec<ClientCertificateDocument>,
+}
+
+/// Tagged native schema: unknown types and missing required paths are errors.
+#[derive(Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+pub(crate) enum ClientCertificateDocument {
+    Pem {
+        domain: String,
+        certificate_file_path: String,
+        private_key_file_path: String,
+        passphrase: Option<String>,
+        #[serde(default)]
+        disabled: bool,
+    },
+    Pkcs12 {
+        domain: String,
+        pkcs12_file_path: String,
+        passphrase: Option<String>,
+        #[serde(default)]
+        disabled: bool,
+    },
+}
+
+fn deserialize_client_certificates<'de, D>(
+    deserializer: D,
+) -> Result<Vec<ClientCertificateDocument>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Serde's field-type diagnostics can include the rejected passphrase value.
+    // Keep certificate configuration out of diagnostics, including malformed input.
+    Vec::<ClientCertificateDocument>::deserialize(deserializer).map_err(|_| {
+        serde::de::Error::custom("invalid clientCertificates: expected pem or pkcs12 declarations with required string domain and paths, optional string passphrase and boolean disabled")
+    })
+}
+
+impl ClientCertificateDocument {
+    pub(crate) fn into_domain(self) -> ClientCertificate {
+        match self {
+            Self::Pem {
+                domain,
+                certificate_file_path,
+                private_key_file_path,
+                passphrase,
+                disabled,
+            } => ClientCertificate::Pem {
+                domain,
+                certificate_file_path,
+                private_key_file_path,
+                passphrase,
+                disabled,
+            },
+            Self::Pkcs12 {
+                domain,
+                pkcs12_file_path,
+                passphrase,
+                disabled,
+            } => ClientCertificate::Pkcs12 {
+                domain,
+                pkcs12_file_path,
+                passphrase,
+                disabled,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -342,7 +414,7 @@ impl ParameterDocument {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EnvironmentDocument {
     pub(crate) name: String,
@@ -353,6 +425,8 @@ pub(crate) struct EnvironmentDocument {
     pub(crate) dot_env_file_path: Option<String>,
     #[serde(default)]
     pub(crate) variables: Vec<EnvironmentVariableDocument>,
+    #[serde(default, deserialize_with = "deserialize_client_certificates")]
+    pub(crate) client_certificates: Vec<ClientCertificateDocument>,
 }
 
 fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
@@ -370,6 +444,11 @@ impl EnvironmentDocument {
             description: optional_documentation(self.description.as_ref())?,
             extends: self.extends,
             dot_env_file_path: self.dot_env_file_path,
+            client_certificates: self
+                .client_certificates
+                .into_iter()
+                .map(ClientCertificateDocument::into_domain)
+                .collect(),
             variables: self
                 .variables
                 .into_iter()

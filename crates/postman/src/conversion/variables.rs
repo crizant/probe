@@ -53,6 +53,7 @@ pub(super) fn convert_collection_variables(
         extends: None,
         description: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables,
     }])
 }

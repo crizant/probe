@@ -44,6 +44,7 @@ pub fn create_environment(
         description: None,
         extends,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables: Vec::new(),
     });
     validate_environments(&candidate)?;

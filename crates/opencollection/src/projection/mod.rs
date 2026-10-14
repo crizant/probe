@@ -20,6 +20,12 @@ pub(crate) fn project_collection(
         metadata: document.info.into_domain(),
         items: project_items(document.items, "items", diagnostics)?,
         environments,
+        client_certificates: document
+            .config
+            .client_certificates
+            .into_iter()
+            .map(crate::document::ClientCertificateDocument::into_domain)
+            .collect(),
     })
 }
 

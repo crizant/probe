@@ -473,6 +473,7 @@ fn environments() -> Vec<Environment> {
         extends: None,
         description: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables: vec![
             secret("token"),
             secret("unused"),
