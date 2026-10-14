@@ -11,6 +11,7 @@ fn environment_manager_row_ids_follow_insertions_and_removals() {
         extends: None,
         description: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables: Vec::new(),
     };
     let variable = || {
@@ -1045,7 +1046,30 @@ fn saved_environment(workspace: &EnvironmentWorkspace, name: &str) -> Option<Env
 
 #[gpui_kit::test]
 fn environment_manager_saves_plain_variables_and_parent(cx: &mut TestAppContext) {
-    let workspace = EnvironmentWorkspace::writable(cx, "manager-save");
+    let source = fs::read_to_string(environment_fixture())
+        .unwrap()
+        .replace("\r\n", "\n");
+    let source = source.replace(
+        "    - name: development",
+        concat!(
+            "    - name: development\n",
+            "      clientCertificates:\n",
+            "        - domain: dev.example.com\n",
+            "          type: pem\n",
+            "          certificateFilePath: ./certs/dev.pem\n",
+            "          privateKeyFilePath: ./certs/dev-key.pem\n",
+            "          passphrase: '{{certPassphrase}}'\n",
+            "        - domain: dev.example.com\n",
+            "          type: pkcs12\n",
+            "          pkcs12FilePath: ./certs/dev.p12\n",
+            "          disabled: true",
+        ),
+    );
+    let workspace = EnvironmentWorkspace::writable_source(cx, "manager-save", &source);
+    let certificates = saved_environment(&workspace, "development")
+        .unwrap()
+        .client_certificates;
+    assert_eq!(certificates.len(), 2);
     workspace.update(cx, |view, window, cx| {
         view.select_environment(Some("development".to_owned()), cx);
         view.open_environment_manager_dialog(window, cx);
@@ -1079,6 +1103,21 @@ fn environment_manager_saves_plain_variables_and_parent(cx: &mut TestAppContext)
     });
     let development = saved_environment(&workspace, "development").unwrap();
     assert_eq!(development.extends, None);
+    assert_eq!(development.client_certificates, certificates);
+    assert_eq!(workspace.store.get_calls(), 0);
+    workspace.update(cx, |view, _, _| {
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        assert_eq!(
+            loaded
+                .workspace()
+                .environments()
+                .iter()
+                .find(|env| env.name == "development")
+                .unwrap()
+                .client_certificates,
+            certificates
+        );
+    });
     assert!(development.variables.iter().any(|variable| matches!(
         variable,
         EnvironmentVariable::Plain(variable) if variable.name.as_deref() == Some("region")

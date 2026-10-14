@@ -147,20 +147,27 @@ fn bundled_collection_value(collection: &probe_core::Collection) -> Value {
         root.insert(string_key("docs"), documentation_value(docs));
     }
     root.insert(string_key("bundled"), Value::Bool(true));
+    let mut config = serde_yaml_ng::Mapping::new();
     if !collection.environments.is_empty() {
-        root.insert(
-            string_key("config"),
-            map([(
-                "environments",
-                Value::Sequence(
-                    collection
-                        .environments
-                        .iter()
-                        .map(environment_value)
-                        .collect(),
-                ),
-            )]),
+        config.insert(
+            string_key("environments"),
+            Value::Sequence(
+                collection
+                    .environments
+                    .iter()
+                    .map(environment_value)
+                    .collect(),
+            ),
         );
+    }
+    if !collection.client_certificates.is_empty() {
+        config.insert(
+            string_key("clientCertificates"),
+            client_certificates_value(&collection.client_certificates),
+        );
+    }
+    if !config.is_empty() {
+        root.insert(string_key("config"), Value::Mapping(config));
     }
     root.insert(
         string_key("items"),
@@ -385,6 +392,12 @@ pub(super) fn environment_value(environment: &Environment) -> Value {
     }
     if let Some(path) = &environment.dot_env_file_path {
         value.insert(string_key("dotEnvFilePath"), Value::String(path.clone()));
+    }
+    if !environment.client_certificates.is_empty() {
+        value.insert(
+            string_key("clientCertificates"),
+            client_certificates_value(&environment.client_certificates),
+        );
     }
     if !environment.variables.is_empty() {
         value.insert(

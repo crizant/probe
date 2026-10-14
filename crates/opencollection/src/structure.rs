@@ -248,7 +248,6 @@ impl LoadedWorkspace {
 }
 
 /// A structural edit captured from a loaded workspace for background execution.
-#[derive(Debug)]
 pub struct PreparedStructureEdit {
     operation: StructureOperation,
     source: WorkspaceSource,
@@ -865,6 +864,24 @@ fn unique_suffix() -> String {
         + &std::process::id().to_string()
         + "-"
         + &NEXT_SUFFIX.fetch_add(1, Ordering::Relaxed).to_string()
+}
+
+impl std::fmt::Debug for PreparedStructureEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedStructureEdit")
+            .field("operation", &self.operation)
+            .field("source", &self.source)
+            .field(
+                "baselines",
+                &self
+                    .baselines
+                    .iter()
+                    .map(|(path, source)| (path, crate::debug::SourceDebug(source)))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+            .field("old_selectors", &self.old_selectors)
+            .finish()
+    }
 }
 
 #[cfg(test)]

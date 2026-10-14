@@ -70,6 +70,7 @@ pub(super) fn convert_preview(
         },
         items,
         environments,
+        client_certificates: Vec::new(),
     };
 
     sort_import_diagnostics(&mut diagnostics);

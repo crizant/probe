@@ -226,6 +226,7 @@ fn environment(
         extends: extends.map(str::to_owned),
         description: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables,
     }
 }

@@ -158,6 +158,7 @@ pub struct Workspace {
     folders: Arena<WorkspaceFolder>,
     request_ancestors: BTreeMap<RequestKey, Vec<FolderKey>>,
     environments: Vec<Environment>,
+    client_certificates: Vec<crate::ClientCertificate>,
 }
 
 /// A parent location for a structural workspace edit.
@@ -220,6 +221,7 @@ impl Workspace {
             folders,
             request_ancestors,
             environments: collection.environments,
+            client_certificates: collection.client_certificates,
         }
     }
 
@@ -459,6 +461,13 @@ impl Workspace {
     #[must_use]
     pub fn request_ancestor_folders(&self, key: RequestKey) -> Option<&[FolderKey]> {
         self.request_ancestors.get(&key).map(Vec::as_slice)
+    }
+
+    /// Returns certificates declared at collection scope, in source order.
+    /// Environment declarations remain available on each environment separately.
+    #[must_use]
+    pub fn client_certificates(&self) -> &[crate::ClientCertificate] {
+        &self.client_certificates
     }
 
     /// Returns collection environments in source order.
@@ -890,6 +899,7 @@ mod tests {
                 request("Health"),
             ],
             environments: Vec::new(),
+            client_certificates: Vec::new(),
         };
 
         let workspace = Workspace::from_collection(collection);
@@ -1093,6 +1103,7 @@ mod tests {
                 description: None,
                 extends: None,
                 dot_env_file_path: None,
+                client_certificates: Vec::new(),
                 variables: Vec::new(),
             }],
             ..Collection::default()

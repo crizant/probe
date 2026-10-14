@@ -15,6 +15,8 @@ pub struct Environment {
     pub dot_env_file_path: Option<String>,
     /// Environment variables.
     pub variables: Vec<EnvironmentVariable>,
+    /// Certificates declared directly in this environment; never implicitly merged.
+    pub client_certificates: Vec<crate::ClientCertificate>,
 }
 
 /// A normal or secret environment variable.

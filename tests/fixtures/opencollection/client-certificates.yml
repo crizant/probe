@@ -1,0 +1,45 @@
+opencollection: 1.0.0
+info:
+  name: Client certificates
+bundled: true
+config:
+  clientCertificates:
+    - domain: api.example.com
+      type: pem
+      certificateFilePath: ./certs/../certs/client.pem
+      privateKeyFilePath: '{{certDirectory}}/client-key.pem'
+    - domain: api.example.com
+      type: pkcs12
+      pkcs12FilePath: './certs/client archive.p12'
+      passphrase: '{{certPassphrase}}'
+      disabled: true
+    - domain: another.example.com
+      type: pem
+      certificateFilePath: /configured/client.pem
+      privateKeyFilePath: 'C:\certs\client-key.pem'
+      passphrase: literal-passphrase
+      disabled: false
+  environments:
+    - name: development
+      variables:
+        - name: baseUrl
+          value: https://dev-api.example.com
+      clientCertificates:
+        - domain: dev-api.example.com
+          type: pem
+          certificateFilePath: ./certs/dev.pem
+          privateKeyFilePath: ./certs/dev-key.pem
+    - name: production
+      extends: development
+      variables:
+        - name: baseUrl
+          value: https://api.example.com
+      clientCertificates:
+        - domain: api.example.com
+          type: pkcs12
+          pkcs12FilePath: ./certs/prod.p12
+          passphrase: ''
+          disabled: true
+    - name: inherited-variables
+      extends: production
+items: []

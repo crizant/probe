@@ -10,6 +10,7 @@ use std::{error::Error as StdError, fmt};
 use probe_core::{Collection, validate_environments};
 use serde_yaml_ng::Value;
 
+mod debug;
 mod document;
 mod projection;
 mod repository;
@@ -29,12 +30,27 @@ pub use structure::{
 };
 
 /// An OpenCollection document together with its supported domain projection.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ParsedCollection {
     collection: Collection,
     document: Value,
     bundled: bool,
     diagnostics: Vec<ProjectionDiagnostic>,
+}
+
+impl fmt::Debug for ParsedCollection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParsedCollection")
+            .field("collection", &self.collection)
+            // Raw YAML may repeat a passphrase under another key via an alias.
+            .field(
+                "document_fields",
+                &self.document.as_mapping().map(serde_yaml_ng::Mapping::len),
+            )
+            .field("bundled", &self.bundled)
+            .field("diagnostics", &self.diagnostics)
+            .finish()
+    }
 }
 
 impl ParsedCollection {

@@ -21,6 +21,7 @@ fn environment() -> Environment {
         extends: None,
         description: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables: vec![EnvironmentVariable::Plain(Variable {
             name: Some("login".to_owned()),
             value: Some(VariableValueSet::Single(VariableValue::String(

@@ -447,6 +447,7 @@ fn environment(
         extends: extends.map(str::to_owned),
         description: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables,
     }
 }
@@ -1208,6 +1209,7 @@ fn create_environment_rejects_inheritance_cycles() {
         extends: Some("b".to_owned()),
         description: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables: Vec::new(),
     }];
 

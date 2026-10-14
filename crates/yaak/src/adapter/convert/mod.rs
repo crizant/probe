@@ -394,6 +394,7 @@ fn convert_environments(
             extends,
             description: None,
             dot_env_file_path: None,
+            client_certificates: Vec::new(),
             variables,
         });
     }

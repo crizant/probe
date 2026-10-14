@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod arena;
+mod client_certificate;
 mod collection;
 mod environment;
 mod environment_edit;
@@ -17,6 +18,7 @@ mod request_resolution;
 mod secret;
 mod workspace;
 
+pub use client_certificate::ClientCertificate;
 pub use collection::{
     Author, Collection, CollectionItem, CollectionMetadata, CollectionUpdate, Documentation,
     Folder, FolderUpdate, ImportDiagnostic, ImportDiagnosticSeverity, ItemMetadata,

@@ -37,6 +37,7 @@ fn environment() -> Vec<Environment> {
         extends: None,
         description: None,
         dot_env_file_path: None,
+        client_certificates: Vec::new(),
         variables: vec![
             EnvironmentVariable::Secret(SecretVariable {
                 name: Some("token".into()),

@@ -6,6 +6,13 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- OpenCollection PEM and PKCS#12 client certificate configuration now loads and
+  persists at collection and environment scope, with strict entry validation and
+  indexed errors. Passphrases must be strings when present; explicit null is
+  rejected. Certificate execution is not yet supported.
+
 ### Changed
 
 - JSON editors now use native smart indentation on Enter, including GraphQL
