@@ -234,6 +234,10 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
         .update(cx, |view, _, _| {
             assert!(!view.transient.request_execution_menu_open);
             assert!(view.execution.response(request_key).is_none());
+            assert!(
+                view.execution_service.is_none(),
+                "copying as cURL must not start the HTTP execution runtime"
+            );
         })
         .unwrap();
     let mut visual = VisualTestContext::from_window(window.into(), cx);
@@ -293,6 +297,10 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
         .update(cx, |view, _, _| {
             assert!(!view.transient.request_execution_menu_open);
             assert!(view.execution.response(request_key).is_none());
+            assert!(
+                view.execution_service.is_none(),
+                "copying as cURL must not start the HTTP execution runtime"
+            );
         })
         .unwrap();
 }
