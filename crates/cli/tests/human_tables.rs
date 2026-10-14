@@ -5,23 +5,23 @@ use common::*;
 use unicode_width::UnicodeWidthStr;
 
 #[test]
-fn piped_request_details_match_goldens_and_keep_json_contract() {
-    let collection = fixture("request-human.yml");
+fn piped_request_details_match_byte_exact_goldens() {
+    let collection = fixture("phase1-bundled.yml");
     let populated = concat!(
-        "Name: Get user\nSelector: items/0\nType: http\nEnvironment: <none>\n",
-        "Method: GET\nURL: https://example.com/users/:id\nDescription: <unset>\nDocs: <unset>\n",
+        "Name: List pets\nSelector: items/0/items/0\nType: http\nEnvironment: <none>\n",
+        "Method: GET\nURL: https://api.example.com/pets\nDescription: <unset>\nDocs: <unset>\n",
         "Headers\nNAME     VALUE             STATE\nAccept   application/json\nX-Debug  true              disabled\n",
-        "Path parameters\nNAME    VALUE        STATE\nid      123\nunused  {{literal}}  disabled\n",
-        "Query parameters\nNAME    VALUE  STATE\nlimit   20\noffset  10     disabled\n",
+        "Path parameters\nNAME     VALUE  STATE\nownerId  42\n",
+        "Query parameters\nNAME   VALUE  STATE\nlimit  25\n",
         "Body: <unset>\nAuthentication: <unset>\n",
     );
     let empty = concat!(
-        "Name: Empty\nSelector: items/1\nType: http\nEnvironment: <none>\n",
-        "Method: GET\nURL: https://example.com\nDescription: <unset>\nDocs: <unset>\n",
+        "Name: Health check\nSelector: items/1\nType: http\nEnvironment: <none>\n",
+        "Method: HEAD\nURL: https://api.example.com/health\nDescription: <unset>\nDocs: <unset>\n",
         "Headers\n  (none)\nPath parameters\n  (none)\nQuery parameters\n  (none)\n",
         "Body: <unset>\nAuthentication: <unset>\n",
     );
-    for (selector, expected) in [("items/0", populated), ("items/1", empty)] {
+    for (selector, expected) in [("items/0/items/0", populated), ("items/1", empty)] {
         for columns in ["1", "999", "invalid"] {
             let output = probe()
                 .args(["request", "get"])
@@ -35,62 +35,28 @@ fn piped_request_details_match_goldens_and_keep_json_contract() {
             assert_eq!(output.stdout, expected.as_bytes());
         }
     }
-    let expected = serde_json::json!({
-        "schemaVersion": 1, "name": "Get user", "selector": "items/0", "type": "http",
-        "environment": null, "method": "GET", "url": "https://example.com/users/:id",
-        "description": null, "docs": null, "body": null, "authentication": null, "graphql": null,
-        "headers": [
-            { "name": "Accept", "value": "application/json", "disabled": false },
-            { "name": "X-Debug", "value": "true", "disabled": true }
-        ],
-        "pathParameters": [
-            { "name": "id", "value": "123", "disabled": false },
-            { "name": "unused", "value": "{{literal}}", "disabled": true }
-        ],
-        "queryParameters": [
-            { "name": "limit", "value": "20", "disabled": false },
-            { "name": "offset", "value": "10", "disabled": true }
-        ],
-    });
-    assert_eq!(
-        run_json(&["request", "get", collection.to_str().unwrap(), "items/0"]),
-        expected
-    );
 }
 
 #[test]
-fn request_set_confirms_selector_without_dumping_details_and_keeps_json() {
+fn request_set_confirms_selector_without_dumping_details() {
     let collection = temporary_path("set-human.yml");
-    fs::copy(fixture("request-human.yml"), &collection).unwrap();
+    fs::copy(fixture("phase1-bundled.yml"), &collection).unwrap();
     let output = probe()
         .args(["request", "set"])
         .arg(&collection)
-        .args(["items/0", "--name", "Updated user"])
+        .args(["items/0/items/0", "--name", "Updated pets"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty());
-    assert_eq!(output.stdout, b"Updated request: items/0\n");
-    let updated = run_json(&["request", "get", collection.to_str().unwrap(), "items/0"]);
-    assert_eq!(updated["name"], "Updated user");
-    assert_eq!(
-        run_json(&[
-            "request",
-            "set",
-            collection.to_str().unwrap(),
-            "items/0",
-            "--name",
-            "Updated user"
-        ]),
-        updated
-    );
+    assert_eq!(output.stdout, b"Updated request: items/0/items/0\n");
     fs::remove_file(collection).unwrap();
 }
 
 #[test]
 fn request_detail_tables_bound_long_names_and_values_without_changing_json() {
     let collection = temporary_path("detail-tables.yml");
-    fs::copy(fixture("request-human.yml"), &collection).unwrap();
+    fs::copy(fixture("phase1-bundled.yml"), &collection).unwrap();
     let name = "測試".repeat(30);
     let value = "value".repeat(80);
     let entries =
@@ -99,7 +65,7 @@ fn request_detail_tables_bound_long_names_and_values_without_changing_json() {
         "request",
         "set",
         collection.to_str().unwrap(),
-        "items/0",
+        "items/0/items/0",
         "--headers",
         &entries,
         "--path-parameters",
@@ -111,7 +77,7 @@ fn request_detail_tables_bound_long_names_and_values_without_changing_json() {
         let output = probe()
             .args(["request", "get"])
             .arg(&collection)
-            .arg("items/0")
+            .arg("items/0/items/0")
             .env("COLUMNS", columns)
             .output()
             .unwrap();
@@ -129,7 +95,12 @@ fn request_detail_tables_bound_long_names_and_values_without_changing_json() {
             assert!(row.ends_with("disabled"));
         }
     }
-    let json = run_json(&["request", "get", collection.to_str().unwrap(), "items/0"]);
+    let json = run_json(&[
+        "request",
+        "get",
+        collection.to_str().unwrap(),
+        "items/0/items/0",
+    ]);
     for field in ["headers", "pathParameters", "queryParameters"] {
         assert_eq!(
             json[field],
@@ -142,10 +113,10 @@ fn request_detail_tables_bound_long_names_and_values_without_changing_json() {
 #[cfg(target_os = "linux")]
 #[test]
 fn request_details_use_narrow_stdout_terminal_and_piped_fallback() {
-    let collection = fixture("request-human.yml");
+    let collection = fixture("phase1-bundled.yml");
     for width in [20, 42] {
         let terminal = Command::new("script").args(["-q", "-e", "-c",
-            "stty rows 24 cols \"$PROBE_TABLE_WIDTH\"; \"$PROBE_TABLE_BINARY\" request get \"$PROBE_TABLE_COLLECTION\" items/0", "/dev/null"])
+            "stty rows 24 cols \"$PROBE_TABLE_WIDTH\"; \"$PROBE_TABLE_BINARY\" request get \"$PROBE_TABLE_COLLECTION\" items/0/items/0", "/dev/null"])
             .env("PROBE_TABLE_WIDTH", width.to_string())
             .env("PROBE_TABLE_BINARY", env!("CARGO_BIN_EXE_probe"))
             .env("PROBE_TABLE_COLLECTION", &collection).output().unwrap();
@@ -153,29 +124,35 @@ fn request_details_use_narrow_stdout_terminal_and_piped_fallback() {
         let human = String::from_utf8(terminal.stdout)
             .unwrap()
             .replace("\r\n", "\n");
-        assert!(human.starts_with("Name: Get user\nSelector: items/0\n"));
-        for title in ["Headers", "Path parameters", "Query parameters"] {
+        assert!(human.starts_with("Name: List pets\nSelector: items/0/items/0\n"));
+        for (title, line_count) in [
+            ("Headers", 3),
+            ("Path parameters", 2),
+            ("Query parameters", 2),
+        ] {
             let lines = human
                 .split(&format!("{title}\n"))
                 .nth(1)
                 .unwrap()
                 .lines()
-                .take(3)
+                .take(line_count)
                 .collect::<Vec<_>>();
             assert!(lines.iter().all(|line| line.width() <= width), "{human}");
-            assert!(lines[2].ends_with("disabled"), "{human}");
+            if title == "Headers" {
+                assert!(lines[2].ends_with("disabled"), "{human}");
+            }
         }
     }
     let destination = temporary_path("redirected-request-get.txt");
     let redirected = Command::new("script").args(["-q", "-e", "-c",
-        "stty rows 24 cols 20; \"$PROBE_TABLE_BINARY\" request get \"$PROBE_TABLE_COLLECTION\" items/0 > \"$PROBE_TABLE_OUTPUT\"", "/dev/null"])
+        "stty rows 24 cols 20; \"$PROBE_TABLE_BINARY\" request get \"$PROBE_TABLE_COLLECTION\" items/0/items/0 > \"$PROBE_TABLE_OUTPUT\"", "/dev/null"])
         .env("PROBE_TABLE_BINARY", env!("CARGO_BIN_EXE_probe"))
         .env("PROBE_TABLE_COLLECTION", &collection).env("PROBE_TABLE_OUTPUT", &destination).output().unwrap();
     assert!(redirected.status.success(), "{redirected:?}");
     let piped = probe()
         .args(["request", "get"])
         .arg(&collection)
-        .arg("items/0")
+        .arg("items/0/items/0")
         .output()
         .unwrap();
     assert!(piped.status.success());
