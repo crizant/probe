@@ -27,7 +27,7 @@ impl ProbeApp {
         request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Ok(selected) = request.selected_websocket_message() else {
             return div().debug_selector(|| "websocket-invalid-selection".into()).text_color(theme.colors.text.secondary).child("Message variants require exactly one selected variant. The saved variants have not been changed.").into_any_element();
         };

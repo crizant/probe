@@ -58,11 +58,16 @@ pub(super) fn library_icon(
     cache_key: &'static str,
     data: &'static LazyLock<Vec<u8>>,
     size: f32,
-) -> gpui::Div {
+) -> gpui_kit::Div {
     svg_icon(cache_key, data.as_slice(), size, size)
 }
 
-fn svg_icon(cache_key: &'static str, data: &'static [u8], width: f32, height: f32) -> gpui::Div {
+fn svg_icon(
+    cache_key: &'static str,
+    data: &'static [u8],
+    width: f32,
+    height: f32,
+) -> gpui_kit::Div {
     let width = px(width);
     let height = px(height);
     div()
@@ -195,7 +200,7 @@ impl RequestIcon {
     }
 }
 
-pub(crate) fn request_icon(theme: Theme, icon: &RequestIcon) -> gpui::Div {
+pub(crate) fn request_icon(theme: Theme, icon: &RequestIcon) -> gpui_kit::Div {
     let (cache_key, data, is_method) = icon.asset();
     let height = theme.metrics.icon_standard;
     let width = height * 1.5;
@@ -216,7 +221,7 @@ pub(crate) fn request_icon(theme: Theme, icon: &RequestIcon) -> gpui::Div {
     .text_color(color)
 }
 
-pub(crate) fn tree_icon_slot(theme: Theme, icon: impl IntoElement) -> gpui::Div {
+pub(crate) fn tree_icon_slot(theme: Theme, icon: impl IntoElement) -> gpui_kit::Div {
     let height = theme.metrics.icon_standard * 1.25;
     div()
         .w(px(height))
@@ -228,7 +233,7 @@ pub(crate) fn tree_icon_slot(theme: Theme, icon: impl IntoElement) -> gpui::Div 
         .child(icon)
 }
 
-pub(crate) fn tree_disclosure_icon(theme: Theme, expanded: bool) -> gpui::Div {
+pub(crate) fn tree_disclosure_icon(theme: Theme, expanded: bool) -> gpui_kit::Div {
     let (name, svg) = if expanded {
         ("lucide-chevron-down", &CHEVRON_DOWN_SVG)
     } else {
@@ -237,7 +242,7 @@ pub(crate) fn tree_disclosure_icon(theme: Theme, expanded: bool) -> gpui::Div {
     library_icon(name, svg, theme.metrics.icon_small).text_color(theme.colors.text.muted)
 }
 
-pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
+pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui_kit::Div {
     let icon = if expanded {
         library_icon(
             "lucide-chevron-up",
@@ -254,12 +259,12 @@ pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui::Div {
     icon.text_color(theme.colors.text.muted)
 }
 
-pub(crate) fn lock_icon(theme: Theme) -> gpui::Div {
+pub(crate) fn lock_icon(theme: Theme) -> gpui_kit::Div {
     library_icon("lucide-lock", &LOCK_SVG, theme.metrics.icon_small)
         .text_color(theme.colors.text.muted)
 }
 
-fn tree_item_icon_color(theme: Theme, selected: bool) -> gpui::Rgba {
+fn tree_item_icon_color(theme: Theme, selected: bool) -> gpui_kit::Rgba {
     if selected {
         theme.colors.selection.active_foreground
     } else {
@@ -267,7 +272,7 @@ fn tree_item_icon_color(theme: Theme, selected: bool) -> gpui::Rgba {
     }
 }
 
-fn folder_icon(theme: Theme, expanded: bool, selected: bool, size: f32) -> gpui::Div {
+fn folder_icon(theme: Theme, expanded: bool, selected: bool, size: f32) -> gpui_kit::Div {
     let icon = if expanded {
         library_icon("lucide-folder-open", &FOLDER_OPEN_SVG, size)
     } else {
@@ -276,23 +281,23 @@ fn folder_icon(theme: Theme, expanded: bool, selected: bool, size: f32) -> gpui:
     icon.text_color(tree_item_icon_color(theme, selected))
 }
 
-pub(crate) fn tree_folder_icon(theme: Theme, expanded: bool, selected: bool) -> gpui::Div {
+pub(crate) fn tree_folder_icon(theme: Theme, expanded: bool, selected: bool) -> gpui_kit::Div {
     folder_icon(theme, expanded, selected, theme.metrics.icon_standard)
 }
 
-pub(crate) fn collection_icon(theme: Theme) -> gpui::Div {
+pub(crate) fn collection_icon(theme: Theme) -> gpui_kit::Div {
     library_icon("lucide-library", &LIBRARY_SVG, theme.metrics.icon_standard)
 }
 
-pub(crate) fn menu_folder_icon(theme: Theme) -> gpui::Div {
+pub(crate) fn menu_folder_icon(theme: Theme) -> gpui_kit::Div {
     folder_icon(theme, false, false, 14.0)
 }
 
-pub(crate) fn plus_icon(_theme: Theme) -> gpui::Div {
+pub(crate) fn plus_icon(_theme: Theme) -> gpui_kit::Div {
     library_icon("lucide-plus", &PLUS_SVG, 14.0)
 }
 
-pub(crate) fn hover_fill(color: gpui::Rgba) -> gpui::Rgba {
+pub(crate) fn hover_fill(color: gpui_kit::Rgba) -> gpui_kit::Rgba {
     let mut hover: Hsla = color.into();
     hover.l = if hover.l < 0.5 {
         (hover.l + 0.08).min(1.0)
@@ -339,12 +344,12 @@ pub(crate) fn add_menu_button_with_id(
     )
 }
 
-pub(crate) fn save_icon(theme: Theme) -> gpui::Div {
+pub(crate) fn save_icon(theme: Theme) -> gpui_kit::Div {
     library_icon("lucide-save", &SAVE_SVG, theme.metrics.icon_standard)
         .text_color(theme.colors.text.primary)
 }
 
-pub(crate) fn download_icon(theme: Theme) -> gpui::Div {
+pub(crate) fn download_icon(theme: Theme) -> gpui_kit::Div {
     library_icon(
         "lucide-download",
         &DOWNLOAD_SVG,
@@ -353,12 +358,15 @@ pub(crate) fn download_icon(theme: Theme) -> gpui::Div {
     .text_color(theme.colors.text.primary)
 }
 
-pub(crate) fn close_icon(theme: Theme) -> gpui::Div {
+pub(crate) fn close_icon(theme: Theme) -> gpui_kit::Div {
     library_icon("lucide-x", &CLOSE_SVG, theme.metrics.icon_standard)
         .text_color(theme.colors.text.secondary)
 }
 
-pub(crate) fn disconnect_severity_mark(theme: Theme, severity: DisconnectSeverity) -> gpui::Div {
+pub(crate) fn disconnect_severity_mark(
+    theme: Theme,
+    severity: DisconnectSeverity,
+) -> gpui_kit::Div {
     let (name, svg) = match severity {
         DisconnectSeverity::Success => ("disconnect-severity-success", &CHECK_SVG),
         DisconnectSeverity::Temporary => ("disconnect-severity-temporary", &SEVERITY_DIAMOND_SVG),
@@ -370,7 +378,7 @@ pub(crate) fn disconnect_severity_mark(theme: Theme, severity: DisconnectSeverit
         .text_color(disconnect_severity_color(theme, severity))
 }
 
-pub(crate) fn locate_icon(theme: Theme) -> gpui::Div {
+pub(crate) fn locate_icon(theme: Theme) -> gpui_kit::Div {
     library_icon(
         "lucide-locate-fixed",
         &LOCATE_SVG,
@@ -379,7 +387,7 @@ pub(crate) fn locate_icon(theme: Theme) -> gpui::Div {
     .text_color(theme.colors.text.secondary)
 }
 
-fn sidebar_icon(theme: Theme, collapsed: bool) -> gpui::Div {
+fn sidebar_icon(theme: Theme, collapsed: bool) -> gpui_kit::Div {
     if collapsed {
         library_icon(
             "lucide-panel-left-open",
@@ -452,7 +460,7 @@ fn icon_button_base(
     accessibility_label: &'static str,
     enabled: bool,
     selected: bool,
-    active_background: gpui::Rgba,
+    active_background: gpui_kit::Rgba,
 ) -> Button {
     Button::new(id)
         .hint(theme, accessibility_label)
@@ -474,15 +482,15 @@ fn icon_button_base(
         })
 }
 
-pub(super) fn folder_open_icon(color: gpui::Rgba) -> gpui::Div {
+pub(super) fn folder_open_icon(color: gpui_kit::Rgba) -> gpui_kit::Div {
     library_icon("lucide-folder-open", &FOLDER_OPEN_SVG, 14.0).text_color(color)
 }
 
-pub(crate) fn trash_icon(color: gpui::Rgba) -> gpui::Div {
+pub(crate) fn trash_icon(color: gpui_kit::Rgba) -> gpui_kit::Div {
     library_icon("lucide-trash-2", &TRASH_SVG, 14.0).text_color(color)
 }
 
-pub(crate) fn clear_icon(theme: Theme) -> gpui::Div {
+pub(crate) fn clear_icon(theme: Theme) -> gpui_kit::Div {
     library_icon("lucide-eraser", &CLEAR_SVG, theme.metrics.icon_standard)
         .text_color(theme.colors.text.secondary)
 }

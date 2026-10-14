@@ -250,7 +250,7 @@ impl ProbeApp {
         theme: Theme,
         list_scroll: Option<&components::ListScroll>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
         for (index, row) in kind.rows(request).enumerate() {
             let name_view = cx.weak_entity();

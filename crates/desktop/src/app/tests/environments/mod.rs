@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::SecretUiStatus;
 use crate::credentials::{CredentialId, CredentialStore, CredentialStoreError};
-use gpui::{Context, Window, WindowHandle};
+use gpui_kit::{Context, Window, WindowHandle};
 use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
@@ -184,7 +184,7 @@ impl EnvironmentWorkspace {
         &self,
         cx: &mut TestAppContext,
         index: usize,
-        strategy: gpui::ScrollStrategy,
+        strategy: gpui_kit::ScrollStrategy,
     ) {
         self.update(cx, |view, _, cx| {
             view.environment_variables_scroll
@@ -196,8 +196,8 @@ impl EnvironmentWorkspace {
     fn assert_manager_field_focus(
         &self,
         cx: &mut TestAppContext,
-        focus: &gpui::FocusHandle,
-        controller: gpui::EntityId,
+        focus: &gpui_kit::FocusHandle,
+        controller: gpui_kit::EntityId,
     ) {
         self.update(cx, |view, window, cx| {
             assert_eq!(window.focused(cx).as_ref(), Some(focus));
@@ -279,7 +279,7 @@ fn type_secret(view: &mut ProbeApp, window: &mut Window, cx: &mut Context<ProbeA
     input.update(cx, |input, cx| input.set_value(value, window, cx));
 }
 
-fn secret_input_is_empty(view: &ProbeApp, cx: &gpui::App) -> bool {
+fn secret_input_is_empty(view: &ProbeApp, cx: &gpui_kit::App) -> bool {
     view.secret_value_dialog
         .as_ref()
         .expect("secret value dialog should be open")

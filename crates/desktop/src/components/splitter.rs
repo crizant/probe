@@ -1,5 +1,5 @@
 use super::*;
-use gpui::{Axis, CursorStyle, MouseDownEvent};
+use gpui_kit::{Axis, CursorStyle, MouseDownEvent};
 
 const LINE_SIZE: f32 = 1.0;
 const HIT_TARGET_SIZE: f32 = 5.0;

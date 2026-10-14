@@ -75,7 +75,7 @@ pub(super) fn editor_search_card_overlay(
     active_match: usize,
     editor_state: Entity<EditorState>,
     cx: &mut App,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     if !search_state.read(cx).is_open() {
         return editor.into_any_element();
     }
@@ -329,7 +329,7 @@ pub(super) fn response_search_highlight_overlay(
     editor: impl IntoElement,
     text: SharedString,
     matches: Vec<(Range<usize>, bool)>,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     if matches.is_empty() {
         return editor.into_any_element();
     }
@@ -378,7 +378,7 @@ pub(in crate::components) fn search_match_bounds(
     editor: &EditorState,
     text: &str,
     range: &Range<usize>,
-    fallback_char_size: gpui::Size<Pixels>,
+    fallback_char_size: gpui_kit::Size<Pixels>,
 ) -> Vec<Bounds<Pixels>> {
     let mut bounds = Vec::new();
     let start = range.start.min(text.len());
@@ -418,7 +418,7 @@ pub(in crate::components) fn search_fallback_char_size(
     theme: Theme,
     editor: &EditorState,
     window: &Window,
-) -> gpui::Size<Pixels> {
+) -> gpui_kit::Size<Pixels> {
     let font_size = px(theme.typography.body_size);
     let font_id = window
         .text_system()
@@ -431,7 +431,7 @@ pub(in crate::components) fn search_fallback_char_size(
     )
 }
 
-fn usable_search_char_size(bounds: &Bounds<Pixels>) -> Option<gpui::Size<Pixels>> {
+fn usable_search_char_size(bounds: &Bounds<Pixels>) -> Option<gpui_kit::Size<Pixels>> {
     (bounds.size.width > px(0.0) && bounds.size.height > px(0.0)).then_some(bounds.size)
 }
 
@@ -456,7 +456,7 @@ pub(in crate::components) fn search_match_char_ranges(
 
 pub(in crate::components) fn normalize_search_char_bounds(
     bounds: &mut Bounds<Pixels>,
-    last_char_size: Option<gpui::Size<Pixels>>,
+    last_char_size: Option<gpui_kit::Size<Pixels>>,
 ) {
     let Some(last_char_size) = last_char_size else {
         return;

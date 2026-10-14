@@ -7,11 +7,11 @@
 
 use std::{collections::HashMap, ops::Range, rc::Rc, sync::LazyLock};
 
-use gpui::{Context, HighlightStyle, SharedString, Window};
-use gpui_base::input::{
+use gpui_kit::base::input::{
     EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter,
     InputHighlighterFactory, Rope,
 };
+use gpui_kit::{Context, HighlightStyle, SharedString, Window};
 use syntect::{
     parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet},
     util::LinesWithEndings,

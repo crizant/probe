@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use gpui::{Context, EntityInputHandler as _, Window};
-use gpui_base::input::EditorState;
+use gpui_kit::base::input::EditorState;
+use gpui_kit::{Context, EntityInputHandler as _, Window};
 
 /// A local edit decided from the text before and after a collapsed caret change.
 /// Ranges and `cursor` are UTF-8 byte offsets into the post-change text.

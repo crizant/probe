@@ -6,7 +6,7 @@ impl ProbeApp {
         specs: &[DialogActionSpec],
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         let mut actions = components::dialog_actions(theme);
         for spec in specs.iter().copied() {
             let view = cx.weak_entity();
@@ -49,7 +49,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(dialog) = self.application_dialog.as_ref() else {
             return div().into_any_element();
         };
@@ -199,7 +199,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(dialog) = self.structure_dialog.as_ref() else {
             return div().into_any_element();
         };
@@ -379,7 +379,7 @@ impl ProbeApp {
         .into_any_element()
     }
 
-    fn render_save_destination(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_save_destination(&self, theme: Theme, cx: &mut Context<Self>) -> gpui_kit::Div {
         let Some(dialog) = self.structure_dialog.as_ref() else {
             return div();
         };
@@ -461,7 +461,7 @@ impl ProbeApp {
         row: &SaveDestinationRow,
         parent: &str,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let selected = row.selector == parent;
         let depth = row.depth;
         let select_id = if row.selector.is_empty() {
@@ -582,7 +582,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(name) = self.structure_dialog.as_ref().and_then(|dialog| {
             matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. })
                 .then(|| dialog.new_folder_name.clone())
@@ -679,7 +679,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(name) = self.create_environment_dialog.as_ref() else {
             return div().into_any_element();
         };

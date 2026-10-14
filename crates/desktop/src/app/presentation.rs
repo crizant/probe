@@ -1,4 +1,4 @@
-use gpui::{IntoElement as _, ParentElement as _, Styled as _, div, px};
+use gpui_kit::{IntoElement as _, ParentElement as _, Styled as _, div, px};
 
 use crate::{
     response_inspector::InspectSelection, response_viewer::PreparedDocument, theme::Theme,
@@ -16,7 +16,7 @@ pub(crate) struct PrettyRevealState {
     pub(crate) scroll_pending: bool,
 }
 
-pub(crate) fn response_status_color(theme: Theme, status: u16) -> gpui::Rgba {
+pub(crate) fn response_status_color(theme: Theme, status: u16) -> gpui_kit::Rgba {
     match status {
         100..=199 => theme.colors.responses.informational,
         200..=299 => theme.colors.responses.success,
@@ -88,7 +88,7 @@ pub(crate) fn inspect_row_index(
     })
 }
 
-pub(crate) fn placeholder_message(theme: Theme, message: &str) -> gpui::AnyElement {
+pub(crate) fn placeholder_message(theme: Theme, message: &str) -> gpui_kit::AnyElement {
     div()
         .flex_1()
         .flex()
@@ -103,7 +103,7 @@ pub(crate) fn placeholder_message(theme: Theme, message: &str) -> gpui::AnyEleme
 pub(crate) fn request_method_options(
     theme: Theme,
     active_method: &str,
-) -> Vec<(String, String, Option<gpui::Rgba>)> {
+) -> Vec<(String, String, Option<gpui_kit::Rgba>)> {
     let mut methods = vec!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
     if !methods.contains(&active_method) {
         methods.push(active_method);

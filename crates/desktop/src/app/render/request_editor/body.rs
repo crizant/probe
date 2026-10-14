@@ -7,7 +7,7 @@ impl ProbeApp {
         request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let active_kind = body_kind(request);
         let choices = [
             ("None", BodyEditorKind::None),

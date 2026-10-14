@@ -7,7 +7,7 @@ impl ProbeApp {
         parts: &[MultipartPart],
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
         for (index, part) in parts.iter().enumerate() {
             let value = match &part.value {

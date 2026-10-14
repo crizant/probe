@@ -11,7 +11,12 @@ use std::{
     time::Duration,
 };
 
-use gpui::{
+use gpui_kit::base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+use gpui_kit::base::{
+    AutoScroll, Button, Input, POPUP_PRIORITY, Popover, Positioner, Scrollbar, ScrollbarMode, Tab,
+    Tabs, ToastStack,
+};
+use gpui_kit::{
     Action, Anchor, App, AppContext as _, Axis, Bounds, Context, CursorStyle, DragMoveEvent,
     ElementId, FocusHandle, FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyBinding,
     MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, PathPromptOptions, Pixels,
@@ -21,12 +26,7 @@ use gpui::{
     relative, size, transparent_black, uniform_list,
 };
 #[cfg(target_os = "macos")]
-use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
-use gpui_base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
-use gpui_base::{
-    AutoScroll, Button, Input, POPUP_PRIORITY, Popover, Positioner, Scrollbar, ScrollbarMode, Tab,
-    Tabs, ToastStack,
-};
+use gpui_kit::{Menu, MenuItem, OsAction, SystemMenuType};
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Body, Collection, Environment, EnvironmentVariable,
     FileReference, FormField, Header, ItemKind, MultipartPart, MultipartPartKind, MultipartValue,
@@ -138,7 +138,7 @@ const MAX_INSPECT_LIST_WIDTH: f32 = 360.0;
 #[cfg(test)]
 use crate::filesystem::{WATCH_POLL, drain_watch_events};
 
-gpui::actions!(
+gpui_kit::actions!(
     probe,
     [
         OpenWorkspace,
@@ -340,7 +340,7 @@ pub(crate) struct ProbeApp {
     #[cfg(test)]
     rendered_environment_variable_rows: usize,
     _response_elapsed_refresh: Task<()>,
-    _quit_subscription: gpui::Subscription,
+    _quit_subscription: gpui_kit::Subscription,
 }
 
 impl ProbeApp {
@@ -601,7 +601,7 @@ impl ProbeApp {
 }
 
 #[cfg(target_os = "windows")]
-fn render_windows_controls(theme: Theme) -> gpui::Div {
+fn render_windows_controls(theme: Theme) -> gpui_kit::Div {
     let control = move |id: &'static str,
                         label: &'static str,
                         hint: &'static str,
@@ -662,7 +662,7 @@ fn render_windows_controls(theme: Theme) -> gpui::Div {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn render_windows_controls(_: Theme) -> gpui::Div {
+fn render_windows_controls(_: Theme) -> gpui_kit::Div {
     div()
 }
 
@@ -670,7 +670,7 @@ pub fn run() {
     // The theme has to be known before the window exists. This file is small,
     // so read it once here instead of after the first frame on a background task.
     let startup = LoadedUserConfig::load();
-    let app = gpui_platform::application();
+    let app = gpui_kit::application();
     let reopen_startup = startup.clone();
     app.on_reopen(move |cx| {
         if cx.windows().is_empty() {

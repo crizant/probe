@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
-use gpui::{
-    Context, Entity, IntoElement, Render, SharedString, TestAppContext, VisualTestContext, hsla,
-    point, prelude::*, px, size, transparent_black,
-};
-use gpui_base::{
+use gpui_kit::base::{
     Editor, Input, InputBase,
     input::{EditorState, InputState},
+};
+use gpui_kit::{
+    Context, Entity, IntoElement, Render, SharedString, TestAppContext, VisualTestContext, hsla,
+    point, prelude::*, px, size, transparent_black,
 };
 
 use super::auto_edit::{apply_auto_edit, detect_auto_edit};
@@ -249,9 +249,9 @@ fn variable_highlight_runs_color_only_mustache_spans() {
     let value = "{{host}}/users";
     let ranges = variable_ranges(value);
     let palette = stand_in_palette();
-    let base = gpui::TextRun {
+    let base = gpui_kit::TextRun {
         len: value.len(),
-        font: gpui::Font::default(),
+        font: gpui_kit::Font::default(),
         color: transparent_black(),
         background_color: None,
         underline: None,
@@ -273,9 +273,9 @@ fn variable_highlight_runs_underline_unresolved_mustache_spans() {
     let value = "{{host}}/{{missing}}";
     let ranges = variable_ranges(value);
     let palette = stand_in_palette();
-    let base = gpui::TextRun {
+    let base = gpui_kit::TextRun {
         len: value.len(),
-        font: gpui::Font::default(),
+        font: gpui_kit::Font::default(),
         color: hsla(0.0, 0.0, 0.2, 1.0),
         background_color: None,
         underline: None,
@@ -307,9 +307,9 @@ fn variable_highlight_runs_clamp_overlapping_url_placeholders() {
     let value = "{{a:b}}";
     let ranges = input_variable_ranges(value, true);
     let palette = stand_in_palette();
-    let base = gpui::TextRun {
+    let base = gpui_kit::TextRun {
         len: value.len(),
-        font: gpui::Font::default(),
+        font: gpui_kit::Font::default(),
         color: transparent_black(),
         background_color: None,
         underline: None,
@@ -394,9 +394,9 @@ fn variable_highlight_runs_paint_non_variable_text_with_the_base_color() {
     let ranges = variable_ranges(value);
     let base_color = hsla(0.0, 0.0, 0.25, 1.0);
     let palette = stand_in_palette();
-    let base = gpui::TextRun {
+    let base = gpui_kit::TextRun {
         len: value.len(),
-        font: gpui::Font::default(),
+        font: gpui_kit::Font::default(),
         color: base_color,
         background_color: None,
         underline: None,
@@ -440,7 +440,7 @@ fn search_match_char_ranges_split_long_matches_on_char_boundaries() {
 #[test]
 fn search_highlight_bounds_repair_wrapped_edge_characters() {
     let mut wrapped_edge =
-        gpui::Bounds::new(point(px(120.0), px(24.0)), size(px(-120.0), px(32.0)));
+        gpui_kit::Bounds::new(point(px(120.0), px(24.0)), size(px(-120.0), px(32.0)));
 
     super::normalize_search_char_bounds(&mut wrapped_edge, Some(size(px(8.0), px(16.0))));
 
@@ -453,7 +453,11 @@ struct SearchHighlightHarness {
 }
 
 impl Render for SearchHighlightHarness {
-    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = Theme::light();
         InputBase::new("search-highlight-harness-editor")
             .size_full()
@@ -463,7 +467,7 @@ impl Render for SearchHighlightHarness {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn search_highlight_bounds_include_last_character_before_newline(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let value = SharedString::from("aaaaaaaaaf\n234");
@@ -512,7 +516,11 @@ struct HighlightHarness {
 }
 
 impl Render for HighlightHarness {
-    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         InputBase::new("variable-highlight-harness-input")
             .w(px(160.0))
             .h(px(24.0))
@@ -527,7 +535,7 @@ fn long_variable_url() -> SharedString {
     ))
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn variable_highlight_scrolls_with_caret_at_end_of_long_url(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let value = long_variable_url();
@@ -570,7 +578,7 @@ fn variable_highlight_scrolls_with_caret_at_end_of_long_url(cx: &mut TestAppCont
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn variable_highlight_stays_at_origin_when_caret_is_at_start(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let value = long_variable_url();
@@ -954,7 +962,11 @@ struct TooltipScrollHarness {
 }
 
 impl Render for TooltipScrollHarness {
-    fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        window: &mut gpui_kit::Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = Theme::light();
         self.renders += 1;
         div()
@@ -977,7 +989,7 @@ impl Render for TooltipScrollHarness {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn input_tooltip_hits_follow_native_scroll_with_an_offscreen_caret(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let window = cx.open_window(size(px(320.0), px(80.0)), |window, cx| {

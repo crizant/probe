@@ -7,11 +7,11 @@
 
 use std::borrow::Cow;
 
-use gpui::{FontWeight, Hsla, Rgba, WindowAppearance, hsla, px, rgba};
-use gpui_base::{
+use gpui_kit::base::{
     ColorTokens, RadiusTokens, ScrollbarStyles, SemanticThemeTokens, ShadowTokens, SpacingTokens,
     TextStyleToken, TypographyTokens,
 };
+use gpui_kit::{FontWeight, Hsla, Rgba, WindowAppearance, hsla, px, rgba};
 
 use crate::user_config::ThemeMode;
 
@@ -206,30 +206,32 @@ impl Theme {
     }
 
     /// Install gpui-base infrastructure and the library's default semantic tokens.
-    pub fn init(cx: &mut gpui::App) {
-        gpui_base::init(cx);
+    pub fn init(cx: &mut gpui_kit::App) {
+        gpui_kit::init(cx);
         load_bundled_fonts(cx);
         Self::sync_gpui_base(WindowAppearance::Light, cx);
     }
 
     /// Project the theme for `appearance` into gpui-base's global `Theme`.
-    pub fn sync_gpui_base(appearance: WindowAppearance, cx: &mut gpui::App) {
+    pub fn sync_gpui_base(appearance: WindowAppearance, cx: &mut gpui_kit::App) {
         Self::sync_theme(Self::for_window_appearance(appearance), cx);
     }
 
     /// Project this theme into gpui-base's global `Theme` so primitives and
     /// infrastructure (scrollbars, resize handles) share the same tokens.
-    pub(crate) fn sync_theme(theme: Self, cx: &mut gpui::App) {
-        let gpui_theme = gpui_base::Theme::global_mut(cx);
+    pub(crate) fn sync_theme(theme: Self, cx: &mut gpui_kit::App) {
+        let gpui_theme = gpui_kit::base::Theme::global_mut(cx);
         gpui_theme.tokens = theme.semantic_tokens();
         let scrollbar = theme.colors.scrollbar;
         let thumb_radius = px(theme.metrics.radius_small);
-        gpui_theme.scrollbar.styles = ScrollbarStyles::default()
-            .thumb(|thumb| thumb.bg(scrollbar.thumb).radius(thumb_radius))
-            .thumb_hover(|thumb| thumb.bg(scrollbar.thumb_hover).radius(thumb_radius))
-            .thumb_active(|thumb| thumb.bg(scrollbar.thumb_active).radius(thumb_radius));
-        gpui_theme.resizable.handle = theme.colors.borders.subtle.into();
-        gpui_theme.resizable.active_handle = theme.colors.borders.focused.into();
+        gpui_theme.scrollbar = gpui_theme.scrollbar.clone().with_styles(
+            ScrollbarStyles::default()
+                .thumb(|thumb| thumb.bg(scrollbar.thumb).radius(thumb_radius))
+                .thumb_hover(|thumb| thumb.bg(scrollbar.thumb_hover).radius(thumb_radius))
+                .thumb_active(|thumb| thumb.bg(scrollbar.thumb_active).radius(thumb_radius)),
+        );
+        gpui_theme.resizable.handle = Some(theme.colors.borders.subtle.into());
+        gpui_theme.resizable.active_handle = Some(theme.colors.borders.focused.into());
     }
 
     /// Editor caret selection wash derived from the active accent.
@@ -278,6 +280,7 @@ impl Theme {
                 border: self.colors.borders.standard.into(),
                 input: self.colors.borders.standard.into(),
                 ring: self.colors.borders.focused.into(),
+                selection: self.editor_selection(),
             },
             radius: RadiusTokens {
                 none: px(0.0),
@@ -578,7 +581,7 @@ const fn monospace_font() -> &'static str {
 }
 
 /// JetBrains Mono 2.304 (SIL OFL 1.1), bundled in `assets/fonts/jetbrains-mono`.
-fn load_bundled_fonts(cx: &mut gpui::App) {
+fn load_bundled_fonts(cx: &mut gpui_kit::App) {
     cx.text_system()
         .add_fonts(vec![
             Cow::Borrowed(
@@ -629,7 +632,7 @@ const fn default_motion() -> Motion {
 mod tests {
     use super::{Theme, ThemeAppearance, appearance_override};
     use crate::user_config::ThemeMode;
-    use gpui::WindowAppearance;
+    use gpui_kit::WindowAppearance;
 
     #[test]
     fn native_appearances_select_the_expected_built_in_theme() {

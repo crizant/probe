@@ -1,7 +1,11 @@
 use super::*;
 
 impl ProbeApp {
-    pub(super) fn render_toasts(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn render_toasts(
+        &self,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
         if self.toasts.is_empty() {
             return div().into_any_element();
         }
@@ -32,7 +36,7 @@ impl ProbeApp {
             .into_any_element()
     }
 
-    pub(super) fn render_tab_tooltip(&self, theme: Theme) -> gpui::AnyElement {
+    pub(super) fn render_tab_tooltip(&self, theme: Theme) -> gpui_kit::AnyElement {
         let Some(tooltip) = self.transient.tab_tooltip else {
             return div().into_any_element();
         };
@@ -150,7 +154,7 @@ impl ProbeApp {
         theme: Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(context_menu) = self.transient.tab_context_menu.as_ref() else {
             return div().into_any_element();
         };
@@ -204,7 +208,7 @@ impl ProbeApp {
         theme: Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(context_menu) = self.transient.tree_context_menu.as_ref() else {
             return div().into_any_element();
         };
@@ -296,7 +300,7 @@ impl ProbeApp {
         row: TreeRow,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(loaded) = &self.loaded_workspace else {
             return div().into_any_element();
         };
@@ -470,7 +474,7 @@ impl ProbeApp {
         button: Button,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let TreeRowSpec {
             item,
             selector,
@@ -544,7 +548,7 @@ impl ProbeApp {
             .into_any_element()
     }
 
-    pub(super) fn render_tree_root_drop_row(&self, theme: Theme) -> gpui::AnyElement {
+    pub(super) fn render_tree_root_drop_row(&self, theme: Theme) -> gpui_kit::AnyElement {
         let show_line = matches!(
             self.tree_drop_target.map(|intent| intent.indicator),
             Some(DropIndicator::RootEnd)
@@ -569,7 +573,7 @@ impl ProbeApp {
             .into_any_element()
     }
 
-    pub(super) fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui_kit::Div {
         let new_http_request_view = cx.weak_entity();
         let new_graphql_request_view = cx.weak_entity();
         let new_folder_view = cx.weak_entity();

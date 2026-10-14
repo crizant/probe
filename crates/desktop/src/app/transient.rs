@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::BTreeMap, path::PathBuf};
 
-use gpui::{Context, FocusHandle, Task};
+use gpui_kit::{Context, FocusHandle, Task};
 use probe_core::WorkspaceItemRef;
 
 use super::{DesktopMenu, DesktopSubmenu, PositionedContextMenu, ProbeApp, TabTooltip};

@@ -74,7 +74,7 @@ fn assert_failed_without_secret(view: &ProbeApp, key: probe_core::RequestKey) {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn execution_marks_stale_presence_missing_when_the_native_secret_is_absent(
     cx: &mut TestAppContext,
 ) {
@@ -94,7 +94,7 @@ fn execution_marks_stale_presence_missing_when_the_native_secret_is_absent(
     assert_eq!(workspace.store.get_calls(), 1);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn execution_reads_the_native_value_and_relearns_presence(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let id = workspace.development_secret();
@@ -178,12 +178,12 @@ fn assert_stale_execution_cannot_override(cx: &mut TestAppContext, write: Creden
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn stale_execution_cannot_restore_a_secret_deleted_while_it_resolved(cx: &mut TestAppContext) {
     assert_stale_execution_cannot_override(cx, CredentialWrite::Delete);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn stale_execution_cannot_forget_a_secret_set_while_it_resolved(cx: &mut TestAppContext) {
     assert_stale_execution_cannot_override(cx, CredentialWrite::Set);
 }

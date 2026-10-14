@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui::ImageFormat;
+use gpui_kit::ImageFormat;
 use probe_http::{HttpResponse, ResponseHeader};
 
 use super::prepare::{body_is_binary, pretty_json_body, pretty_xml_body, response_body_syntax};

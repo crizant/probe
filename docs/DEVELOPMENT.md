@@ -58,15 +58,15 @@ Before adding a crate, check the standard library and existing dependencies. Pre
 actively maintained, cross-platform crates and avoid large dependencies for trivial
 work. Do not replace dependencies without a task-specific reason.
 
-Probe uses Longbridge `gpui-base` (`gpui-base` / `gpui_base`, from
-`longbridge/gpui-component`'s `crates/base`). Never add the separate, pre-styled
-`gpui-component` crate or copy its APIs. Initialize the theme once through
+Probe depends on `gpui-kit` with default features disabled and uses its unstyled
+`gpui_kit::base` layer. Never enable the separate, pre-styled `component` layer or
+copy its APIs. Initialize the theme once through
 `probe_desktop::theme::Theme::init(cx)`.
 
-Keep GPUI and `gpui-base` on compatible pinned sources. If their types conflict,
-inspect the pinned `gpui-base` lockfile and correct the GPUI pin rather than mixing
-revisions. Do not upgrade either dependency during unrelated work. Inspect the exact
-pinned source and examples before using unfamiliar APIs.
+GPUI Kit coordinates the matching GPUI and base versions. Keep its resolved version
+in Cargo.lock; do not add independent GPUI dependencies or upgrade Kit during
+unrelated work. Inspect the exact pinned source and examples before using
+unfamiliar APIs.
 
 Do not introduce Electron, Tauri, WebView, React, Flutter, or another GUI framework
 without explicit approval.

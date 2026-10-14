@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use gpui_base::{ToastManager, ToastMotion, ToastOptions, ToastStackState, ToastTransitionStatus};
+use gpui_kit::base::{
+    ToastManager, ToastMotion, ToastOptions, ToastStackState, ToastTransitionStatus,
+};
 
 pub(crate) const TOAST_MOTION_DURATION: Duration = Duration::from_millis(120);
 pub(crate) const TOAST_AUTO_DISMISS: Duration = Duration::from_secs(4);

@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::components::surfaces::TextContextLabelHandler;
-use gpui::TouchPhase;
+use gpui_kit::TouchPhase;
 
 #[derive(Clone, Copy)]
 pub(in crate::components) struct EditorInsets {
@@ -191,7 +191,7 @@ pub(crate) struct ProbeTextInput {
     on_field_focus: Option<FieldFocusHandler>,
     pub(in crate::components) shared_input: Option<Entity<InputState>>,
     pub(in crate::components) flat: bool,
-    pub(in crate::components) leading_icon: Option<gpui::Div>,
+    pub(in crate::components) leading_icon: Option<gpui_kit::Div>,
     pub(in crate::components) content_gap: f32,
     pub(in crate::components) quiet_focus: bool,
     pub(in crate::components) focus_on_render: bool,
@@ -625,7 +625,7 @@ impl ListScrollState {
 
 #[derive(IntoElement)]
 pub(crate) struct ListScrollRegion {
-    child: gpui::AnyElement,
+    child: gpui_kit::AnyElement,
     scroll: ScrollHandle,
     state: ListScroll,
     fill_height: bool,
@@ -808,7 +808,7 @@ pub(crate) fn url_text_input(
     placeholder: impl Into<SharedString>,
     variables: VariableContext,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let mut input = text_input_base(theme, id, value, placeholder);
     input.debug_selector = Some("request-url-input");
     input.variables = variables;
@@ -884,7 +884,7 @@ mod tests {
     use super::{
         ListedFieldGesture, ListedFieldWheel, ListedFieldWheelSample, classify_listed_field_wheel,
     };
-    use gpui::{TouchPhase, px};
+    use gpui_kit::{TouchPhase, px};
     use std::time::{Duration, Instant};
 
     fn sample(

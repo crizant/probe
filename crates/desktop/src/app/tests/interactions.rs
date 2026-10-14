@@ -29,7 +29,7 @@ fn drag_tab(
     visual.run_until_parked();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn dragging_mixed_tabs_reorders_in_both_directions_without_selecting_them(cx: &mut TestAppContext) {
     let (window, [request, collection, folder]) = mixed_tab_window(cx);
     let mut visual = VisualTestContext::from_window(window.into(), cx);
@@ -49,7 +49,7 @@ fn dragging_mixed_tabs_reorders_in_both_directions_without_selecting_them(cx: &m
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn overview_context_menu_keeps_its_target_and_middle_click_closes_it(cx: &mut TestAppContext) {
     let (window, [_, collection, _]) = mixed_tab_window(cx);
     let mut visual = VisualTestContext::from_window(window.into(), cx);
@@ -77,7 +77,7 @@ fn overview_context_menu_keeps_its_target_and_middle_click_closes_it(cx: &mut Te
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn middle_clicking_a_request_tab_closes_it(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -122,7 +122,7 @@ fn middle_clicking_a_request_tab_closes_it(cx: &mut TestAppContext) {
     assert_eq!(selected, Some(WorkspaceItemRef::Request(first)));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn request_tab_context_menu_closes_other_tabs_and_selects_its_target(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -185,7 +185,7 @@ fn request_tab_context_menu_closes_other_tabs_and_selects_its_target(cx: &mut Te
     assert_eq!(selected, Some(WorkspaceItemRef::Request(first)));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn tree_context_menu_duplicate_restores_tree_focus_for_delete_shortcut(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -258,7 +258,7 @@ fn tree_context_menu_duplicate_restores_tree_focus_for_delete_shortcut(cx: &mut 
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn tree_context_menu_duplicate_keeps_keyboard_rename_dialog_open_after_reconcile(
     cx: &mut TestAppContext,
 ) {
@@ -335,7 +335,7 @@ fn tree_context_menu_duplicate_keeps_keyboard_rename_dialog_open_after_reconcile
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn platform_close_tab_hotkey_closes_the_active_request(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -378,7 +378,7 @@ fn platform_close_tab_hotkey_closes_the_active_request(cx: &mut TestAppContext) 
     assert_eq!(active, Some(first));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn tab_and_shift_tab_move_focus_between_controls(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -431,7 +431,7 @@ fn tab_and_shift_tab_move_focus_between_controls(cx: &mut TestAppContext) {
     assert_eq!(previous, input);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn opening_many_request_tabs_scrolls_to_the_active_tab(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -526,7 +526,7 @@ fn opening_many_request_tabs_scrolls_to_the_active_tab(cx: &mut TestAppContext) 
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn hovering_a_request_tab_shows_the_full_label_tooltip(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -592,7 +592,7 @@ fn hovering_a_request_tab_shows_the_full_label_tooltip(cx: &mut TestAppContext) 
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn overview_tab_tooltip_shows_its_name_and_icon_without_a_request_method(cx: &mut TestAppContext) {
     let (window, [_, _, folder]) = mixed_tab_window(cx);
     let mut visual = VisualTestContext::from_window(window.into(), cx);

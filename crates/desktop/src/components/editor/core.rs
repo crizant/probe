@@ -1,7 +1,7 @@
 use super::auto_edit::{apply_auto_edit, apply_editor_auto_edit, detect_auto_edit};
 use super::*;
 use crate::app::{ShiftTabOrOutdent, TabOrIndent};
-use gpui::EntityInputHandler as _;
+use gpui_kit::EntityInputHandler as _;
 
 struct EditorField {
     state: Entity<EditorState>,
@@ -107,7 +107,7 @@ pub(in crate::components) struct ProbeEditor {
     pub(in crate::components) min_height: Option<f32>,
     pub(in crate::components) padding: EditorInsets,
     pub(in crate::components) soft_wrap: bool,
-    pub(in crate::components) text_color: gpui::Rgba,
+    pub(in crate::components) text_color: gpui_kit::Rgba,
     pub(in crate::components) scroll_to_range: Option<Range<usize>>,
     pub(in crate::components) search_matches: Vec<(Range<usize>, bool)>,
     pub(in crate::components) on_change: Option<InputChangeHandler>,
@@ -151,6 +151,8 @@ impl RenderOnce for ProbeEditor {
             let state = cx.new(|cx| {
                 let mut editor = EditorState::new(window, cx)
                     .placeholder(placeholder.clone())
+                    // Probe owns JSON pairing; Kit also pairs plain text by default.
+                    .auto_close(false)
                     .folding(false)
                     .searchable(true)
                     .soft_wrap(soft_wrap)
@@ -350,7 +352,7 @@ impl RenderOnce for ProbeEditor {
                         // Blur the editor by clearing window focus
                         let focus_handle = state.read(cx).focus_handle(cx);
                         if focus_handle.is_focused(window) {
-                            window.blur();
+                            window.blur(cx);
                         }
                     }
                 }

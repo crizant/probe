@@ -5,7 +5,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use gpui::{
+use gpui_kit::{
     KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, TestAppContext, VisualTestContext,
     point, px, size,
 };
@@ -46,7 +46,7 @@ fn toast_debug(view: &ProbeApp) -> Vec<String> {
         .collect()
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn idle_app_does_not_notify_for_caret_blink(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
@@ -65,7 +65,7 @@ fn idle_app_does_not_notify_for_caret_blink(cx: &mut TestAppContext) {
     assert_eq!(notifications.get(), 0);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn websocket_elapsed_refresh_is_once_per_second_and_http_keeps_fast_cadence(
     cx: &mut TestAppContext,
 ) {
@@ -168,13 +168,13 @@ fn projection_warning_identifies_unsupported_value_and_containing_item() {
 
 fn has_active_toast(view: &ProbeApp, intent: ToastIntent, text: &str) -> bool {
     view.toasts.iter().any(|(_, toast, status)| {
-        status != gpui_base::ToastTransitionStatus::Ending
+        status != gpui_kit::base::ToastTransitionStatus::Ending
             && toast.intent == intent
             && toast.message.contains(text)
     })
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn toast_stack_renders_and_the_front_toast_can_be_dismissed(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -220,7 +220,7 @@ fn toast_stack_renders_and_the_front_toast_can_be_dismissed(cx: &mut TestAppCont
                     .iter()
                     .find(|(id, _, _)| *id == 2)
                     .map(|(_, _, status)| status),
-                Some(gpui_base::ToastTransitionStatus::Ending),
+                Some(gpui_kit::base::ToastTransitionStatus::Ending),
                 "close bounds: {close:?}"
             );
             view.close_workspace_now(cx);
@@ -730,7 +730,7 @@ fn assert_save_shortcut_after_clicking_remove_row_persists_removal(
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_system_menu_delegates_services_to_the_operating_system() {
-    use gpui::{MenuItem, SystemMenuType};
+    use gpui_kit::{MenuItem, SystemMenuType};
 
     let menus = super::system_menus(PaneLayout::Horizontal);
 
@@ -784,7 +784,7 @@ fn macos_system_menu_delegates_services_to_the_operating_system() {
     assert!(layout.items[1].is_checked());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn view_menu_state_changes_are_persisted(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -805,7 +805,7 @@ fn view_menu_state_changes_are_persisted(cx: &mut TestAppContext) {
         .expect("test window should remain open");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn desktop_menu_action_opens_the_requested_menu(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -960,7 +960,7 @@ fn lossy_import_conversion_waits_for_confirmation_then_imports_partially() {
     assert!(import.warning_count > 0);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn postman_lossy_import_requires_desktop_confirmation(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let preview = inspect_postman_source(postman_fixture("collection-lossy.json")).unwrap();
@@ -996,7 +996,7 @@ fn postman_lossy_import_requires_desktop_confirmation(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn successful_postman_import_selects_collection_variables_environment(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let imported = inspect_postman_source(postman_fixture("collection-v2.1.json"))
@@ -1073,7 +1073,7 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
     fs::remove_file(destination).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn successful_yaak_import_selects_global_environment(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let imported = inspect_yaak_source(yaak_fixture("export-v4.json"))
@@ -1116,7 +1116,7 @@ fn successful_yaak_import_selects_global_environment(cx: &mut TestAppContext) {
     fs::remove_file(destination).unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn postman_import_protects_dirty_requests(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1146,7 +1146,7 @@ fn postman_import_protects_dirty_requests(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn import_submenu_actions_open_and_close_provider_state(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -1193,7 +1193,7 @@ fn import_submenu_actions_open_and_close_provider_state(cx: &mut TestAppContext)
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn sidebar_import_submenu_keyboard_activation_restores_trigger_focus(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
@@ -1315,7 +1315,7 @@ fn reconciled_workspace(workspace: probe_opencollection::LoadedWorkspace) -> Rec
 
 fn mixed_tab_window(
     cx: &mut TestAppContext,
-) -> (gpui::WindowHandle<ProbeApp>, [crate::shell::OpenTab; 3]) {
+) -> (gpui_kit::WindowHandle<ProbeApp>, [crate::shell::OpenTab; 3]) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1200.0), px(640.0)), |window, cx| {
         ProbeApp::new(window, cx)
@@ -1342,8 +1342,8 @@ fn mixed_tab_window(
 
 fn hover_and_wait(
     cx: &mut TestAppContext,
-    window: gpui::WindowHandle<ProbeApp>,
-    point: gpui::Point<gpui::Pixels>,
+    window: gpui_kit::WindowHandle<ProbeApp>,
+    point: gpui_kit::Point<gpui_kit::Pixels>,
 ) {
     {
         let mut visual = VisualTestContext::from_window(window.into(), cx);

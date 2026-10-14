@@ -21,7 +21,7 @@ impl ProbeApp {
         checked: Option<bool>,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         if let Some(checked) = checked {
             let view = cx.weak_entity();
             return components::checked_menu_button(
@@ -58,7 +58,7 @@ impl ProbeApp {
         label: &'static str,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let open = self.transient.desktop_menu_open == Some(menu);
         let hover_view = cx.weak_entity();
         let change_view = cx.weak_entity();
@@ -97,7 +97,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         if cfg!(target_os = "macos") {
             return div().into_any_element();
         }
@@ -126,7 +126,7 @@ impl ProbeApp {
         menu: DesktopMenu,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let definition = self.desktop_menu_definition(menu);
         self.render_desktop_menu_definition(theme, definition, window, cx)
     }
@@ -137,7 +137,7 @@ impl ProbeApp {
         definition: DesktopMenuDefinition,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let mut popup = components::popup_surface(theme, definition.id, definition.width)
             .aria_label(format!("{} menu", definition.label));
 
@@ -277,7 +277,7 @@ impl ProbeApp {
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         let switcher_view = cx.weak_entity();
         let sidebar_toggle_view = cx.weak_entity();
         let home_view = cx.weak_entity();

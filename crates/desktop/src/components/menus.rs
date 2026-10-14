@@ -63,7 +63,7 @@ pub(crate) fn menu_button_with_leading(
 
 pub(crate) fn shortcut_label_for_action(
     window: &Window,
-    action: &dyn gpui::Action,
+    action: &dyn gpui_kit::Action,
 ) -> Option<String> {
     window
         .highest_precedence_binding_for_action(action)
@@ -72,16 +72,16 @@ pub(crate) fn shortcut_label_for_action(
 
 pub(crate) fn shortcut_label_for_action_in_context(
     window: &Window,
-    action: &dyn gpui::Action,
+    action: &dyn gpui_kit::Action,
     context: &str,
 ) -> Option<String> {
-    let context = gpui::KeyContext::parse(context).ok()?;
+    let context = gpui_kit::KeyContext::parse(context).ok()?;
     window
         .highest_precedence_binding_for_action_in_context(action, context)
         .map(|binding| shortcut_label_for_binding(&binding))
 }
 
-fn shortcut_label_for_binding(binding: &gpui::KeyBinding) -> String {
+fn shortcut_label_for_binding(binding: &gpui_kit::KeyBinding) -> String {
     binding
         .keystrokes()
         .iter()
@@ -90,7 +90,7 @@ fn shortcut_label_for_binding(binding: &gpui::KeyBinding) -> String {
         .join(" ")
 }
 
-fn shortcut_label_for_keystroke(keystroke: &gpui::KeybindingKeystroke) -> String {
+fn shortcut_label_for_keystroke(keystroke: &gpui_kit::KeybindingKeystroke) -> String {
     let label = keystroke.to_string();
     if let Some(prefix) = label.strip_suffix("enter") {
         format!("{prefix}⏎")
@@ -240,7 +240,7 @@ pub(crate) fn positioned_cascading_menu(
     open: bool,
     parent_width: f32,
     trigger: impl IntoElement,
-    popup: gpui::AnyElement,
+    popup: gpui_kit::AnyElement,
 ) -> impl IntoElement {
     let surface_inset = theme.metrics.spacing_1 + 1.0;
     div().relative().w_full().child(trigger).when(open, |row| {
@@ -269,7 +269,7 @@ pub(crate) fn cascading_menu(
     label: impl Into<String>,
     open: bool,
     parent_width: f32,
-    popup: gpui::AnyElement,
+    popup: gpui_kit::AnyElement,
     on_open: impl Fn(&mut App) + 'static,
 ) -> impl IntoElement {
     positioned_cascading_menu(
@@ -333,7 +333,7 @@ pub(crate) fn checked_menu_button(
         )
 }
 
-pub(crate) fn menu_separator(theme: Theme) -> gpui::Div {
+pub(crate) fn menu_separator(theme: Theme) -> gpui_kit::Div {
     div()
         .mx(px(theme.metrics.spacing_2))
         .my(px(theme.metrics.spacing_1))
@@ -342,7 +342,7 @@ pub(crate) fn menu_separator(theme: Theme) -> gpui::Div {
         .bg(theme.colors.borders.subtle)
 }
 
-pub(super) fn context_menu_separator(theme: Theme) -> gpui::Div {
+pub(super) fn context_menu_separator(theme: Theme) -> gpui_kit::Div {
     div()
         .mx(px(theme.metrics.spacing_2))
         .h(px(1.0))
@@ -376,8 +376,8 @@ pub(crate) fn destructive_menu_button(
 pub(super) struct MenuButtonStyle {
     pub(super) height: f32,
     pub(super) padding_x: f32,
-    pub(super) text_color: gpui::Rgba,
-    pub(super) shortcut_color: gpui::Rgba,
+    pub(super) text_color: gpui_kit::Rgba,
+    pub(super) shortcut_color: gpui_kit::Rgba,
 }
 
 impl MenuButtonStyle {
@@ -416,7 +416,7 @@ pub(super) fn menu_button_with_style(
     // mouse-down. Activate before that rerender so the subsequent click is not
     // lost when the popup is unmounted. Keyboard activation still follows the
     // headless button's normal action path.
-    gpui::div()
+    gpui_kit::div()
         .w_full()
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             cx.stop_propagation();
@@ -580,7 +580,7 @@ pub(crate) fn pane_layout_toggle(
         ))
 }
 
-fn pane_layout_icon(layout: PaneLayout, color: gpui::Rgba) -> gpui::Div {
+fn pane_layout_icon(layout: PaneLayout, color: gpui_kit::Rgba) -> gpui_kit::Div {
     let divider = match layout {
         PaneLayout::Vertical => div().w_full().h(px(1.0)).bg(color),
         PaneLayout::Horizontal => div().h_full().w(px(1.0)).bg(color),

@@ -8,7 +8,7 @@ impl ProbeApp {
         theme: Theme,
         list_scroll: Option<&components::ListScroll>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let active = request
             .authentication
             .as_ref()

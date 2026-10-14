@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::controls::TextContextMenuLabel;
-use gpui::ClipboardItem;
+use gpui_kit::ClipboardItem;
 use std::cell::RefCell;
 
 type ResponseValueCache = RefCell<
@@ -23,7 +23,7 @@ pub(crate) fn documentation_text_input(
     value: String,
     placeholder: &'static str,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     ProbeEditor {
         theme,
         id,
@@ -56,7 +56,7 @@ pub(crate) fn websocket_composer(
     enabled: bool,
     placeholder: &'static str,
     on_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     ProbeEditor {
         theme,
         id,
@@ -94,7 +94,7 @@ pub(crate) fn body_text_input(
     syntax: BodySyntax,
     variables: VariableContext,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let value = value.into();
     let ranges = variable_ranges(&value);
     let decorations = body_text_highlights(
@@ -137,7 +137,7 @@ pub(crate) fn response_body_input(
     id: impl Into<ElementId>,
     text: SharedString,
     options: ResponseBodyInputOptions<'_>,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let inspection_reveal = options.inspection_reveal;
     let search_matches = response_highlights(
         options.matches,
@@ -244,7 +244,7 @@ pub(crate) fn response_headers_input(
     matches: &[SearchMatch],
     active_match: usize,
     on_visible_range: impl Fn(Range<usize>, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let joined = join_header_lines(headers);
     let mut decorations = Vec::new();
     for (offset, name_len) in joined.line_offsets.iter().zip(&joined.name_lens) {
@@ -280,7 +280,7 @@ pub(crate) fn response_inspector_input(
     id: impl Into<ElementId>,
     text: impl Into<SharedString>,
     on_visible_range: impl Fn(Range<usize>, &mut App) + 'static,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     response_editor(
         theme,
         id,
@@ -345,7 +345,7 @@ struct ResponseEditorPresentation {
     decorations: Vec<TextDecoration>,
     language: SharedString,
     soft_wrap: bool,
-    text_color: gpui::Rgba,
+    text_color: gpui_kit::Rgba,
     scroll_to_range: Option<Range<usize>>,
     search_matches: Vec<(Range<usize>, bool)>,
 }
@@ -357,7 +357,7 @@ fn response_editor(
     on_visible_range: VisibleRangeHandler,
     on_mouse_down: Option<EditorMouseDownHandler>,
     extra_context_menu_actions: Vec<TextContextMenuExtraAction>,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     ProbeEditor {
         theme,
         id: id.into(),

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use gpui::{Image, ImageFormat, SharedString};
+use gpui_kit::{Image, ImageFormat, SharedString};
 use quick_xml::{Reader, events::Event, writer::Writer};
 
 use super::{PreparedDocument, ResponseBodySyntax, ResponseImagePreview, SYNC_PRETTY_BYTES};

@@ -5,7 +5,7 @@ impl ProbeApp {
         &self,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let mut active_tab_background: Hsla = theme.colors.actions.accent.into();
         active_tab_background.a = 0.12;
         let mut active_tab_close_hover: Hsla = theme.colors.actions.accent.into();
@@ -63,7 +63,7 @@ impl ProbeApp {
                     };
                     let request_index = self.shell.tabs().position(|open| open == key).unwrap_or(0);
                     (
-                        gpui::ElementId::from(("request-tab", key.slot())),
+                        gpui_kit::ElementId::from(("request-tab", key.slot())),
                         format!("request-tab-{request_index}"),
                         label,
                         self.shell.active_tab() == Some(key),
@@ -93,10 +93,10 @@ impl ProbeApp {
                     (
                         match overview {
                             crate::shell::OverviewTab::Collection => {
-                                gpui::ElementId::from("collection-tab")
+                                gpui_kit::ElementId::from("collection-tab")
                             }
                             crate::shell::OverviewTab::Folder(key) => {
-                                gpui::ElementId::from(("folder-tab", key.slot()))
+                                gpui_kit::ElementId::from(("folder-tab", key.slot()))
                             }
                         },
                         format!("overview-tab-{overview_index}"),
@@ -125,13 +125,13 @@ impl ProbeApp {
             let drop_after = self.tab_drop_target == Some((tab, false));
             let close_id = match tab {
                 crate::shell::OpenTab::Request(key) => {
-                    gpui::ElementId::from(("close-tab", key.slot()))
+                    gpui_kit::ElementId::from(("close-tab", key.slot()))
                 }
                 crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Collection) => {
-                    gpui::ElementId::from("close-collection-tab")
+                    gpui_kit::ElementId::from("close-collection-tab")
                 }
                 crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) => {
-                    gpui::ElementId::from(("close-folder-tab", key.slot()))
+                    gpui_kit::ElementId::from(("close-folder-tab", key.slot()))
                 }
             };
             tab_strip = tab_strip.child(

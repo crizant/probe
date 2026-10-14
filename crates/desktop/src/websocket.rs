@@ -1,5 +1,5 @@
 //! Desktop-only, bounded presentation state. Transport ownership stays in Session.
-use gpui::{ListAlignment, ListState, Rgba, px};
+use gpui_kit::{ListAlignment, ListState, Rgba, px};
 use probe_application::{
     CloseOrigin, SessionData, SessionError, SessionEvent, SessionSender, WebSocketInputFormat,
     close_code_name,

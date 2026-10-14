@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
 
-use gpui::Action;
+use gpui_kit::Action;
 use probe_core::{Environment, ImportDiagnostic, ImportDiagnosticSeverity, ItemKind, RequestKey};
 use probe_yaak::{YaakImportPreview, YaakWorkspaceSummary};
 
@@ -27,7 +27,7 @@ pub(crate) struct EnvironmentManagerDialog {
     pub(crate) active_field: Option<(
         EnvironmentVariableRowId,
         EnvironmentFieldKind,
-        gpui::Entity<components::FieldInput>,
+        gpui_kit::Entity<components::FieldInput>,
     )>,
 }
 

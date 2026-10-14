@@ -1,13 +1,13 @@
 use std::{cell::Cell, rc::Rc};
 
-use gpui::{
+use gpui_kit::base::{
+    Button, Popover,
+    input::{Copy, Cut, InputState, Paste, SelectAll, Undo},
+};
+use gpui_kit::{
     AppContext as _, Axis, ClipboardItem, Context, Entity, Focusable as _, Image,
     InteractiveElement as _, IntoElement, KeyBinding, Modifiers, MouseButton, Render, ScrollHandle,
     SharedString, TestAppContext, VisualTestContext, div, point, prelude::*, px, size,
-};
-use gpui_base::{
-    Button, Popover,
-    input::{Copy, Cut, InputState, Paste, SelectAll, Undo},
 };
 
 use super::{
@@ -27,11 +27,15 @@ struct VariablePopupTestView {
     hover: Entity<VariableHoverState>,
     secret: bool,
     unavailable: bool,
-    editor_focus: gpui::FocusHandle,
+    editor_focus: gpui_kit::FocusHandle,
 }
 
 impl Render for VariablePopupTestView {
-    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let presentation = VariableTooltipPresentation {
             value: String::new(),
             placeholder: "Variable value",
@@ -54,7 +58,7 @@ impl Render for VariablePopupTestView {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn secret_popup_does_not_focus_its_hidden_value_input(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(400.0), px(240.0)), |window, cx| {
@@ -83,7 +87,7 @@ fn secret_popup_does_not_focus_its_hidden_value_input(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn unavailable_variable_popup_does_not_focus_a_value_input(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(400.0), px(240.0)), |window, cx| {
@@ -120,7 +124,7 @@ struct PlaceholderHarness {
 }
 
 impl Render for PlaceholderHarness {
-    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut gpui_kit::Window, _: &mut Context<Self>) -> impl IntoElement {
         let mut input = super::text_input_base(
             Theme::light(),
             "placeholder-input",
@@ -132,7 +136,7 @@ impl Render for PlaceholderHarness {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn input_placeholder_updates_when_label_or_shared_state_changes(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(180.0)), |window, cx| {
@@ -183,7 +187,7 @@ fn input_placeholder_updates_when_label_or_shared_state_changes(cx: &mut TestApp
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn unchanged_placeholder_redraw_does_not_notify_input_state(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     // `set_placeholder` replaces the stored string and then notifies. GPUI does
@@ -266,7 +270,7 @@ struct PersistentInputFocusHarness {
 }
 
 impl Render for PersistentInputFocusHarness {
-    fn render(&mut self, _: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut gpui_kit::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_view = cx.weak_entity();
         let field_view = cx.weak_entity();
         let mut input =
@@ -288,7 +292,7 @@ impl Render for PersistentInputFocusHarness {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn virtualizing_a_persistent_input_does_not_report_blur_to_either_focus_callback(
     cx: &mut TestAppContext,
 ) {
@@ -334,7 +338,7 @@ fn virtualizing_a_persistent_input_does_not_report_blur_to_either_focus_callback
             assert_eq!(window.focused(cx), Some(focus));
             assert!(!view.focus_changes.contains(&false));
             assert!(!view.field_focus_changes.contains(&false));
-            window.blur();
+            window.blur(cx);
         })
         .unwrap();
     visual.run_until_parked();
@@ -382,7 +386,11 @@ struct ScrollableInputHarness {
 }
 
 impl Render for ScrollableInputHarness {
-    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let mut input = super::text_input_base(
             Theme::light(),
             ("scrollable-input", self.row_id),
@@ -406,7 +414,7 @@ impl Render for ScrollableInputHarness {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
@@ -438,14 +446,14 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
         })
         .unwrap();
     for (index, delta_x) in [-2.0_f32, -3.0, -3.0, -4.0].into_iter().enumerate() {
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
             position: field.center(),
-            delta: gpui::ScrollDelta::Pixels(point(px(delta_x), px(0.0))),
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(delta_x), px(0.0))),
             modifiers: Modifiers::default(),
             touch_phase: if index == 0 {
-                gpui::TouchPhase::Started
+                gpui_kit::TouchPhase::Started
             } else {
-                gpui::TouchPhase::Moved
+                gpui_kit::TouchPhase::Moved
             },
         });
     }
@@ -462,11 +470,11 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
     let text_before = window
         .update(cx, |_, _, cx| input.read(cx).scroll_offset().x)
         .unwrap();
-    visual.simulate_event(gpui::ScrollWheelEvent {
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
         position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(-160.0), px(-6.0))),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(-160.0), px(-6.0))),
         modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
+        touch_phase: gpui_kit::TouchPhase::Moved,
     });
     visual.run_until_parked();
     window
@@ -482,14 +490,14 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
     let text_before = window
         .update(cx, |_, _, cx| input.read(cx).scroll_offset().x)
         .unwrap();
-    visual.simulate_event(gpui::ScrollWheelEvent {
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
         position: field.center(),
-        delta: gpui::ScrollDelta::Lines(point(0.0, -1.0)),
+        delta: gpui_kit::ScrollDelta::Lines(point(0.0, -1.0)),
         modifiers: Modifiers {
             shift: true,
             ..Modifiers::default()
         },
-        touch_phase: gpui::TouchPhase::Moved,
+        touch_phase: gpui_kit::TouchPhase::Moved,
     });
     visual.run_until_parked();
     window
@@ -511,14 +519,14 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
         })
         .unwrap();
     for _ in 0..2 {
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
             position: field.center(),
-            delta: gpui::ScrollDelta::Lines(point(0.0, -1.0)),
+            delta: gpui_kit::ScrollDelta::Lines(point(0.0, -1.0)),
             modifiers: Modifiers {
                 shift: true,
                 ..Modifiers::default()
             },
-            touch_phase: gpui::TouchPhase::Moved,
+            touch_phase: gpui_kit::TouchPhase::Moved,
         });
     }
     visual.run_until_parked();
@@ -534,7 +542,7 @@ fn small_horizontal_trackpad_frames_scroll_focused_text(cx: &mut TestAppContext)
         .unwrap();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(220.0)), |window, cx| {
@@ -561,11 +569,11 @@ fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut 
             (view.input.clone(), view.list_scroll.offset().y)
         })
         .unwrap();
-    visual.simulate_event(gpui::ScrollWheelEvent {
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
         position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(-100_000.0), px(0.0))),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(-100_000.0), px(0.0))),
         modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Started,
+        touch_phase: gpui_kit::TouchPhase::Started,
     });
     let edge = window
         .update(cx, |view, _, cx| {
@@ -577,11 +585,11 @@ fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut 
         edge < px(0.0),
         "the field should be at its horizontal edge before the drift frame, offset={edge:?}"
     );
-    visual.simulate_event(gpui::ScrollWheelEvent {
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
         position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-20.0))),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.0), px(-20.0))),
         modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
+        touch_phase: gpui_kit::TouchPhase::Moved,
     });
     window
         .update(cx, |view, _, cx| {
@@ -593,11 +601,11 @@ fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut 
             assert_eq!(input.read(cx).scroll_offset().x, edge);
         })
         .unwrap();
-    visual.simulate_event(gpui::ScrollWheelEvent {
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
         position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(40.0), px(0.0))),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(40.0), px(0.0))),
         modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Moved,
+        touch_phase: gpui_kit::TouchPhase::Moved,
     });
     window
         .update(cx, |view, _, cx| {
@@ -619,12 +627,12 @@ fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut 
         .unwrap();
     visual.run_until_parked();
     for (phase, delta_y) in [
-        (gpui::TouchPhase::Started, px(-100_000.0)),
-        (gpui::TouchPhase::Moved, px(8.0)),
+        (gpui_kit::TouchPhase::Started, px(-100_000.0)),
+        (gpui_kit::TouchPhase::Moved, px(8.0)),
     ] {
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
             position: field.center(),
-            delta: gpui::ScrollDelta::Pixels(point(px(0.0), delta_y)),
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(0.0), delta_y)),
             modifiers: Modifiers {
                 shift: true,
                 ..Modifiers::default()
@@ -633,11 +641,11 @@ fn horizontal_edge_blocks_vertical_drift_and_allows_immediate_reversal(cx: &mut 
         });
     }
     // Switching to a native horizontal event before layout must keep the queued Shift movement.
-    visual.simulate_event(gpui::ScrollWheelEvent {
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
         position: field.center(),
-        delta: gpui::ScrollDelta::Pixels(point(px(4.0), px(0.0))),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(4.0), px(0.0))),
         modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Started,
+        touch_phase: gpui_kit::TouchPhase::Started,
     });
     visual.run_until_parked();
     window
@@ -673,7 +681,11 @@ struct EditableEditorHarness {
 }
 
 impl Render for EditableEditorHarness {
-    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = Theme::light();
         let view = cx.weak_entity();
         div()
@@ -716,14 +728,14 @@ impl Render for EditableEditorHarness {
                 .into_any_element(),
             )
             .child(
-                gpui_base::InputBase::new("tab-next-control")
+                gpui_kit::base::InputBase::new("tab-next-control")
                     .debug_selector(|| "tab-next-control".into())
-                    .child(gpui_base::Input::new(&self.next)),
+                    .child(gpui_kit::base::Input::new(&self.next)),
             )
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn editable_editor_preserves_caret_and_undo_history_across_controlled_renders(
     cx: &mut TestAppContext,
 ) {
@@ -809,7 +821,7 @@ fn editable_editor_preserves_caret_and_undo_history_across_controlled_renders(
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn editable_editor_dispatches_tab_actions_and_undo_atomically(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     cx.update(|cx| {
@@ -945,7 +957,11 @@ fn editable_editor_dispatches_tab_actions_and_undo_atomically(cx: &mut TestAppCo
 }
 
 impl Render for TextContextMenuHarness {
-    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = Theme::light();
         let content = match self.kind {
             TextContextMenuHarnessKind::Input => {
@@ -1017,7 +1033,7 @@ fn open_text_context_menu(
     cx: &mut TestAppContext,
     kind: TextContextMenuHarnessKind,
     target: &'static str,
-) -> gpui::WindowHandle<TextContextMenuHarness> {
+) -> gpui_kit::WindowHandle<TextContextMenuHarness> {
     let window = cx.open_window(size(px(420.0), px(220.0)), |window, cx| {
         TextContextMenuHarness {
             kind,
@@ -1037,7 +1053,7 @@ fn open_text_context_menu(
     window
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn editable_input_and_body_editor_show_editing_context_menu(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     cx.update(|cx| {
@@ -1076,7 +1092,7 @@ fn editable_input_and_body_editor_show_editing_context_menu(cx: &mut TestAppCont
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn readonly_response_editor_shows_copy_context_menu(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let window = open_text_context_menu(
@@ -1092,7 +1108,7 @@ fn readonly_response_editor_shows_copy_context_menu(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("text-context-paste").is_none());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn text_context_menu_only_enables_paste_for_text_clipboard_content(cx: &mut TestAppContext) {
     cx.update(|cx| {
         cx.write_to_clipboard(ClipboardItem::new_image(&Image::empty()));
@@ -1103,7 +1119,7 @@ fn text_context_menu_only_enables_paste_for_text_clipboard_content(cx: &mut Test
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn context_menu_actions_apply_to_the_target_input(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let window = open_text_context_menu(cx, TextContextMenuHarnessKind::Input, "context-input");
@@ -1146,7 +1162,11 @@ fn context_menu_actions_apply_to_the_target_input(cx: &mut TestAppContext) {
 }
 
 impl Render for MenuTestView {
-    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let open_view = cx.weak_entity();
         let activate_view = cx.weak_entity();
 
@@ -1192,7 +1212,7 @@ impl Render for MenuTestView {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn controlled_popover_menu_item_activates_on_pointer_press(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let window = cx.open_window(size(px(320.0), px(180.0)), |_, _| MenuTestView {
@@ -1230,7 +1250,11 @@ struct DropdownHoverLeakView {
 }
 
 impl Render for DropdownHoverLeakView {
-    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let select_view = cx.weak_entity();
         let underlay_view = cx.weak_entity();
 
@@ -1280,7 +1304,7 @@ impl Render for DropdownHoverLeakView {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn dropdown_menu_does_not_hover_elements_underneath(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let window = cx.open_window(size(px(360.0), px(280.0)), |_, _| DropdownHoverLeakView {
@@ -1334,7 +1358,7 @@ fn dropdown_menu_does_not_hover_elements_underneath(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn dropdown_opens_from_keyboard_focused_trigger(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let window = cx.open_window(size(px(360.0), px(280.0)), |_, _| DropdownHoverLeakView {
@@ -1366,7 +1390,7 @@ fn dropdown_opens_from_keyboard_focused_trigger(cx: &mut TestAppContext) {
     assert_eq!(value, Some("POST"));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn dropdown_keyboard_navigation_selects_and_dismisses(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let window = cx.open_window(size(px(360.0), px(280.0)), |_, _| DropdownHoverLeakView {
@@ -1411,7 +1435,7 @@ struct SplitterHarness {
 }
 
 impl Render for SplitterHarness {
-    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut gpui_kit::Window, _: &mut Context<Self>) -> impl IntoElement {
         let presses = self.presses.clone();
         div().size_full().p(px(8.0)).child(
             div()
@@ -1430,7 +1454,7 @@ impl Render for SplitterHarness {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn pane_splitter_activates_on_pointer_press(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let presses = Rc::new(Cell::new(0));
@@ -1460,7 +1484,7 @@ struct HiddenLineSplitterHarness {
 }
 
 impl Render for HiddenLineSplitterHarness {
-    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut gpui_kit::Window, _: &mut Context<Self>) -> impl IntoElement {
         let presses = self.presses.clone();
         div().size_full().p(px(8.0)).child(
             div()
@@ -1480,7 +1504,7 @@ impl Render for HiddenLineSplitterHarness {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn pane_splitter_without_idle_line_still_exposes_a_hit_target(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let presses = Rc::new(Cell::new(0));
@@ -1512,7 +1536,11 @@ struct DropdownButtonHarness {
 }
 
 impl Render for DropdownButtonHarness {
-    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let primary_view = cx.weak_entity();
         let menu_state_view = cx.weak_entity();
         let activate_view = cx.weak_entity();
@@ -1557,7 +1585,7 @@ impl Render for DropdownButtonHarness {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn dropdown_button_primary_action_does_not_open_the_menu(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let window = cx.open_window(size(px(320.0), px(180.0)), |_, _| DropdownButtonHarness {
@@ -1584,7 +1612,7 @@ fn dropdown_button_primary_action_does_not_open_the_menu(cx: &mut TestAppContext
     assert!(visual.debug_bounds("dropdown-button-popup").is_none());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn dropdown_button_menu_trigger_opens_and_activates_an_item(cx: &mut TestAppContext) {
     cx.update(crate::theme::Theme::init);
     let window = cx.open_window(size(px(320.0), px(180.0)), |_, _| DropdownButtonHarness {
@@ -1652,7 +1680,7 @@ fn custom_method_labels_supplement_only_generic_http_icons() {
     assert_eq!(websocket.custom_method(), None);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn list_scroll_accumulates_bursts_and_retains_axis_across_remounts_and_gaps(
     cx: &mut TestAppContext,
 ) {
@@ -1669,11 +1697,11 @@ fn list_scroll_accumulates_bursts_and_retains_axis_across_remounts_and_gaps(
     cx.run_until_parked();
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let position = visual.debug_bounds("scrollable-input").unwrap().center();
-    visual.simulate_event(gpui::ScrollWheelEvent {
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
         position,
-        delta: gpui::ScrollDelta::Pixels(point(px(-80.0), px(-24.0))),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(-80.0), px(-24.0))),
         modifiers: Modifiers::default(),
-        touch_phase: gpui::TouchPhase::Started,
+        touch_phase: gpui_kit::TouchPhase::Started,
     });
     window
         .update(cx, |view, window, cx| {
@@ -1696,19 +1724,19 @@ fn list_scroll_accumulates_bursts_and_retains_axis_across_remounts_and_gaps(
     // These events arrive before layout; reversal and sideways drift must retain the list axis.
     for (phase, delta, expected) in [
         (
-            gpui::TouchPhase::Started,
+            gpui_kit::TouchPhase::Started,
             point(px(3.0), px(-36.0)),
             px(-36.0),
         ),
         (
-            gpui::TouchPhase::Moved,
+            gpui_kit::TouchPhase::Moved,
             point(px(-48.0), px(8.0)),
             px(-28.0),
         ),
     ] {
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
             position,
-            delta: gpui::ScrollDelta::Pixels(delta),
+            delta: gpui_kit::ScrollDelta::Pixels(delta),
             modifiers: Modifiers::default(),
             touch_phase: phase,
         });
@@ -1729,18 +1757,18 @@ fn list_scroll_accumulates_bursts_and_retains_axis_across_remounts_and_gaps(
         .unwrap();
     visual.run_until_parked();
     for row in 0..3 {
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
             position,
-            delta: gpui::ScrollDelta::Pixels(if row == 0 {
+            delta: gpui_kit::ScrollDelta::Pixels(if row == 0 {
                 point(px(1.0), px(-4.0))
             } else {
                 point(px(-40.0), px(-3.0))
             }),
             modifiers: Modifiers::default(),
             touch_phase: if row == 0 {
-                gpui::TouchPhase::Started
+                gpui_kit::TouchPhase::Started
             } else {
-                gpui::TouchPhase::Moved
+                gpui_kit::TouchPhase::Moved
             },
         });
         window
@@ -1762,11 +1790,11 @@ fn list_scroll_accumulates_bursts_and_retains_axis_across_remounts_and_gaps(
         (point(px(1.0), px(40.0)), px(0.0)),
         (point(px(-40.0), px(-3.0)), px(-3.0)),
     ] {
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
             position,
-            delta: gpui::ScrollDelta::Pixels(delta),
+            delta: gpui_kit::ScrollDelta::Pixels(delta),
             modifiers: Modifiers::default(),
-            touch_phase: gpui::TouchPhase::Moved,
+            touch_phase: gpui_kit::TouchPhase::Moved,
         });
         visual.run_until_parked();
         window

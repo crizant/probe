@@ -7,7 +7,7 @@ impl ProbeApp {
         request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let operation = request.selected_graphql().ok().flatten();
         let query = operation
             .and_then(|op| op.query.as_ref())
@@ -54,7 +54,7 @@ impl ProbeApp {
         request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let operation = request.selected_graphql().ok().flatten();
         let variables = operation
             .and_then(|op| op.variables.as_ref())
@@ -104,7 +104,7 @@ impl ProbeApp {
         request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let operation = request.selected_graphql().ok().flatten();
         let operation_name = operation
             .and_then(|op| op.operation_name.as_ref())
@@ -157,7 +157,7 @@ impl ProbeApp {
         request: &Request,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let operation = request.selected_graphql().ok().flatten();
         let extensions = operation
             .and_then(|op| op.extensions.as_ref())

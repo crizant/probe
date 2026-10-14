@@ -1,5 +1,5 @@
 use crate::session::WorkspaceSessionState;
-use gpui::{AppContext as _, Context};
+use gpui_kit::{AppContext as _, Context};
 
 use super::{PaneLayout, ProbeApp, ToastIntent};
 

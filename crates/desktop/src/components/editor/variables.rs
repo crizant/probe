@@ -1,5 +1,5 @@
 use super::*;
-use gpui::UnderlineStyle;
+use gpui_kit::UnderlineStyle;
 use probe_core::VariableStatus;
 
 #[allow(clippy::too_many_arguments)]
@@ -13,7 +13,7 @@ pub(in crate::components) fn variable_input_overlay(
     highlight_path_variables: bool,
     window: &mut Window,
     cx: &mut App,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let ranges = input_variable_ranges(&value, highlight_path_variables);
     let tooltip_ranges = variable_ranges(&value);
     let tooltip_geometry = (!tooltip_ranges.is_empty()).then(|| {
@@ -112,7 +112,7 @@ pub(super) fn variable_editor_overlay(
     variables: VariableContext,
     window: &mut Window,
     cx: &mut App,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let ranges = variable_ranges(&value);
     let mut wrapper = div()
         .id(tooltip_id.clone())
@@ -201,7 +201,7 @@ fn variable_hover_hit(
     width: Pixels,
     height: Option<Pixels>,
     debug_selector: String,
-) -> gpui::Stateful<gpui::Div> {
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     let hover_trigger = hover.clone();
     div()
         .id(id)
@@ -242,13 +242,13 @@ fn variable_hover_hit(
 }
 
 fn with_variable_tooltip(
-    wrapper: gpui::Stateful<gpui::Div>,
+    wrapper: gpui_kit::Stateful<gpui_kit::Div>,
     theme: Theme,
     hover: Entity<VariableHoverState>,
     variables: VariableContext,
     editor_focus: FocusHandle,
     cx: &App,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let (open, active, bounds) = {
         let state = hover.read(cx);
         (state.open, state.active.clone(), state.trigger_bounds)
@@ -632,7 +632,7 @@ impl SecretTooltipState {
         }
     }
 
-    pub(in crate::components) fn status_color(self, theme: Theme) -> gpui::Rgba {
+    pub(in crate::components) fn status_color(self, theme: Theme) -> gpui_kit::Rgba {
         match self {
             Self::Stored => theme.colors.status.success,
             Self::NotStored | Self::Unknown => theme.colors.text.muted,

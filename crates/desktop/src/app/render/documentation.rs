@@ -5,9 +5,9 @@ pub(super) fn documentation_sections(
     theme: Theme,
     first_label: &'static str,
     values: [Option<&str>; 2],
-    ids: [gpui::ElementId; 2],
-    on_change: impl Fn(bool, gpui::SharedString, &mut Window, &mut gpui::App) + 'static,
-) -> gpui::Div {
+    ids: [gpui_kit::ElementId; 2],
+    on_change: impl Fn(bool, gpui_kit::SharedString, &mut Window, &mut gpui_kit::App) + 'static,
+) -> gpui_kit::Div {
     let on_change = Rc::new(on_change);
     let mut sections = div()
         .size_full()
@@ -47,11 +47,11 @@ pub(in crate::app) fn documentation_text_field(
     theme: Theme,
     label: &'static str,
     text: Option<&str>,
-    id: gpui::ElementId,
+    id: gpui_kit::ElementId,
     container_id: &'static str,
     grow: bool,
-    on_change: impl Fn(gpui::SharedString, &mut Window, &mut gpui::App) + 'static,
-) -> gpui::Div {
+    on_change: impl Fn(gpui_kit::SharedString, &mut Window, &mut gpui_kit::App) + 'static,
+) -> gpui_kit::Div {
     div()
         .min_h(px(0.0))
         .when(!grow, |section| section.flex_none())
@@ -91,7 +91,7 @@ impl ProbeApp {
         tab: crate::shell::OverviewTab,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         let mut overview = div()
             .id("documentation-overview")
             .debug_selector(|| "documentation-overview".into())

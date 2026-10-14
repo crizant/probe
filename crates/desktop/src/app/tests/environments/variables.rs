@@ -30,7 +30,7 @@ fn select_first_request(
     })
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn request_variables_render_inline_and_show_resolved_tooltips(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "tooltip");
     select_first_request(&workspace, cx);
@@ -137,7 +137,7 @@ fn request_variables_render_inline_and_show_resolved_tooltips(cx: &mut TestAppCo
     assert_eq!(edited_url.as_deref(), Some("https://url.example"));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn missing_url_variable_tooltip_creates_the_variable(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "create-var");
     let request_key = select_first_request(&workspace, cx);
@@ -203,7 +203,7 @@ fn missing_url_variable_tooltip_creates_the_variable(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn json_body_variables_show_resolved_tooltips(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let request_key = select_first_request(&workspace, cx);
@@ -254,7 +254,7 @@ fn json_body_variables_show_resolved_tooltips(cx: &mut TestAppContext) {
         .expect("tooltip should offer the resolved value");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn variable_context_resolves_once_per_frame_for_many_headers(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let request_key = select_first_request(&workspace, cx);
@@ -302,7 +302,7 @@ fn variable_context_resolves_once_per_frame_for_many_headers(cx: &mut TestAppCon
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn variable_context_reclassifies_when_the_selected_environment_changes(cx: &mut TestAppContext) {
     use probe_core::VariableStatus::{Missing, Resolved};
     let workspace = EnvironmentWorkspace::open(cx);
@@ -351,7 +351,7 @@ fn variable_context_reclassifies_when_the_selected_environment_changes(cx: &mut 
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn invalid_secret_identity_keeps_a_plain_variable_resolvable(cx: &mut TestAppContext) {
     use probe_core::VariableStatus::Resolved;
 

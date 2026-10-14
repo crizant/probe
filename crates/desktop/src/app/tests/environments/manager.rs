@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::chrome::environment_variable_text;
-use gpui::ScrollStrategy;
+use gpui_kit::ScrollStrategy;
 use std::rc::Rc;
 
 #[test]
@@ -39,7 +39,7 @@ fn environment_manager_row_ids_follow_insertions_and_removals() {
     assert_eq!(dialog.variable_row_ids, [0, 2, 3]);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_switcher_is_available_without_a_request_and_offers_actions(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.update(cx, |view, _, cx| {
@@ -62,7 +62,7 @@ fn environment_switcher_is_available_without_a_request_and_offers_actions(cx: &m
         .expect("environment switcher should include Manage environments");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "base");
@@ -153,7 +153,7 @@ fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut Te
         .expect("unsaved environment changes should show a dirty indicator");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "base");
@@ -183,11 +183,11 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
         let field = visual.debug_bounds(selector).unwrap();
         visual.simulate_click(field.center(), Modifiers::default());
         visual.run_until_parked();
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
             position: field.center(),
-            delta: gpui::ScrollDelta::Pixels(point(px(2.0), px(-8.0))),
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(2.0), px(-8.0))),
             modifiers: Modifiers::default(),
-            touch_phase: gpui::TouchPhase::Started,
+            touch_phase: gpui_kit::TouchPhase::Started,
         });
         workspace.update(cx, |view, _, _| {
             assert_eq!(
@@ -219,7 +219,7 @@ fn environment_manager_scrolls_variables_when_the_pointer_is_over_a_field(cx: &m
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestAppContext) {
     for field_kind in ["name", "value"] {
         let workspace = EnvironmentWorkspace::open(cx);
@@ -374,7 +374,7 @@ fn environment_manager_retains_only_the_focused_virtualized_field(cx: &mut TestA
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_releases_the_field_on_blur_environment_change_and_close(
     cx: &mut TestAppContext,
 ) {
@@ -476,7 +476,7 @@ fn environment_manager_releases_the_field_on_blur_environment_change_and_close(
     visual.run_until_parked();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_override(
     cx: &mut TestAppContext,
 ) {
@@ -616,7 +616,7 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
     workspace.assert_manager_field_focus(cx, &focus, controller);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_scrolls_a_new_row_into_view(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "base");
@@ -690,7 +690,7 @@ fn environment_manager_scrolls_a_new_row_into_view(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_virtualizes_rows_and_resets_scroll_on_environment_change(
     cx: &mut TestAppContext,
 ) {
@@ -788,7 +788,7 @@ fn environment_manager_virtualizes_rows_and_resets_scroll_on_environment_change(
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_protects_dirty_draft_and_restores_create_focus(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.update(cx, |view, window, cx| {
@@ -851,7 +851,7 @@ fn environment_manager_protects_dirty_draft_and_restores_create_focus(cx: &mut T
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_validation_errors_are_scoped_and_dismissible(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.update(cx, |view, window, cx| {
@@ -912,7 +912,7 @@ fn environment_manager_validation_errors_are_scoped_and_dismissible(cx: &mut Tes
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_routes_blocked_save_and_create_failures_to_its_error(
     cx: &mut TestAppContext,
 ) {
@@ -967,7 +967,7 @@ fn environment_manager_routes_blocked_save_and_create_failures_to_its_error(
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_dialog_auto_dismisses_errors_when_their_condition_resolves(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.update(cx, |view, window, cx| {
@@ -1043,7 +1043,7 @@ fn saved_environment(workspace: &EnvironmentWorkspace, name: &str) -> Option<Env
         .cloned()
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_saves_plain_variables_and_parent(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-save");
     workspace.update(cx, |view, window, cx| {
@@ -1085,7 +1085,7 @@ fn environment_manager_saves_plain_variables_and_parent(cx: &mut TestAppContext)
     )));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn platform_save_hotkey_saves_dirty_environment_manager(cx: &mut TestAppContext) {
     cx.update(bind_platform_hotkeys);
     let workspace = EnvironmentWorkspace::writable(cx, "manager-save-hotkey");
@@ -1123,7 +1123,7 @@ fn platform_save_hotkey_saves_dirty_environment_manager(cx: &mut TestAppContext)
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn platform_save_hotkey_is_disabled_when_environment_manager_has_nothing_to_save(
     cx: &mut TestAppContext,
 ) {
@@ -1165,7 +1165,7 @@ fn platform_save_hotkey_is_disabled_when_environment_manager_has_nothing_to_save
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn platform_save_hotkey_is_disabled_while_environment_manager_save_is_busy(
     cx: &mut TestAppContext,
 ) {
@@ -1195,7 +1195,7 @@ fn platform_save_hotkey_is_disabled_while_environment_manager_save_is_busy(
     cx.run_until_parked();
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_save_ignores_edits_made_while_busy(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-save-busy");
     workspace.update(cx, |view, window, cx| {
@@ -1237,7 +1237,7 @@ fn manager_environment(view: &ProbeApp) -> Option<&str> {
         .map(|dialog| dialog.original_name.as_str())
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_deletes_a_leaf_environment(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-delete");
     workspace.update(cx, |view, window, cx| {
@@ -1262,7 +1262,7 @@ fn environment_manager_deletes_a_leaf_environment(cx: &mut TestAppContext) {
     assert!(saved_environment(&workspace, "development").is_none());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_delete_preserves_a_dirty_draft_for_another_environment(
     cx: &mut TestAppContext,
 ) {
@@ -1301,7 +1301,7 @@ fn environment_manager_delete_preserves_a_dirty_draft_for_another_environment(
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_delete_selects_a_neighbor(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-delete-neighbor");
     workspace.update(cx, |view, window, cx| {
@@ -1336,7 +1336,7 @@ fn environment_manager_delete_selects_a_neighbor(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_delete_of_the_last_environment_closes(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-delete-last");
     workspace.update(cx, |view, window, cx| {
@@ -1368,7 +1368,7 @@ fn environment_manager_delete_of_the_last_environment_closes(cx: &mut TestAppCon
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_closes_when_the_workspace_resets(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let other = http_environment_fixture().canonicalize().unwrap();
@@ -1390,7 +1390,7 @@ fn environment_manager_closes_when_the_workspace_resets(cx: &mut TestAppContext)
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_cached_rows_follow_draft_edits_and_selection(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "development");
@@ -1505,7 +1505,7 @@ fn environment_manager_cached_rows_follow_draft_edits_and_selection(cx: &mut Tes
     assert!(renamed.iter().all(|row| row.defined_in == "renamed-base"));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-reload");
     workspace.mark_stored(cx, &workspace.development_secret());
@@ -1642,7 +1642,7 @@ fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_cancel_with_unsaved_changes_prompts(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.update(cx, |view, window, cx| {
@@ -1686,7 +1686,7 @@ fn environment_manager_cancel_with_unsaved_changes_prompts(cx: &mut TestAppConte
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_context_menu_deletes_an_environment(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-context-delete");
     workspace.open_manager(cx, "development");
@@ -1719,7 +1719,7 @@ fn environment_manager_context_menu_deletes_an_environment(cx: &mut TestAppConte
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn create_environment_dialog_cannot_close_while_persistence_is_running(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "create-env-cancel-busy");
     workspace.update(cx, |view, window, cx| {
@@ -1747,7 +1747,7 @@ fn create_environment_dialog_cannot_close_while_persistence_is_running(cx: &mut 
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn creating_an_environment_from_the_switcher_persists_and_selects_it(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "create-env");
     workspace.update(cx, |_, _, cx| cx.notify());
@@ -1788,7 +1788,7 @@ fn creating_an_environment_from_the_switcher_persists_and_selects_it(cx: &mut Te
     assert!(saved_environment(&workspace, "staging").is_some());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn filesystem_reload_keeps_the_create_environment_dialog(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "create-env-reload");
     workspace.update(cx, |view, window, cx| {
@@ -1805,7 +1805,7 @@ fn filesystem_reload_keeps_the_create_environment_dialog(cx: &mut TestAppContext
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn create_environment_dialog_rejects_an_empty_name(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "create-env-empty");
     workspace.update(cx, |view, window, cx| {
@@ -1827,7 +1827,7 @@ fn create_environment_dialog_rejects_an_empty_name(cx: &mut TestAppContext) {
         .expect("validation error should render as a toast");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_selection_is_shared_when_opening_another_request(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.update(cx, |view, _, cx| {
@@ -1841,7 +1841,7 @@ fn environment_selection_is_shared_when_opening_another_request(cx: &mut TestApp
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_selection_is_restored_when_reopening_a_workspace(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.update(cx, |view, _, cx| {
@@ -1858,7 +1858,7 @@ fn environment_selection_is_restored_when_reopening_a_workspace(cx: &mut TestApp
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_selection_is_remembered_per_workspace(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     let second = http_environment_fixture().canonicalize().unwrap();
@@ -1880,7 +1880,7 @@ fn environment_selection_is_remembered_per_workspace(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_reads_writes_and_clears_description(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable_source(
         cx,
@@ -2046,7 +2046,7 @@ fn environment_manager_reads_writes_and_clears_description(cx: &mut TestAppConte
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn environment_manager_shows_an_environment_without_a_description_key(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable_source(
         cx,
@@ -2134,7 +2134,7 @@ fn save_open_environment(workspace: &EnvironmentWorkspace, cx: &mut TestAppConte
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn missing_environment_is_not_restored(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
