@@ -113,7 +113,7 @@ impl RenderOnce for ProbeEditor {
             let state = cx.new(|cx| {
                 let mut editor = EditorState::new(window, cx)
                     .placeholder(placeholder.clone())
-                    .smart_indent(false)
+                    .smart_indent(language.as_ref() == "json")
                     .folding(false)
                     // Let the shortcut reach Probe’s search card; the native
                     // session still owns matching, navigation, and painting.
@@ -183,6 +183,7 @@ impl RenderOnce for ProbeEditor {
                 }));
                 if language_changed {
                     editor.set_highlighter(self.language.clone(), cx);
+                    editor.set_smart_indent(self.language.as_ref() == "json", window, cx);
                 }
                 if value_changed {
                     editor.set_value(self.value.clone(), window, cx);

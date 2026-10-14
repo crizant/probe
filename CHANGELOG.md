@@ -8,6 +8,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
+- JSON editors now use native smart indentation on Enter, including GraphQL
+  Variables and Extensions.
 - JSON body editors auto-close braces, brackets, and double quotes using tracked
   pairs; single quotes, parentheses, and backticks no longer auto-close. Plain
   text and XML remain unpaired.
