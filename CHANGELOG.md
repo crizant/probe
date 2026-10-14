@@ -30,6 +30,11 @@ Release dates use Australia/Brisbane time (UTC+10).
   pairs; single quotes, parentheses, and backticks no longer auto-close. Plain
   text and XML remain unpaired.
 
+### Fixed
+
+- Desktop Copy as cURL no longer starts the HTTP execution runtime. The copied
+  command is unchanged.
+
 ## [1.0.1] - 2026-10-14
 
 ### Changed

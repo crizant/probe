@@ -452,30 +452,6 @@ impl ExecutionService {
         rx
     }
 
-    pub(crate) fn copy_as_curl(
-        &self,
-        input: ExecutionInput,
-        options: ExecutionOptions,
-    ) -> oneshot::Receiver<Result<String, String>> {
-        let (sender, receiver) = oneshot::channel();
-        let engine = self.engine.clone();
-        self.runtime
-            .as_ref()
-            .expect("execution runtime is active")
-            .spawn(async move {
-                let resolution = RequestResolution {
-                    environments: &input.environments,
-                    client_certificates: &input.client_certificates,
-                    environment: input.environment.as_deref(),
-                    ..RequestResolution::default()
-                };
-                let result =
-                    probe_application::copy_as_curl(&input.request, &resolution, &engine, &options);
-                let _ = sender.send(result);
-            });
-        receiver
-    }
-
     pub(crate) fn execute(
         &self,
         input: ExecutionInput,

@@ -216,23 +216,16 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
         .expect("HTTP requests should offer Copy as cURL");
     visual.simulate_click(copy_item.center(), Modifiers::default());
     drop(visual);
-    cx.executor().allow_parking();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    let command = loop {
-        cx.run_until_parked();
-        if let Some(command) = cx
-            .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
-            .filter(|text| text.starts_with("curl "))
-        {
-            break command;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "clipboard export timed out: {:?}",
-            window.update(cx, |view, _, _| toast_debug(view)).unwrap()
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    cx.run_until_parked();
+    let command = cx
+        .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+        .filter(|text| text.starts_with("curl "))
+        .unwrap_or_else(|| {
+            panic!(
+                "clipboard export did not finish: {:?}",
+                window.update(cx, |view, _, _| toast_debug(view)).unwrap()
+            )
+        });
     assert!(command.starts_with("curl "));
     assert!(command.contains("https://example.com/current-draft"));
     let body_argument = format!("--data-binary '@{}'", body_path.display());
@@ -241,6 +234,10 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
         .update(cx, |view, _, _| {
             assert!(!view.transient.request_execution_menu_open);
             assert!(view.execution.response(request_key).is_none());
+            assert!(
+                view.execution_service.is_none(),
+                "copying as cURL must not start the HTTP execution runtime"
+            );
         })
         .unwrap();
     let mut visual = VisualTestContext::from_window(window.into(), cx);
@@ -283,27 +280,27 @@ fn request_send_menu_offers_streaming_the_response_to_a_file(cx: &mut TestAppCon
         .expect("GraphQL requests should offer Copy as cURL");
     visual.simulate_click(copy_item.center(), Modifiers::default());
     drop(visual);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        cx.run_until_parked();
-        if cx
-            .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
-            .is_some_and(|text| text.contains("--data-raw '{}'"))
-        {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "GraphQL clipboard export timed out: clipboard={:?}, toast={:?}",
-            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())),
-            window.update(cx, |view, _, _| toast_debug(view)).unwrap()
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    cx.run_until_parked();
+    let graphql_command = cx
+        .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+        .unwrap_or_else(|| {
+            panic!(
+                "GraphQL clipboard export did not finish: toast={:?}",
+                window.update(cx, |view, _, _| toast_debug(view)).unwrap()
+            )
+        });
+    assert!(
+        graphql_command.contains("--data-raw '{}'"),
+        "GraphQL clipboard export was {graphql_command:?}"
+    );
     window
         .update(cx, |view, _, _| {
             assert!(!view.transient.request_execution_menu_open);
             assert!(view.execution.response(request_key).is_none());
+            assert!(
+                view.execution_service.is_none(),
+                "copying as cURL must not start the HTTP execution runtime"
+            );
         })
         .unwrap();
 }

@@ -1,5 +1,25 @@
 use super::*;
 
+/// Builds a cURL command without the HTTP execution runtime.
+///
+/// Variable resolution and command formatting do not send a request or read
+/// body files, so this stays off the multi-thread Tokio runtime that real
+/// sends use.
+fn export_curl_command(
+    request: Request,
+    environments: Vec<Environment>,
+    environment: Option<String>,
+    options: ExecutionOptions,
+) -> Result<String, String> {
+    let engine = probe_http::HttpEngine::new().map_err(|error| error.to_string())?;
+    let resolution = probe_application::RequestResolution {
+        environments: &environments,
+        environment: environment.as_deref(),
+        ..probe_application::RequestResolution::default()
+    };
+    probe_application::copy_as_curl(&request, &resolution, &engine, &options)
+}
+
 impl ProbeApp {
     pub(super) fn copy_as_curl(&mut self, key: RequestKey, cx: &mut Context<Self>) {
         self.transient.request_execution_menu_open = false;
@@ -10,18 +30,13 @@ impl ProbeApp {
         let Some(request) = loaded.workspace().request(key).cloned() else {
             return;
         };
-        let input = ExecutionInput {
-            request,
-            environments: loaded
-                .workspace()
-                .environments()
-                .iter()
-                .map(probe_core::Environment::clone_without_client_certificates)
-                .collect(),
-            client_certificates: Vec::new(),
-            environment: self.shell.selected_environment().map(str::to_owned),
-            credential_workspace: None,
-        };
+        let environments = loaded
+            .workspace()
+            .environments()
+            .iter()
+            .map(probe_core::Environment::clone_without_client_certificates)
+            .collect();
+        let environment = self.shell.selected_environment().map(str::to_owned);
         let options = ExecutionOptions {
             base_directory: self
                 .workspace_path
@@ -29,28 +44,12 @@ impl ProbeApp {
                 .and_then(workspace_base_directory),
             ..ExecutionOptions::default()
         };
-        if self.execution_service.is_none() {
-            match ExecutionService::with_credentials(Arc::clone(&self.credential_store)) {
-                Ok(service) => self.execution_service = Some(service),
-                Err(error) => {
-                    self.show_toast(
-                        ToastIntent::Error,
-                        format!("Could not copy as cURL: {error}"),
-                        cx,
-                    );
-                    return;
-                }
-            }
-        }
-        let result = self
-            .execution_service
-            .as_ref()
-            .unwrap()
-            .copy_as_curl(input, options);
         cx.spawn(async move |view, cx| {
-            let result = result
-                .await
-                .unwrap_or_else(|_| Err("request export ended without a result".into()));
+            let result = cx
+                .background_spawn(async move {
+                    export_curl_command(request, environments, environment, options)
+                })
+                .await;
             let _ = view.update(cx, |view, cx| match result {
                 Ok(command) => {
                     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(command));
