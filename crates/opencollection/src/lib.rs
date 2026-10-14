@@ -42,7 +42,11 @@ impl fmt::Debug for ParsedCollection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParsedCollection")
             .field("collection", &self.collection)
-            .field("document", &crate::debug::YamlDebug(&self.document))
+            // Raw YAML may repeat a passphrase under another key via an alias.
+            .field(
+                "document_fields",
+                &self.document.as_mapping().map(serde_yaml_ng::Mapping::len),
+            )
             .field("bundled", &self.bundled)
             .field("diagnostics", &self.diagnostics)
             .finish()

@@ -264,6 +264,8 @@ fn invalid_native_certificate_data_is_rejected_without_disclosing_passphrases() 
             "type: pkcs12\n    domain: api.example.com\n    pkcs12FilePath: client.p12\n    certificateFilePath: client.pem\n    passphrase: SENSITIVE_VALUE",
             "type: pem\n    domain: api.example.com\n    certificateFilePath: client.pem\n    privateKeyFilePath: key.pem\n    disabledd: true\n    passphrase: SENSITIVE_VALUE",
             "type: pkcs12\n    domain: api.example.com\n    pkcs12FilePath: client.p12\n    disabledd: true\n    passphrase: SENSITIVE_VALUE",
+            "type: pem\n    domain: api.example.com\n    certificateFilePath: client.pem\n    privateKeyFilePath: key.pem\n    passphrase: null",
+            "type: pkcs12\n    domain: api.example.com\n    pkcs12FilePath: client.p12\n    passphrase: null",
         ] {
             let certificates = format!("clientCertificates:\n  - {invalid}\n");
             let config = if scope == "collection" {
@@ -318,9 +320,7 @@ fn assert_redacted(value: &impl std::fmt::Debug) {
     );
     assert!(!debug.contains("literal-passphrase"));
     assert!(!debug.contains("certPassphrase"));
-    assert!(debug.contains("[REDACTED]"));
-    assert!(debug.contains("api.example.com"));
-    assert!(debug.contains("clientCertificates"));
+    assert!(debug.contains("len="));
 }
 
 #[test]
@@ -421,7 +421,7 @@ fn both_variants_preserve_optional_fields_independently() {
     ] {
         for (options, expected_passphrase, expected_disabled) in [
             ("", None, false),
-            ("      passphrase: null\n", None, false),
+            ("      passphrase: foo\n", Some("foo"), false),
             (
                 "      passphrase: ''\n      disabled: false\n",
                 Some(""),
@@ -503,7 +503,7 @@ fn certificate_errors_identify_the_entry_index_in_both_scopes() {
 fn unrelated_environment_edit_retains_explicit_optional_certificate_fields() {
     let source = source().replace("\r\n", "\n").replace(
         "          privateKeyFilePath: ./certs/dev-key.pem",
-        "          privateKeyFilePath: ./certs/dev-key.pem\n          passphrase: null\n          disabled: false",
+        "          privateKeyFilePath: ./certs/dev-key.pem\n          passphrase: ''\n          disabled: false",
     );
     let original: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source).unwrap();
     let path = temporary_path("certificate-optional-fields.yml");
@@ -513,10 +513,10 @@ fn unrelated_environment_edit_retains_explicit_optional_certificate_fields() {
     assert!(matches!(
         &environment.client_certificates[0],
         ClientCertificate::Pem {
-            passphrase: None,
+            passphrase: Some(passphrase),
             disabled: false,
             ..
-        }
+        } if passphrase.is_empty()
     ));
     environment.variables.clear();
     loaded
@@ -528,4 +528,20 @@ fn unrelated_environment_edit_retains_explicit_optional_certificate_fields() {
         saved["config"]["environments"][0]["clientCertificates"],
         original["config"]["environments"][0]["clientCertificates"]
     );
+}
+
+#[test]
+fn parsed_and_loaded_debug_do_not_disclose_passphrases_reused_by_yaml_aliases() {
+    let source = source().replace("literal-passphrase", "&p SENSITIVE_ALIAS_VALUE") + "b: *p\n";
+    let parsed = parse(&source).unwrap();
+    let debug = format!("{parsed:?}");
+    assert!(debug.contains("[REDACTED]"));
+    assert!(debug.contains("api.example.com"));
+    assert!(!debug.contains("SENSITIVE_ALIAS_VALUE"));
+    let path = temporary_path("certificate-alias.yml");
+    fs::write(&path, source).unwrap();
+    let loaded = load_workspace(&path).unwrap();
+    let debug = format!("{loaded:?}");
+    assert!(debug.contains("len="));
+    assert!(!debug.contains("SENSITIVE_ALIAS_VALUE"));
 }

@@ -10,7 +10,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 - OpenCollection PEM and PKCS#12 client certificate configuration now loads and
   persists at collection and environment scope, with strict entry validation and
-  indexed errors. Certificate execution is not yet supported.
+  indexed errors. Passphrases must be strings when present; explicit null is
+  rejected. Certificate execution is not yet supported.
 
 ### Changed
 

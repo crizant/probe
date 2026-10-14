@@ -31,7 +31,7 @@ pub(crate) struct CollectionConfigDocument {
 }
 
 /// Tagged native schema: unknown types and missing required paths are errors.
-#[derive(Clone, Deserialize)]
+#[derive(Deserialize)]
 #[serde(
     deny_unknown_fields,
     tag = "type",
@@ -43,6 +43,7 @@ pub(crate) enum ClientCertificateDocument {
         domain: String,
         certificate_file_path: String,
         private_key_file_path: String,
+        #[serde(default, deserialize_with = "deserialize_optional_passphrase")]
         passphrase: Option<String>,
         #[serde(default)]
         disabled: bool,
@@ -50,6 +51,7 @@ pub(crate) enum ClientCertificateDocument {
     Pkcs12 {
         domain: String,
         pkcs12_file_path: String,
+        #[serde(default, deserialize_with = "deserialize_optional_passphrase")]
         passphrase: Option<String>,
         #[serde(default)]
         disabled: bool,
@@ -58,8 +60,44 @@ pub(crate) enum ClientCertificateDocument {
 
 impl std::fmt::Debug for ClientCertificateDocument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.clone().into_domain().fmt(f)
+        match self {
+            Self::Pem {
+                domain,
+                certificate_file_path,
+                private_key_file_path,
+                disabled,
+                ..
+            } => f
+                .debug_struct("Pem")
+                .field("domain", domain)
+                .field("certificate_file_path", certificate_file_path)
+                .field("private_key_file_path", private_key_file_path)
+                .field("passphrase", &"[REDACTED]")
+                .field("disabled", disabled)
+                .finish(),
+            Self::Pkcs12 {
+                domain,
+                pkcs12_file_path,
+                disabled,
+                ..
+            } => f
+                .debug_struct("Pkcs12")
+                .field("domain", domain)
+                .field("pkcs12_file_path", pkcs12_file_path)
+                .field("passphrase", &"[REDACTED]")
+                .field("disabled", disabled)
+                .finish(),
+        }
     }
+}
+
+fn deserialize_optional_passphrase<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // This is called only for a present field. Missing fields use None through
+    // serde(default); a present field must be a string, including the empty string.
+    String::deserialize(deserializer).map(Some)
 }
 
 fn deserialize_client_certificates<'de, D>(
