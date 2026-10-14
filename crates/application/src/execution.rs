@@ -290,9 +290,10 @@ impl HttpExecution {
         C: Future + Send,
         P: FnMut(HttpProgress) + Send,
     {
-        options.client_identity = self
-            .client_identity
-            .map_err(|error| self.disclosure.redact_error(error))?;
+        // Selection errors contain only fixed configuration diagnostics or typed
+        // resolver errors (variable names, never resolved values). Preserve these
+        // safe errors, including the existing PKCS#12 unsupported diagnostic.
+        options.client_identity = self.client_identity?;
         if self.disclosure.uses_secrets() {
             // Cache spool files would retain unredacted response bytes.
             options.response_cache = None;
@@ -706,6 +707,53 @@ mod certificate_variable_tests {
             ))
         );
         assert!(provider.calls.borrow().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pkcs12_keeps_its_safe_unsupported_error_when_request_uses_secrets() {
+        let loaded = fixture();
+        let provider = Provider::default();
+        let mut request = request();
+        request.headers.push(probe_core::Header {
+            name: "X-Secret".into(),
+            value: "{{passwordAlias}}".into(),
+            disabled: false,
+        });
+        let certificates = [ClientCertificate::Pkcs12 {
+            domain: "{{mtlsDomain}}".into(),
+            pkcs12_file_path: "{{unused}}".into(),
+            passphrase: Some("{{unused}}".into()),
+            disabled: false,
+        }];
+        let execution = prepare_request(
+            &request,
+            &RequestResolution {
+                client_certificates: &certificates,
+                ..resolution(&loaded)
+            },
+            &provider,
+        )
+        .unwrap()
+        .into_http()
+        .unwrap();
+        assert!(execution.uses_secrets());
+        let error = execution
+            .execute(
+                &HttpEngine::new().unwrap(),
+                ExecutionOptions::default(),
+                None,
+                std::future::pending::<()>(),
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            HttpError::ClientConfiguration(
+                "PKCS#12 client certificate execution is not supported yet".into()
+            )
+        );
+        assert_eq!(*provider.calls.borrow(), ["certPassword"]);
     }
 
     #[test]
