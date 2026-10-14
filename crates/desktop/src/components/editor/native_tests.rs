@@ -117,8 +117,8 @@ fn json_context_prevents_duplicate_closing_quote(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn probe_editor_disables_smart_indent(cx: &mut TestAppContext) {
-    for language in ["", "xml", "json"] {
+fn probe_editor_enables_smart_indent_only_for_json(cx: &mut TestAppContext) {
+    for (language, expected) in [("", "{\n}"), ("xml", "{\n}"), ("json", "{\n  \n}")] {
         let (window, editor) = setup(cx, "{}", language, false);
         window
             .update(cx, |_, _, cx| {
@@ -129,8 +129,51 @@ fn probe_editor_disables_smart_indent(cx: &mut TestAppContext) {
             .unwrap();
         cx.simulate_keystrokes(window.into(), "enter");
         cx.run_until_parked();
-        assert_eq!(editor.read_with(cx, |editor, _| editor.value()), "{\n}");
+        assert_eq!(editor.read_with(cx, |editor, _| editor.value()), expected);
     }
+}
+
+#[gpui_kit::test]
+fn language_switch_updates_smart_indent_without_reset(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.bind_keys([KeyBinding::new("ctrl-z", Undo, None)]));
+    let (window, editor) = setup(cx, "{}", "json", false);
+    window
+        .update(cx, |_, _, cx| {
+            editor.update(cx, |editor, cx| editor.set_selected_range(1..1, cx));
+        })
+        .unwrap();
+    for (language, expected) in [
+        ("xml", "{\n}"),
+        ("json", "{\n  \n}"),
+        ("", "{\n}"),
+        ("json", "{\n  \n}"),
+    ] {
+        window
+            .update(cx, |view, _, cx| {
+                view.language = language.into();
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(view.editor.as_ref().unwrap(), &editor);
+            })
+            .unwrap();
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(editor.value(), "{}");
+            assert_eq!(editor.selected_range(), 1..1);
+        });
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        assert_eq!(editor.read_with(cx, |editor, _| editor.value()), expected);
+        cx.simulate_keystrokes(window.into(), "ctrl-z");
+        cx.run_until_parked();
+    }
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.value(), "{}");
+        assert_eq!(editor.selected_range(), 1..1);
+    });
 }
 
 #[gpui_kit::test]
