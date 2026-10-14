@@ -178,6 +178,14 @@ fn environment_certificate_replacement_and_removal_are_persisted() {
         load_workspace(&path).unwrap().workspace().environments()[0],
         replacement
     );
+    let saved: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let entries = saved["config"]["environments"][0]["clientCertificates"]
+        .as_sequence()
+        .unwrap();
+    assert!(entries[0].get("disabled").is_none());
+    assert_eq!(entries[1]["disabled"], serde_yaml_ng::Value::Bool(true));
+    assert!(entries[2].get("disabled").is_none());
     replacement.client_certificates.clear();
     loaded
         .replace_environment("development", replacement.clone())
@@ -247,6 +255,15 @@ fn invalid_native_certificate_data_is_rejected_without_disclosing_passphrases() 
             "type: pkcs12\n    domain: api.example.com\n    pkcs12FilePath: [invalid]",
             "type: pkcs12\n    domain: api.example.com\n    pkcs12FilePath: client.p12\n    passphrase: [SENSITIVE_VALUE]",
             "type: pkcs12\n    domain: api.example.com\n    pkcs12FilePath: client.p12\n    disabled: SENSITIVE_VALUE",
+            "type: pem\n    domain: api.example.com\n    certificateFilePath: client.pem\n    privateKeyFilePath: key.pem\n    unknownKey: SENSITIVE_VALUE",
+            "type: pkcs12\n    domain: api.example.com\n    pkcs12FilePath: client.p12\n    unknownKey: SENSITIVE_VALUE",
+            "type: pkcs12\n    domain: 123\n    pkcs12FilePath: client.p12",
+            "type: pem\n    domain: false\n    certificateFilePath: client.pem\n    privateKeyFilePath: key.pem",
+            "type: pkcs12\n    domain: [api.example.com]\n    pkcs12FilePath: client.p12",
+            "type: pem\n    domain: api.example.com\n    certificateFilePath: client.pem\n    privateKeyFilePath: key.pem\n    pkcs12FilePath: client.p12\n    passphrase: SENSITIVE_VALUE",
+            "type: pkcs12\n    domain: api.example.com\n    pkcs12FilePath: client.p12\n    certificateFilePath: client.pem\n    passphrase: SENSITIVE_VALUE",
+            "type: pem\n    domain: api.example.com\n    certificateFilePath: client.pem\n    privateKeyFilePath: key.pem\n    disabledd: true\n    passphrase: SENSITIVE_VALUE",
+            "type: pkcs12\n    domain: api.example.com\n    pkcs12FilePath: client.p12\n    disabledd: true\n    passphrase: SENSITIVE_VALUE",
         ] {
             let certificates = format!("clientCertificates:\n  - {invalid}\n");
             let config = if scope == "collection" {
@@ -267,7 +284,7 @@ fn invalid_native_certificate_data_is_rejected_without_disclosing_passphrases() 
                 "opencollection: 1.0.0\ninfo: {{name: Invalid}}\nbundled: true\nconfig:\n{config}items: []\n"
             );
             let error = parse(&yaml).unwrap_err();
-            assert!(error.to_string().contains("invalid clientCertificates"));
+            assert!(error.to_string().contains("invalid clientCertificates[0]"));
             assert!(!format!("{error:?} {error}").contains("SENSITIVE_VALUE"));
         }
     }
@@ -301,8 +318,9 @@ fn assert_redacted(value: &impl std::fmt::Debug) {
     );
     assert!(!debug.contains("literal-passphrase"));
     assert!(!debug.contains("certPassphrase"));
-    assert!(!debug.contains("original_source"));
-    assert!(!debug.contains("serialized_source"));
+    assert!(debug.contains("[REDACTED]"));
+    assert!(debug.contains("api.example.com"));
+    assert!(debug.contains("clientCertificates"));
 }
 
 #[test]
@@ -362,7 +380,7 @@ fn repository_debug_output_never_dumps_passphrase_bearing_source() {
         .prepare_environment_create("new".into(), None)
         .unwrap();
     assert_redacted(&prepared);
-    assert!(format!("{prepared:?}").contains("EnvironmentCreateKind"));
+    assert!(format!("{prepared:?}").contains("Bundled"));
     let completed = prepared.execute().unwrap();
     assert_redacted(&completed);
     loaded.complete_environment_create(completed).unwrap();
@@ -403,6 +421,7 @@ fn both_variants_preserve_optional_fields_independently() {
     ] {
         for (options, expected_passphrase, expected_disabled) in [
             ("", None, false),
+            ("      passphrase: null\n", None, false),
             (
                 "      passphrase: ''\n      disabled: false\n",
                 Some(""),
@@ -438,6 +457,75 @@ fn both_variants_preserve_optional_fields_independently() {
                 loaded.workspace().client_certificates(),
                 collection.client_certificates
             );
+            let saved: serde_yaml_ng::Value =
+                serde_yaml_ng::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let disabled = saved["config"]["clientCertificates"][0].get("disabled");
+            assert_eq!(
+                disabled,
+                expected_disabled.then_some(&serde_yaml_ng::Value::Bool(true))
+            );
         }
     }
+}
+
+#[test]
+fn certificate_errors_identify_the_entry_index_in_both_scopes() {
+    for scope in ["collection", "environment"] {
+        for invalid_index in [0, 1, 2] {
+            let mut document: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source()).unwrap();
+            let entries = if scope == "collection" {
+                document["config"]["clientCertificates"]
+                    .as_sequence_mut()
+                    .unwrap()
+            } else {
+                let entries = document["config"]["environments"][0]["clientCertificates"]
+                    .as_sequence_mut()
+                    .unwrap();
+                entries.resize(3, entries[0].clone());
+                entries
+            };
+            entries[invalid_index].as_mapping_mut().unwrap().insert(
+                serde_yaml_ng::Value::String("unknownKey".into()),
+                serde_yaml_ng::Value::String("SENSITIVE_VALUE".into()),
+            );
+            let error = parse(&serde_yaml_ng::to_string(&document).unwrap()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("clientCertificates[{invalid_index}]"))
+            );
+            assert!(!format!("{error:?} {error}").contains("SENSITIVE_VALUE"));
+        }
+    }
+}
+
+#[test]
+fn unrelated_environment_edit_retains_explicit_optional_certificate_fields() {
+    let source = source().replace("\r\n", "\n").replace(
+        "          privateKeyFilePath: ./certs/dev-key.pem",
+        "          privateKeyFilePath: ./certs/dev-key.pem\n          passphrase: null\n          disabled: false",
+    );
+    let original: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source).unwrap();
+    let path = temporary_path("certificate-optional-fields.yml");
+    fs::write(&path, source).unwrap();
+    let mut loaded = load_workspace(&path).unwrap();
+    let mut environment = loaded.workspace().environments()[0].clone();
+    assert!(matches!(
+        &environment.client_certificates[0],
+        ClientCertificate::Pem {
+            passphrase: None,
+            disabled: false,
+            ..
+        }
+    ));
+    environment.variables.clear();
+    loaded
+        .replace_environment("development", environment)
+        .unwrap();
+    let saved: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        saved["config"]["environments"][0]["clientCertificates"],
+        original["config"]["environments"][0]["clientCertificates"]
+    );
 }

@@ -10,6 +10,7 @@ use std::{error::Error as StdError, fmt};
 use probe_core::{Collection, validate_environments};
 use serde_yaml_ng::Value;
 
+mod debug;
 mod document;
 mod projection;
 mod repository;
@@ -41,9 +42,10 @@ impl fmt::Debug for ParsedCollection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParsedCollection")
             .field("collection", &self.collection)
+            .field("document", &crate::debug::YamlDebug(&self.document))
             .field("bundled", &self.bundled)
             .field("diagnostics", &self.diagnostics)
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 

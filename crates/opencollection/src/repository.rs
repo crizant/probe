@@ -1919,90 +1919,197 @@ pub(crate) fn atomic_write(
 impl std::fmt::Debug for PreparedDocumentationSave {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedDocumentationSave")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("document_path", &self.document_path)
+            .field(
+                "original_source",
+                &crate::debug::SourceDebug(&self.original_source),
+            )
+            .field("item_path", &self.item_path)
+            .field("update", &self.update)
+            .finish()
     }
 }
 
 impl std::fmt::Debug for CompletedDocumentationSave {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompletedDocumentationSave")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("document_path", &self.document_path)
+            .field(
+                "serialized_source",
+                &crate::debug::SourceDebug(&self.serialized_source),
+            )
+            .field("update", &self.update)
+            .finish()
     }
 }
 
 impl std::fmt::Debug for PreparedRequestSave {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedRequestSave")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("diagnostic_prefix", &self.diagnostic_prefix)
+            .field("persistence", &self.persistence)
+            .field(
+                "original_source",
+                &crate::debug::SourceDebug(&self.original_source),
+            )
+            .field("update", &self.update)
+            .finish()
     }
 }
 
 impl std::fmt::Debug for CompletedRequestSave {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompletedRequestSave")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("document_path", &self.document_path)
+            .field(
+                "serialized_source",
+                &crate::debug::SourceDebug(&self.serialized_source),
+            )
+            .field("diagnostic_prefix", &self.diagnostic_prefix)
+            .field("diagnostics", &self.diagnostics)
+            .finish()
     }
 }
 
 impl std::fmt::Debug for PreparedEnvironmentSave {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedEnvironmentSave")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("persistence", &self.persistence)
+            .field(
+                "original_source",
+                &crate::debug::SourceDebug(&self.original_source),
+            )
+            .field("mutation", &self.mutation)
+            .finish()
     }
 }
 
 impl std::fmt::Debug for CompletedEnvironmentSave {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompletedEnvironmentSave")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("document_path", &self.document_path)
+            .field(
+                "serialized_source",
+                &crate::debug::SourceDebug(&self.serialized_source),
+            )
+            .finish()
     }
 }
 
 impl std::fmt::Debug for PreparedEnvironmentReplace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedEnvironmentReplace")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("persistence", &self.persistence)
+            .field(
+                "original_source",
+                &crate::debug::SourceDebug(&self.original_source),
+            )
+            .field("original_name", &self.original_name)
+            .field("replacement", &self.replacement)
+            .field("description", &self.description)
+            .finish()
     }
 }
 
 impl std::fmt::Debug for CompletedEnvironmentReplace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompletedEnvironmentReplace")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("original_name", &self.original_name)
+            .field("replacement", &self.replacement)
+            .field("description", &self.description)
+            .field("document_path", &self.document_path)
+            .field(
+                "serialized_source",
+                &crate::debug::SourceDebug(&self.serialized_source),
+            )
+            .finish()
     }
 }
 
 impl std::fmt::Debug for PreparedEnvironmentDelete {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedEnvironmentDelete")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("name", &self.name)
+            .field("persistence", &self.persistence)
+            .field(
+                "original_source",
+                &crate::debug::SourceDebug(&self.original_source),
+            )
+            .finish()
     }
 }
 
 impl std::fmt::Debug for CompletedEnvironmentDelete {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompletedEnvironmentDelete")
-            .finish_non_exhaustive()
-    }
-}
-
-impl std::fmt::Debug for EnvironmentCreateKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EnvironmentCreateKind")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("name", &self.name)
+            .field("document_path", &self.document_path)
+            .field(
+                "serialized_source",
+                &self
+                    .serialized_source
+                    .as_deref()
+                    .map(crate::debug::SourceDebug),
+            )
+            .field("bundled_index", &self.bundled_index)
+            .finish()
     }
 }
 
 impl std::fmt::Debug for CompletedEnvironmentCreate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompletedEnvironmentCreate")
-            .finish_non_exhaustive()
+            .field("baseline", &self.baseline)
+            .field("name", &self.name)
+            .field("document_path", &self.document_path)
+            .field(
+                "serialized_source",
+                &crate::debug::SourceDebug(&self.serialized_source),
+            )
+            .field("bundled_index", &self.bundled_index)
+            .finish()
     }
 }
 
 impl std::fmt::Debug for SourceDocument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SourceDocument").finish_non_exhaustive()
+        f.debug_struct("SourceDocument")
+            .field(
+                "original_source",
+                &crate::debug::SourceDebug(&self.original_source),
+            )
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for EnvironmentCreateKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bundled {
+                document_path,
+                original_source,
+                bundled_index,
+            } => f
+                .debug_struct("Bundled")
+                .field("document_path", document_path)
+                .field(
+                    "original_source",
+                    &crate::debug::SourceDebug(original_source),
+                )
+                .field("bundled_index", bundled_index)
+                .finish(),
+            Self::Unbundled { root } => f.debug_struct("Unbundled").field("root", root).finish(),
+        }
     }
 }
 

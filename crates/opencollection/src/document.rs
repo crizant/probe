@@ -9,7 +9,7 @@ use probe_core::{
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 
-#[derive(Default, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CollectionDocument {
     pub(crate) opencollection: String,
@@ -21,7 +21,7 @@ pub(crate) struct CollectionDocument {
     pub(crate) config: CollectionConfigDocument,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CollectionConfigDocument {
     #[serde(default)]
@@ -31,8 +31,9 @@ pub(crate) struct CollectionConfigDocument {
 }
 
 /// Tagged native schema: unknown types and missing required paths are errors.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(
+    deny_unknown_fields,
     tag = "type",
     rename_all = "lowercase",
     rename_all_fields = "camelCase"
@@ -55,16 +56,44 @@ pub(crate) enum ClientCertificateDocument {
     },
 }
 
+impl std::fmt::Debug for ClientCertificateDocument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.clone().into_domain().fmt(f)
+    }
+}
+
 fn deserialize_client_certificates<'de, D>(
     deserializer: D,
 ) -> Result<Vec<ClientCertificateDocument>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    // Serde's field-type diagnostics can include the rejected passphrase value.
-    // Keep certificate configuration out of diagnostics, including malformed input.
-    Vec::<ClientCertificateDocument>::deserialize(deserializer).map_err(|_| {
-        serde::de::Error::custom("invalid clientCertificates: expected pem or pkcs12 declarations with required string domain and paths, optional string passphrase and boolean disabled")
+    let value = Value::deserialize(deserializer)?;
+    client_certificate_documents(value).map_err(serde::de::Error::custom)
+}
+
+fn client_certificate_documents(
+    value: Value,
+) -> Result<Vec<ClientCertificateDocument>, serde_yaml_ng::Error> {
+    let entries: Vec<Value> = serde_yaml_ng::from_value(value).map_err(|_| {
+        yaml_error("invalid clientCertificates: expected an array of certificate declarations")
+    })?;
+    entries.into_iter().enumerate().map(|(index, entry)| {
+        // Never include rejected values: field-type errors may contain a passphrase.
+        serde_yaml_ng::from_value(entry).map_err(|_| yaml_error(&format!(
+            "invalid clientCertificates[{index}]: expected pem or pkcs12 with required string domain and paths, optional string passphrase and boolean disabled, and no unknown fields"
+        )))
+    }).collect()
+}
+
+pub(crate) fn client_certificates_from_yaml(
+    value: Value,
+) -> Result<Vec<ClientCertificate>, serde_yaml_ng::Error> {
+    client_certificate_documents(value).map(|entries| {
+        entries
+            .into_iter()
+            .map(ClientCertificateDocument::into_domain)
+            .collect()
     })
 }
 
@@ -414,7 +443,7 @@ impl ParameterDocument {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EnvironmentDocument {
     pub(crate) name: String,
@@ -729,4 +758,24 @@ pub(crate) struct BodyVariantDocument {
     #[serde(default)]
     pub(crate) selected: bool,
     pub(crate) body: Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CollectionDocument;
+
+    #[test]
+    fn document_debug_keeps_metadata_and_paths_but_redacts_certificate_passphrases() {
+        let document: CollectionDocument = serde_yaml_ng::from_str(include_str!(
+            "../../../tests/fixtures/opencollection/client-certificates.yml"
+        ))
+        .unwrap();
+        let debug = format!("{document:?}");
+        assert!(debug.contains("Client certificates"));
+        assert!(debug.contains("api.example.com"));
+        assert!(debug.contains("client.pem"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("literal-passphrase"));
+        assert!(!debug.contains("certPassphrase"));
+    }
 }

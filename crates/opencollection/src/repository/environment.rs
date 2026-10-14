@@ -325,14 +325,14 @@ pub(super) fn apply_environment_replace(
 
     // A variable/name edit must retain the original certificate representation and
     // unknown fields. Replace this scope only when its domain configuration changes.
-    let current: crate::document::EnvironmentDocument =
-        serde_yaml_ng::from_value(Value::Mapping(mapping.clone())).map_err(|_| {
-            SaveError::InvalidDocument("invalid environment configuration".to_owned())
-        })?;
-    let current = current
-        .into_domain()
-        .map_err(|_| SaveError::InvalidDocument("invalid environment configuration".to_owned()))?;
-    if current.client_certificates != replacement.client_certificates {
+    let current = mapping
+        .get(string_key("clientCertificates"))
+        .cloned()
+        .map(crate::document::client_certificates_from_yaml)
+        .transpose()
+        .map_err(|error| SaveError::InvalidDocument(error.to_string()))?
+        .unwrap_or_default();
+    if current != replacement.client_certificates {
         if replacement.client_certificates.is_empty() {
             mapping.remove(string_key("clientCertificates"));
         } else {
@@ -623,7 +623,9 @@ pub(super) fn client_certificates_value(certificates: &[probe_core::ClientCertif
                 if let Some(passphrase) = passphrase {
                     value.insert(string_key("passphrase"), Value::String(passphrase.clone()));
                 }
-                value.insert(string_key("disabled"), Value::Bool(*disabled));
+                if *disabled {
+                    value.insert(string_key("disabled"), Value::Bool(true));
+                }
                 Value::Mapping(value)
             })
             .collect(),
