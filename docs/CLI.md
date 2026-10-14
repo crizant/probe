@@ -5,7 +5,8 @@ diagnostics on stderr. Add `--json` to commands that return data or structured e
 
 ## Human-readable tables
 
-`request list`, `folder list`, `environment list`, and `request variables` use
+`request list`, `folder list`, `environment list`, `request variables`, HTTP/GraphQL
+response summaries, and the headers/path/query sections of `request get` use
 space-aligned columns measured in terminal display cells, including CJK characters.
 Each item stays on one line. Long values end with `…`; selectors and folder parent
 selectors truncate in the middle to retain both ends. CSI/OSC ANSI escape sequences
@@ -17,8 +18,10 @@ size uses a deterministic 120-column limit. `COLUMNS` is deliberately ignored.
 Piped human output is space-aligned and may be truncated; scripts should use
 `--json` for structured, complete values instead of parsing human tables.
 Selectors and folder parent selectors are capped at 28 columns,
-request and folder names at 36, and environment and variable names at 32. The final
-URL, EXTENDS, or USED IN column uses the remaining space. Folder PARENT stays
+request and folder names at 36, and environment and variable names at 32. The
+URL, EXTENDS, USED IN, STATUS, and VALUE columns use the available space. Names in
+request detail tables are capped at 32 columns; STATE retains disabled markers.
+Folder PARENT stays
 within the same 28-column cap as SELECTOR. Narrow layouts
 preserve compact type, method, and boolean columns before shrinking text; headers
 are preserved where space permits. Extremely narrow terminals may truncate headers
@@ -127,11 +130,23 @@ engine. Pressing Ctrl-C cancels the active execution. `--output <file>` writes t
 response body to the specified path using bounded streaming; response metadata remains on
 stdout. The destination is replaced only after the complete response has been written.
 Human output shows the request method and effective URL from the built HTTP request
-(after path/query parameters and URL normalization), status, duration, response size, and
-response body. `Final URL:` appears only when redirects change the effective URL
+(after path/query parameters and URL normalization), a compact status/duration/size
+table, and the response body:
+
+```text
+GET https://example.com/users
+
+STATUS  TIME    SIZE
+200 OK  128 ms  1.4 KiB
+
+<response body>
+```
+
+`Final URL:` appears only when redirects change the effective URL
 initially sent by the HTTP engine. Path/query parameters and URL normalization
 alone do not show it. Response headers are hidden by default; add `--show-headers`
-to include them. `--json` always includes response headers and is unaffected by this
+to include them under a `Headers` section title as `name: value` lines.
+`--json` always includes response headers and is unaffected by this
 flag. `--show-headers` does not change dry-run output.
 
 Native WebSocket requests execute through the same `request run` command:
@@ -331,6 +346,40 @@ use bundled structural selectors.
 least one supported request field is required. It updates the in-memory
 request first, merges only those fields into the retained YAML document, and then
 atomically replaces the source file. It is unavailable for stdin workspaces.
+Human success output is a single line, such as `Updated request: items/0`.
+`--json` still returns the complete updated request.
+
+`request get` keeps top-level metadata, documentation, body/protocol summaries,
+and authentication as detail lines. Headers, path parameters, and query parameters
+have separate tables; enabled entries have a blank STATE and disabled entries show
+`disabled`. The former `Headers:` heading is now the `Headers` section title,
+path parameter names have no `:` prefix, and the former ` [disabled]` suffix is
+now in STATE. Long header/parameter names and values truncate with an ellipsis
+to fit the terminal; piped tables use a fixed 120-column limit. Scripts should use
+`--json` for full values. Empty sections show `(none)` without an empty table. For example:
+
+```text
+Name: Get user
+Selector: items/0
+Type: http
+Environment: local
+Method: GET
+URL: https://example.com/users/:id
+Description: <unset>
+Docs: <unset>
+Headers
+NAME     VALUE             STATE
+Accept   application/json
+X-Debug  true              disabled
+Path parameters
+NAME  VALUE  STATE
+id    123
+Query parameters
+NAME   VALUE  STATE
+limit  20
+Body: <unset>
+Authentication: <unset>
+```
 
 `collection get` reads collection `info.summary` and root `docs`. `collection set`
 writes those fields only. OpenCollection collections have no `description` field,

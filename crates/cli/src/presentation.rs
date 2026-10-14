@@ -10,6 +10,7 @@ use probe_core::{
 };
 use probe_http::{HttpResponse, MAX_IN_MEMORY_RESPONSE_BYTES};
 use serde_json::{Map, Value, json};
+use table::Column;
 
 pub(super) fn response_human(
     method: &str,
@@ -18,18 +19,24 @@ pub(super) fn response_human(
     show_headers: bool,
 ) -> String {
     let url = &response.initial_url;
-    let mut rendered = format!(
-        "{method} {url}\n\n{} {}\n{} ms\n{}\n",
-        response.status,
-        response.reason,
-        response.duration.as_millis(),
-        human_size(response.size),
-    );
+    let mut rendered = format!("{method} {url}\n\n");
+    rendered.push_str(&table::render_terminal(
+        &[
+            Column::remaining("STATUS"),
+            Column::compact("TIME"),
+            Column::compact("SIZE"),
+        ],
+        &[[
+            format!("{} {}", response.status, response.reason),
+            format!("{} ms", response.duration.as_millis()),
+            human_size(response.size),
+        ]],
+    ));
     if response.url_changed {
         rendered.push_str(&format!("Final URL: {}\n", response.url));
     }
     if show_headers {
-        rendered.push_str("Headers:\n");
+        rendered.push_str("Headers\n");
         if response.headers.is_empty() {
             rendered.push_str("  (none)\n");
         } else {
@@ -253,49 +260,30 @@ pub(super) fn request_human(
     );
     append_text(&mut output, "Docs", request.docs.as_deref());
 
-    output.push_str("Headers:\n");
-    if request.headers.is_empty() {
-        output.push_str("  (none)\n");
-    } else {
-        for header in &request.headers {
-            let state = if header.disabled { " [disabled]" } else { "" };
-            output.push_str(&format!("  {}: {}{state}\n", header.name, header.value));
-        }
-    }
-
-    output.push_str("Path parameters:\n");
-    if request.path_parameters.is_empty() {
-        output.push_str("  (none)\n");
-    } else {
-        for parameter in &request.path_parameters {
-            let state = if parameter.disabled {
-                " [disabled]"
-            } else {
-                ""
-            };
-            output.push_str(&format!(
-                "  :{}={}{state}\n",
-                parameter.name, parameter.value
-            ));
-        }
-    }
-
-    output.push_str("Query parameters:\n");
-    if request.query_parameters.is_empty() {
-        output.push_str("  (none)\n");
-    } else {
-        for parameter in &request.query_parameters {
-            let state = if parameter.disabled {
-                " [disabled]"
-            } else {
-                ""
-            };
-            output.push_str(&format!(
-                "  {}={}{state}\n",
-                parameter.name, parameter.value
-            ));
-        }
-    }
+    append_entries(
+        &mut output,
+        "Headers",
+        request
+            .headers
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.value.as_str(), entry.disabled)),
+    );
+    append_entries(
+        &mut output,
+        "Path parameters",
+        request
+            .path_parameters
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.value.as_str(), entry.disabled)),
+    );
+    append_entries(
+        &mut output,
+        "Query parameters",
+        request
+            .query_parameters
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.value.as_str(), entry.disabled)),
+    );
 
     if request.kind.is_graphql() {
         output.push_str("Body: graphql\n");
@@ -332,6 +320,35 @@ pub(super) fn request_human(
             .unwrap_or("<unset>"),
     ));
     Ok(output)
+}
+
+fn append_entries<'a>(
+    output: &mut String,
+    title: &str,
+    entries: impl Iterator<Item = (&'a str, &'a str, bool)>,
+) {
+    output.push_str(&format!("{title}\n"));
+    let rows: Vec<_> = entries
+        .map(|(name, value, disabled)| {
+            [
+                name.to_owned(),
+                value.to_owned(),
+                if disabled { "disabled" } else { "" }.to_owned(),
+            ]
+        })
+        .collect();
+    if rows.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        output.push_str(&table::render_terminal(
+            &[
+                Column::text("NAME", 32),
+                Column::remaining("VALUE"),
+                Column::compact("STATE"),
+            ],
+            &rows,
+        ));
+    }
 }
 
 pub(super) fn request_json(
@@ -710,9 +727,12 @@ mod response_url_tests {
                 url_changed: final_url != original_url,
                 reason: "OK".to_owned(),
                 url: final_url.to_owned(),
-                duration: Duration::ZERO,
+                duration: Duration::from_millis(128),
                 size: 5,
-                headers: Vec::new(),
+                headers: vec![probe_http::ResponseHeader {
+                    name: "X-Debug".to_owned(),
+                    value: "true".to_owned(),
+                }],
                 body: b"hello".to_vec(),
                 body_complete: true,
                 body_file: None,
@@ -720,19 +740,36 @@ mod response_url_tests {
             };
             for show_headers in [false, true] {
                 let human = response_human("GET", &response, None, show_headers);
-                if final_url == original_url {
-                    assert!(!human.contains("Final URL:"), "{human}");
+                let redirect = if final_url == original_url {
+                    String::new()
                 } else {
-                    assert!(
-                        human.contains(&format!("Final URL: {final_url}\n")),
-                        "{human}"
-                    );
-                }
-                assert!(human.starts_with(&format!("GET {original_url}\n")));
-                assert!(human.ends_with("\n\nhello\n"));
+                    format!("Final URL: {final_url}\n")
+                };
+                let headers = if show_headers {
+                    "Headers\n  X-Debug: true\n"
+                } else {
+                    ""
+                };
+                assert_eq!(
+                    human,
+                    format!(
+                        "GET {original_url}\n\nSTATUS  TIME    SIZE\n200 OK  128 ms  5 B\n{redirect}{headers}\nhello\n"
+                    )
+                );
             }
             let structured = response_json(json!({ "url": original_url }), &response, None);
-            assert_eq!(structured["response"]["url"], final_url);
+            assert_eq!(
+                structured,
+                json!({
+                    "request": { "url": original_url },
+                    "response": {
+                        "body": { "content": "hello", "encoding": "utf8", "omissionReason": null, "omitted": false, "outputPath": null },
+                        "durationMs": 128,
+                        "headers": [{ "name": "X-Debug", "value": "true" }],
+                        "reason": "OK", "sizeBytes": 5, "status": 200, "url": final_url,
+                    }
+                })
+            );
         }
     }
 }

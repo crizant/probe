@@ -6,6 +6,20 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- CLI HTTP/GraphQL response summaries now show status, time, and size in a compact
+  table. `request get` uses tables for headers and path/query parameters, including
+  disabled states, while keeping metadata and documentation as detail lines. Long
+  header/parameter names and values are truncated with an ellipsis to fit the
+  terminal; piped tables use a fixed 120-column limit. Scripts should use `--json`
+  for full values. The `Headers:` heading is now `Headers` in `request get` and
+  `request run --show-headers`; response header lines still use `name: value`.
+  Path parameter names no longer have a `:` prefix, and ` [disabled]` markers
+  have moved into the STATE column of request detail tables.
+  `request set` now confirms the selector without repeating the entire request.
+  JSON output contracts remain unchanged.
+
 ## [1.0.0] - 2026-10-13
 
 ### Changed

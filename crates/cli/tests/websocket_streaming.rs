@@ -93,6 +93,55 @@ fn records(stdout: &str) -> Vec<Value> {
 }
 
 #[test]
+fn websocket_request_get_and_run_keep_their_text_output() {
+    let (url, server) = server(|mut socket| async move {
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Text("hi".into())
+        );
+        socket.send(Message::Text("reply".into())).await.unwrap();
+        close(&mut socket).await;
+    });
+    let path = workspace(&url, Some("hi"));
+    let get = probe()
+        .args(["request", "get"])
+        .arg(&path)
+        .arg("items/0")
+        .output()
+        .unwrap();
+    assert!(get.status.success(), "{get:?}");
+    assert!(get.stderr.is_empty());
+    assert_eq!(
+        get.stdout,
+        format!(
+            concat!(
+                "Name: Socket\nSelector: items/0\nType: websocket\nEnvironment: <none>\n",
+                "URL: {}\nDescription: <unset>\nDocs: <unset>\n",
+                "Headers\n  (none)\nPath parameters\n  (none)\nQuery parameters\n  (none)\n",
+                "WebSocket message (text): hi\nAuthentication: <unset>\n",
+            ),
+            url
+        )
+        .as_bytes()
+    );
+    let run = probe()
+        .args(["request", "run"])
+        .arg(&path)
+        .arg("items/0")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{run:?}");
+    assert!(run.stderr.is_empty());
+    assert_eq!(
+        run.stdout,
+        format!("Connected: {url}\n> hi\n< reply\nClosed: remote\n").as_bytes()
+    );
+    server.join().unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn configured_send_and_stdin_order_are_literal_and_ndjson_preserves_data() {
     let (url, server) = server(|mut socket| async move {
         for expected in [
