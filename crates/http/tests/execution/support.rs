@@ -111,16 +111,22 @@ pub(crate) const fn http_body(body: RequestBody) -> RequestKind {
     RequestKind::Http { body: Some(body) }
 }
 
-pub(crate) async fn delayed_server() -> (String, JoinHandle<io::Result<()>>) {
+pub(crate) async fn delayed_server() -> (
+    String,
+    tokio::sync::oneshot::Receiver<()>,
+    JoinHandle<io::Result<()>>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let (received_tx, received_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await?;
         read_request(&mut stream).await?;
+        let _ = received_tx.send(());
         tokio::time::sleep(Duration::from_secs(10)).await;
         write_response(&mut stream, "200 OK", &[], b"late").await
     });
-    (format!("http://{address}/slow"), handle)
+    (format!("http://{address}/slow"), received_rx, handle)
 }
 
 pub(crate) fn temporary_path(suffix: &str) -> PathBuf {

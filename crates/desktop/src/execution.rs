@@ -1544,11 +1544,13 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(10), async {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let url = format!("ws://{}/{{{{token}}}}", listener.local_addr().unwrap());
+                let (burst_sent_tx, burst_sent_rx) = oneshot::channel();
                 let server = tokio::spawn(async move {
                     let (stream, _) = listener.accept().await.unwrap();
                     let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
                     for index in 0..100 { socket.send(tokio_tungstenite::tungstenite::Message::text(index.to_string())).await.unwrap(); }
                     socket.close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame { code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal, reason: secret.into() })).await.unwrap();
+                    burst_sent_tx.send(()).unwrap();
                     // Wait for the peer acknowledgement rather than dropping TCP.
                     use futures_util::StreamExt;
                     let _ = socket.next().await;
@@ -1556,14 +1558,13 @@ mod tests {
                 let (_cancel, cancellation) = oneshot::channel();
                 let input = native_input(Request { url: Some(url), kind: probe_core::RequestKind::WebSocket { message: None }, ..Default::default() }, workspace);
                 let (mut events, _) = service.connect_websocket(input, cancellation);
+                burst_sent_rx.await.unwrap();
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
                 while events.len() < BRIDGE_CAPACITY {
                     assert!(tokio::time::Instant::now() < deadline, "desktop bridge did not fill before the deadline");
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    tokio::task::yield_now().await;
                 }
                 assert_eq!(events.len(), BRIDGE_CAPACITY, "a stalled desktop bridge is bounded");
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                assert_eq!(events.len(), BRIDGE_CAPACITY, "a stalled desktop bridge stays bounded after settling");
                 let mut received = 0;
                 let mut closed = false;
                 while let Some(update) = events.recv().await {

@@ -22,7 +22,7 @@ async fn wait_for_cache_cleanup(path: &Path) {
 
 #[tokio::test]
 async fn reports_timeout_and_cancellation_separately() {
-    let (timeout_url, timeout_server) = delayed_server().await;
+    let (timeout_url, _timeout_received, timeout_server) = delayed_server().await;
     let mut timed = request("GET", timeout_url);
     timed.settings = RequestSettings {
         timeout: Some(Duration::from_millis(20)),
@@ -36,13 +36,15 @@ async fn reports_timeout_and_cancellation_separately() {
     assert_eq!(error, HttpError::Timeout);
     timeout_server.abort();
 
-    let (cancel_url, cancel_server) = delayed_server().await;
+    let (cancel_url, cancel_received, cancel_server) = delayed_server().await;
     let error = HttpEngine::new()
         .unwrap()
         .execute_cancellable(
             &request("GET", cancel_url).into_http().unwrap(),
             &ExecutionOptions::default(),
-            tokio::time::sleep(Duration::from_millis(20)),
+            async {
+                cancel_received.await.unwrap();
+            },
         )
         .await
         .unwrap_err();

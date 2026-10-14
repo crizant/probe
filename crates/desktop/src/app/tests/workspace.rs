@@ -4415,11 +4415,13 @@ fn wait_for_shortcut_request(
         if finished {
             return;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "shortcut request did not finish"
+        let now = std::time::Instant::now();
+        assert!(now < deadline, "shortcut request did not finish");
+        std::thread::park_timeout(
+            deadline
+                .saturating_duration_since(now)
+                .min(Duration::from_millis(10)),
         );
-        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
