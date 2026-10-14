@@ -1370,3 +1370,29 @@ fn effective_environment_variables_resolve_inheritance_overrides_and_secrets() {
         })
     );
 }
+
+#[test]
+fn variable_only_environment_snapshot_omits_certificate_secrets_and_preserves_resolution() {
+    let mut source = environment(
+        "child",
+        Some("base"),
+        vec![variable("host", "localhost"), secret("token")],
+    );
+    source.color = Some("blue".into());
+    source.dot_env_file_path = Some(".env".into());
+    source
+        .client_certificates
+        .push(probe_core::ClientCertificate::Pem {
+            domain: "localhost".into(),
+            certificate_file_path: "cert.pem".into(),
+            private_key_file_path: "key.pem".into(),
+            passphrase: Some("secret".into()),
+            disabled: false,
+        });
+    let snapshot = source.clone_without_client_certificates();
+    assert!(snapshot.client_certificates.is_empty());
+    let mut expected = source.clone();
+    expected.client_certificates.clear();
+    assert_eq!(snapshot, expected);
+    assert_eq!(source.client_certificates.len(), 1);
+}

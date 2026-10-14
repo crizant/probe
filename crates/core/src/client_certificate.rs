@@ -68,7 +68,8 @@ impl fmt::Debug for ClientCertificate {
 }
 
 /// Matches a literal hostname/authority glob against an HTTPS URL's parsed host.
-/// `*` matches zero or more hostname characters; other characters are literal.
+/// A wildcard must be the whole leftmost label (`*.example.com`). It matches
+/// one or more subdomain labels; other wildcard placements never match.
 /// A portless pattern permits any port. An explicit port matches the effective
 /// HTTPS port (including 443). Paths, userinfo, and regex syntax are rejected.
 #[must_use]
@@ -102,23 +103,13 @@ pub fn client_certificate_domain_matches(pattern: &str, host: &str, port: u16) -
     }
     let pattern = pattern.to_ascii_lowercase();
     let host = host.to_ascii_lowercase();
-    let mut parts = pattern.split('*');
-    let prefix = parts.next().unwrap_or_default();
-    let Some(mut remaining) = host.strip_prefix(prefix) else {
-        return false;
-    };
-    let Some(suffix) = parts.next_back() else {
-        return remaining.is_empty();
-    };
-    let Some(middle) = remaining.strip_suffix(suffix) else {
-        return false;
-    };
-    remaining = middle;
-    for part in parts {
-        let Some(index) = remaining.find(part) else {
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        if suffix.is_empty() || suffix.contains('*') {
             return false;
-        };
-        remaining = &remaining[index + part.len()..];
+        }
+        host.strip_suffix(&format!(".{suffix}"))
+            .is_some_and(|prefix| !prefix.is_empty())
+    } else {
+        !pattern.contains('*') && pattern == host
     }
-    true
 }

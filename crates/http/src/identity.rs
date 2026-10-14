@@ -64,9 +64,11 @@ impl PemClientIdentity {
     pub(crate) async fn load(&self, options: &ExecutionOptions) -> Result<Identity, HttpError> {
         let cert_path = resolve_path(&self.certificate_file_path, options)?;
         let key_path = resolve_path(&self.private_key_file_path, options)?;
-        let cert = tokio::fs::read(cert_path)
-            .await
-            .map_err(|_| configuration("cannot read client certificate file"))?;
+        let cert = Zeroizing::new(
+            tokio::fs::read(cert_path)
+                .await
+                .map_err(|_| configuration("cannot read client certificate file"))?,
+        );
         let key = Zeroizing::new(
             tokio::fs::read(key_path)
                 .await

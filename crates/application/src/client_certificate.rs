@@ -4,22 +4,22 @@ use probe_http::HttpError;
 
 /// Only the selected environment's direct declarations are retained. This never
 /// traverses `extends`, resolves certificate variables, or reads identity files.
-pub(crate) struct CertificateScopes {
-    environment: Vec<probe_core::ClientCertificate>,
-    collection: Vec<probe_core::ClientCertificate>,
+pub(crate) struct CertificateScopes<'a> {
+    environment: &'a [probe_core::ClientCertificate],
+    collection: &'a [probe_core::ClientCertificate],
 }
 
-impl CertificateScopes {
-    pub(crate) fn new(resolution: &RequestResolution<'_>) -> Self {
+impl<'a> CertificateScopes<'a> {
+    pub(crate) fn new(resolution: &RequestResolution<'a>) -> Self {
         Self {
             environment: resolution
                 .environments
                 .iter()
                 .find(|environment| Some(environment.name.as_str()) == resolution.environment)
-                .map_or_else(Vec::new, |environment| {
-                    environment.client_certificates.clone()
+                .map_or(&[][..], |environment| {
+                    environment.client_certificates.as_slice()
                 }),
-            collection: resolution.client_certificates.to_vec(),
+            collection: resolution.client_certificates,
         }
     }
 
@@ -42,7 +42,7 @@ impl CertificateScopes {
             return Ok(None);
         };
         let port = url.port_or_known_default().unwrap_or(443);
-        for certificate in self.environment.iter().chain(&self.collection) {
+        for certificate in self.environment.iter().chain(self.collection) {
             let (domain, disabled) = match certificate {
                 probe_core::ClientCertificate::Pem {
                     domain, disabled, ..
@@ -283,6 +283,49 @@ mod tests {
                 Some("local")
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn selection_rejects_unparseable_urls_and_nondefault_port_at_443() {
+        let certificates = [pem("localhost:8443", "missing.pem", false)];
+        for url in [
+            "not a URL",
+            "https://[invalid",
+            "https://localhost",
+            "https://localhost:443",
+        ] {
+            assert_eq!(select(url, &certificates, &[], None).unwrap(), None);
+        }
+        assert_eq!(
+            select("https://localhost:8443", &certificates, &[], None).unwrap(),
+            identity("localhost:8443", "missing.pem")
+        );
+    }
+
+    #[test]
+    fn selection_keeps_the_certificate_host_when_path_parameters_contain_urls() {
+        let certificates = [pem("localhost:8443", "missing.pem", false)];
+        let request = Request {
+            method: Some("GET".into()),
+            url: Some("https://localhost:8443/:resource".into()),
+            path_parameters: vec![probe_core::QueryParameter {
+                name: "resource".into(),
+                value: "https://evil.example/private".into(),
+                disabled: false,
+            }],
+            ..Request::default()
+        }
+        .into_http()
+        .unwrap();
+        assert_eq!(
+            CertificateScopes::new(&RequestResolution {
+                client_certificates: &certificates,
+                ..RequestResolution::default()
+            })
+            .select(&request)
+            .unwrap(),
+            identity("localhost:8443", "missing.pem")
         );
     }
 

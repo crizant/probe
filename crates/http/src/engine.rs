@@ -304,7 +304,8 @@ fn configure_client(
     };
     let mut builder = builder.redirect(policy);
     if let Some((identity, _)) = identity {
-        builder = builder.identity(identity);
+        // Proxy TLS must never inherit the host-scoped client certificate resolver.
+        builder = builder.no_proxy().identity(identity);
     }
     builder.build().map_err(|error| {
         HttpError::ClientConfiguration(if authenticated {
@@ -338,6 +339,5 @@ fn identity_redirect_policy(maximum: usize, identity: crate::PemClientIdentity) 
     })
 }
 
-#[path = "mtls_tests.rs"]
 #[cfg(test)]
 mod mtls_tests;

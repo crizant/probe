@@ -16,8 +16,8 @@ Release dates use Australia/Brisbane time (UTC+10).
   for mTLS from CLI and desktop. Direct selected-environment certificates take
   precedence over collection certificates. RSA, EC, PKCS#8, certificate chains,
   and encrypted PKCS#8 keys are supported. Redirects outside the selected domain
-  fail with a clear diagnostic before connecting. PKCS#12 execution and environment certificate inheritance
-  remain unsupported; no certificate editor or proprietary fields are added.
+  fail with a clear diagnostic before connecting. PKCS#12 execution and
+  environment certificate inheritance remain unsupported; no certificate editor or proprietary fields are added.
 
 ### Changed
 

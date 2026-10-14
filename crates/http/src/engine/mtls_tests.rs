@@ -278,3 +278,52 @@ async fn engine_checks_identity_scope_against_built_url_before_connecting() {
     assert_eq!(error, HttpError::Timeout);
     assert!(listener.accept().is_ok());
 }
+
+#[tokio::test]
+async fn certificate_bearing_execution_bypasses_an_https_proxy_outside_its_domain() {
+    let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+    proxy.set_nonblocking(true).unwrap();
+    let proxy_url = format!("https://localhost:{}", proxy.local_addr().unwrap().port());
+    let (port, worker) =
+        server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".into());
+    let configuration = PemClientIdentity::new(
+        "127.0.0.1".into(),
+        fixture("client.pem").to_str().unwrap().into(),
+        fixture("client-key.pem").to_str().unwrap().into(),
+        None,
+    );
+    let identity = configuration
+        .load(&ExecutionOptions::default())
+        .await
+        .unwrap();
+    let builder = || {
+        Client::builder()
+            .tls_certs_only([reqwest::Certificate::from_pem(&bytes("ca.pem")).unwrap()])
+            .proxy(reqwest::Proxy::https(&proxy_url).unwrap())
+            .timeout(Duration::from_secs(2))
+    };
+    let authenticated =
+        configure_client(builder(), true, 10, Some((identity, configuration))).unwrap();
+    let response = authenticated
+        .get(format!("https://127.0.0.1:{port}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(worker.join().unwrap());
+    assert_eq!(
+        proxy.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+
+    // The same explicit HTTPS proxy remains active for ordinary executions.
+    let ordinary = configure_client(builder(), true, 10, None).unwrap();
+    assert!(
+        ordinary
+            .get(format!("https://127.0.0.1:{port}"))
+            .send()
+            .await
+            .is_err()
+    );
+    assert!(proxy.accept().is_ok());
+}

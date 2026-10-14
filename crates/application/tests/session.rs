@@ -42,7 +42,7 @@ async fn listener() -> (TcpListener, String) {
     let url = format!("ws://{}/socket", listener.local_addr().unwrap());
     (listener, url)
 }
-fn prepared(req: &Request) -> probe_application::PreparedRequest {
+fn prepared(req: &Request) -> probe_application::PreparedRequest<'_> {
     prepare_request(req, &RequestResolution::default(), &NoSecrets).unwrap()
 }
 
@@ -375,12 +375,13 @@ async fn secrets_are_used_on_wire_and_redacted_at_every_event_boundary() {
                 disabled: false,
             })],
         };
+        let overrides = [("token".into(), SECRET.into())];
         let request = prepare_request(
             &req,
             &RequestResolution {
-                environments: &[env],
+                environments: std::slice::from_ref(&env),
                 environment: Some("local"),
-                overrides: &[("token".into(), SECRET.into())],
+                overrides: &overrides,
                 ..RequestResolution::default()
             },
             &NoSecrets,
@@ -625,13 +626,14 @@ fn secret_bearing_configuration_diagnostics_withhold_all_request_values() {
             Some(message(WebSocketMessageKind::Binary, "{{token}}")),
         ),
     ];
+    let overrides = [("token".into(), SECRET.into())];
     for req in reqs {
         let prepared = prepare_request(
             &req,
             &RequestResolution {
                 environments: std::slice::from_ref(&env),
                 environment: Some("local"),
-                overrides: &[("token".into(), SECRET.into())],
+                overrides: &overrides,
                 ..RequestResolution::default()
             },
             &NoSecrets,

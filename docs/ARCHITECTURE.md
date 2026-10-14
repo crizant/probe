@@ -707,13 +707,19 @@ environment's direct declarations first, followed by collection declarations. It
 skips disabled entries and takes the first enabled match; disabled entries never
 mask collection entries, and `extends` never inherits certificates. A winning
 PKCS#12 declaration returns an explicit unsupported configuration error.
-Dry runs and Copy as cURL do not load or decrypt certificates; WebSockets are unchanged.
+Preparation retains borrowed resolution inputs. Certificate scopes are built only
+when converting to HTTP/GraphQL execution; only the winning identity is copied.
+Dry runs and Copy as cURL do not copy, load or decrypt certificates. Desktop
+WebSocket and Copy as cURL snapshots omit certificate declarations, including
+those inside environments. WebSocket transport remains unchanged.
 
 The matching rules below are Probe's own execution contract; OpenCollection does
 not define a matching algorithm. Matching applies only to HTTPS. Hostnames are
-ASCII case-insensitive and anchored at both ends; `*` matches zero or more hostname characters, including dots.
-`*.example.com` matches nested subdomains but does not match the bare apex.
-`*example.com` also matches `evil-example.com`; wildcard patterns require care.
+ASCII case-insensitive and anchored at both ends. A wildcard must be the entire
+leftmost label: `*.example.com` matches one or more subdomain labels, including
+nested subdomains, but does not match the bare apex. Other wildcard placements
+never match: `*example.com` cannot match `evil-example.com`, and standalone `*`,
+`api*.example.com` and `*.*.example.com` are unsupported.
 Trailing dots are significant: `example.com` does not match `example.com.`, while
 `example.com.` does. Probe uses the parsed URL hostname without stripping its dot.
 Portless patterns allow any port; an explicit port must equal the effective HTTPS
@@ -725,8 +731,7 @@ IPv6 port, for example `[::1]:8443`. Domain patterns contain only ASCII letters,
 digits, dots, hyphens, `*`, colons and brackets;
 schemes, paths, userinfo, queries, fragments and regex syntax are not patterns.
 Thus `example.com` never matches `example.com.evil.test`.
-This preserves Bruno's hostname wildcard behavior while avoiding its unsafe URL
-prefix match. The upstream OpenCollection schema defines certificate fields but
+Probe deliberately restricts wildcard placement and avoids URL prefix matching. The upstream OpenCollection schema defines certificate fields but
 no matching algorithm: see [certificate schema](https://github.com/opencollection-dev/opencollection/blob/535a5c5803da7a3fe1d575fff23350b4a7c43c6a/packages/oc-schema/src/opencollection.schema.json)
 and [Bruno transport](https://github.com/usebruno/bruno/blob/fd0e623bb6a1cf62a08bfd06c7ea9b61e25f303e/packages/bruno-electron/src/ipc/network/cert-utils.js).
 Bruno interpolates certificate strings with broader variable scopes than Probe;
@@ -742,14 +747,19 @@ literal passphrase; legacy OpenSSL encrypted PEM is rejected. Key derivation run
 on a blocking worker, with zeroizing key and combined PEM buffers, and decrypted
 material is never written to disk. Diagnostics do not include parser output,
 private-key material, paths or passphrases. Rustls checks the cert/key match.
-The core passphrase remains a plain `String` and is cloned into application
-`CertificateScopes` and desktop `ExecutionInput`; these copies are not zeroized.
-The transport passphrase and temporary key buffers zeroize on drop, but the key
+The core passphrase remains a plain `String`. Application `CertificateScopes`
+borrows declarations; desktop HTTP/GraphQL `ExecutionInput` snapshots still clone
+them, including plain passphrase strings that are not zeroized.
+The transport passphrase and temporary certificate/key buffers zeroize on drop, but the key
 copy retained inside `reqwest::Identity` is not zeroized. This is memory hygiene,
 not a guarantee that every process-memory copy is erased.
 
-Certificate-bearing executions construct a fresh reqwest/rustls client. The default
-client remains reusable for ordinary requests. Redirects follow existing limits
+Certificate-bearing executions construct a fresh reqwest/rustls client and disable
+all proxies before installing the identity (`ClientBuilder::no_proxy()`), including
+system/environment proxies and explicit builder proxies. HTTPS proxy TLS must not
+receive a resolver for a certificate scoped to the destination host. These
+executions connect directly; ordinary requests retain existing proxy behavior and
+the reusable default client. Redirects follow existing limits
 only when the target is HTTPS and matches the selected pattern; otherwise the
 request fails with a clear, secret-safe "redirect blocked" diagnostic without
 connecting to the target. HTTPS-to-HTTP redirects are blocked by the same rule.

@@ -60,17 +60,17 @@ impl SecretProvider for NoSecrets {
 /// The provider is asked only for secrets the request can reach, including through
 /// plain variables. It may block, so interactive interfaces must call this away from
 /// their UI thread.
-pub fn prepare_request(
+pub fn prepare_request<'a>(
     request: &Request,
-    resolution: &RequestResolution<'_>,
+    resolution: &RequestResolution<'a>,
     secrets: &dyn SecretProvider,
-) -> Result<PreparedRequest, EnvironmentResolutionError> {
+) -> Result<PreparedRequest<'a>, EnvironmentResolutionError> {
     if !resolution.resolves_variables() {
         return Ok(PreparedRequest {
             execution: request.clone(),
             presentation: request.clone(),
             disclosure: SecretDisclosure::default(),
-            certificates: CertificateScopes::new(resolution),
+            resolution: *resolution,
         });
     }
     let environment = resolve_environment_for_request_with_provider(
@@ -93,19 +93,19 @@ pub fn prepare_request(
         execution,
         presentation,
         disclosure,
-        certificates: CertificateScopes::new(resolution),
+        resolution: *resolution,
     })
 }
 
 /// A resolved request whose secret-bearing execution form is not observable.
-pub struct PreparedRequest {
-    certificates: CertificateScopes,
+pub struct PreparedRequest<'a> {
+    resolution: RequestResolution<'a>,
     execution: Request,
     presentation: Request,
     disclosure: SecretDisclosure,
 }
 
-impl PreparedRequest {
+impl PreparedRequest<'_> {
     /// The request with secret references retained, safe for dry runs and summaries.
     #[must_use]
     pub const fn presentation(&self) -> &Request {
@@ -126,8 +126,8 @@ impl PreparedRequest {
                 initial_url_depends_on_secret(self.presentation, request.request(), environment)?;
         }
         Ok(HttpExecution {
+            client_identity: CertificateScopes::new(&self.resolution).select(&request),
             request,
-            certificates: self.certificates,
             disclosure: self.disclosure,
         })
     }
@@ -176,7 +176,7 @@ fn initial_url_depends_on_secret(
     }))
 }
 
-impl fmt::Debug for PreparedRequest {
+impl fmt::Debug for PreparedRequest<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PreparedRequest")
@@ -188,7 +188,7 @@ impl fmt::Debug for PreparedRequest {
 
 /// HTTP engine input whose results are redacted before they are returned.
 pub struct HttpExecution {
-    certificates: CertificateScopes,
+    client_identity: Result<Option<probe_http::PemClientIdentity>, HttpError>,
     request: PreparedHttpRequest,
     disclosure: SecretDisclosure,
 }
@@ -218,8 +218,8 @@ impl HttpExecution {
         C: Future + Send,
         P: FnMut(HttpProgress) + Send,
     {
-        options.client_identity = self.certificates.select(&self.request)?;
-        if self.uses_secrets() {
+        options.client_identity = self.client_identity?;
+        if self.disclosure.uses_secrets() {
             // Cache spool files would retain unredacted response bytes.
             options.response_cache = None;
         }

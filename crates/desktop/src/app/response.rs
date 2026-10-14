@@ -12,8 +12,13 @@ impl ProbeApp {
         };
         let input = ExecutionInput {
             request,
-            environments: loaded.workspace().environments().to_vec(),
-            client_certificates: loaded.workspace().client_certificates().to_vec(),
+            environments: loaded
+                .workspace()
+                .environments()
+                .iter()
+                .map(probe_core::Environment::clone_without_client_certificates)
+                .collect(),
+            client_certificates: Vec::new(),
             environment: self.shell.selected_environment().map(str::to_owned),
             credential_workspace: None,
         };
