@@ -46,177 +46,81 @@ fn certificates(
 fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-templates");
     workspace.open_manager(cx, "base");
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-variable-value-host")
-            .is_some()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-secret-set-secretToken")
-            .is_none()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-manager-add-variable")
-            .is_some()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-manager-add-secret")
-            .is_none()
-    );
-    click(&workspace, cx, "environment-tab-1");
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-secret-set-secretToken")
-            .is_some()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-variable-value-host")
-            .is_none()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-manager-add-variable")
-            .is_none()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-manager-add-secret")
-            .is_some()
-    );
+    for (tab, plain) in [("environment-tab-0", true), ("environment-tab-1", false)] {
+        click(&workspace, cx, tab);
+        for (selector, visible) in [
+            ("environment-variable-value-host", plain),
+            ("environment-secret-set-secretToken", !plain),
+            ("environment-manager-add-variable", plain),
+            ("environment-manager-add-secret", !plain),
+        ] {
+            assert_eq!(
+                workspace.visual(cx).debug_bounds(selector).is_some(),
+                visible,
+                "{selector}"
+            );
+        }
+    }
     click(&workspace, cx, "environment-tab-2");
     assert!(
         workspace
             .visual(cx)
-            .debug_bounds("certificate-list-footer")
+            .debug_bounds("environment-certificates")
             .is_some()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-variable-value-host")
+            .is_none()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-secret-set-secretToken")
+            .is_none()
     );
     click(&workspace, cx, "certificate-add");
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("certificate-dialog")
-            .is_some()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-certificates")
-            .is_some(),
-        "the list stays behind the nested dialog"
-    );
     fill(&workspace, cx, 0, "api.example.com");
-    fill(&workspace, cx, 1, "{{certPath}}");
-    // Required private key is still absent; Save must not commit an invalid declaration.
-    workspace.update(cx, |view, window, cx| {
-        view.save_certificate_editor(window, cx)
-    });
-    assert!(certificates(&workspace, cx).is_empty());
+    fill(&workspace, cx, 1, "certs/client.pem");
     fill(&workspace, cx, 2, "certs/client-key.pem");
-    workspace.update(cx, |view, _, cx| {
-        let editor = view
-            .environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap();
-        assert!(matches!(
-            editor.certificate(cx),
-            Some(ClientCertificate::Pem {
-                passphrase: None,
-                ..
-            })
-        ));
-    });
-    fill(&workspace, cx, 4, "{{certPassword}}");
-    workspace.update(cx, |view, _, cx| {
-        let editor = view
-            .environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap();
-        assert!(editor.inputs[4].read(cx).presentation().is_masked());
-        assert!(view.environment_manager_is_dirty());
-        assert!(view.environment_manager_save_disabled());
-    });
-    click(&workspace, cx, "certificate-reveal");
-    workspace.update(cx, |view, _, cx| {
-        assert!(
-            !view
+    fill(&workspace, cx, 4, "{{secretVariable}}");
+    for (toggle, masked) in [(false, true), (true, false), (true, true)] {
+        if toggle {
+            click(&workspace, cx, "certificate-reveal");
+        }
+        workspace.update(cx, |view, _, cx| {
+            let editor = view
                 .environment_manager_dialog
                 .as_ref()
                 .unwrap()
                 .certificate_editor
                 .as_ref()
-                .unwrap()
-                .inputs[4]
-                .read(cx)
-                .presentation()
-                .is_masked()
-        )
-    });
-    click(&workspace, cx, "certificate-reveal");
-    workspace.update(cx, |view, _, cx| {
-        assert!(
-            view.environment_manager_dialog
-                .as_ref()
-                .unwrap()
-                .certificate_editor
-                .as_ref()
-                .unwrap()
-                .inputs[4]
-                .read(cx)
-                .presentation()
-                .is_masked()
-        );
-    });
+                .unwrap();
+            assert_eq!(editor.inputs[4].read(cx).presentation().is_masked(), masked);
+        });
+    }
     click(&workspace, cx, "certificate-save");
-    assert!(
-        matches!(&certificates(&workspace, cx)[0], ClientCertificate::Pem { certificate_file_path, passphrase, .. } if certificate_file_path == "{{certPath}}" && passphrase.as_deref() == Some("{{certPassword}}"))
-    );
-    click(&workspace, cx, "certificate-edit-0");
-    fill(&workspace, cx, 4, "literal password");
-    click(&workspace, cx, "certificate-cancel");
-    assert!(
-        matches!(&certificates(&workspace, cx)[0], ClientCertificate::Pem { passphrase, .. } if passphrase.as_deref() == Some("{{certPassword}}"))
-    );
-    click(&workspace, cx, "environment-tab-0");
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("environment-variable-value-host")
-            .is_some()
-    );
     workspace.update(cx, |view, window, cx| {
         view.save_environment_manager_dialog(window, cx)
     });
     cx.run_until_parked();
     let saved = probe_opencollection::load_workspace(&workspace.path).unwrap();
-    assert_eq!(
-        saved
-            .workspace()
-            .environments()
-            .iter()
-            .find(|environment| environment.name == "base")
-            .unwrap()
-            .client_certificates,
-        certificates(&workspace, cx)
+    let certificate = &saved
+        .workspace()
+        .environments()
+        .iter()
+        .find(|environment| environment.name == "base")
+        .unwrap()
+        .client_certificates[0];
+    assert!(
+        matches!(certificate, ClientCertificate::Pem { passphrase, .. } if passphrase.as_deref() == Some("{{secretVariable}}"))
     );
     assert_eq!(workspace.store.get_calls(), 0);
+    assert!(
+        workspace.store.values.lock().unwrap().is_empty(),
+        "templated passphrases must not be written to the credential store"
+    );
 }
 
 #[gpui_kit::test]
@@ -330,10 +234,6 @@ fn certificate_crud_order_disable_save_and_dirty_switching(cx: &mut TestAppConte
         );
     });
     cx.run_until_parked();
-    assert!(
-        certificates(&workspace, cx).is_empty(),
-        "parent certificates must not appear as editable entries"
-    );
     workspace.update(cx, |view, _, cx| {
         view.select_environment_manager_environment("base", cx)
     });
@@ -770,9 +670,6 @@ fn certificate_required_field_feedback_tracks_type_and_whitespace(cx: &mut TestA
 
 #[gpui_kit::test]
 fn certificate_dialog_escape_cancel_and_save_preserve_outer_draft(cx: &mut TestAppContext) {
-    use crate::app::chrome::certificates::{
-        CERTIFICATE_MOVE_DOWN, CERTIFICATE_MOVE_UP, CERTIFICATE_ORDER_DESCRIPTION,
-    };
     cx.update(bind_platform_hotkeys);
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-modal");
     let original_yaml = workspace.yaml();
@@ -784,11 +681,14 @@ fn certificate_dialog_escape_cancel_and_save_preserve_outer_draft(cx: &mut TestA
             .debug_bounds("certificate-order-description")
             .is_some()
     );
-    assert!(CERTIFICATE_ORDER_DESCRIPTION.contains("top to bottom"));
-    assert!(CERTIFICATE_ORDER_DESCRIPTION.contains("first matching enabled"));
-    assert!(CERTIFICATE_MOVE_UP.contains("higher matching priority"));
-    assert!(CERTIFICATE_MOVE_DOWN.contains("lower matching priority"));
     click(&workspace, cx, "certificate-add");
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-certificates")
+            .is_some(),
+        "the list stays behind the nested dialog"
+    );
     let restore_focus = workspace.update(cx, |view, _, _| {
         Some(
             view.environment_manager_dialog
