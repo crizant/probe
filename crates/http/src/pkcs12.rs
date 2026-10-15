@@ -1,14 +1,11 @@
 //! PKCS#12 decoding with RustCrypto. Never expose parser errors or decoded bags.
 
-use der::{
-    AnyRef, Decode, Encode, EncodePem,
-    asn1::{ContextSpecific, ObjectIdentifier},
-};
+use der::{AnyRef, Decode, Encode, EncodePem, asn1::ObjectIdentifier};
 use hmac::{KeyInit, Mac};
 use pkcs12::cms::{content_info::ContentInfo, encrypted_data::EncryptedData};
-use pkcs12::{AuthenticatedSafe, CertBag, MacData, Pfx, kdf, safe_bag::SafeContents};
+use pkcs12::{AuthenticatedSafe, CertBag, MacData, Pfx, kdf};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::{HttpError, Pkcs12Error};
 
@@ -26,14 +23,14 @@ fn error(kind: Pkcs12Error) -> HttpError {
     HttpError::Pkcs12(kind)
 }
 
-// SafeBag owns raw bytes, including plaintext key bags. Scrub them on all exits.
-struct Bags(SafeContents);
-impl Drop for Bags {
-    fn drop(&mut self) {
-        for bag in &mut self.0 {
-            bag.bag_value.zeroize();
-        }
-    }
+// RFC 7292 SafeBag, borrowed through RustCrypto DER so plaintext key bags
+// reference the zeroizing safe buffer instead of making non-zeroizing copies.
+#[derive(der::Sequence)]
+struct SafeBagRef<'a> {
+    bag_id: ObjectIdentifier,
+    #[asn1(context_specific = "0", tag_mode = "EXPLICIT")]
+    bag_value: AnyRef<'a>,
+    bag_attributes: Option<AnyRef<'a>>,
 }
 
 pub(crate) fn identity_from_pkcs12(
@@ -54,23 +51,19 @@ pub(crate) fn identity_from_pkcs12(
     let mut certs: Vec<CertificateDer<'static>> = Vec::new();
     for safe in safes {
         let contents = decode_safe(safe, password)?;
-        let bags = Bags(SafeContents::from_der(&contents).map_err(|_| error(INVALID))?);
-        for bag in &bags.0 {
+        let bags = Vec::<SafeBagRef<'_>>::from_der(&contents).map_err(|_| error(INVALID))?;
+        for bag in &bags {
             match bag.bag_id {
                 pkcs12::PKCS_12_KEY_BAG_OID => {
-                    let key = ContextSpecific::<AnyRef<'_>>::from_der(&bag.bag_value)
-                        .map_err(|_| error(INVALID))?;
                     keys.push(Zeroizing::new(
-                        key.value.to_der().map_err(|_| error(INVALID))?,
+                        bag.bag_value.to_der().map_err(|_| error(INVALID))?,
                     ));
                 }
                 pkcs12::PKCS_12_PKCS8_KEY_BAG_OID => {
-                    let encrypted =
-                        ContextSpecific::<pkcs12::pbe_params::EncryptedPrivateKeyInfo>::from_der(
-                            &bag.bag_value,
-                        )
+                    let encrypted = bag
+                        .bag_value
+                        .decode_as::<pkcs12::pbe_params::EncryptedPrivateKeyInfo>()
                         .map_err(|_| error(INVALID))?;
-                    let encrypted = encrypted.value;
                     keys.push(decrypt(
                         &encrypted
                             .encryption_algorithm
@@ -81,18 +74,17 @@ pub(crate) fn identity_from_pkcs12(
                     )?);
                 }
                 pkcs12::PKCS_12_CERT_BAG_OID => {
-                    let cert = ContextSpecific::<CertBag>::from_der(&bag.bag_value)
-                        .map_err(|_| error(INVALID))?
-                        .value;
+                    let cert = bag
+                        .bag_value
+                        .decode_as::<CertBag>()
+                        .map_err(|_| error(INVALID))?;
                     if cert.cert_id != pkcs12::PKCS_12_X509_CERT_OID {
                         return Err(error(UNSUPPORTED));
                     }
                     let cert = CertificateDer::from(cert.cert_value.as_bytes().to_vec());
                     rustls::server::ParsedCertificate::try_from(&cert)
                         .map_err(|_| error(INVALID))?;
-                    if !certs.contains(&cert) {
-                        certs.push(cert);
-                    }
+                    certs.push(cert);
                 }
                 // Reject rather than ignore bags that might conceal identities (e.g.
                 // nested safeContents). This PR deliberately has no selection policy.
@@ -100,6 +92,8 @@ pub(crate) fn identity_from_pkcs12(
             }
         }
     }
+    certs.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
+    certs.dedup();
     select_identity(&keys, certs)
 }
 
@@ -146,7 +140,6 @@ fn decrypt(
         .decrypt_in_place(password.unwrap_or("").as_bytes(), &mut decrypted)
         .map_err(|failure| match failure {
             pkcs5::Error::DecryptFailed => error(PASSWORD),
-            pkcs5::Error::UnsupportedAlgorithm { .. } => error(UNSUPPORTED),
             _ => error(INVALID),
         })?
         .len();
@@ -333,11 +326,15 @@ mod tests {
         ] {
             let failure = identity_from_pkcs12(&read(name), password).expect_err(name);
             assert_eq!(failure, error(expected), "{name}");
+            assert!(failure.is_configuration());
+            assert!(failure.to_string().contains("PKCS#12"));
             let diagnostic = format!("{failure} {failure:?}");
             for secret in [PASS, "wrong-passphrase-marker", "BEGIN PRIVATE KEY", name] {
                 assert!(!diagnostic.contains(secret));
             }
         }
+        assert!(!HttpError::Timeout.is_configuration());
+        assert!(!HttpError::Transport("handshake failed".into()).is_configuration());
         for malformed in [
             b"private-key-secret-marker".as_slice(),
             b"",
@@ -363,12 +360,13 @@ mod tests {
         use rustls::pki_types::pem::PemObject;
         let leaf = CertificateDer::from_pem_slice(&read("client.pem")).unwrap();
         let root = CertificateDer::from_pem_slice(&read("ca.pem")).unwrap();
-        let certificates = vec![root.clone(), leaf.clone()];
+        let unrelated = CertificateDer::from_pem_slice(&read("wrong-client.pem")).unwrap();
+        let certificates = vec![unrelated, root.clone(), leaf.clone()];
         assert_eq!(
-            certificate_chain(1, &certificates).unwrap(),
+            certificate_chain(2, &certificates).unwrap(),
             vec![&leaf, &root]
         );
-        assert_eq!(certificate_chain(0, &certificates).unwrap(), vec![&root]);
+        assert_eq!(certificate_chain(1, &certificates).unwrap(), vec![&root]);
         // A missing issuer is valid: the remote verifier may already have it.
         assert_eq!(
             certificate_chain(0, std::slice::from_ref(&leaf)).unwrap(),
