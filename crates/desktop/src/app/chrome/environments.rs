@@ -683,7 +683,14 @@ impl ProbeApp {
         let Some(dialog) = self.environment_manager_dialog.as_ref() else {
             return div().into_any_element();
         };
-        let rows = dialog.effective_rows(environments);
+        let rows = std::rc::Rc::new(
+            dialog
+                .effective_rows(environments)
+                .iter()
+                .filter(|row| row.variable.is_secret() == (dialog.tab == EnvironmentTab::Secrets))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
         let rows_empty = rows.is_empty();
         let busy = self.environment_save_task.is_some();
         let dirty = self.environment_manager_is_dirty();
@@ -787,6 +794,41 @@ impl ProbeApp {
                 .mode(ScrollbarMode::Scrolling),
         );
 
+        let mut tabs = Tabs::new("environment-manager-tabs")
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1));
+        for (index, (label, tab)) in [
+            ("Variables", EnvironmentTab::Variables),
+            ("Secrets", EnvironmentTab::Secrets),
+            ("Client Certificates", EnvironmentTab::ClientCertificates),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let view = cx.weak_entity();
+            tabs = tabs.child(
+                components::text_tab(
+                    theme,
+                    format!("environment-tab-{index}"),
+                    label,
+                    dialog.tab == tab,
+                    index + 1,
+                    3,
+                    move |_, _, cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            if let Some(dialog) = view.environment_manager_dialog.as_mut() {
+                                dialog.tab = tab;
+                                dialog.active_field = None;
+                            }
+                            view.environment_variables_scroll = UniformListScrollHandle::new();
+                            cx.notify();
+                        });
+                    },
+                )
+                .disabled(busy || dialog.certificate_editor.is_some()),
+            );
+        }
         let table = div()
             .mt(px(theme.metrics.spacing_2))
             .flex_1()
@@ -894,7 +936,12 @@ impl ProbeApp {
                 )
                 .mt(px(theme.metrics.spacing_2))
             })
-            .child(table);
+            .child(tabs)
+            .child(if dialog.tab == EnvironmentTab::ClientCertificates {
+                self.render_certificate_tab(theme, busy, cx)
+            } else {
+                table.into_any_element()
+            });
 
         let close_view = cx.weak_entity();
         let save_view = cx.weak_entity();
@@ -925,7 +972,7 @@ impl ProbeApp {
                         "Close",
                         components::DialogActionStyle::Secondary,
                         None,
-                        false,
+                        dialog.certificate_editor.is_some(),
                         move |_, window, cx| {
                             let _ = close_view.update(cx, |view, cx| {
                                 view.request_close_environment_manager_dialog(window, cx);

@@ -16,6 +16,8 @@ pub(crate) const IMPORT_DIAGNOSTIC_GROUP_LIMIT: usize = 8;
 #[derive(Clone, Debug)]
 pub(crate) struct EnvironmentManagerDialog {
     pub(crate) original_name: String,
+    pub(crate) tab: super::EnvironmentTab,
+    pub(crate) certificate_editor: Option<super::CertificateEditor>,
     draft: Environment,
     pub(crate) secret_statuses: BTreeMap<String, SecretUiStatus>,
     pub(crate) variable_row_ids: Vec<u64>,
@@ -58,6 +60,8 @@ impl EnvironmentManagerDialog {
         let next_variable_row_id = environment.variables.len() as u64;
         Self {
             original_name: environment.name.clone(),
+            tab: super::EnvironmentTab::default(),
+            certificate_editor: None,
             draft: environment.clone(),
             secret_statuses: BTreeMap::new(),
             variable_row_ids: (0..next_variable_row_id).collect(),
@@ -66,6 +70,13 @@ impl EnvironmentManagerDialog {
             #[cfg(test)]
             effective_row_builds: std::cell::Cell::new(0),
             active_field: None,
+        }
+    }
+
+    pub(crate) fn with_tab(environment: &Environment, tab: super::EnvironmentTab) -> Self {
+        Self {
+            tab,
+            ..Self::new(environment)
         }
     }
 

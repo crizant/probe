@@ -40,7 +40,9 @@ use probe_opencollection::{
     CompletedEnvironmentDelete, LoadedWorkspace, StructureOperation, StructureResult,
     create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
 };
+mod certificates;
 mod chrome;
+use certificates::{CertificateEditor, EnvironmentTab};
 mod detached_requests;
 mod dialogs;
 mod documentation;

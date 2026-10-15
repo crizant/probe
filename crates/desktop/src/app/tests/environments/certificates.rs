@@ -1,0 +1,363 @@
+use super::*;
+use crate::app::EnvironmentTab;
+use probe_core::ClientCertificate;
+
+fn click(workspace: &EnvironmentWorkspace, cx: &mut TestAppContext, selector: &'static str) {
+    let mut visual = workspace.visual(cx);
+    let bounds = visual
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("missing {selector}"));
+    visual.simulate_click(bounds.center(), Modifiers::default());
+    visual.run_until_parked();
+}
+
+fn fill(workspace: &EnvironmentWorkspace, cx: &mut TestAppContext, field: usize, value: &str) {
+    workspace.update(cx, |view, window, cx| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_editor
+            .as_ref()
+            .unwrap()
+            .inputs[field]
+            .update(cx, |input, cx| {
+                input.set_value(value.to_owned(), window, cx)
+            });
+        cx.notify();
+    });
+    cx.run_until_parked();
+}
+
+fn certificates(
+    workspace: &EnvironmentWorkspace,
+    cx: &mut TestAppContext,
+) -> Vec<ClientCertificate> {
+    workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .draft()
+            .client_certificates
+            .clone()
+    })
+}
+
+#[gpui_kit::test]
+fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "base");
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-variable-value-host")
+            .is_some()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-secret-set-secretToken")
+            .is_none()
+    );
+    click(&workspace, cx, "environment-tab-1");
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-secret-set-secretToken")
+            .is_some()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-variable-value-host")
+            .is_none()
+    );
+    click(&workspace, cx, "environment-tab-2");
+    click(&workspace, cx, "certificate-add");
+    fill(&workspace, cx, 0, "api.example.com");
+    fill(&workspace, cx, 1, "{{certPath}}");
+    // Required private key is still absent; Save must not commit an invalid declaration.
+    workspace.update(cx, |view, window, cx| {
+        view.save_certificate_editor(window, cx)
+    });
+    assert!(certificates(&workspace, cx).is_empty());
+    fill(&workspace, cx, 2, "certs/client-key.pem");
+    fill(&workspace, cx, 4, "{{certPassword}}");
+    workspace.update(cx, |view, _, cx| {
+        let editor = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_editor
+            .as_ref()
+            .unwrap();
+        assert!(editor.inputs[4].read(cx).presentation().is_masked());
+        assert!(view.environment_manager_is_dirty());
+        assert!(view.environment_manager_save_disabled());
+    });
+    click(&workspace, cx, "certificate-reveal");
+    workspace.update(cx, |view, _, cx| {
+        assert!(
+            !view
+                .environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .certificate_editor
+                .as_ref()
+                .unwrap()
+                .inputs[4]
+                .read(cx)
+                .presentation()
+                .is_masked()
+        )
+    });
+    click(&workspace, cx, "certificate-save");
+    assert!(
+        matches!(&certificates(&workspace, cx)[0], ClientCertificate::Pem { certificate_file_path, passphrase, .. } if certificate_file_path == "{{certPath}}" && passphrase.as_deref() == Some("{{certPassword}}"))
+    );
+    click(&workspace, cx, "certificate-edit-0");
+    fill(&workspace, cx, 4, "literal password");
+    click(&workspace, cx, "certificate-cancel");
+    assert!(
+        matches!(&certificates(&workspace, cx)[0], ClientCertificate::Pem { passphrase, .. } if passphrase.as_deref() == Some("{{certPassword}}"))
+    );
+    click(&workspace, cx, "environment-tab-0");
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-variable-value-host")
+            .is_some()
+    );
+    assert_eq!(workspace.store.get_calls(), 0);
+}
+
+#[gpui_kit::test]
+fn certificate_crud_order_disable_save_and_dirty_switching(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-ui");
+    workspace.open_manager(cx, "base");
+    let original_variables = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .draft()
+            .variables
+            .clone()
+    });
+    click(&workspace, cx, "environment-tab-2");
+    for pkcs12 in [false, true] {
+        click(&workspace, cx, "certificate-add");
+        // An unfinished form protects environment switching even before saving the row.
+        workspace.update(cx, |view, _, cx| {
+            view.select_environment_manager_environment("development", cx);
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .original_name,
+                "base"
+            );
+        });
+        fill(&workspace, cx, 0, "{{domain}}");
+        if pkcs12 {
+            click(&workspace, cx, "certificate-type-1");
+            workspace.update(cx, |view, window, cx| {
+                view.save_certificate_editor(window, cx)
+            });
+            assert_eq!(certificates(&workspace, cx).len(), 1);
+            fill(&workspace, cx, 3, "{{certDirectory}}/client.pfx");
+        } else {
+            fill(&workspace, cx, 1, "certs/client.pem");
+            fill(&workspace, cx, 2, "{{privateKeyPath}}");
+        }
+        fill(&workspace, cx, 4, "literal password");
+        click(&workspace, cx, "certificate-save");
+    }
+    click(&workspace, cx, "certificate-toggle-0");
+    click(&workspace, cx, "certificate-toggle-1");
+    click(&workspace, cx, "certificate-up-1");
+    click(&workspace, cx, "certificate-edit-0");
+    fill(&workspace, cx, 3, "certs/edited.p12");
+    click(&workspace, cx, "certificate-save");
+    click(&workspace, cx, "certificate-edit-1");
+    fill(&workspace, cx, 1, "certs/edited.pem");
+    click(&workspace, cx, "certificate-save");
+    let expected = certificates(&workspace, cx);
+    assert!(
+        matches!(&expected[0], ClientCertificate::Pkcs12 { disabled: true, pkcs12_file_path, .. } if pkcs12_file_path == "certs/edited.p12")
+    );
+    assert!(
+        matches!(&expected[1], ClientCertificate::Pem { disabled: true, certificate_file_path, .. } if certificate_file_path == "certs/edited.pem")
+    );
+    workspace.update(cx, |view, window, cx| {
+        view.select_environment_manager_environment("development", cx);
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .original_name,
+            "base"
+        );
+        view.save_environment_manager_dialog(window, cx);
+    });
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&workspace.path).unwrap();
+    let base = loaded
+        .workspace()
+        .environments()
+        .iter()
+        .find(|environment| environment.name == "base")
+        .unwrap();
+    assert_eq!(base.client_certificates, expected);
+    assert_eq!(base.variables, original_variables);
+    workspace.update(cx, |view, _, cx| {
+        assert!(!view.environment_manager_is_dirty());
+        view.select_environment_manager_environment("development", cx);
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .original_name,
+            "development"
+        );
+        assert_eq!(
+            view.environment_manager_dialog.as_ref().unwrap().tab,
+            EnvironmentTab::ClientCertificates
+        );
+    });
+    cx.run_until_parked();
+    assert!(
+        certificates(&workspace, cx).is_empty(),
+        "parent certificates must not appear as editable entries"
+    );
+    workspace.update(cx, |view, _, cx| {
+        view.select_environment_manager_environment("base", cx)
+    });
+    cx.run_until_parked();
+    click(&workspace, cx, "certificate-delete-0");
+    click(&workspace, cx, "certificate-delete-0");
+    workspace.update(cx, |view, window, cx| {
+        view.save_environment_manager_dialog(window, cx)
+    });
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&workspace.path).unwrap();
+    assert!(
+        loaded
+            .workspace()
+            .environments()
+            .iter()
+            .find(|environment| environment.name == "base")
+            .unwrap()
+            .client_certificates
+            .is_empty()
+    );
+    assert_eq!(workspace.store.get_calls(), 0);
+    assert!(
+        workspace.store.values.lock().unwrap().is_empty(),
+        "literal passphrases never enter the credential store"
+    );
+}
+
+#[gpui_kit::test]
+fn certificate_browse_stores_relative_and_external_paths_and_ignores_stale_picker(
+    cx: &mut TestAppContext,
+) {
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-picker");
+    workspace.open_manager(cx, "base");
+    workspace.update(cx, |view, window, cx| {
+        view.open_certificate_editor(None, window, cx)
+    });
+    cx.run_until_parked();
+    let inside = workspace.path.parent().unwrap().join("certs/client.pem");
+    for (selected, expected) in [
+        (inside, "certs/client.pem".to_owned()),
+        (
+            std::env::temp_dir().join("external-client.pem"),
+            std::env::temp_dir()
+                .join("external-client.pem")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    ] {
+        click(&workspace, cx, "certificate-browse-1");
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|options| {
+            assert!(options.files && !options.directories && !options.multiple);
+            Some(vec![selected])
+        });
+        cx.run_until_parked();
+        workspace.update(cx, |view, _, cx| {
+            assert_eq!(
+                view.environment_manager_dialog
+                    .as_ref()
+                    .unwrap()
+                    .certificate_editor
+                    .as_ref()
+                    .unwrap()
+                    .inputs[1]
+                    .read(cx)
+                    .value()
+                    .as_str(),
+                expected
+            )
+        });
+    }
+    click(&workspace, cx, "certificate-browse-2");
+    click(&workspace, cx, "certificate-cancel");
+    workspace.update(cx, |view, window, cx| {
+        view.open_certificate_editor(None, window, cx)
+    });
+    cx.simulate_path_prompt_response(|_| {
+        Some(vec![workspace.path.parent().unwrap().join("stale.pem")])
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, cx| {
+        assert!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .certificate_editor
+                .as_ref()
+                .unwrap()
+                .inputs[2]
+                .read(cx)
+                .value()
+                .is_empty()
+        )
+    });
+}
+
+#[gpui_kit::test]
+fn certificate_forms_follow_existing_external_reload_conflict_policy(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-reload");
+    workspace.open_manager(cx, "base");
+    workspace.update(cx, |view, window, cx| {
+        view.open_certificate_editor(None, window, cx)
+    });
+    fill(&workspace, cx, 0, "unsaved.example.com");
+    workspace.update(cx, |view, _, cx| {
+        view.apply_reconciled_workspace(
+            reconciled_workspace(probe_opencollection::load_workspace(&workspace.path).unwrap()),
+            cx,
+        );
+        assert!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .certificate_editor
+                .is_some(),
+            "unrelated reload retains the form"
+        );
+    });
+    let source = workspace.yaml().replace("name: base", "name: base\n      clientCertificates:\n        - domain: disk.example.com\n          type: pkcs12\n          pkcs12FilePath: disk.p12");
+    fs::write(&workspace.path, source).unwrap();
+    workspace.update(cx, |view, _, cx| {
+        view.apply_reconciled_workspace(
+            reconciled_workspace(probe_opencollection::load_workspace(&workspace.path).unwrap()),
+            cx,
+        );
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert!(dialog.certificate_editor.is_none());
+        assert_eq!(dialog.draft().client_certificates.len(), 1);
+        assert!(!view.environment_manager_is_dirty());
+        assert!(view.environment_dialog_error.is_some());
+    });
+}

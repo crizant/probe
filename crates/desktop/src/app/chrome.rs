@@ -1,5 +1,6 @@
 use super::*;
 
+mod certificates;
 mod dialogs;
 mod environments;
 mod menus;

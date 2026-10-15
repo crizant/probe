@@ -324,6 +324,12 @@ impl Render for ProbeApp {
                 cx.listener(|view, _: &CancelEnvironmentManagerDialog, window, cx| {
                     if view.secret_value_dialog.is_some() {
                         view.close_secret_value_dialog(window, cx);
+                    } else if view
+                        .environment_manager_dialog
+                        .as_ref()
+                        .is_some_and(|dialog| dialog.certificate_editor.is_some())
+                    {
+                        view.cancel_certificate_editor(window, cx);
                     } else {
                         view.request_close_environment_manager_dialog(window, cx);
                     }
