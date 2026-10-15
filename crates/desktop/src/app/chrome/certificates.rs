@@ -355,6 +355,7 @@ impl ProbeApp {
         let save = cx.weak_entity();
         form.child(
             components::dialog_actions(theme)
+                .mt(px(theme.metrics.spacing_2))
                 .child(components::dialog_action_button(
                     theme,
                     "certificate-cancel",
