@@ -30,7 +30,8 @@ PKCS#12 fixtures reuse these public test keys and certificates. Run
 own to leave PEMs unchanged). That script records every OpenSSL 3 invocation and
 constructs special unencrypted archives with small Python DER helpers: mismatched
 keys, duplicate keys/certificates, reversed chain order, certificate/key-only stores,
-multiple distinct identities, and an unsupported nested bag. OpenSSL exports cover
+multiple distinct identities (including separate leaf certificates sharing one key),
+and an unsupported nested bag. OpenSSL exports cover
 AES-128/192/256 and all advertised SHA-1/SHA-2 MACs, empty passwords, encrypted MAC-less content and
 unsupported legacy PBE. All nonempty passwords are `probe-test-only-password`.
 A separate root/intermediate/leaf hierarchy verifies intermediate transmission in

@@ -783,13 +783,13 @@ bags (including nested safeContents) fail explicitly. OpenSSL 3's modern default
 exports work; legacy exports may need re-exporting with modern encryption.
 There is no OpenSSL runtime/system dependency or native-tls transport.
 
-The archive must contain one distinct private key. Repeated copies of the same
-public key are accepted; distinct private keys are rejected with
+The archive must contain one distinct private key and one matching leaf certificate.
+Repeated copies of the same key and certificate are accepted; distinct private keys
+or multiple distinct matching leaf certificates (even sharing a key) are rejected with
 "PKCS#12 contains multiple client identities; identity selection is not supported yet".
 Bag aliases and localKeyId never override cryptographic key/certificate matching.
-Certificates are deduplicated and sorted by DER bytes. The first certificate that
-cryptographically matches that key is the leaf; renewed
-certificates sharing the same key do not constitute separate private-key identities.
+Certificates are deduplicated before matching; the unique certificate that
+cryptographically matches that key is the leaf.
 Issuer/subject names assemble its leaf-first chain, excluding duplicate and unrelated
 certificates and stopping at a root, missing issuer or cycle. This orders certificates;
 the remote server remains responsible for client-chain trust and signature validation.

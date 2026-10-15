@@ -96,3 +96,6 @@ with tempfile.TemporaryDirectory(prefix="probe-p12-chain-") as temporary:
     extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n")
     openssl("x509", "-req", "-in", scratch / "leaf.csr", "-CA", intermediate, "-CAkey", intermediate_key, "-set_serial", "11", "-out", leaf, "-days", "36500", "-extfile", extensions)
     archive("client-intermediates.p12", cert(root), key("client-key.pem"), cert(leaf), cert(intermediate))
+
+# Distinct matching leaf certificates are ambiguous even when they share a key.
+archive("client-multiple-leaves.p12", key("client-key.pem"), cert("client.pem"), cert("pkcs12-chain-leaf.pem"), cert("ca.pem"), cert("pkcs12-chain-intermediate.pem"), cert("pkcs12-chain-root.pem"))

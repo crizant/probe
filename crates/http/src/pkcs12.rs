@@ -230,7 +230,10 @@ fn select_identity(
         for (cert_index, cert) in certs.iter().enumerate() {
             let certified = rustls::sign::CertifiedKey::new(vec![cert.clone()], signing.clone());
             if certified.keys_match().is_ok() {
-                selected.get_or_insert((key_index, cert_index));
+                if selected.is_some_and(|(_, leaf)| leaf != cert_index) {
+                    return Err(error(AMBIGUOUS));
+                }
+                selected = Some((key_index, cert_index));
             }
         }
     }
@@ -343,6 +346,7 @@ mod tests {
             ("client-no-mac.p12", None, PASSWORD),
             ("client-mismatch.p12", None, MISMATCH),
             ("client-multiple.p12", None, AMBIGUOUS),
+            ("client-multiple-leaves.p12", None, AMBIGUOUS),
             ("client-cert-only.p12", None, Pkcs12Error::NoIdentity),
             ("client-key-only.p12", None, Pkcs12Error::NoIdentity),
             ("client-legacy.p12", Some(PASS), UNSUPPORTED),
