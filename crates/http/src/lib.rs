@@ -26,7 +26,7 @@ pub const MAX_IN_MEMORY_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub struct ExecutionOptions {
     /// Base directory for relative request-body file paths.
     pub base_directory: Option<PathBuf>,
-    /// Selected PEM identity; each authenticated execution gets its own client.
+    /// Selected PEM or PKCS#12 identity; each authenticated execution gets its own client.
     pub client_identity: Option<ClientIdentity>,
     /// Shared cache used for automatically managed large-response spool files.
     ///

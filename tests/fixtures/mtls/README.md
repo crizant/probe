@@ -31,6 +31,8 @@ own to leave PEMs unchanged). That script records every OpenSSL 3 invocation and
 constructs special unencrypted archives with small Python DER helpers: mismatched
 keys, duplicate keys/certificates, reversed chain order, certificate/key-only stores,
 multiple distinct identities, and an unsupported nested bag. OpenSSL exports cover
-AES-256/SHA-256, AES-128/SHA-1, empty passwords, encrypted MAC-less content and
+AES-128/192/256 and all advertised SHA-1/SHA-2 MACs, empty passwords, encrypted MAC-less content and
 unsupported legacy PBE. All nonempty passwords are `probe-test-only-password`.
+A separate root/intermediate/leaf hierarchy verifies intermediate transmission in
+an actual mTLS handshake; its root and intermediate private keys are discarded.
 OpenSSL is used only to generate fixtures; parsing/decryption tests use RustCrypto.

@@ -70,3 +70,29 @@ for name, password, options in [
     ("client-no-mac.p12", "probe-test-only-password", ["-nomac"]),
 ]:
     openssl("pkcs12", "-export", "-inkey", BASE / "client-key.pem", "-in", BASE / "client.pem", "-certfile", BASE / "ca.pem", "-out", BASE / name, "-passout", f"pass:{password}", *options)
+
+# Exercise all advertised traditional PKCS#12 MAC digests, with AES-192 as
+# another common PBES2 cipher size. No new private key material is generated.
+for digest in ["sha224", "sha384", "sha512", "sha512-224", "sha512-256"]:
+    openssl("pkcs12", "-export", "-inkey", BASE / "client-key.pem", "-in", BASE / "client.pem", "-out", BASE / f"client-{digest}.p12", "-passout", "pass:probe-test-only-password", "-keypbe", "AES-192-CBC", "-certpbe", "AES-192-CBC", "-macalg", digest)
+
+# An independent three-certificate hierarchy proves intermediate extraction.
+# Keep only public certificates and the already-public client private key.
+import tempfile
+with tempfile.TemporaryDirectory(prefix="probe-p12-chain-") as temporary:
+    scratch = Path(temporary)
+    root_key = scratch / "root-key.pem"
+    intermediate_key = scratch / "intermediate-key.pem"
+    root = BASE / "pkcs12-chain-root.pem"
+    intermediate = BASE / "pkcs12-chain-intermediate.pem"
+    leaf = BASE / "pkcs12-chain-leaf.pem"
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", root_key, "-out", root, "-subj", "/CN=Probe PKCS12 chain root", "-days", "36500", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+    openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", intermediate_key, "-out", scratch / "intermediate.csr", "-subj", "/CN=Probe PKCS12 intermediate")
+    extensions = scratch / "intermediate.ext"
+    extensions.write_text("basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n")
+    openssl("x509", "-req", "-in", scratch / "intermediate.csr", "-CA", root, "-CAkey", root_key, "-set_serial", "10", "-out", intermediate, "-days", "36500", "-extfile", extensions)
+    openssl("req", "-new", "-key", BASE / "client-key.pem", "-out", scratch / "leaf.csr", "-subj", "/CN=Probe PKCS12 chain client")
+    extensions = scratch / "leaf.ext"
+    extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n")
+    openssl("x509", "-req", "-in", scratch / "leaf.csr", "-CA", intermediate, "-CAkey", intermediate_key, "-set_serial", "11", "-out", leaf, "-days", "36500", "-extfile", extensions)
+    archive("client-intermediates.p12", cert(root), key("client-key.pem"), cert(leaf), cert(intermediate))

@@ -790,7 +790,11 @@ mod certificate_variable_tests {
         });
         let certificates = [ClientCertificate::Pkcs12 {
             domain: "{{mtlsDomain}}".into(),
-            pkcs12_file_path: "{{directory}}/client.p12".into(),
+            pkcs12_file_path: Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/mtls/client-protected.p12")
+                .to_str()
+                .unwrap()
+                .into(),
             passphrase: Some("{{passwordAlias}}".into()),
             disabled: false,
         }];
@@ -816,10 +820,7 @@ mod certificate_variable_tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(
-            error,
-            HttpError::InvalidRequest(SECRET_DIAGNOSTIC_WITHHELD.into())
-        );
+        assert_eq!(error, HttpError::Pkcs12(probe_http::Pkcs12Error::Integrity));
         assert_eq!(*provider.calls.borrow(), ["certPassword"]);
     }
 

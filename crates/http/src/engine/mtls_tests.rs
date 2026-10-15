@@ -34,6 +34,7 @@ fn server(response: String) -> (u16, std::thread::JoinHandle<bool>) {
     let worker = std::thread::spawn(move || {
         let mut roots = RootCertStore::empty();
         roots.add(certs("ca.pem").remove(0)).unwrap();
+        roots.add(certs("pkcs12-chain-root.pem").remove(0)).unwrap();
         let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
             Arc::new(roots),
@@ -126,6 +127,7 @@ async fn mtls_requires_a_trusted_client_and_valid_identity_succeeds() {
         (None, false),
         (Some(("client.pem", "client-pkcs8-key.pem")), true),
         (Some(("client-protected.p12", "")), true),
+        (Some(("client-intermediates.p12", "")), true),
         (Some(("wrong-client.pem", "wrong-client-key.pem")), false),
     ] {
         let (port, worker) = server(ok());

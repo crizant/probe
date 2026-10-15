@@ -287,8 +287,14 @@ mod tests {
     #[test]
     fn single_identity_archives_accept_chains_empty_passwords_and_duplicate_bags() {
         for (name, password) in [
+            ("client-sha224.p12", Some(PASS)),
+            ("client-sha384.p12", Some(PASS)),
+            ("client-sha512.p12", Some(PASS)),
+            ("client-sha512-224.p12", Some(PASS)),
+            ("client-sha512-256.p12", Some(PASS)),
             ("client-unencrypted.p12", None),
             ("client-chain.p12", None),
+            ("client-intermediates.p12", None),
             ("client-duplicate-key.p12", None),
             ("client-protected.p12", Some(PASS)),
             ("client-aes128.p12", Some(PASS)),
@@ -325,9 +331,7 @@ mod tests {
             ("client-legacy.p12", Some(PASS), UNSUPPORTED),
             ("client-unsupported-bag.p12", None, INVALID),
         ] {
-            let failure = identity_from_pkcs12(&read(name), password)
-                .err()
-                .expect(name);
+            let failure = identity_from_pkcs12(&read(name), password).expect_err(name);
             assert_eq!(failure, error(expected), "{name}");
             let diagnostic = format!("{failure} {failure:?}");
             for secret in [PASS, "wrong-passphrase-marker", "BEGIN PRIVATE KEY", name] {
