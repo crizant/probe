@@ -600,6 +600,7 @@ impl ProbeApp {
         &self,
         theme: Theme,
         busy: bool,
+        tab: EnvironmentTab,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let add_variable_view = cx.weak_entity();
@@ -614,50 +615,54 @@ impl ProbeApp {
             .gap(px(theme.metrics.spacing_2))
             .border_t_1()
             .border_color(theme.colors.borders.subtle)
-            .child(
-                components::editor_add_button(
-                    theme,
-                    "environment-manager-add-variable",
-                    "Add variable",
-                    move |_, _, cx| {
-                        let _ = add_variable_view.update(cx, |view, cx| {
-                            view.add_environment_manager_variable(
-                                cx,
-                                EnvironmentVariable::Plain(Variable {
-                                    name: Some(String::new()),
-                                    value: Some(VariableValueSet::Single(VariableValue::String(
-                                        String::new(),
-                                    ))),
-                                    disabled: false,
-                                }),
-                            );
-                        });
-                    },
+            .when(tab == EnvironmentTab::Variables, |footer| {
+                footer.child(
+                    components::editor_add_button(
+                        theme,
+                        "environment-manager-add-variable",
+                        "Add variable",
+                        move |_, _, cx| {
+                            let _ = add_variable_view.update(cx, |view, cx| {
+                                view.add_environment_manager_variable(
+                                    cx,
+                                    EnvironmentVariable::Plain(Variable {
+                                        name: Some(String::new()),
+                                        value: Some(VariableValueSet::Single(
+                                            VariableValue::String(String::new()),
+                                        )),
+                                        disabled: false,
+                                    }),
+                                );
+                            });
+                        },
+                    )
+                    .flex_none()
+                    .disabled(busy),
                 )
-                .flex_none()
-                .disabled(busy),
-            )
-            .child(
-                components::editor_add_button(
-                    theme,
-                    "environment-manager-add-secret",
-                    "Add secret",
-                    move |_, _, cx| {
-                        let _ = add_secret_view.update(cx, |view, cx| {
-                            view.add_environment_manager_variable(
-                                cx,
-                                EnvironmentVariable::Secret(SecretVariable {
-                                    name: Some(String::new()),
-                                    value_type: None,
-                                    disabled: false,
-                                }),
-                            );
-                        });
-                    },
+            })
+            .when(tab == EnvironmentTab::Secrets, |footer| {
+                footer.child(
+                    components::editor_add_button(
+                        theme,
+                        "environment-manager-add-secret",
+                        "Add secret",
+                        move |_, _, cx| {
+                            let _ = add_secret_view.update(cx, |view, cx| {
+                                view.add_environment_manager_variable(
+                                    cx,
+                                    EnvironmentVariable::Secret(SecretVariable {
+                                        name: Some(String::new()),
+                                        value_type: None,
+                                        disabled: false,
+                                    }),
+                                );
+                            });
+                        },
+                    )
+                    .flex_none()
+                    .disabled(busy),
                 )
-                .flex_none()
-                .disabled(busy),
-            )
+            })
             .into_any_element()
     }
 
@@ -801,6 +806,7 @@ impl ProbeApp {
         );
 
         let mut tabs = Tabs::new("environment-manager-tabs")
+            .mt(px(theme.metrics.spacing_3))
             .flex()
             .items_center()
             .gap(px(theme.metrics.spacing_1));
@@ -848,7 +854,7 @@ impl ProbeApp {
             .border_color(theme.colors.borders.standard)
             .child(table_header)
             .child(table_body)
-            .child(self.render_environment_variable_actions(theme, busy, cx));
+            .child(self.render_environment_variable_actions(theme, busy, dialog.tab, cx));
         let form = div()
             .flex_1()
             .min_w(px(0.0))

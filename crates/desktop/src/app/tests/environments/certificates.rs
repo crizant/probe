@@ -58,6 +58,18 @@ fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut Tes
             .debug_bounds("environment-secret-set-secretToken")
             .is_none()
     );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-manager-add-variable")
+            .is_some()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-manager-add-secret")
+            .is_none()
+    );
     click(&workspace, cx, "environment-tab-1");
     assert!(
         workspace
@@ -71,6 +83,18 @@ fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut Tes
             .debug_bounds("environment-variable-value-host")
             .is_none()
     );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-manager-add-variable")
+            .is_none()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-manager-add-secret")
+            .is_some()
+    );
     click(&workspace, cx, "environment-tab-2");
     assert!(
         workspace
@@ -79,6 +103,19 @@ fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut Tes
             .is_some()
     );
     click(&workspace, cx, "certificate-add");
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-dialog")
+            .is_some()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("environment-certificates")
+            .is_some(),
+        "the list stays behind the nested dialog"
+    );
     fill(&workspace, cx, 0, "api.example.com");
     fill(&workspace, cx, 1, "{{certPath}}");
     // Required private key is still absent; Save must not commit an invalid declaration.
@@ -131,6 +168,21 @@ fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut Tes
                 .presentation()
                 .is_masked()
         )
+    });
+    click(&workspace, cx, "certificate-reveal");
+    workspace.update(cx, |view, _, cx| {
+        assert!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .certificate_editor
+                .as_ref()
+                .unwrap()
+                .inputs[4]
+                .read(cx)
+                .presentation()
+                .is_masked()
+        );
     });
     click(&workspace, cx, "certificate-save");
     assert!(
@@ -435,6 +487,13 @@ fn certificate_forms_follow_existing_external_reload_conflict_policy(cx: &mut Te
         assert!(!view.environment_manager_is_dirty());
         assert!(view.environment_dialog_error.is_some());
     });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert_eq!(
+            window.focused(cx),
+            Some(view.environment_manager_dialog_focus.clone())
+        );
+    });
 }
 
 fn certificate_fixture_source() -> String {
@@ -707,4 +766,107 @@ fn certificate_required_field_feedback_tracks_type_and_whitespace(cx: &mut TestA
             .debug_bounds("certificate-required-field")
             .is_none()
     );
+}
+
+#[gpui_kit::test]
+fn certificate_dialog_escape_cancel_and_save_preserve_outer_draft(cx: &mut TestAppContext) {
+    use crate::app::chrome::certificates::{
+        CERTIFICATE_MOVE_DOWN, CERTIFICATE_MOVE_UP, CERTIFICATE_ORDER_DESCRIPTION,
+    };
+    cx.update(bind_platform_hotkeys);
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-modal");
+    let original_yaml = workspace.yaml();
+    workspace.open_manager(cx, "base");
+    click(&workspace, cx, "environment-tab-2");
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-order-description")
+            .is_some()
+    );
+    assert!(CERTIFICATE_ORDER_DESCRIPTION.contains("top to bottom"));
+    assert!(CERTIFICATE_ORDER_DESCRIPTION.contains("first matching enabled"));
+    assert!(CERTIFICATE_MOVE_UP.contains("higher matching priority"));
+    assert!(CERTIFICATE_MOVE_DOWN.contains("lower matching priority"));
+    click(&workspace, cx, "certificate-add");
+    let restore_focus = workspace.update(cx, |view, _, _| {
+        Some(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .certificate_editor
+                .as_ref()
+                .unwrap()
+                .restore_focus
+                .clone(),
+        )
+    });
+    fill(&workspace, cx, 0, "discard.example.com");
+    fill(&workspace, cx, 1, "client.pem");
+    fill(&workspace, cx, 2, "key.pem");
+    // A click behind the modal must not switch tabs.
+    click(&workspace, cx, "environment-tab-0");
+    workspace.update(cx, |view, window, cx| {
+        view.select_environment_manager_environment("development", cx);
+        view.request_close_environment_manager_dialog(window, cx);
+        view.save_environment_manager_dialog(window, cx);
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(dialog.tab, EnvironmentTab::ClientCertificates);
+        assert_eq!(dialog.draft().name, "base");
+        assert!(dialog.certificate_editor.is_some());
+        assert!(view.application_dialog.is_none());
+        assert!(view.environment_save_task.is_none());
+    });
+    cx.simulate_keystrokes(workspace.window.into(), "escape");
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert!(dialog.certificate_editor.is_none());
+        assert!(dialog.draft().client_certificates.is_empty());
+        assert!(!view.environment_manager_is_dirty());
+        assert_eq!(window.focused(cx), restore_focus);
+    });
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-dialog")
+            .is_none()
+    );
+    click(&workspace, cx, "certificate-add");
+    fill(&workspace, cx, 0, "saved.example.com");
+    fill(&workspace, cx, 1, "{{certPath}}");
+    fill(&workspace, cx, 2, "key.pem");
+    click(&workspace, cx, "certificate-save");
+    assert_eq!(certificates(&workspace, cx).len(), 1);
+    assert_eq!(
+        workspace.yaml(),
+        original_yaml,
+        "inner Save changes only the draft"
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-dialog")
+            .is_none()
+    );
+    click(&workspace, cx, "certificate-edit-0");
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-dialog")
+            .is_some()
+    );
+    fill(&workspace, cx, 0, "cancelled.example.com");
+    click(&workspace, cx, "certificate-cancel");
+    assert!(
+        matches!(&certificates(&workspace, cx)[0], ClientCertificate::Pem { domain, .. } if domain == "saved.example.com")
+    );
+    click(&workspace, cx, "certificate-edit-0");
+    fill(&workspace, cx, 0, "edited.example.com");
+    cx.simulate_keystrokes(workspace.window.into(), "enter");
+    cx.run_until_parked();
+    assert!(
+        matches!(&certificates(&workspace, cx)[0], ClientCertificate::Pem { domain, .. } if domain == "edited.example.com")
+    );
+    assert_eq!(workspace.yaml(), original_yaml);
 }

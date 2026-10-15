@@ -127,6 +127,13 @@ impl ProbeApp {
         if self.environment_save_task.is_some() {
             return;
         }
+        if self
+            .environment_manager_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.certificate_editor.is_some())
+        {
+            return;
+        }
         if self.environment_manager_is_dirty() {
             self.show_application_dialog(ApplicationDialog::UnsavedEnvironment, window, cx);
             return;
@@ -178,6 +185,24 @@ impl ProbeApp {
         let Some((mut dialog, previous_original)) = previous else {
             return;
         };
+        if let Some(editor) = dialog.certificate_editor.as_ref() {
+            let window = editor.window;
+            let view = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = window.update(cx, |_, window, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        if view
+                            .environment_manager_dialog
+                            .as_ref()
+                            .is_none_or(|dialog| dialog.certificate_editor.is_none())
+                            && view.application_dialog.is_none()
+                        {
+                            view.restore_environment_dialog_focus(window, cx);
+                        }
+                    });
+                });
+            });
+        }
         self.transient.environment_manager_context_menu = None;
         let Some(disk) = self.loaded_workspace.as_ref().and_then(|loaded| {
             loaded
@@ -704,7 +729,13 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.environment_manager_dialog.is_some() {
+        if let Some(editor) = self
+            .environment_manager_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.certificate_editor.as_ref())
+        {
+            editor.focus.focus(window, cx);
+        } else if self.environment_manager_dialog.is_some() {
             self.environment_manager_dialog_focus.focus(window, cx);
         } else {
             self.focus_handle.focus(window, cx);

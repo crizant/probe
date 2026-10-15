@@ -26,6 +26,8 @@ static SIDEBAR_COLLAPSE_SVG: LazyLock<Vec<u8>> =
 static SIDEBAR_EXPAND_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuPanelLeftOpen));
 static HOME_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuHouse));
+static EYE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuEye));
+static EYE_OFF_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuEyeOff));
 static LOCK_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLock));
 static SEVERITY_DIAMOND_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuDiamond));
@@ -257,6 +259,15 @@ pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui_kit::Div {
         )
     };
     icon.text_color(theme.colors.text.muted)
+}
+
+pub(crate) fn eye_icon(theme: Theme, revealed: bool) -> gpui_kit::Div {
+    let (key, data) = if revealed {
+        ("lucide-eye-off", &EYE_OFF_SVG)
+    } else {
+        ("lucide-eye", &EYE_SVG)
+    };
+    library_icon(key, data, theme.metrics.icon_standard).text_color(theme.colors.text.secondary)
 }
 
 pub(crate) fn lock_icon(theme: Theme) -> gpui_kit::Div {

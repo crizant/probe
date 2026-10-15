@@ -193,6 +193,8 @@ gpui_kit::actions!(
         SubmitCreateEnvironmentDialog,
         SubmitEnvironmentManagerDialog,
         SubmitSecretValueDialog,
+        SubmitCertificateDialog,
+        CancelCertificateDialog,
         SubmitApplicationDialog,
         SubmitApplicationDialogDestructive,
         CancelStructureDialog,
@@ -832,6 +834,8 @@ fn bind_platform_hotkeys(cx: &mut App) {
         ),
         KeyBinding::new("enter", SubmitApplicationDialog, Some("ApplicationDialog")),
         KeyBinding::new("enter", SubmitSecretValueDialog, Some("SecretValueDialog")),
+        KeyBinding::new("enter", SubmitCertificateDialog, Some("CertificateDialog")),
+        KeyBinding::new("escape", CancelCertificateDialog, Some("CertificateDialog")),
         KeyBinding::new("escape", CancelStructureDialog, Some("StructureDialog")),
         KeyBinding::new(
             "escape",

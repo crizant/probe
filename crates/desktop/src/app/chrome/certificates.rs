@@ -1,6 +1,11 @@
 use super::*;
 use probe_core::ClientCertificate;
 
+pub(in crate::app) const CERTIFICATE_ORDER_DESCRIPTION: &str =
+    "Certificates are matched from top to bottom. The first matching enabled certificate is used.";
+pub(in crate::app) const CERTIFICATE_MOVE_UP: &str = "Move up - higher matching priority";
+pub(in crate::app) const CERTIFICATE_MOVE_DOWN: &str = "Move down - lower matching priority";
+
 impl ProbeApp {
     pub(in crate::app::chrome) fn render_certificate_tab(
         &self,
@@ -11,9 +16,6 @@ impl ProbeApp {
         let Some(dialog) = self.environment_manager_dialog.as_ref() else {
             return div().into_any_element();
         };
-        if let Some(editor) = dialog.certificate_editor.as_ref() {
-            return self.render_certificate_form(theme, editor, cx);
-        }
         let mut list = div()
             .id("environment-certificates")
             .debug_selector(|| "environment-certificates".into())
@@ -154,7 +156,7 @@ impl ProbeApp {
                         components::icon_button(
                             theme,
                             format!("certificate-up-{index}"),
-                            "Move certificate up",
+                            CERTIFICATE_MOVE_UP,
                             components::chevron_icon(theme, true),
                             move |_, _, cx| {
                                 let _ = up.update(cx, |view, cx| {
@@ -176,7 +178,7 @@ impl ProbeApp {
                         components::icon_button(
                             theme,
                             format!("certificate-down-{index}"),
-                            "Move certificate down",
+                            CERTIFICATE_MOVE_DOWN,
                             components::chevron_icon(theme, false),
                             move |_, _, cx| {
                                 let _ = down.update(cx, |view, cx| {
@@ -248,6 +250,18 @@ impl ProbeApp {
                     .child(div().w(px(44.0)).child("ON"))
                     .child(div().flex_1().child("CERTIFICATE")),
             )
+            .child(
+                components::dialog_description(theme, CERTIFICATE_ORDER_DESCRIPTION)
+                    .id("certificate-order-description")
+                    .debug_selector(|| "certificate-order-description".into())
+                    .px(px(theme.metrics.spacing_2))
+                    .py(px(theme.metrics.spacing_2))
+                    .flex_none()
+                    .text_size(px(theme.typography.caption_size))
+                    .text_color(theme.colors.text.muted)
+                    .border_b_1()
+                    .border_color(theme.colors.borders.subtle),
+            )
             .child(list)
             .child(
                 div()
@@ -279,19 +293,22 @@ impl ProbeApp {
             .into_any_element()
     }
 
-    fn render_certificate_form(
+    pub(in crate::app) fn render_certificate_dialog(
         &self,
         theme: Theme,
-        editor: &CertificateEditor,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
+        let Some(editor) = self
+            .environment_manager_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.certificate_editor.as_ref())
+        else {
+            return div().into_any_element();
+        };
         let mut form = div()
             .id("certificate-form")
             .debug_selector(|| "certificate-form".into())
-            .mt(px(theme.metrics.spacing_2))
-            .flex_1()
             .min_h(px(0.0))
-            .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap(px(theme.metrics.spacing_2));
@@ -397,11 +414,15 @@ impl ProbeApp {
                 ));
             } else if field == 4 {
                 let view = cx.weak_entity();
-                row = row.child(components::editor_action_button(
+                row = row.child(components::icon_button(
                     theme,
                     "certificate-reveal",
-                    if editor.revealed { "Hide" } else { "Reveal" },
-                    false,
+                    if editor.revealed {
+                        "Hide passphrase"
+                    } else {
+                        "Reveal passphrase"
+                    },
+                    components::eye_icon(theme, editor.revealed),
                     move |_, window, cx| {
                         let _ = view.update(cx, |view, cx| {
                             if let Some(editor) = view
@@ -435,7 +456,7 @@ impl ProbeApp {
         }
         let cancel = cx.weak_entity();
         let save = cx.weak_entity();
-        form.child(
+        let form = form.child(
             components::dialog_actions(theme)
                 .mt(px(theme.metrics.spacing_2))
                 .child(components::dialog_action_button(
@@ -462,7 +483,14 @@ impl ProbeApp {
                             save.update(cx, |view, cx| view.save_certificate_editor(window, cx));
                     },
                 )),
-        )
-        .into_any_element()
+        );
+        let content = components::dialog_surface(theme, "certificate-dialog", 680.0)
+            .debug_selector(|| "certificate-dialog".into())
+            .max_w(relative(0.9))
+            .max_h(relative(0.9))
+            .overflow_y_scroll()
+            .child(form);
+        components::dialog_layer(theme, &editor.focus, "CertificateDialog", content)
+            .into_any_element()
     }
 }

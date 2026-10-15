@@ -15,6 +15,9 @@ pub(crate) enum EnvironmentTab {
 #[derive(Clone)]
 pub(crate) struct CertificateEditor {
     pub(crate) index: Option<usize>,
+    pub(crate) focus: FocusHandle,
+    pub(crate) restore_focus: FocusHandle,
+    pub(crate) window: gpui_kit::AnyWindowHandle,
     pub(crate) pkcs12: bool,
     pub(crate) disabled: bool,
     pub(crate) revealed: bool,
@@ -105,6 +108,13 @@ impl ProbeApp {
         if dialog.certificate_editor.is_some() {
             return;
         }
+        let restore_focus = if dialog.tab == EnvironmentTab::ClientCertificates {
+            window
+                .focused(cx)
+                .unwrap_or_else(|| self.environment_manager_dialog_focus.clone())
+        } else {
+            self.environment_manager_dialog_focus.clone()
+        };
         let mut values = vec![String::new(); 5];
         let mut pkcs12 = false;
         let mut disabled = false;
@@ -181,10 +191,15 @@ impl ProbeApp {
                 input
             })
             .collect();
+        self.transient.environment_manager_context_menu = None;
         let dialog = self.environment_manager_dialog.as_mut().unwrap();
+        dialog.active_field = None;
         dialog.tab = EnvironmentTab::ClientCertificates;
         dialog.certificate_editor = Some(CertificateEditor {
             index,
+            focus: cx.focus_handle(),
+            restore_focus,
+            window: window.window_handle(),
             pkcs12,
             disabled,
             revealed: false,
@@ -203,10 +218,16 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(dialog) = self.environment_manager_dialog.as_mut() {
-            dialog.certificate_editor = None;
+        if let Some(editor) = self
+            .environment_manager_dialog
+            .as_mut()
+            .and_then(|dialog| dialog.certificate_editor.take())
+        {
+            for input in &editor.inputs {
+                input.update(cx, |input, cx| input.set_value("", window, cx));
+            }
+            editor.restore_focus.focus(window, cx);
         }
-        self.environment_manager_dialog_focus.focus(window, cx);
         cx.notify();
     }
 

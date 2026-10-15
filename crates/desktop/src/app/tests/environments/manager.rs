@@ -89,9 +89,11 @@ fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut Te
         visual
             .debug_bounds("environment-manager-add-variable")
             .expect("add-variable action should render");
-        visual
-            .debug_bounds("environment-manager-add-secret")
-            .expect("add-secret action should render");
+        assert!(
+            visual
+                .debug_bounds("environment-manager-add-secret")
+                .is_none()
+        );
         visual
             .debug_bounds("environment-variable-value-host")
             .expect("string values should remain editable");
@@ -705,6 +707,14 @@ fn environment_manager_scrolls_a_new_row_into_view(cx: &mut TestAppContext) {
         "adding a variable below the fold should scroll the list, offset={offset_y:?}"
     );
 
+    let secrets_tab = visual.debug_bounds("environment-tab-1").unwrap();
+    visual.simulate_click(secrets_tab.center(), Modifiers::default());
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("environment-manager-add-variable")
+            .is_none()
+    );
     let add_secret = visual
         .debug_bounds("environment-manager-add-secret")
         .expect("add secret should render");
@@ -750,9 +760,11 @@ fn environment_manager_virtualizes_rows_and_resets_scroll_on_environment_change(
     visual
         .debug_bounds("environment-manager-add-variable")
         .expect("add variable should stay available while the list is scrolled");
-    visual
-        .debug_bounds("environment-manager-add-secret")
-        .expect("add secret should stay available while the list is scrolled");
+    assert!(
+        visual
+            .debug_bounds("environment-manager-add-secret")
+            .is_none()
+    );
     let rendered = workspace.update(cx, |view, _, _| view.rendered_environment_variable_rows);
     assert!(rendered > 0 && rendered < 40, "rendered {rendered} rows");
 
@@ -776,9 +788,11 @@ fn environment_manager_virtualizes_rows_and_resets_scroll_on_environment_change(
     visual
         .debug_bounds("environment-manager-add-variable")
         .expect("add variable should stay available after scrolling to the end");
-    visual
-        .debug_bounds("environment-manager-add-secret")
-        .expect("add secret should stay available after scrolling to the end");
+    assert!(
+        visual
+            .debug_bounds("environment-manager-add-secret")
+            .is_none()
+    );
     assert!(
         visual
             .debug_bounds("environment-variable-value-virtual-0")

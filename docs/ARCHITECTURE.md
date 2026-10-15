@@ -823,9 +823,12 @@ certificate inheritance, or proprietary YAML fields are introduced.
 The desktop Environment Manager has Variables, Secrets, and Client Certificates
 tabs. The certificate tab edits only the selected environment's direct
 `client_certificates`; parent-environment certificates are neither shown nor
-editable. PEM and PKCS#12 forms provide editable paths with Browse, masked
+editable. PEM and PKCS#12 dialogs provide editable paths with Browse, masked
 passphrases with reveal, required-field feedback, enable/disable, and declaration
-ordering. Browse uses workspace-relative paths where possible without copying
+ordering. Matching uses the first enabled certificate with a matching domain,
+from top to bottom. Inner Save updates the environment draft; Cancel or Escape
+discards certificate edits without closing the manager. Outer Save Changes
+persists the draft. Browse uses workspace-relative paths where possible without copying
 files. Saving trims domains and paths while retaining passphrase text verbatim,
 including an untouched explicit empty value. Literal passphrases remain in YAML;
 the editor does not write to the credential store. Changes use the existing
