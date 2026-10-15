@@ -30,7 +30,7 @@ impl fmt::Debug for PemClientIdentity {
 }
 
 impl PemClientIdentity {
-    /// Retains literal configuration; performs no I/O or decryption.
+    /// Retains the selected configuration; performs no I/O or decryption.
     #[must_use]
     pub fn new(
         domain: String,

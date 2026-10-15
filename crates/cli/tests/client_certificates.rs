@@ -24,7 +24,7 @@ fn certs(name: &str) -> Vec<CertificateDer<'static>> {
         .unwrap()
 }
 
-fn mtls_server() -> (u16, JoinHandle<bool>) {
+fn mtls_server(body: &'static str) -> (u16, JoinHandle<bool>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -75,7 +75,6 @@ fn mtls_server() -> (u16, JoinHandle<bool>) {
             .conn
             .peer_certificates()
             .is_some_and(|certificates| !certificates.is_empty());
-        let body = r#"{"mtls":true}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
@@ -99,7 +98,7 @@ fn cli_http_and_graphql_use_collection_pem_identity_and_dry_run_does_not_load_fi
     )
     .unwrap();
     for protocol in ["http", "graphql"] {
-        let (port, worker) = mtls_server();
+        let (port, worker) = mtls_server(r#"{"mtls":true}"#);
         let body = if protocol == "graphql" {
             "      body:\n        query: 'query { viewer { id } }'\n"
         } else {
@@ -140,5 +139,85 @@ fn cli_http_and_graphql_use_collection_pem_identity_and_dry_run_does_not_load_fi
         assert_eq!(response["response"]["body"]["content"], r#"{"mtls":true}"#);
         assert!(worker.join().unwrap());
     }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn cli_variables_and_secret_provider_resolve_certificate_configuration() {
+    let directory = temporary_path("mtls-variables");
+    fs::create_dir_all(&directory).unwrap();
+    let workspace = directory.join("collection.yml");
+    fs::copy(tls_fixture("client.pem"), directory.join("client.pem")).unwrap();
+    fs::copy(
+        tls_fixture("client-encrypted-key.pem"),
+        directory.join("client-key.pem"),
+    )
+    .unwrap();
+    let (port, worker) = mtls_server(r#"{"mtls":true,"secret":"probe-test-only-password"}"#);
+    fs::write(
+        &workspace,
+        include_str!("../../../tests/fixtures/opencollection/mtls-variables.yml"),
+    )
+    .unwrap();
+    let variables = [
+        "--environment",
+        "child",
+        "--var",
+        "mtlsDomain=localhost",
+        "--var",
+        "directory=.",
+        "--var",
+        "passwordAlias={{certPassword}}",
+    ];
+    // No provider or files are available during dry-run; certificate-only secrets
+    // must remain untouched even in strict mode.
+    let dry = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .args(["items/0", "--dry-run", "--strict-variables", "--json"])
+        .args(variables)
+        .output()
+        .unwrap();
+    assert!(
+        dry.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    let source = fs::read_to_string(&workspace).unwrap().replace(
+        "https://api.example.com/private",
+        &format!("https://localhost:{port}/private"),
+    );
+    fs::write(&workspace, source).unwrap();
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&workspace)
+        .args([
+            "items/0",
+            "--json",
+            "--strict-variables",
+            "--secret-provider",
+            "env",
+        ])
+        .args(variables)
+        .env("certPassword", "probe-test-only-password")
+        .env("SSL_CERT_FILE", tls_fixture("ca.pem"))
+        .env("SSL_CERT_DIR", &directory)
+        .env("NO_PROXY", "localhost,127.0.0.1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["response"]["status"], 200);
+    assert_eq!(
+        response["response"]["body"]["content"],
+        r#"{"mtls":true,"secret":"[REDACTED]"}"#
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("probe-test-only-password"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("probe-test-only-password"));
+    assert!(worker.join().unwrap());
     fs::remove_dir_all(directory).unwrap();
 }
