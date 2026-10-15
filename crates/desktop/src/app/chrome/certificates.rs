@@ -227,26 +227,29 @@ impl ProbeApp {
         for (index, (label, pkcs12)) in [("PEM", false), ("PKCS#12", true)].into_iter().enumerate()
         {
             let view = cx.weak_entity();
-            types = types.child(components::text_tab(
-                theme,
-                format!("certificate-type-{index}"),
-                label,
-                editor.pkcs12 == pkcs12,
-                index + 1,
-                2,
-                move |_, _, cx| {
-                    let _ = view.update(cx, |view, cx| {
-                        if let Some(editor) = view
-                            .environment_manager_dialog
-                            .as_mut()
-                            .and_then(|dialog| dialog.certificate_editor.as_mut())
-                        {
-                            editor.pkcs12 = pkcs12;
-                        }
-                        cx.notify();
-                    });
-                },
-            ));
+            types = types.child(
+                components::text_tab(
+                    theme,
+                    format!("certificate-type-{index}"),
+                    label,
+                    editor.pkcs12 == pkcs12,
+                    index + 1,
+                    2,
+                    move |_, _, cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            if let Some(editor) = view
+                                .environment_manager_dialog
+                                .as_mut()
+                                .and_then(|dialog| dialog.certificate_editor.as_mut())
+                            {
+                                editor.pkcs12 = pkcs12;
+                            }
+                            cx.notify();
+                        });
+                    },
+                )
+                .debug_selector(move || format!("certificate-type-{index}")),
+            );
         }
         let mut types = Some(types);
         let fields = if editor.pkcs12 {

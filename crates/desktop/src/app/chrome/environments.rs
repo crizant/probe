@@ -826,6 +826,7 @@ impl ProbeApp {
                         });
                     },
                 )
+                .debug_selector(move || format!("environment-tab-{index}"))
                 .disabled(busy || dialog.certificate_editor.is_some()),
             );
         }

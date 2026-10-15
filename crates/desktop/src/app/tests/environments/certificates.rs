@@ -44,7 +44,7 @@ fn certificates(
 
 #[gpui_kit::test]
 fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut TestAppContext) {
-    let workspace = EnvironmentWorkspace::open(cx);
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-templates");
     workspace.open_manager(cx, "base");
     assert!(
         workspace
@@ -81,6 +81,22 @@ fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut Tes
     });
     assert!(certificates(&workspace, cx).is_empty());
     fill(&workspace, cx, 2, "certs/client-key.pem");
+    workspace.update(cx, |view, _, cx| {
+        let editor = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_editor
+            .as_ref()
+            .unwrap();
+        assert!(matches!(
+            editor.certificate(cx),
+            Some(ClientCertificate::Pem {
+                passphrase: None,
+                ..
+            })
+        ));
+    });
     fill(&workspace, cx, 4, "{{certPassword}}");
     workspace.update(cx, |view, _, cx| {
         let editor = view
@@ -126,6 +142,21 @@ fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut Tes
             .visual(cx)
             .debug_bounds("environment-variable-value-host")
             .is_some()
+    );
+    workspace.update(cx, |view, window, cx| {
+        view.save_environment_manager_dialog(window, cx)
+    });
+    cx.run_until_parked();
+    let saved = probe_opencollection::load_workspace(&workspace.path).unwrap();
+    assert_eq!(
+        saved
+            .workspace()
+            .environments()
+            .iter()
+            .find(|environment| environment.name == "base")
+            .unwrap()
+            .client_certificates,
+        certificates(&workspace, cx)
     );
     assert_eq!(workspace.store.get_calls(), 0);
 }
@@ -267,15 +298,16 @@ fn certificate_browse_stores_relative_and_external_paths_and_ignores_stale_picke
     });
     cx.run_until_parked();
     let inside = workspace.path.parent().unwrap().join("certs/client.pem");
+    let outside = workspace
+        .path
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("external-client.pem");
     for (selected, expected) in [
         (inside, "certs/client.pem".to_owned()),
-        (
-            std::env::temp_dir().join("external-client.pem"),
-            std::env::temp_dir()
-                .join("external-client.pem")
-                .to_string_lossy()
-                .into_owned(),
-        ),
+        (outside.clone(), outside.to_string_lossy().into_owned()),
     ] {
         click(&workspace, cx, "certificate-browse-1");
         assert!(cx.did_prompt_for_paths());
@@ -347,7 +379,7 @@ fn certificate_forms_follow_existing_external_reload_conflict_policy(cx: &mut Te
             "unrelated reload retains the form"
         );
     });
-    let source = workspace.yaml().replace("name: base", "name: base\n      clientCertificates:\n        - domain: disk.example.com\n          type: pkcs12\n          pkcs12FilePath: disk.p12");
+    let source = workspace.yaml().replacen("name: base", "name: base\n      clientCertificates:\n        - domain: disk.example.com\n          type: pkcs12\n          pkcs12FilePath: disk.p12", 1);
     fs::write(&workspace.path, source).unwrap();
     workspace.update(cx, |view, _, cx| {
         view.apply_reconciled_workspace(
