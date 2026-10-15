@@ -343,7 +343,7 @@ impl ProbeApp {
         }
         form = form.child(components::dialog_description(theme, "Domain and file paths are required. Paths and passphrases accept {{variables}}. Prefer {{secretVariable}} for passphrases; literal values are saved in the collection."));
         let missing_field = editor.missing_required_field(cx);
-        if let Some(field) = missing_field {
+        if let Some(field) = missing_field.filter(|_| editor.show_validation_feedback) {
             form = form.child(
                 components::dialog_description(theme, format!("{field} is required."))
                     .id("certificate-required-field")

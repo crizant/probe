@@ -32,8 +32,7 @@ Release dates use Australia/Brisbane time (UTC+10).
   precedence over collection certificates. RSA, EC, PKCS#8, certificate chains,
   and encrypted PKCS#8 keys are supported. Redirects outside the selected domain
   fail with a clear diagnostic before connecting. Environment certificate
-  inheritance remains unsupported; no certificate editor
-  or proprietary fields are added.
+  inheritance remains unsupported; no proprietary fields are added.
 
 ### Changed
 

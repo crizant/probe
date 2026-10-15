@@ -481,17 +481,38 @@ fn environment_manager_releases_the_field_on_blur_environment_change_and_close(
 fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_override(
     cx: &mut TestAppContext,
 ) {
-    let workspace = EnvironmentWorkspace::open(cx);
+    // Keep inherited rows below the promoted row so a wrong scroll target cannot
+    // be hidden by clamping at the end of a short list.
+    let extra_inherited = (0..30)
+        .map(|index| format!("        - name: parent-extra-{index}\n          value: inherited\n"))
+        .collect::<String>();
+    let source = fs::read_to_string(environment_fixture()).unwrap().replacen(
+        "    - name: development",
+        &format!("{extra_inherited}    - name: development"),
+        1,
+    );
+    let workspace = EnvironmentWorkspace::writable_source(cx, "mixed-promotion", &source);
     workspace.open_manager(cx, "development");
     workspace.update(cx, |_, window, _| window.activate_window());
     workspace.add_manager_variables(cx, "inherited-focus", 80);
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.add_variable(EnvironmentVariable::Secret(SecretVariable {
+                name: Some("direct-secret".into()),
+                value_type: None,
+                disabled: false,
+            }));
+        })
+    });
     let inherited_index = workspace.update(cx, |view, _, _| {
         view.environment_manager_dialog
             .as_ref()
             .unwrap()
             .draft()
             .variables
-            .len()
+            .iter()
+            .filter(|variable| !variable.is_secret())
+            .count()
     });
     workspace.scroll_manager_to(cx, inherited_index, ScrollStrategy::Top);
     cx.run_until_parked();
@@ -538,6 +559,17 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
     visual
         .debug_bounds("environment-variable-name-baseUrl")
         .unwrap();
+    let promoted = visual
+        .debug_bounds("environment-variable-value-baseUrl")
+        .unwrap();
+    let viewport = visual
+        .debug_bounds("environment-manager-variables")
+        .unwrap();
+    assert!(
+        promoted.origin.y >= viewport.origin.y
+            && promoted.origin.y + promoted.size.height <= viewport.origin.y + viewport.size.height,
+        "promoted variable must remain inside the visible Variables tab viewport"
+    );
     workspace.assert_manager_field_focus(cx, &focus, controller);
     cx.simulate_input(workspace.window.into(), "continued");
     visual.run_until_parked();
@@ -609,7 +641,12 @@ fn inherited_value_keeps_its_controller_when_virtualized_and_promoted_to_an_over
             .debug_bounds("environment-variable-value-baseUrl")
             .is_none()
     );
-    workspace.scroll_manager_to(cx, direct_index, ScrollStrategy::Top);
+    assert_eq!(
+        direct_index,
+        inherited_index + 1,
+        "full draft index includes the hidden secret"
+    );
+    workspace.scroll_manager_to(cx, inherited_index, ScrollStrategy::Top);
     visual.run_until_parked();
     visual
         .debug_bounds("environment-variable-value-baseUrl")

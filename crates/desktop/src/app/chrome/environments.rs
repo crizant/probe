@@ -410,7 +410,9 @@ impl ProbeApp {
                                         {
                                             set_environment_variable_text(&mut variable, value.to_string());
                                             let direct_id = dialog.next_variable_row_id;
-                                            let index = dialog.draft().variables.len();
+                                            let index = dialog.draft().variables.iter().filter(|variable| {
+                                                variable.is_secret() == (dialog.tab == EnvironmentTab::Secrets)
+                                            }).count();
                                             dialog.add_variable(EnvironmentVariable::Plain(variable));
                                             // The inherited row disappears when its direct override is added.
                                             // Move ownership to the new identity before the next render.
@@ -766,7 +768,11 @@ impl ProbeApp {
                                     .border_b_1()
                                     .border_color(theme.colors.borders.subtle)
                                     .text_color(theme.colors.text.muted)
-                                    .child("No variables in this environment.")
+                                    .child(if dialog.tab == EnvironmentTab::Secrets {
+                                        "No secrets in this environment."
+                                    } else {
+                                        "No variables in this environment."
+                                    })
                                     .into_any_element(),
                             );
                         }

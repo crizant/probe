@@ -625,6 +625,16 @@ fn certificate_required_field_feedback_tracks_type_and_whitespace(cx: &mut TestA
     workspace.open_manager(cx, "base");
     click(&workspace, cx, "environment-tab-2");
     click(&workspace, cx, "certificate-add");
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-required-field")
+            .is_none(),
+        "a pristine form must not show validation feedback"
+    );
+    click(&workspace, cx, "certificate-field-0");
+    cx.simulate_input(workspace.window.into(), " ");
+    cx.run_until_parked();
     for (expected, field, value) in [
         ("Domain", 0, " \t "),
         ("Domain", 0, "api.example.com"),

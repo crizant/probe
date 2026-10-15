@@ -18,6 +18,7 @@ pub(crate) struct CertificateEditor {
     pub(crate) pkcs12: bool,
     pub(crate) disabled: bool,
     pub(crate) revealed: bool,
+    pub(crate) show_validation_feedback: bool,
     // An untouched explicit empty YAML value differs from an absent passphrase.
     preserve_empty_passphrase: bool,
     // Domain, PEM certificate, PEM private key, PKCS#12 archive, passphrase.
@@ -161,16 +162,17 @@ impl ProbeApp {
                     &input,
                     window,
                     move |view, input, event, _, cx| {
-                        if let InputEvent::Change = event {
-                            if index == 4
-                                && !input.read(cx).value().is_empty()
-                                && let Some(editor) = view
-                                    .environment_manager_dialog
-                                    .as_mut()
-                                    .and_then(|dialog| dialog.certificate_editor.as_mut())
-                                && editor.inputs.get(4) == Some(input)
+                        if matches!(event, InputEvent::Change | InputEvent::Blur) {
+                            if let Some(editor) = view
+                                .environment_manager_dialog
+                                .as_mut()
+                                .and_then(|dialog| dialog.certificate_editor.as_mut())
+                                && editor.inputs.get(index) == Some(input)
                             {
-                                editor.preserve_empty_passphrase = false;
+                                editor.show_validation_feedback = true;
+                                if index == 4 && !input.read(cx).value().is_empty() {
+                                    editor.preserve_empty_passphrase = false;
+                                }
                             }
                             cx.notify();
                         }
@@ -186,6 +188,7 @@ impl ProbeApp {
             pkcs12,
             disabled,
             revealed: false,
+            show_validation_feedback: false,
             preserve_empty_passphrase,
             inputs,
             _subscriptions: Rc::new(subscriptions),
@@ -214,10 +217,12 @@ impl ProbeApp {
         let Some(dialog) = self.environment_manager_dialog.as_mut() else {
             return;
         };
-        let Some(editor) = dialog.certificate_editor.as_ref() else {
+        let Some(editor) = dialog.certificate_editor.as_mut() else {
             return;
         };
         let Some(certificate) = editor.certificate(cx) else {
+            editor.show_validation_feedback = true;
+            cx.notify();
             return;
         };
         let index = editor.index;
