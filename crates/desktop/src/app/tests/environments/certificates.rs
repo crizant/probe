@@ -43,7 +43,9 @@ fn certificates(
 }
 
 #[gpui_kit::test]
-fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut TestAppContext) {
+fn certificate_tabs_filter_rows_mask_passphrases_and_leave_credential_store_untouched(
+    cx: &mut TestAppContext,
+) {
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-templates");
     workspace.open_manager(cx, "base");
     for (tab, plain) in [("environment-tab-0", true), ("environment-tab-1", false)] {
@@ -716,6 +718,8 @@ fn certificate_dialog_escape_cancel_and_save_preserve_outer_draft(cx: &mut TestA
         assert!(dialog.certificate_editor.is_some());
         assert!(view.application_dialog.is_none());
         assert!(view.environment_save_task.is_none());
+        assert!(view.environment_manager_is_dirty());
+        assert!(view.environment_manager_save_disabled());
     });
     cx.simulate_keystrokes(workspace.window.into(), "escape");
     cx.run_until_parked();
