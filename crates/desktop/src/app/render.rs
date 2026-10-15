@@ -290,6 +290,16 @@ impl Render for ProbeApp {
                 }),
             )
             .on_action(
+                cx.listener(|view, _: &SubmitCertificateDialog, window, cx| {
+                    view.save_certificate_editor(window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &CancelCertificateDialog, window, cx| {
+                    view.cancel_certificate_editor(window, cx);
+                }),
+            )
+            .on_action(
                 cx.listener(|view, _: &SubmitSecretValueDialog, window, cx| {
                     view.save_secret_value(window, cx);
                 }),
@@ -324,6 +334,12 @@ impl Render for ProbeApp {
                 cx.listener(|view, _: &CancelEnvironmentManagerDialog, window, cx| {
                     if view.secret_value_dialog.is_some() {
                         view.close_secret_value_dialog(window, cx);
+                    } else if view
+                        .environment_manager_dialog
+                        .as_ref()
+                        .is_some_and(|dialog| dialog.certificate_editor.is_some())
+                    {
+                        view.cancel_certificate_editor(window, cx);
                     } else {
                         view.request_close_environment_manager_dialog(window, cx);
                     }
@@ -403,6 +419,7 @@ impl Render for ProbeApp {
             .child(self.render_environment_manager_dialog(theme, window, cx))
             .child(self.render_secret_value_dialog(theme, window, cx))
             .child(self.render_environment_manager_context_menu(theme, window, cx))
+            .child(self.render_certificate_dialog(theme, cx))
             .child(self.render_create_environment_dialog(theme, window, cx))
             .child(self.render_application_dialog(theme, window, cx))
             .child(self.render_tab_tooltip(theme))

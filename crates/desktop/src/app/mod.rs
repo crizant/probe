@@ -40,7 +40,9 @@ use probe_opencollection::{
     CompletedEnvironmentDelete, LoadedWorkspace, StructureOperation, StructureResult,
     create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
 };
+mod certificates;
 mod chrome;
+use certificates::{CertificateEditor, EnvironmentTab};
 mod detached_requests;
 mod dialogs;
 mod documentation;
@@ -191,6 +193,8 @@ gpui_kit::actions!(
         SubmitCreateEnvironmentDialog,
         SubmitEnvironmentManagerDialog,
         SubmitSecretValueDialog,
+        SubmitCertificateDialog,
+        CancelCertificateDialog,
         SubmitApplicationDialog,
         SubmitApplicationDialogDestructive,
         CancelStructureDialog,
@@ -830,6 +834,8 @@ fn bind_platform_hotkeys(cx: &mut App) {
         ),
         KeyBinding::new("enter", SubmitApplicationDialog, Some("ApplicationDialog")),
         KeyBinding::new("enter", SubmitSecretValueDialog, Some("SecretValueDialog")),
+        KeyBinding::new("enter", SubmitCertificateDialog, Some("CertificateDialog")),
+        KeyBinding::new("escape", CancelCertificateDialog, Some("CertificateDialog")),
         KeyBinding::new("escape", CancelStructureDialog, Some("StructureDialog")),
         KeyBinding::new(
             "escape",

@@ -9,6 +9,7 @@ use std::sync::{
     mpsc,
 };
 
+mod certificates;
 mod manager;
 mod secret_execution;
 mod secrets;
@@ -164,6 +165,14 @@ impl EnvironmentWorkspace {
         self.update(cx, |view, window, cx| {
             view.select_environment(Some(environment.to_owned()), cx);
             view.open_environment_manager_dialog(window, cx);
+        });
+        cx.run_until_parked();
+    }
+
+    fn select_manager_tab(&self, cx: &mut TestAppContext, tab: crate::app::EnvironmentTab) {
+        self.update(cx, |view, _, cx| {
+            view.environment_manager_dialog.as_mut().unwrap().tab = tab;
+            cx.notify();
         });
         cx.run_until_parked();
     }

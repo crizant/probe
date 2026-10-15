@@ -39,6 +39,7 @@ fn manager_secret_status_comes_from_presence_for_the_effective_environment(
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.mark_stored(cx, &workspace.development_secret());
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, _, cx| {
         assert_eq!(
             manager_status(view, "secretToken"),
@@ -87,6 +88,7 @@ fn manager_secret_status_comes_from_presence_for_the_effective_environment(
 fn manager_secret_row_actions_follow_presence_and_saved_state(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "base");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     let mut visual = workspace.visual(cx);
     assert!(renders(&mut visual, "environment-secret-set-secretToken"));
     assert!(!renders(
@@ -163,6 +165,7 @@ fn manager_secret_row_actions_follow_presence_and_saved_state(cx: &mut TestAppCo
 fn manager_new_secret_must_be_saved_before_credential_can_be_set(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "new-secret");
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         view.apply_environment_manager_draft(cx, |dialog| {
             dialog
@@ -239,6 +242,7 @@ fn manager_replaces_and_deletes_native_value_without_changing_declaration(cx: &m
     let id = workspace.development_secret();
     workspace.store_secret(cx, &id, "old-value");
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         assert_eq!(
             manager_status(view, "secretToken"),
@@ -298,6 +302,7 @@ fn manager_trash_removes_declaration_without_deleting_native_value(cx: &mut Test
     let id = workspace.credential("base", "secretToken");
     workspace.store.set(&id, "private").unwrap();
     workspace.open_manager(cx, "base");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     let is_token = |variable: &EnvironmentVariable| matches!(variable, EnvironmentVariable::Secret(secret) if secret.name.as_deref() == Some("secretToken"));
 
     let mut visual = workspace.visual(cx);
@@ -330,6 +335,7 @@ fn manager_set_failure_reports_error_without_recording_presence(cx: &mut TestApp
     let before = workspace.yaml();
     workspace.store.fail_set.store(true, Ordering::SeqCst);
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         assert_eq!(
             manager_status(view, "secretToken"),
@@ -360,6 +366,7 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
     let old_id = workspace.development_secret();
     workspace.store.set(&old_id, "private").unwrap();
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         view.apply_environment_manager_draft(cx, |dialog| {
             dialog.draft_mut().name = "production".into()
@@ -452,6 +459,7 @@ fn manager_renames_change_credential_identity_without_migration(cx: &mut TestApp
 fn environment_manager_close_save_confirms_secret_rename_before_closing(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "secret-rename-close");
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         view.apply_environment_manager_draft(cx, |dialog| {
             dialog.draft_mut().name = "production".into()
@@ -487,6 +495,7 @@ fn in_flight_set_survives_closing_its_dialog_and_the_manager(cx: &mut TestAppCon
     let workspace = EnvironmentWorkspace::open(cx);
     let id = workspace.development_secret();
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         view.open_secret_value_dialog("secretToken".into(), window, cx);
         let input = view.secret_value_dialog.as_ref().unwrap().input.clone();
@@ -518,6 +527,7 @@ fn in_flight_set_survives_closing_its_dialog_and_the_manager(cx: &mut TestAppCon
     );
 
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         assert_eq!(
             manager_status(view, "secretToken"),
@@ -535,6 +545,7 @@ fn manager_secret_keyboard_enter_submits_and_escape_discards(cx: &mut TestAppCon
     let workspace = EnvironmentWorkspace::open(cx);
     let id = workspace.development_secret();
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         view.open_secret_value_dialog("secretToken".into(), window, cx);
         type_secret(view, window, cx, "discard-me");
@@ -577,6 +588,7 @@ fn manager_secret_keyboard_enter_submits_and_escape_discards(cx: &mut TestAppCon
 fn manager_secret_dialog_cannot_save_after_draft_becomes_dirty(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         view.open_secret_value_dialog("secretToken".into(), window, cx);
         type_secret(view, window, cx, "must-not-write");
@@ -607,6 +619,7 @@ fn manager_delete_failure_restores_status_and_reports_error(cx: &mut TestAppCont
     workspace.store_secret(cx, &id, "keep-me");
     workspace.store.fail_delete.store(true, Ordering::SeqCst);
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         view.open_secret_value_dialog("secretToken".into(), window, cx);
         view.delete_stored_secret("secretToken".into(), "development".into(), window, cx);
@@ -863,6 +876,7 @@ fn assert_delete_marks_placeholder_unresolved(cx: &mut TestAppContext, native: O
     }
     workspace.mark_stored(cx, &id);
     workspace.open_manager(cx, "development");
+    workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
     workspace.update(cx, |view, window, cx| {
         assert_eq!(view.variable_context(cx).status("secretToken"), Resolved);
         view.open_secret_value_dialog("secretToken".into(), window, cx);

@@ -410,7 +410,9 @@ impl ProbeApp {
                                         {
                                             set_environment_variable_text(&mut variable, value.to_string());
                                             let direct_id = dialog.next_variable_row_id;
-                                            let index = dialog.draft().variables.len();
+                                            let index = dialog.draft().variables.iter().filter(|variable| {
+                                                variable.is_secret() == (dialog.tab == EnvironmentTab::Secrets)
+                                            }).count();
                                             dialog.add_variable(EnvironmentVariable::Plain(variable));
                                             // The inherited row disappears when its direct override is added.
                                             // Move ownership to the new identity before the next render.
@@ -598,6 +600,7 @@ impl ProbeApp {
         &self,
         theme: Theme,
         busy: bool,
+        tab: EnvironmentTab,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let add_variable_view = cx.weak_entity();
@@ -612,50 +615,54 @@ impl ProbeApp {
             .gap(px(theme.metrics.spacing_2))
             .border_t_1()
             .border_color(theme.colors.borders.subtle)
-            .child(
-                components::editor_add_button(
-                    theme,
-                    "environment-manager-add-variable",
-                    "Add variable",
-                    move |_, _, cx| {
-                        let _ = add_variable_view.update(cx, |view, cx| {
-                            view.add_environment_manager_variable(
-                                cx,
-                                EnvironmentVariable::Plain(Variable {
-                                    name: Some(String::new()),
-                                    value: Some(VariableValueSet::Single(VariableValue::String(
-                                        String::new(),
-                                    ))),
-                                    disabled: false,
-                                }),
-                            );
-                        });
-                    },
+            .when(tab == EnvironmentTab::Variables, |footer| {
+                footer.child(
+                    components::editor_add_button(
+                        theme,
+                        "environment-manager-add-variable",
+                        "Add Variable",
+                        move |_, _, cx| {
+                            let _ = add_variable_view.update(cx, |view, cx| {
+                                view.add_environment_manager_variable(
+                                    cx,
+                                    EnvironmentVariable::Plain(Variable {
+                                        name: Some(String::new()),
+                                        value: Some(VariableValueSet::Single(
+                                            VariableValue::String(String::new()),
+                                        )),
+                                        disabled: false,
+                                    }),
+                                );
+                            });
+                        },
+                    )
+                    .flex_none()
+                    .disabled(busy),
                 )
-                .flex_none()
-                .disabled(busy),
-            )
-            .child(
-                components::editor_add_button(
-                    theme,
-                    "environment-manager-add-secret",
-                    "Add secret",
-                    move |_, _, cx| {
-                        let _ = add_secret_view.update(cx, |view, cx| {
-                            view.add_environment_manager_variable(
-                                cx,
-                                EnvironmentVariable::Secret(SecretVariable {
-                                    name: Some(String::new()),
-                                    value_type: None,
-                                    disabled: false,
-                                }),
-                            );
-                        });
-                    },
+            })
+            .when(tab == EnvironmentTab::Secrets, |footer| {
+                footer.child(
+                    components::editor_add_button(
+                        theme,
+                        "environment-manager-add-secret",
+                        "Add Secret",
+                        move |_, _, cx| {
+                            let _ = add_secret_view.update(cx, |view, cx| {
+                                view.add_environment_manager_variable(
+                                    cx,
+                                    EnvironmentVariable::Secret(SecretVariable {
+                                        name: Some(String::new()),
+                                        value_type: None,
+                                        disabled: false,
+                                    }),
+                                );
+                            });
+                        },
+                    )
+                    .flex_none()
+                    .disabled(busy),
                 )
-                .flex_none()
-                .disabled(busy),
-            )
+            })
             .into_any_element()
     }
 
@@ -683,7 +690,14 @@ impl ProbeApp {
         let Some(dialog) = self.environment_manager_dialog.as_ref() else {
             return div().into_any_element();
         };
-        let rows = dialog.effective_rows(environments);
+        let rows = std::rc::Rc::new(
+            dialog
+                .effective_rows(environments)
+                .iter()
+                .filter(|row| row.variable.is_secret() == (dialog.tab == EnvironmentTab::Secrets))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
         let rows_empty = rows.is_empty();
         let busy = self.environment_save_task.is_some();
         let dirty = self.environment_manager_is_dirty();
@@ -759,7 +773,11 @@ impl ProbeApp {
                                     .border_b_1()
                                     .border_color(theme.colors.borders.subtle)
                                     .text_color(theme.colors.text.muted)
-                                    .child("No variables in this environment.")
+                                    .child(if dialog.tab == EnvironmentTab::Secrets {
+                                        "No secrets in this environment."
+                                    } else {
+                                        "No variables in this environment."
+                                    })
                                     .into_any_element(),
                             );
                         }
@@ -787,6 +805,43 @@ impl ProbeApp {
                 .mode(ScrollbarMode::Scrolling),
         );
 
+        let mut tabs = Tabs::new("environment-manager-tabs")
+            .mt(px(theme.metrics.spacing_3))
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1));
+        for (index, (label, tab)) in [
+            ("Variables", EnvironmentTab::Variables),
+            ("Secrets", EnvironmentTab::Secrets),
+            ("Client Certificates", EnvironmentTab::ClientCertificates),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let view = cx.weak_entity();
+            tabs = tabs.child(
+                components::text_tab(
+                    theme,
+                    format!("environment-tab-{index}"),
+                    label,
+                    dialog.tab == tab,
+                    index + 1,
+                    3,
+                    move |_, _, cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            if let Some(dialog) = view.environment_manager_dialog.as_mut() {
+                                dialog.tab = tab;
+                                dialog.active_field = None;
+                            }
+                            view.environment_variables_scroll = UniformListScrollHandle::new();
+                            cx.notify();
+                        });
+                    },
+                )
+                .debug_selector(move || format!("environment-tab-{index}"))
+                .disabled(busy || dialog.certificate_editor.is_some()),
+            );
+        }
         let table = div()
             .mt(px(theme.metrics.spacing_2))
             .flex_1()
@@ -799,7 +854,7 @@ impl ProbeApp {
             .border_color(theme.colors.borders.standard)
             .child(table_header)
             .child(table_body)
-            .child(self.render_environment_variable_actions(theme, busy, cx));
+            .child(self.render_environment_variable_actions(theme, busy, dialog.tab, cx));
         let form = div()
             .flex_1()
             .min_w(px(0.0))
@@ -894,7 +949,12 @@ impl ProbeApp {
                 )
                 .mt(px(theme.metrics.spacing_2))
             })
-            .child(table);
+            .child(tabs)
+            .child(if dialog.tab == EnvironmentTab::ClientCertificates {
+                self.render_certificate_tab(theme, busy, cx)
+            } else {
+                table.into_any_element()
+            });
 
         let close_view = cx.weak_entity();
         let save_view = cx.weak_entity();
@@ -925,7 +985,7 @@ impl ProbeApp {
                         "Close",
                         components::DialogActionStyle::Secondary,
                         None,
-                        false,
+                        dialog.certificate_editor.is_some(),
                         move |_, window, cx| {
                             let _ = close_view.update(cx, |view, cx| {
                                 view.request_close_environment_manager_dialog(window, cx);

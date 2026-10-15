@@ -8,6 +8,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- The desktop Environment Manager now has Variables, Secrets, and Client Certificates
+  tabs. Add, edit, disable, reorder, and remove environment PEM and PKCS#12
+  declarations, including variable paths and masked literal or templated passphrases.
+
 - HTTP and GraphQL requests now execute single-identity PKCS#12 (`.p12`/`.pfx`)
   client certificates alongside PEM in CLI and desktop, with existing variable
   and secret support. Modern PBES2/PBKDF2 AES-CBC containers are supported;
@@ -28,8 +32,7 @@ Release dates use Australia/Brisbane time (UTC+10).
   precedence over collection certificates. RSA, EC, PKCS#8, certificate chains,
   and encrypted PKCS#8 keys are supported. Redirects outside the selected domain
   fail with a clear diagnostic before connecting. Environment certificate
-  inheritance remains unsupported; no certificate editor
-  or proprietary fields are added.
+  inheritance remains unsupported; no proprietary fields are added.
 
 ### Changed
 

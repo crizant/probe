@@ -1,5 +1,6 @@
 use super::*;
 
+pub(super) mod certificates;
 mod dialogs;
 mod environments;
 mod menus;

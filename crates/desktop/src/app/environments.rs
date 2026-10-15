@@ -127,6 +127,13 @@ impl ProbeApp {
         if self.environment_save_task.is_some() {
             return;
         }
+        if self
+            .environment_manager_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.certificate_editor.is_some())
+        {
+            return;
+        }
         if self.environment_manager_is_dirty() {
             self.show_application_dialog(ApplicationDialog::UnsavedEnvironment, window, cx);
             return;
@@ -178,6 +185,24 @@ impl ProbeApp {
         let Some((mut dialog, previous_original)) = previous else {
             return;
         };
+        if let Some(editor) = dialog.certificate_editor.as_ref() {
+            let window = editor.window;
+            let view = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = window.update(cx, |_, window, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        if view
+                            .environment_manager_dialog
+                            .as_ref()
+                            .is_none_or(|dialog| dialog.certificate_editor.is_none())
+                            && view.application_dialog.is_none()
+                        {
+                            view.restore_environment_dialog_focus(window, cx);
+                        }
+                    });
+                });
+            });
+        }
         self.transient.environment_manager_context_menu = None;
         let Some(disk) = self.loaded_workspace.as_ref().and_then(|loaded| {
             loaded
@@ -190,18 +215,21 @@ impl ProbeApp {
             self.discard_environment_manager_dialog();
             return;
         };
-        let dirty = previous_original
-            .as_ref()
-            .is_none_or(|original| original != dialog.draft());
+        let dirty = dialog.certificate_editor.is_some()
+            || previous_original
+                .as_ref()
+                .is_none_or(|original| original != dialog.draft());
         let environment_changed_on_disk = previous_original
             .as_ref()
             .is_none_or(|original| original != &disk);
         if !dirty {
-            self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(&disk));
+            self.environment_manager_dialog =
+                Some(EnvironmentManagerDialog::with_tab(&disk, dialog.tab));
             return;
         }
         if environment_changed_on_disk {
-            self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(&disk));
+            self.environment_manager_dialog =
+                Some(EnvironmentManagerDialog::with_tab(&disk, dialog.tab));
             self.show_environment_dialog_error(
                 "This environment changed on disk. Unsaved environment edits were discarded."
                     .to_owned(),
@@ -239,7 +267,14 @@ impl ProbeApp {
             .environment_manager_dialog
             .as_ref()
             .map(|dialog| dialog.draft().variables.len());
-        self.apply_environment_manager_draft(cx, |dialog| dialog.add_variable(variable));
+        self.apply_environment_manager_draft(cx, |dialog| {
+            dialog.tab = if variable.is_secret() {
+                EnvironmentTab::Secrets
+            } else {
+                EnvironmentTab::Variables
+            };
+            dialog.add_variable(variable);
+        });
         let Some(after) = self
             .environment_manager_dialog
             .as_ref()
@@ -250,9 +285,22 @@ impl ProbeApp {
         if before == Some(after) {
             return;
         }
-        // Direct variables are a prefix of the list, so this index is the new row.
+        // Each tab shows only one kind of direct variable, followed by inherited rows.
+        let visible_direct = self
+            .environment_manager_dialog
+            .as_ref()
+            .map_or(0, |dialog| {
+                dialog
+                    .draft()
+                    .variables
+                    .iter()
+                    .filter(|variable| {
+                        variable.is_secret() == (dialog.tab == EnvironmentTab::Secrets)
+                    })
+                    .count()
+            });
         self.environment_variables_scroll
-            .scroll_to_item(after.saturating_sub(1), ScrollStrategy::Bottom);
+            .scroll_to_item(visible_direct.saturating_sub(1), ScrollStrategy::Bottom);
     }
 
     pub(super) fn select_environment_manager_environment(
@@ -277,7 +325,7 @@ impl ProbeApp {
         else {
             return;
         };
-        if dialog.draft() != original {
+        if dialog.certificate_editor.is_some() || dialog.draft() != original {
             self.show_environment_dialog_error(
                 "Save or cancel the current environment changes first.",
                 EnvironmentDialogErrorResolution::ManagerClean,
@@ -292,7 +340,8 @@ impl ProbeApp {
             .iter()
             .find(|environment| environment.name == name)
         {
-            self.environment_manager_dialog = Some(EnvironmentManagerDialog::new(environment));
+            self.environment_manager_dialog =
+                Some(EnvironmentManagerDialog::with_tab(environment, dialog.tab));
             self.environment_variables_scroll = UniformListScrollHandle::new();
             self.sync_secret_statuses_from_presence();
             self.clear_environment_dialog_error(cx);
@@ -338,6 +387,9 @@ impl ProbeApp {
         let Some(dialog) = self.environment_manager_dialog.as_ref() else {
             return;
         };
+        if dialog.certificate_editor.is_some() {
+            return;
+        }
         let mut replacement = dialog.draft().clone();
         replacement.name = replacement.name.trim().to_owned();
         for variable in &mut replacement.variables {
@@ -447,7 +499,14 @@ impl ProbeApp {
                                     view.close_environment_manager_dialog(window, cx);
                                 } else {
                                     view.environment_manager_dialog =
-                                        Some(EnvironmentManagerDialog::new(&environment));
+                                        Some(EnvironmentManagerDialog::with_tab(
+                                            &environment,
+                                            view.environment_manager_dialog
+                                                .as_ref()
+                                                .map_or(EnvironmentTab::default(), |dialog| {
+                                                    dialog.tab
+                                                }),
+                                        ));
                                     view.sync_secret_statuses_from_presence();
                                 }
                             }
@@ -647,16 +706,22 @@ impl ProbeApp {
         let Some(loaded) = self.loaded_workspace.as_ref() else {
             return false;
         };
-        loaded
-            .workspace()
-            .environments()
-            .iter()
-            .find(|environment| environment.name == dialog.original_name)
-            .is_none_or(|environment| environment != dialog.draft())
+        dialog.certificate_editor.is_some()
+            || loaded
+                .workspace()
+                .environments()
+                .iter()
+                .find(|environment| environment.name == dialog.original_name)
+                .is_none_or(|environment| environment != dialog.draft())
     }
 
     pub(super) fn environment_manager_save_disabled(&self) -> bool {
-        self.environment_save_task.is_some() || !self.environment_manager_is_dirty()
+        self.environment_save_task.is_some()
+            || !self.environment_manager_is_dirty()
+            || self
+                .environment_manager_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.certificate_editor.is_some())
     }
 
     pub(super) fn restore_environment_dialog_focus(
@@ -664,7 +729,13 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.environment_manager_dialog.is_some() {
+        if let Some(editor) = self
+            .environment_manager_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.certificate_editor.as_ref())
+        {
+            editor.focus.focus(window, cx);
+        } else if self.environment_manager_dialog.is_some() {
             self.environment_manager_dialog_focus.focus(window, cx);
         } else {
             self.focus_handle.focus(window, cx);
