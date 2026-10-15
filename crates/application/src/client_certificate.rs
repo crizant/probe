@@ -65,7 +65,7 @@ impl<'a> CertificateScopes<'a> {
                     private_key_file_path,
                     passphrase,
                     ..
-                } => Ok(Some(probe_http::PemClientIdentity::new(
+                } => Ok(Some(probe_http::ClientIdentity::new(
                     domain,
                     interpolate(certificate_file_path)?,
                     interpolate(private_key_file_path)?,
@@ -134,7 +134,7 @@ mod tests {
     }
 
     fn identity(domain: &str, path: &str) -> Option<probe_http::ClientIdentity> {
-        Some(probe_http::PemClientIdentity::new(
+        Some(probe_http::ClientIdentity::new(
             domain.into(),
             path.into(),
             "unused-key.pem".into(),

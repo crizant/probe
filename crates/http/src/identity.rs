@@ -26,9 +26,6 @@ enum IdentityMaterial {
     Pkcs12 { path: String },
 }
 
-/// Backwards-compatible name for the PEM constructor.
-pub type PemClientIdentity = ClientIdentity;
-
 impl fmt::Debug for ClientIdentity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -316,7 +313,7 @@ mod tests {
                 ))
             );
         }
-        let identity = PemClientIdentity::new(
+        let identity = ClientIdentity::new(
             "localhost".into(),
             "client.pem".into(),
             "client-key.pem".into(),
@@ -331,7 +328,7 @@ mod tests {
             base_directory: Some(fixture("")),
             ..ExecutionOptions::default()
         };
-        let identity = PemClientIdentity::new(
+        let identity = ClientIdentity::new(
             "localhost".into(),
             "client.pem".into(),
             "client-key.pem".into(),
@@ -354,7 +351,7 @@ mod tests {
                 "relative client certificate/key path requires a base directory"
             ))
         );
-        let absolute = PemClientIdentity::new(
+        let absolute = ClientIdentity::new(
             "localhost".into(),
             fixture("client.pem").to_str().unwrap().into(),
             fixture("client-key.pem").to_str().unwrap().into(),
@@ -375,7 +372,7 @@ mod tests {
             ("", "client-key.pem", "cannot read client certificate file"),
             ("client.pem", "", "cannot read client private key file"),
         ] {
-            let identity = PemClientIdentity::new(
+            let identity = ClientIdentity::new(
                 "localhost".into(),
                 cert.into(),
                 key.into(),

@@ -13,7 +13,7 @@ mod response;
 pub use cache::{ResponseBodyFile, ResponseCache};
 pub use engine::{HttpEngine, HttpProgress, StreamedHttpResponse};
 pub use error::{HttpError, Pkcs12Error};
-pub use identity::{ClientIdentity, PemClientIdentity};
+pub use identity::ClientIdentity;
 pub use response::{HttpResponse, ResponseHeader};
 
 use std::path::PathBuf;

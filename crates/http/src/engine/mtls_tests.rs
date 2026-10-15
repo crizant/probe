@@ -1,7 +1,7 @@
 //! Public test-only CA fixtures; no production trust override is exposed.
 
 use super::*;
-use crate::PemClientIdentity;
+use crate::ClientIdentity;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use std::{
@@ -34,6 +34,9 @@ fn server(response: String) -> (u16, std::thread::JoinHandle<bool>) {
     let worker = std::thread::spawn(move || {
         let mut roots = RootCertStore::empty();
         roots.add(certs("ca.pem").remove(0)).unwrap();
+        roots
+            .add(certs("pkcs12-shared-root.pem").remove(0))
+            .unwrap();
         roots.add(certs("pkcs12-chain-root.pem").remove(0)).unwrap();
         let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
@@ -87,7 +90,7 @@ async fn client(
                     Some("probe-test-only-password".into()),
                 )
             } else {
-                PemClientIdentity::new(
+                ClientIdentity::new(
                     domain.into(),
                     fixture(cert).to_str().unwrap().into(),
                     fixture(key).to_str().unwrap().into(),
@@ -128,6 +131,7 @@ async fn mtls_requires_a_trusted_client_and_valid_identity_succeeds() {
         (Some(("client.pem", "client-pkcs8-key.pem")), true),
         (Some(("client-protected.p12", "")), true),
         (Some(("client-intermediates.p12", "")), true),
+        (Some(("client-shared-subject.p12", "")), true),
         (Some(("wrong-client.pem", "wrong-client-key.pem")), false),
     ] {
         let (port, worker) = server(ok());
@@ -255,7 +259,7 @@ async fn engine_checks_identity_scope_against_built_url_before_connecting() {
     .unwrap();
     let engine = HttpEngine::new().unwrap();
     let options = |domain: &str| ExecutionOptions {
-        client_identity: Some(PemClientIdentity::new(
+        client_identity: Some(ClientIdentity::new(
             domain.into(),
             fixture("client.pem").to_str().unwrap().into(),
             fixture("client-key.pem").to_str().unwrap().into(),
@@ -292,7 +296,7 @@ async fn certificate_bearing_execution_bypasses_an_https_proxy_outside_its_domai
     let proxy_url = format!("https://localhost:{}", proxy.local_addr().unwrap().port());
     let (port, worker) =
         server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".into());
-    let configuration = PemClientIdentity::new(
+    let configuration = ClientIdentity::new(
         "127.0.0.1".into(),
         fixture("client.pem").to_str().unwrap().into(),
         fixture("client-key.pem").to_str().unwrap().into(),

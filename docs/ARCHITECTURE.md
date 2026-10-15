@@ -791,9 +791,11 @@ or multiple distinct matching leaf certificates (even sharing a key) are rejecte
 Bag aliases and localKeyId never override cryptographic key/certificate matching.
 Certificates are deduplicated before matching; the unique certificate that
 cryptographically matches that key is the leaf.
-Issuer/subject names assemble its leaf-first chain, excluding duplicate and unrelated
-certificates and stopping at a root, missing issuer or cycle. This orders certificates;
-the remote server remains responsible for client-chain trust and signature validation.
+Issuer/subject names and signature verification assemble its leaf-first chain,
+excluding duplicate and unrelated certificates and stopping at a missing issuer or
+cycle. Certificates sharing a subject are ordered by their actual signer, including
+self-issued intermediates. The remote server remains responsible for client-chain
+trust, validity, and usage validation.
 Intermediate/root certificates alone do not make an archive ambiguous. Multi-identity
 selection is deferred to a later desktop UI change.
 

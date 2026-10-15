@@ -39,3 +39,9 @@ fixture, which uses `probe-test-🔑` to verify UTF-16 supplementary-plane handl
 A separate root/intermediate/leaf hierarchy verifies intermediate transmission in
 an actual mTLS handshake; its root and intermediate private keys are discarded.
 OpenSSL is used only to generate fixtures; parsing/decryption tests use RustCrypto.
+
+The shared-subject hierarchy has a root, self-issued intermediate, and unrelated
+decoy CA with the same subject DN and different keys. `shared_subject_chain()` in
+the PKCS#12 generator records its commands, discards all CA private keys, and
+packages its public certificates with the existing public client key. Tests permute
+the candidate issuers and perform an mTLS handshake using the resulting chain.

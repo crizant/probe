@@ -218,13 +218,13 @@ fn select_identity(
     keys: &[Zeroizing<Vec<u8>>],
     certs: Vec<CertificateDer<'static>>,
 ) -> Result<reqwest::Identity, HttpError> {
-    let provider = rustls::crypto::aws_lc_rs::default_provider();
     let mut selected: Option<(usize, usize)> = None;
     let mut public_key = None;
     for (key_index, key) in keys.iter().enumerate() {
-        let signing = provider
-            .key_provider
-            .load_private_key(PrivatePkcs8KeyDer::from(key.to_vec()).into())
+        // Borrow the zeroizing input: KeyProvider::load_private_key requires an
+        // owned 'static copy, while this same provider's parser accepts a borrow.
+        let private_key = PrivatePkcs8KeyDer::from(key.as_slice()).into();
+        let signing = rustls::crypto::aws_lc_rs::sign::any_supported_type(&private_key)
             .map_err(|_| error(UNSUPPORTED))?;
         let public = signing.public_key().ok_or_else(|| error(UNSUPPORTED))?;
         if let Some(previous) = &public_key {
@@ -280,21 +280,64 @@ fn certificate_chain<'a>(
         .collect::<Result<Vec<_>, _>>()?;
     let mut chain = vec![leaf];
     loop {
-        let current = &parsed[*chain.last().expect("chain starts with leaf")].tbs_certificate();
-        if current.issuer() == current.subject() {
-            break;
+        let current = &parsed[*chain.last().expect("chain starts with leaf")];
+        let mut issuer = None;
+        for (index, candidate) in parsed.iter().enumerate() {
+            if chain.contains(&index) {
+                continue;
+            }
+            if candidate.tbs_certificate().subject() != current.tbs_certificate().issuer() {
+                continue;
+            }
+            // Equal names do not imply equal keys, nor that a self-issued
+            // intermediate is self-signed. Select its actual signer.
+            if certificate_signed_by(current, candidate)? {
+                issuer = Some(index);
+                break;
+            }
         }
-        let Some(issuer) = parsed.iter().enumerate().position(|(index, cert)| {
-            !chain.contains(&index) && cert.tbs_certificate().subject() == current.issuer()
-        }) else {
-            break;
-        };
+        let Some(issuer) = issuer else { break };
         chain.push(issuer);
     }
     Ok(chain
         .into_iter()
         .map(|index| &certificates[index])
         .collect())
+}
+
+fn certificate_signed_by(
+    certificate: &x509_cert::Certificate,
+    issuer: &x509_cert::Certificate,
+) -> Result<bool, HttpError> {
+    let spki = issuer.tbs_certificate().subject_public_key_info();
+    let public_algorithm = spki.algorithm.to_der().map_err(|_| error(INVALID))?;
+    let signature_algorithm = certificate
+        .signature_algorithm()
+        .to_der()
+        .map_err(|_| error(INVALID))?;
+    let public_algorithm = AnyRef::from_der(&public_algorithm).map_err(|_| error(INVALID))?;
+    let signature_algorithm = AnyRef::from_der(&signature_algorithm).map_err(|_| error(INVALID))?;
+    let key = spki
+        .subject_public_key
+        .as_bytes()
+        .ok_or_else(|| error(INVALID))?;
+    let signature = certificate
+        .signature()
+        .as_bytes()
+        .ok_or_else(|| error(INVALID))?;
+    let message = certificate
+        .tbs_certificate()
+        .to_der()
+        .map_err(|_| error(INVALID))?;
+    Ok(rustls::crypto::aws_lc_rs::default_provider()
+        .signature_verification_algorithms
+        .all
+        .iter()
+        .any(|algorithm| {
+            algorithm.public_key_alg_id().as_ref() == public_algorithm.value()
+                && algorithm.signature_alg_id().as_ref() == signature_algorithm.value()
+                && algorithm.verify_signature(key, &message, signature).is_ok()
+        }))
 }
 
 #[cfg(test)]
@@ -322,6 +365,7 @@ mod tests {
             ("client-unencrypted.p12", None),
             ("client-chain.p12", None),
             ("client-intermediates.p12", None),
+            ("client-shared-subject.p12", None),
             ("client-duplicate-key.p12", None),
             ("client-protected.p12", Some(PASS)),
             ("client-unicode-password.p12", Some("probe-test-🔑")),
@@ -436,6 +480,75 @@ mod tests {
             certificate_chain(0, std::slice::from_ref(&leaf)).unwrap(),
             vec![&leaf]
         );
+    }
+
+    #[test]
+    fn chain_uses_signatures_when_root_intermediate_and_decoy_share_a_subject() {
+        use rustls::pki_types::pem::PemObject;
+        let leaf = CertificateDer::from_pem_slice(&read("pkcs12-shared-leaf.pem")).unwrap();
+        let intermediate =
+            CertificateDer::from_pem_slice(&read("pkcs12-shared-intermediate.pem")).unwrap();
+        let root = CertificateDer::from_pem_slice(&read("pkcs12-shared-root.pem")).unwrap();
+        let decoy = CertificateDer::from_pem_slice(&read("pkcs12-shared-decoy.pem")).unwrap();
+        let issuers = [&root, &intermediate, &decoy];
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let mut certificates = order.map(|index| issuers[index].clone()).to_vec();
+            certificates.push(leaf.clone());
+            assert_eq!(
+                certificate_chain(3, &certificates).unwrap(),
+                vec![&leaf, &intermediate, &root]
+            );
+        }
+    }
+
+    #[test]
+    fn issuer_verification_honors_the_declared_signature_algorithm() {
+        use der::asn1::Any;
+        use rustls::pki_types::pem::PemObject;
+        let leaf = CertificateDer::from_pem_slice(&read("pkcs12-shared-leaf.pem")).unwrap();
+        let issuer =
+            CertificateDer::from_pem_slice(&read("pkcs12-shared-intermediate.pem")).unwrap();
+        let issuer = x509_cert::Certificate::from_der(&issuer).unwrap();
+        let original = x509_cert::Certificate::from_der(&leaf).unwrap();
+        assert!(certificate_signed_by(&original, &issuer).unwrap());
+        // Relabel the outer algorithm as SHA-384/RSA while retaining the actual
+        // SHA-256 signature and signed TBS bytes. A verifier must not guess a
+        // different algorithm just because it can verify the bytes.
+        let mut certificate = Vec::<Any>::from_der(&leaf).unwrap();
+        let mut algorithm = Vec::<Any>::from_der(&certificate[1].to_der().unwrap()).unwrap();
+        algorithm[0] = Any::from_der(
+            &ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.12")
+                .to_der()
+                .unwrap(),
+        )
+        .unwrap();
+        certificate[1] = Any::from_der(&algorithm.to_der().unwrap()).unwrap();
+        let relabeled = x509_cert::Certificate::from_der(&certificate.to_der().unwrap()).unwrap();
+        assert!(!certificate_signed_by(&relabeled, &issuer).unwrap());
+    }
+
+    #[test]
+    fn pbkdf2_iterations_above_the_limit_are_rejected_before_decryption() {
+        for iterations in [1_000_001, 2_000_000] {
+            let parameters = pkcs5::pbes2::Parameters::generate_pbkdf2_sha256_aes128cbc(
+                iterations,
+                b"test-salt",
+                [0; 16],
+            )
+            .unwrap();
+            let algorithm = pkcs5::EncryptionScheme::Pbes2(parameters).to_der().unwrap();
+            assert_eq!(
+                decrypt(&algorithm, &[0; 16], Some(PASS)).err(),
+                Some(error(INVALID))
+            );
+        }
     }
 
     #[tokio::test]

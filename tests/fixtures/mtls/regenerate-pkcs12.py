@@ -100,3 +100,28 @@ with tempfile.TemporaryDirectory(prefix="probe-p12-chain-") as temporary:
 
 # Distinct matching leaf certificates are ambiguous even when they share a key.
 archive("client-multiple-leaves.p12", key("client-key.pem"), cert("client.pem"), cert("pkcs12-chain-leaf.pem"), cert("ca.pem"), cert("pkcs12-chain-intermediate.pem"), cert("pkcs12-chain-root.pem"))
+
+
+def shared_subject_chain():
+    """A self-issued intermediate and a decoy CA share the root's DN, not its key."""
+    with tempfile.TemporaryDirectory(prefix="probe-p12-shared-") as temporary:
+        scratch = Path(temporary)
+        root = BASE / "pkcs12-shared-root.pem"
+        intermediate = BASE / "pkcs12-shared-intermediate.pem"
+        decoy = BASE / "pkcs12-shared-decoy.pem"
+        leaf = BASE / "pkcs12-shared-leaf.pem"
+        subject = "/CN=Probe shared-subject CA"
+        for name, output in [("root", root), ("decoy", decoy)]:
+            openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", scratch / f"{name}-key.pem", "-out", output, "-subj", subject, "-days", "36500", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+        openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", scratch / "intermediate-key.pem", "-out", scratch / "intermediate.csr", "-subj", subject)
+        extensions = scratch / "intermediate.ext"
+        extensions.write_text("basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n")
+        openssl("x509", "-req", "-in", scratch / "intermediate.csr", "-CA", root, "-CAkey", scratch / "root-key.pem", "-set_serial", "20", "-out", intermediate, "-days", "36500", "-extfile", extensions)
+        openssl("req", "-new", "-key", BASE / "client-key.pem", "-out", scratch / "leaf.csr", "-subj", "/CN=Probe shared-subject client")
+        extensions = scratch / "leaf.ext"
+        extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n")
+        openssl("x509", "-req", "-in", scratch / "leaf.csr", "-CA", intermediate, "-CAkey", scratch / "intermediate-key.pem", "-set_serial", "21", "-out", leaf, "-days", "36500", "-extfile", extensions)
+        archive("client-shared-subject.p12", cert(root), cert(decoy), key("client-key.pem"), cert(leaf), cert(intermediate))
+
+
+shared_subject_chain()

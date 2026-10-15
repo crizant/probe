@@ -521,7 +521,7 @@ mod certificate_variable_tests {
         assert_eq!(*provider.calls.borrow(), ["certPassword"]);
         assert_eq!(
             execution.client_identity,
-            Ok(Some(probe_http::PemClientIdentity::new(
+            Ok(Some(probe_http::ClientIdentity::new(
                 "*.example.com".into(),
                 "inherited/client.pem".into(),
                 "inherited/client-key.pem".into(),
@@ -568,7 +568,7 @@ mod certificate_variable_tests {
         let execution = prepared.into_http().unwrap();
         assert_eq!(
             execution.client_identity,
-            Ok(Some(probe_http::PemClientIdentity::new(
+            Ok(Some(probe_http::ClientIdentity::new(
                 "api.example.com:443".into(),
                 "override/client.pem".into(),
                 "override/client-key.pem".into(),
@@ -762,7 +762,7 @@ mod certificate_variable_tests {
             .into_http()
             .unwrap();
             let expected = matches.then(|| {
-                probe_http::PemClientIdentity::new(
+                probe_http::ClientIdentity::new(
                     domain.into(),
                     "missing-cert.pem".into(),
                     "missing-key.pem".into(),

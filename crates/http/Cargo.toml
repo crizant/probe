@@ -12,7 +12,8 @@ pkcs8 = { version = "0.10.2", features = ["pem", "encryption", "std"] }
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
 # RustCrypto format/KDF support; PBES2 decryption stays entirely in Rust.
 pkcs12 = { version = "0.2.0-pre.0", default-features = false, features = ["kdf"] }
-pkcs5 = { version = "0.8", features = ["pbes2", "sha1-insecure"] }
+# Upstream pbes2 bundles scrypt/salsa20; no independent opt-out exists.
+pkcs5 = { version = "0.8", default-features = false, features = ["pbes2", "sha1-insecure"] }
 der = { version = "0.8", features = ["alloc", "derive", "pem"] }
 x509-cert = { version = "0.3", default-features = false, features = ["pem"] }
 hmac = "0.13"
