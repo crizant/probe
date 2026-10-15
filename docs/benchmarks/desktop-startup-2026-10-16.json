@@ -1,0 +1,1334 @@
+{
+  "schema_version": 1,
+  "platform": "macOS-26.7.1-arm64-arm-64bit",
+  "machine": "arm64",
+  "binary": "target/release/probe-desktop",
+  "binary_sha256": "afbb5b92e178121fd387aab077f13ca890653baef36c2ff37b8e4cfc80ef5581",
+  "warmups": 3,
+  "runs": 30,
+  "scenarios": [
+    {
+      "workspace": "empty",
+      "summary": {
+        "first_frame": {
+          "main_ms": {
+            "median_ms": 171.296354,
+            "p90_ms": 183.571875
+          },
+          "launch_observed_ms": {
+            "median_ms": 179.31854200000032,
+            "p90_ms": 193.89104199999883
+          }
+        },
+        "session_ready": {
+          "main_ms": {
+            "median_ms": 258.831042,
+            "p90_ms": 268.91958300000005
+          },
+          "launch_observed_ms": {
+            "median_ms": 264.8660624999999,
+            "p90_ms": 276.75533299999876
+          }
+        }
+      },
+      "samples": [
+        {
+          "first_frame": {
+            "main_ms": 169.764792,
+            "launch_observed_ms": 185.8908750000001
+          },
+          "session_ready": {
+            "main_ms": 259.38050000000004,
+            "launch_observed_ms": 275.4666670000001
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 180.69395799999998,
+            "launch_observed_ms": 187.98562500000006
+          },
+          "session_ready": {
+            "main_ms": 268.91958300000005,
+            "launch_observed_ms": 276.21808300000004
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 173.22725,
+            "launch_observed_ms": 180.23862499999987
+          },
+          "session_ready": {
+            "main_ms": 264.516666,
+            "launch_observed_ms": 271.48287500000004
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.756959,
+            "launch_observed_ms": 181.85741700000003
+          },
+          "session_ready": {
+            "main_ms": 259.261709,
+            "launch_observed_ms": 265.3596250000001
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 161.737084,
+            "launch_observed_ms": 167.75354200000027
+          },
+          "session_ready": {
+            "main_ms": 248.15420899999998,
+            "launch_observed_ms": 254.07420800000003
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 169.75662499999999,
+            "launch_observed_ms": 175.78149999999982
+          },
+          "session_ready": {
+            "main_ms": 258.030125,
+            "launch_observed_ms": 263.9897499999999
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 170.567,
+            "launch_observed_ms": 176.93320899999998
+          },
+          "session_ready": {
+            "main_ms": 256.874458,
+            "launch_observed_ms": 263.2800839999998
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 157.292875,
+            "launch_observed_ms": 163.12595899999982
+          },
+          "session_ready": {
+            "main_ms": 240.766875,
+            "launch_observed_ms": 246.62229200000007
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 169.096625,
+            "launch_observed_ms": 177.59704199999993
+          },
+          "session_ready": {
+            "main_ms": 249.647125,
+            "launch_observed_ms": 256.85820800000016
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.841292,
+            "launch_observed_ms": 182.37675
+          },
+          "session_ready": {
+            "main_ms": 264.67375,
+            "launch_observed_ms": 271.1442499999999
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 165.063125,
+            "launch_observed_ms": 170.8982080000001
+          },
+          "session_ready": {
+            "main_ms": 249.14804099999998,
+            "launch_observed_ms": 254.95508300000003
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 167.976292,
+            "launch_observed_ms": 173.81529199999957
+          },
+          "session_ready": {
+            "main_ms": 251.265834,
+            "launch_observed_ms": 257.020625
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 160.179416,
+            "launch_observed_ms": 166.40829099999976
+          },
+          "session_ready": {
+            "main_ms": 243.05966600000002,
+            "launch_observed_ms": 249.04258299999958
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 159.53775000000002,
+            "launch_observed_ms": 165.26170900000014
+          },
+          "session_ready": {
+            "main_ms": 243.28125,
+            "launch_observed_ms": 248.9696669999999
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 173.86795899999998,
+            "launch_observed_ms": 181.52116699999965
+          },
+          "session_ready": {
+            "main_ms": 257.028792,
+            "launch_observed_ms": 264.45883299999997
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 178.378459,
+            "launch_observed_ms": 185.51712499999962
+          },
+          "session_ready": {
+            "main_ms": 268.313709,
+            "launch_observed_ms": 275.40087499999987
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 173.43425000000002,
+            "launch_observed_ms": 179.23400000000012
+          },
+          "session_ready": {
+            "main_ms": 255.654375,
+            "launch_observed_ms": 261.4038750000001
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 171.939125,
+            "launch_observed_ms": 179.4030840000005
+          },
+          "session_ready": {
+            "main_ms": 256.175042,
+            "launch_observed_ms": 263.6269169999998
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 173.27395900000002,
+            "launch_observed_ms": 179.62554200000014
+          },
+          "session_ready": {
+            "main_ms": 265.207084,
+            "launch_observed_ms": 271.13800000000055
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 189.87354200000001,
+            "launch_observed_ms": 195.72895800000012
+          },
+          "session_ready": {
+            "main_ms": 287.24233300000003,
+            "launch_observed_ms": 293.04954100000026
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 193.058334,
+            "launch_observed_ms": 199.20699999999948
+          },
+          "session_ready": {
+            "main_ms": 279.65616700000004,
+            "launch_observed_ms": 285.7194590000001
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 170.653583,
+            "launch_observed_ms": 176.63804199999956
+          },
+          "session_ready": {
+            "main_ms": 259.318291,
+            "launch_observed_ms": 265.27329199999986
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 168.943417,
+            "launch_observed_ms": 174.85508300000063
+          },
+          "session_ready": {
+            "main_ms": 258.400375,
+            "launch_observed_ms": 264.180208
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 184.67845799999998,
+            "launch_observed_ms": 192.04141699999954
+          },
+          "session_ready": {
+            "main_ms": 272.27774999999997,
+            "launch_observed_ms": 279.57412499999987
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 172.26125000000002,
+            "launch_observed_ms": 178.13762500000064
+          },
+          "session_ready": {
+            "main_ms": 259.745458,
+            "launch_observed_ms": 265.54308299999985
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 170.10566699999998,
+            "launch_observed_ms": 194.30137499999844
+          },
+          "session_ready": {
+            "main_ms": 265.12845899999996,
+            "launch_observed_ms": 276.75533299999876
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 183.571875,
+            "launch_observed_ms": 193.89104199999883
+          },
+          "session_ready": {
+            "main_ms": 264.526875,
+            "launch_observed_ms": 274.77254199999913
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 161.96433399999998,
+            "launch_observed_ms": 168.3000830000001
+          },
+          "session_ready": {
+            "main_ms": 242.618792,
+            "launch_observed_ms": 248.91591700000149
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 159.48695800000002,
+            "launch_observed_ms": 166.3302499999997
+          },
+          "session_ready": {
+            "main_ms": 249.02591700000002,
+            "launch_observed_ms": 255.8289580000004
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 174.028,
+            "launch_observed_ms": 179.95658399999925
+          },
+          "session_ready": {
+            "main_ms": 266.241833,
+            "launch_observed_ms": 272.1384589999989
+          }
+        }
+      ]
+    },
+    {
+      "workspace": "workspace-100.yml",
+      "summary": {
+        "first_frame": {
+          "main_ms": {
+            "median_ms": 174.480313,
+            "p90_ms": 182.70429099999998
+          },
+          "launch_observed_ms": {
+            "median_ms": 180.8158749999995,
+            "p90_ms": 189.73662500000012
+          }
+        },
+        "session_ready": {
+          "main_ms": {
+            "median_ms": 272.06314599999996,
+            "p90_ms": 285.125791
+          },
+          "launch_observed_ms": {
+            "median_ms": 278.18937500000015,
+            "p90_ms": 291.6408749999988
+          }
+        }
+      },
+      "samples": [
+        {
+          "first_frame": {
+            "main_ms": 173.210375,
+            "launch_observed_ms": 179.15083300000134
+          },
+          "session_ready": {
+            "main_ms": 269.717,
+            "launch_observed_ms": 275.6416670000004
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 174.868208,
+            "launch_observed_ms": 181.169624999999
+          },
+          "session_ready": {
+            "main_ms": 266.792292,
+            "launch_observed_ms": 273.00199999999995
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 157.317083,
+            "launch_observed_ms": 163.67341700000003
+          },
+          "session_ready": {
+            "main_ms": 253.397416,
+            "launch_observed_ms": 259.6518329999995
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 176.106916,
+            "launch_observed_ms": 182.0821670000008
+          },
+          "session_ready": {
+            "main_ms": 268.037375,
+            "launch_observed_ms": 274.11054200000075
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 173.742458,
+            "launch_observed_ms": 179.74770899999902
+          },
+          "session_ready": {
+            "main_ms": 272.411875,
+            "launch_observed_ms": 278.380499999999
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 183.23320800000002,
+            "launch_observed_ms": 189.73662500000012
+          },
+          "session_ready": {
+            "main_ms": 277.267666,
+            "launch_observed_ms": 283.7499999999995
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.63,
+            "launch_observed_ms": 182.53658400000106
+          },
+          "session_ready": {
+            "main_ms": 276.65029200000004,
+            "launch_observed_ms": 283.49308399999984
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 201.55016700000002,
+            "launch_observed_ms": 209.09520799999905
+          },
+          "session_ready": {
+            "main_ms": 290.483959,
+            "launch_observed_ms": 297.9664169999996
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 171.172333,
+            "launch_observed_ms": 177.4815830000005
+          },
+          "session_ready": {
+            "main_ms": 273.93870799999996,
+            "launch_observed_ms": 280.1736660000014
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 174.595542,
+            "launch_observed_ms": 180.52899999999994
+          },
+          "session_ready": {
+            "main_ms": 276.2545,
+            "launch_observed_ms": 282.2016669999989
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 176.228208,
+            "launch_observed_ms": 182.17620799999958
+          },
+          "session_ready": {
+            "main_ms": 276.391917,
+            "launch_observed_ms": 282.3370409999999
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.097875,
+            "launch_observed_ms": 181.4602910000005
+          },
+          "session_ready": {
+            "main_ms": 280.22383299999996,
+            "launch_observed_ms": 286.250291
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 167.308875,
+            "launch_observed_ms": 174.14616699999996
+          },
+          "session_ready": {
+            "main_ms": 257.41925,
+            "launch_observed_ms": 264.28424999999936
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 153.607583,
+            "launch_observed_ms": 159.71558300000055
+          },
+          "session_ready": {
+            "main_ms": 251.850458,
+            "launch_observed_ms": 257.930291000001
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.66637500000002,
+            "launch_observed_ms": 182.0087920000013
+          },
+          "session_ready": {
+            "main_ms": 271.71441699999997,
+            "launch_observed_ms": 277.99825000000135
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 177.496208,
+            "launch_observed_ms": 183.84508399999964
+          },
+          "session_ready": {
+            "main_ms": 269.873583,
+            "launch_observed_ms": 276.1197089999996
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 174.365084,
+            "launch_observed_ms": 180.55487500000032
+          },
+          "session_ready": {
+            "main_ms": 267.71662499999996,
+            "launch_observed_ms": 273.87537500000116
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 169.783625,
+            "launch_observed_ms": 176.3408749999993
+          },
+          "session_ready": {
+            "main_ms": 267.611708,
+            "launch_observed_ms": 274.14033300000006
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 181.49041699999998,
+            "launch_observed_ms": 188.1587090000014
+          },
+          "session_ready": {
+            "main_ms": 276.026292,
+            "launch_observed_ms": 282.70650000000154
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 170.61375,
+            "launch_observed_ms": 176.71058299999842
+          },
+          "session_ready": {
+            "main_ms": 265.191375,
+            "launch_observed_ms": 271.26966699999855
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 167.30925,
+            "launch_observed_ms": 173.4483339999997
+          },
+          "session_ready": {
+            "main_ms": 258.20500000000004,
+            "launch_observed_ms": 264.39462499999775
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 171.030167,
+            "launch_observed_ms": 181.0768749999987
+          },
+          "session_ready": {
+            "main_ms": 292.806417,
+            "launch_observed_ms": 301.31466599999965
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 178.042541,
+            "launch_observed_ms": 190.07279100000218
+          },
+          "session_ready": {
+            "main_ms": 278.15387499999997,
+            "launch_observed_ms": 290.1357080000011
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 179.245167,
+            "launch_observed_ms": 185.08520800000028
+          },
+          "session_ready": {
+            "main_ms": 289.756709,
+            "launch_observed_ms": 295.562541999999
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 167.26350000000002,
+            "launch_observed_ms": 174.14262500000177
+          },
+          "session_ready": {
+            "main_ms": 266.298959,
+            "launch_observed_ms": 273.02295800000206
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 182.70429099999998,
+            "launch_observed_ms": 189.4229170000017
+          },
+          "session_ready": {
+            "main_ms": 285.125791,
+            "launch_observed_ms": 291.6408749999988
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 164.40929200000002,
+            "launch_observed_ms": 170.6385829999988
+          },
+          "session_ready": {
+            "main_ms": 264.362292,
+            "launch_observed_ms": 270.3685829999998
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 169.062916,
+            "launch_observed_ms": 175.04879099999826
+          },
+          "session_ready": {
+            "main_ms": 259.123375,
+            "launch_observed_ms": 265.0374159999984
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 169.86670900000001,
+            "launch_observed_ms": 175.78362499999756
+          },
+          "session_ready": {
+            "main_ms": 275.41083399999997,
+            "launch_observed_ms": 281.27033399999846
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 184.33270800000003,
+            "launch_observed_ms": 190.32970900000024
+          },
+          "session_ready": {
+            "main_ms": 282.42416599999996,
+            "launch_observed_ms": 288.3319170000007
+          }
+        }
+      ]
+    },
+    {
+      "workspace": "workspace-1000.yml",
+      "summary": {
+        "first_frame": {
+          "main_ms": {
+            "median_ms": 171.4803335,
+            "p90_ms": 179.904583
+          },
+          "launch_observed_ms": {
+            "median_ms": 177.95779149999902,
+            "p90_ms": 188.75483300000084
+          }
+        },
+        "session_ready": {
+          "main_ms": {
+            "median_ms": 288.683875,
+            "p90_ms": 298.890958
+          },
+          "launch_observed_ms": {
+            "median_ms": 295.6830624999984,
+            "p90_ms": 306.8148750000006
+          }
+        }
+      },
+      "samples": [
+        {
+          "first_frame": {
+            "main_ms": 257.8885,
+            "launch_observed_ms": 266.192499999999
+          },
+          "session_ready": {
+            "main_ms": 366.07875,
+            "launch_observed_ms": 373.7692909999986
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 164.832792,
+            "launch_observed_ms": 171.0133330000012
+          },
+          "session_ready": {
+            "main_ms": 275.986834,
+            "launch_observed_ms": 282.0810410000014
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 168.07549999999998,
+            "launch_observed_ms": 174.8274159999994
+          },
+          "session_ready": {
+            "main_ms": 281.579458,
+            "launch_observed_ms": 288.33262499999887
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 172.687833,
+            "launch_observed_ms": 178.80545799999936
+          },
+          "session_ready": {
+            "main_ms": 290.064875,
+            "launch_observed_ms": 296.20650000000023
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 174.41695800000002,
+            "launch_observed_ms": 180.4516249999999
+          },
+          "session_ready": {
+            "main_ms": 280.13325,
+            "launch_observed_ms": 286.0672919999985
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 166.48629200000002,
+            "launch_observed_ms": 172.39291700000337
+          },
+          "session_ready": {
+            "main_ms": 281.93962500000004,
+            "launch_observed_ms": 287.8107080000021
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 167.794583,
+            "launch_observed_ms": 173.68087499999874
+          },
+          "session_ready": {
+            "main_ms": 290.75395799999995,
+            "launch_observed_ms": 296.6419999999985
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 165.50537500000002,
+            "launch_observed_ms": 171.5870829999986
+          },
+          "session_ready": {
+            "main_ms": 274.50825000000003,
+            "launch_observed_ms": 280.5738749999982
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 162.779875,
+            "launch_observed_ms": 168.79624999999976
+          },
+          "session_ready": {
+            "main_ms": 282.15675,
+            "launch_observed_ms": 288.17608399999983
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 180.68520800000002,
+            "launch_observed_ms": 188.75483300000084
+          },
+          "session_ready": {
+            "main_ms": 290.311625,
+            "launch_observed_ms": 298.33991699999984
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 168.82445900000002,
+            "launch_observed_ms": 174.74520800000093
+          },
+          "session_ready": {
+            "main_ms": 284.555709,
+            "launch_observed_ms": 290.4408750000016
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 174.976458,
+            "launch_observed_ms": 181.214875000002
+          },
+          "session_ready": {
+            "main_ms": 290.92195799999996,
+            "launch_observed_ms": 297.0497920000028
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 166.36775,
+            "launch_observed_ms": 172.33724999999822
+          },
+          "session_ready": {
+            "main_ms": 283.418292,
+            "launch_observed_ms": 289.3507910000004
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 178.74212500000002,
+            "launch_observed_ms": 185.22541600000153
+          },
+          "session_ready": {
+            "main_ms": 297.45295799999997,
+            "launch_observed_ms": 303.8493330000023
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.880708,
+            "launch_observed_ms": 183.83545900000087
+          },
+          "session_ready": {
+            "main_ms": 298.890958,
+            "launch_observed_ms": 306.8148750000006
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 179.904583,
+            "launch_observed_ms": 213.00466699999987
+          },
+          "session_ready": {
+            "main_ms": 322.105833,
+            "launch_observed_ms": 328.1858749999991
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 170.37145900000002,
+            "launch_observed_ms": 177.95437499999878
+          },
+          "session_ready": {
+            "main_ms": 287.69075,
+            "launch_observed_ms": 295.2503339999986
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 174.646584,
+            "launch_observed_ms": 182.2861670000009
+          },
+          "session_ready": {
+            "main_ms": 296.742375,
+            "launch_observed_ms": 304.3687919999982
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 160.87320799999998,
+            "launch_observed_ms": 167.14533300000056
+          },
+          "session_ready": {
+            "main_ms": 273.463542,
+            "launch_observed_ms": 279.7175420000002
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 165.773459,
+            "launch_observed_ms": 171.88170900000088
+          },
+          "session_ready": {
+            "main_ms": 280.426584,
+            "launch_observed_ms": 286.48437500000057
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 178.729833,
+            "launch_observed_ms": 185.5404579999984
+          },
+          "session_ready": {
+            "main_ms": 300.33570799999995,
+            "launch_observed_ms": 307.1194999999989
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 178.00708300000002,
+            "launch_observed_ms": 184.0174999999995
+          },
+          "session_ready": {
+            "main_ms": 292.823958,
+            "launch_observed_ms": 298.7954170000009
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 190.032875,
+            "launch_observed_ms": 195.98187499999753
+          },
+          "session_ready": {
+            "main_ms": 292.62675,
+            "launch_observed_ms": 298.52766699999836
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 171.091292,
+            "launch_observed_ms": 177.12150000000193
+          },
+          "session_ready": {
+            "main_ms": 286.51129199999997,
+            "launch_observed_ms": 292.564500000001
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 179.207292,
+            "launch_observed_ms": 185.30475000000024
+          },
+          "session_ready": {
+            "main_ms": 290.250958,
+            "launch_observed_ms": 296.28779099999747
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 171.869375,
+            "launch_observed_ms": 177.96120799999926
+          },
+          "session_ready": {
+            "main_ms": 290.43370899999996,
+            "launch_observed_ms": 296.4979579999998
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 167.276667,
+            "launch_observed_ms": 173.3697499999991
+          },
+          "session_ready": {
+            "main_ms": 280.822875,
+            "launch_observed_ms": 286.85370799999885
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 171.956792,
+            "launch_observed_ms": 177.98479200000017
+          },
+          "session_ready": {
+            "main_ms": 281.763209,
+            "launch_observed_ms": 287.71908300000246
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 170.75233400000002,
+            "launch_observed_ms": 177.31308400000145
+          },
+          "session_ready": {
+            "main_ms": 283.183792,
+            "launch_observed_ms": 289.4583749999988
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 170.28283299999998,
+            "launch_observed_ms": 176.72954099999671
+          },
+          "session_ready": {
+            "main_ms": 289.677,
+            "launch_observed_ms": 296.1157909999983
+          }
+        }
+      ]
+    },
+    {
+      "workspace": "workspace-10000.yml",
+      "summary": {
+        "first_frame": {
+          "main_ms": {
+            "median_ms": 176.91204150000002,
+            "p90_ms": 192.152
+          },
+          "launch_observed_ms": {
+            "median_ms": 183.16127099999946,
+            "p90_ms": 198.2511250000023
+          }
+        },
+        "session_ready": {
+          "main_ms": {
+            "median_ms": 531.7034165,
+            "p90_ms": 549.124708
+          },
+          "launch_observed_ms": {
+            "median_ms": 538.0088544999992,
+            "p90_ms": 554.9568329999986
+          }
+        }
+      },
+      "samples": [
+        {
+          "first_frame": {
+            "main_ms": 192.152,
+            "launch_observed_ms": 198.2511250000023
+          },
+          "session_ready": {
+            "main_ms": 542.445292,
+            "launch_observed_ms": 548.4438750000038
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 172.929292,
+            "launch_observed_ms": 179.2160420000002
+          },
+          "session_ready": {
+            "main_ms": 511.96816700000005,
+            "launch_observed_ms": 518.1380840000003
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 182.046166,
+            "launch_observed_ms": 188.48366699999985
+          },
+          "session_ready": {
+            "main_ms": 537.897458,
+            "launch_observed_ms": 544.3164170000045
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 170.805917,
+            "launch_observed_ms": 177.0620829999956
+          },
+          "session_ready": {
+            "main_ms": 520.7019590000001,
+            "launch_observed_ms": 526.8928749999943
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 177.339958,
+            "launch_observed_ms": 183.54283299999707
+          },
+          "session_ready": {
+            "main_ms": 473.977,
+            "launch_observed_ms": 480.2129170000029
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 161.18574999999998,
+            "launch_observed_ms": 167.2506250000012
+          },
+          "session_ready": {
+            "main_ms": 517.018833,
+            "launch_observed_ms": 522.9632499999966
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 185.179583,
+            "launch_observed_ms": 191.1374170000002
+          },
+          "session_ready": {
+            "main_ms": 534.711333,
+            "launch_observed_ms": 540.5520420000016
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.66520899999998,
+            "launch_observed_ms": 182.22470900000332
+          },
+          "session_ready": {
+            "main_ms": 531.3105,
+            "launch_observed_ms": 537.8235840000016
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 195.429042,
+            "launch_observed_ms": 202.64520799999985
+          },
+          "session_ready": {
+            "main_ms": 603.172,
+            "launch_observed_ms": 609.5884999999939
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 185.464083,
+            "launch_observed_ms": 191.72912500000194
+          },
+          "session_ready": {
+            "main_ms": 552.970416,
+            "launch_observed_ms": 559.1718750000041
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 194.085125,
+            "launch_observed_ms": 200.65120800000358
+          },
+          "session_ready": {
+            "main_ms": 539.563541,
+            "launch_observed_ms": 546.0540830000014
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.992541,
+            "launch_observed_ms": 182.23299999999654
+          },
+          "session_ready": {
+            "main_ms": 525.881708,
+            "launch_observed_ms": 531.872749999998
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 164.861791,
+            "launch_observed_ms": 171.0127920000062
+          },
+          "session_ready": {
+            "main_ms": 506.718958,
+            "launch_observed_ms": 512.8338340000056
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 174.654042,
+            "launch_observed_ms": 180.47883400000586
+          },
+          "session_ready": {
+            "main_ms": 476.426625,
+            "launch_observed_ms": 482.2497920000046
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.957833,
+            "launch_observed_ms": 182.21579200000093
+          },
+          "session_ready": {
+            "main_ms": 519.1437500000001,
+            "launch_observed_ms": 525.3615419999988
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 176.582708,
+            "launch_observed_ms": 182.6868749999946
+          },
+          "session_ready": {
+            "main_ms": 532.570458,
+            "launch_observed_ms": 538.6552919999942
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 178.311292,
+            "launch_observed_ms": 184.88254200000398
+          },
+          "session_ready": {
+            "main_ms": 532.3145000000001,
+            "launch_observed_ms": 538.8248750000031
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 166.54487500000002,
+            "launch_observed_ms": 173.17212500000068
+          },
+          "session_ready": {
+            "main_ms": 521.536292,
+            "launch_observed_ms": 528.1587079999995
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 181.018875,
+            "launch_observed_ms": 187.45137500000197
+          },
+          "session_ready": {
+            "main_ms": 537.710417,
+            "launch_observed_ms": 544.1203749999986
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 175.59112499999998,
+            "launch_observed_ms": 181.77775000000196
+          },
+          "session_ready": {
+            "main_ms": 523.7837920000001,
+            "launch_observed_ms": 529.9584589999995
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 176.77575000000002,
+            "launch_observed_ms": 182.95237499999928
+          },
+          "session_ready": {
+            "main_ms": 518.9941670000001,
+            "launch_observed_ms": 525.0676250000055
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 179.271458,
+            "launch_observed_ms": 185.21908299999978
+          },
+          "session_ready": {
+            "main_ms": 538.67875,
+            "launch_observed_ms": 544.5525000000018
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 172.55995800000002,
+            "launch_observed_ms": 178.76670800000483
+          },
+          "session_ready": {
+            "main_ms": 523.288875,
+            "launch_observed_ms": 529.4330830000007
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 177.048333,
+            "launch_observed_ms": 183.37016699999964
+          },
+          "session_ready": {
+            "main_ms": 527.816167,
+            "launch_observed_ms": 534.1531250000031
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 176.361875,
+            "launch_observed_ms": 182.44020899999924
+          },
+          "session_ready": {
+            "main_ms": 532.0963330000001,
+            "launch_observed_ms": 538.1941249999968
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 176.207584,
+            "launch_observed_ms": 182.10324999999727
+          },
+          "session_ready": {
+            "main_ms": 522.132792,
+            "launch_observed_ms": 527.9174579999974
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 177.71912500000002,
+            "launch_observed_ms": 183.62958299999832
+          },
+          "session_ready": {
+            "main_ms": 549.124708,
+            "launch_observed_ms": 554.9568329999986
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 231.071833,
+            "launch_observed_ms": 237.374041999999
+          },
+          "session_ready": {
+            "main_ms": 589.3702499999999,
+            "launch_observed_ms": 595.6120419999991
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 180.343667,
+            "launch_observed_ms": 186.69004200000217
+          },
+          "session_ready": {
+            "main_ms": 545.221625,
+            "launch_observed_ms": 551.4417079999987
+          }
+        },
+        {
+          "first_frame": {
+            "main_ms": 186.045208,
+            "launch_observed_ms": 192.6099590000021
+          },
+          "session_ready": {
+            "main_ms": 545.097208,
+            "launch_observed_ms": 551.6690840000037
+          }
+        }
+      ]
+    }
+  ],
+  "measurement_context": {
+    "date": "2026-10-16",
+    "timezone": "Australia/Brisbane",
+    "source_commit": "687a3bdda8a41e835284a9a6c434e177321189e9",
+    "cpu": "Apple M4",
+    "memory_gib": 16,
+    "compiler": "rustc 1.97.1 (8bab26f4f), Homebrew, LLVM 22.1.8",
+    "profile": "release, startup-benchmark feature",
+    "cache_state": "warm OS caches; fresh temporary session and response cache per process",
+    "theme": "not recorded",
+    "display_refresh_rate_hz": null,
+    "timing": "launch_observed_ms includes process creation, executable loading, GPUI frame milestone, pipe delivery, and reader scheduling; main_ms starts at desktop run entry",
+    "scope": "local reference on macOS; not a cross-platform guarantee or physical display measurement",
+    "fixture": "deterministic bundled performance fixtures; first request tab restored"
+  }
+}

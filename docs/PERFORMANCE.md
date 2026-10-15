@@ -346,3 +346,32 @@ repeated launches primarily measure warm filesystem/OS caches; collect the first
 launch after reboot separately when investigating cold startup. Do not infer cold
 startup by deleting Probe's user data or flushing system caches. There is no CI
 latency threshold until representative baselines are stable.
+
+### Desktop reference run (2026-10-16)
+
+Measured on Apple M4 with 16 GiB RAM, macOS 26.7.1 (arm64), using Homebrew
+rustc 1.97.1 (`8bab26f4f`, LLVM 22.1.8). Source revision:
+`687a3bdda8a41e835284a9a6c434e177321189e9`; release profile with
+`startup-benchmark`. Each scenario had three warmups and 30 measured fresh
+processes, with no competing compilation. Dates use Australia/Brisbane.
+Theme and display refresh rate were not recorded, limiting exact reproducibility.
+
+These figures use **`launch_observed_ms`**, including process creation, executable
+loading, and marker delivery to the runner. They are GPUI frame milestones, not
+physical-display measurements. The cache/session conditions and readiness boundary
+are defined above; these warm-cache macOS measurements are not a cross-platform
+latency guarantee.
+
+| Scenario | First frame median | First frame p90 | Session ready median | Session ready p90 |
+| --- | ---: | ---: | ---: | ---: |
+| Empty | 179.32 ms | 193.89 ms | 264.87 ms | 276.76 ms |
+| 100 requests | 180.82 ms | 189.74 ms | 278.19 ms | 291.64 ms |
+| 1,000 requests | 177.96 ms | 188.75 ms | 295.68 ms | 306.81 ms |
+| 10,000 requests | 183.16 ms | 198.25 ms | 538.01 ms | 554.96 ms |
+
+[Raw samples and measurement context](benchmarks/desktop-startup-2026-10-16.json)
+include both clocks, platform, binary SHA-256, and all 120 measured samples. Absolute
+local checkout paths have been replaced with relative binary/fixture names for
+publication. The homepage rounds medians to the nearest millisecond: empty-session first
+frame 179 ms, empty-session readiness 265 ms, 1,000-request readiness 296 ms,
+and 10,000-request readiness 538 ms.
