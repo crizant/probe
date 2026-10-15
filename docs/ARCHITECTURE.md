@@ -777,7 +777,7 @@ PKCS#12 (`.p12` or `.pfx`) is decoded with RustCrypto `pkcs12`, with
 key bag. Supported MAC digests are SHA-1, SHA-224/256/384/512 and SHA-512/224/256.
 Encryption supports PBKDF2 (HMAC-SHA-1 or SHA-2) with AES-128/192/256-CBC.
 Unencrypted, MAC-less and empty-password archives are accepted. MAC and PBKDF2
-iterations must be in 1..=1,000,000. Scrypt, legacy PKCS#12 PBE (including RC2,
+iterations must be in 1..=1,000,000. Scrypt, AES-GCM, legacy PKCS#12 PBE (including RC2,
 3DES and RC4), signed/enveloped content, non-X.509 certificates and unsupported
 bags (including nested safeContents) fail explicitly. OpenSSL 3's modern default
 exports work; legacy exports may need re-exporting with modern encryption.
@@ -787,7 +787,8 @@ The archive must contain one distinct private key. Repeated copies of the same
 public key are accepted; distinct private keys are rejected with
 "PKCS#12 contains multiple client identities; identity selection is not supported yet".
 Bag aliases and localKeyId never override cryptographic key/certificate matching.
-The first certificate that cryptographically matches that key is the leaf; renewed
+Certificates are deduplicated and sorted by DER bytes. The first certificate that
+cryptographically matches that key is the leaf; renewed
 certificates sharing the same key do not constitute separate private-key identities.
 Issuer/subject names assemble its leaf-first chain, excluding duplicate and unrelated
 certificates and stopping at a root, missing issuer or cycle. This orders certificates;

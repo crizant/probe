@@ -66,13 +66,13 @@ probe environment delete <path> --environment <name> [--json]
 probe environment rename <path> --environment <name> --name <new> [--json]
 ```
 
-HTTP/GraphQL `request run` automatically uses the first enabled matching PEM
+HTTP/GraphQL `request run` automatically uses the first enabled matching PEM or single-identity PKCS#12
 client certificate from the selected environment's direct `clientCertificates`,
 then collection `config.clientCertificates`. Requests using a client certificate
 bypass all proxies, including explicit, environment and system proxies.
 No new flag is required. For example,
 `domain: localhost:8443` matches `https://localhost:8443/private`; relative
-`certificateFilePath` and `privateKeyFilePath` resolve from the workspace base
+`certificateFilePath`, `privateKeyFilePath`, and `pkcs12FilePath` resolve from the workspace base
 directory after interpolation. Certificate domain, path, and passphrase strings
 accept Probe environment variables, `--var` overrides, and secret variables.
 `--dry-run` does not resolve secrets used only by certificates, read identity
@@ -85,6 +85,18 @@ PBE encryption is unsupported. Multiple distinct private keys require future ide
 selection support. Certificate inheritance through `extends` remains unsupported.
 Matching and redirect rules are specified in
 [Architecture](ARCHITECTURE.md#client-certificates-for-http-and-graphql).
+
+For example, a password-protected PKCS#12 identity uses the native OpenCollection
+fields and the existing `certPassword` environment variable or secret:
+
+```yaml
+config:
+  clientCertificates:
+    - domain: api.example.com
+      type: pkcs12
+      pkcs12FilePath: ./certs/client.p12
+      passphrase: "{{certPassword}}"
+```
 
 `agent skill install` installs the Probe agent skill in the current user's
 `~/.agents/skills/probe/`, with `SKILL.md` and `references/cli.md`. Both the

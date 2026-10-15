@@ -1,6 +1,9 @@
 //! PKCS#12 decoding with RustCrypto. Never expose parser errors or decoded bags.
 
-use der::{AnyRef, Decode, Encode, EncodePem, asn1::ObjectIdentifier};
+use der::{
+    AnyRef, Decode, Encode, EncodePem,
+    asn1::{ObjectIdentifier, OctetStringRef},
+};
 use hmac::{KeyInit, Mac};
 use pkcs12::cms::{content_info::ContentInfo, encrypted_data::EncryptedData};
 use pkcs12::{AuthenticatedSafe, CertBag, MacData, Pfx, kdf};
@@ -30,7 +33,7 @@ struct SafeBagRef<'a> {
     bag_id: ObjectIdentifier,
     #[asn1(context_specific = "0", tag_mode = "EXPLICIT")]
     bag_value: AnyRef<'a>,
-    bag_attributes: Option<AnyRef<'a>>,
+    bag_attributes: Option<x509_cert::attr::Attributes>,
 }
 
 pub(crate) fn identity_from_pkcs12(
@@ -42,7 +45,14 @@ pub(crate) fn identity_from_pkcs12(
         return Err(error(INVALID));
     }
     // The outer content may itself contain unencrypted private keys.
-    let safe = Zeroizing::new(pfx.auth_safe.content.value().to_vec());
+    let safe = Zeroizing::new(
+        pfx.auth_safe
+            .content
+            .decode_as::<&OctetStringRef>()
+            .map_err(|_| error(INVALID))?
+            .as_bytes()
+            .to_vec(),
+    );
     if let Some(mac) = &pfx.mac_data {
         verify_mac(mac, &safe, password.unwrap_or(""))?;
     }
@@ -99,7 +109,13 @@ pub(crate) fn identity_from_pkcs12(
 
 fn decode_safe(safe: ContentInfo, password: Option<&str>) -> Result<Zeroizing<Vec<u8>>, HttpError> {
     match safe.content_type {
-        DATA => Ok(Zeroizing::new(safe.content.value().to_vec())),
+        DATA => Ok(Zeroizing::new(
+            safe.content
+                .decode_as::<&OctetStringRef>()
+                .map_err(|_| error(INVALID))?
+                .as_bytes()
+                .to_vec(),
+        )),
         ENCRYPTED_DATA => {
             let encoded = safe.content.to_der().map_err(|_| error(INVALID))?;
             let encrypted = EncryptedData::from_der(&encoded).map_err(|_| error(INVALID))?;
@@ -127,6 +143,14 @@ fn decrypt(
     let pkcs5::EncryptionScheme::Pbes2(params) = scheme else {
         return Err(error(UNSUPPORTED));
     };
+    if !matches!(
+        params.encryption,
+        pkcs5::pbes2::EncryptionScheme::Aes128Cbc { .. }
+            | pkcs5::pbes2::EncryptionScheme::Aes192Cbc { .. }
+            | pkcs5::pbes2::EncryptionScheme::Aes256Cbc { .. }
+    ) {
+        return Err(error(UNSUPPORTED));
+    }
     // Keep resource consumption bounded and the compatibility promise explicit.
     let pkcs5::pbes2::Kdf::Pbkdf2(kdf) = &params.kdf else {
         return Err(error(UNSUPPORTED));
@@ -352,6 +376,33 @@ mod tests {
         assert_eq!(
             identity_from_pkcs12(&damaged, Some(PASS)).err(),
             Some(error(INTEGRITY))
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_content_tags_and_unadvertised_encryption() {
+        use der::asn1::Any;
+        let mut pfx = Pfx::from_der(&read("client-unencrypted.p12")).unwrap();
+        let safe = pfx.auth_safe.content.value().to_vec();
+        pfx.auth_safe.content = Any::new(der::Tag::Sequence, safe).unwrap();
+        assert_eq!(
+            identity_from_pkcs12(&pfx.to_der().unwrap(), None).err(),
+            Some(error(INVALID))
+        );
+        let wrong_tag = ContentInfo {
+            content_type: DATA,
+            content: Any::new(der::Tag::Sequence, vec![]).unwrap(),
+        };
+        assert_eq!(decode_safe(wrong_tag, None).err(), Some(error(INVALID)));
+        // Encrypted data with unsupported algorithm parameters fails before KDF work.
+        let mut params =
+            pkcs5::pbes2::Parameters::generate_pbkdf2_sha256_aes128cbc(1, b"test-salt", [0; 16])
+                .unwrap();
+        params.encryption = pkcs5::pbes2::EncryptionScheme::Aes128Gcm { nonce: [0; 12] };
+        let algorithm = pkcs5::EncryptionScheme::Pbes2(params).to_der().unwrap();
+        assert_eq!(
+            decrypt(&algorithm, &[0; 16], Some(PASS)).err(),
+            Some(error(UNSUPPORTED))
         );
     }
 
