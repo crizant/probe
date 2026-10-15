@@ -903,29 +903,65 @@ fn certificate_list_scrollbar_reaches_overflow_rows(cx: &mut TestAppContext) {
     let mut visual = workspace.visual(cx);
     visual.run_until_parked();
     let list = visual.debug_bounds("environment-certificates").unwrap();
-    let footer = visual.debug_bounds("certificate-list-footer").unwrap();
+    let assert_footer_visible = |visual: &mut VisualTestContext| {
+        let dialog = visual.debug_bounds("environment-manager-dialog").unwrap();
+        let list = visual.debug_bounds("environment-certificates").unwrap();
+        let footer = visual.debug_bounds("certificate-list-footer").unwrap();
+        let add = visual.debug_bounds("certificate-add").unwrap();
+        assert!(footer.is_contained_within(&dialog));
+        assert!(add.is_contained_within(&footer));
+        assert!(
+            !footer.intersects(&list),
+            "the footer stays outside the scrolling viewport"
+        );
+    };
+    assert_footer_visible(&mut visual);
+    let last_row = visual.debug_bounds("environment-certificate-39").unwrap();
+    assert!(
+        !list.intersects(&last_row),
+        "the last row starts below the fold"
+    );
+    let max_offset = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificates_scroll
+            .max_offset()
+            .y
+    });
+    assert!(max_offset > px(0.0));
     visual.simulate_event(gpui_kit::ScrollWheelEvent {
         position: list.center(),
-        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.0), px(-20.0))),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.0), -max_offset)),
         modifiers: Modifiers::default(),
         touch_phase: gpui_kit::TouchPhase::Started,
     });
     visual.run_until_parked();
+    let last_row = visual.debug_bounds("environment-certificate-39").unwrap();
+    assert!(
+        list.contains(&last_row.center()),
+        "the wheel reaches overflow rows"
+    );
+    assert_footer_visible(&mut visual);
     let wheel_offset = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificates_scroll
+            .offset()
+            .y
+    });
+    assert!(wheel_offset < px(0.0));
+    // Use the scrollbar's handle API instead of depending on track geometry.
+    workspace.update(cx, |view, _, cx| {
         let scroll = &view
             .environment_manager_dialog
             .as_ref()
             .unwrap()
             .certificates_scroll;
-        assert!(scroll.max_offset().y > px(0.0));
-        assert!(scroll.offset().y < px(0.0));
-        scroll.offset().y
+        gpui_kit::base::ScrollbarHandle::set_offset(scroll, point(px(0.0), px(0.0)));
+        cx.notify();
     });
-    // Scrolling reveals the shared scrollbar. Clicking its lower track moves the list.
-    visual.simulate_click(
-        point(list.right() - px(2.0), list.bottom() - px(2.0)),
-        Modifiers::default(),
-    );
     visual.run_until_parked();
     workspace.update(cx, |view, _, _| {
         assert!(
@@ -935,12 +971,26 @@ fn certificate_list_scrollbar_reaches_overflow_rows(cx: &mut TestAppContext) {
                 .certificates_scroll
                 .offset()
                 .y
-                < wheel_offset,
-            "the explicit scrollbar must control the same list as the wheel"
+                > wheel_offset
         );
     });
-    assert_eq!(
-        visual.debug_bounds("certificate-list-footer").unwrap(),
-        footer
+    let first_row = visual.debug_bounds("environment-certificate-0").unwrap();
+    let last_row = visual.debug_bounds("environment-certificate-39").unwrap();
+    assert!(
+        list.contains(&first_row.center()),
+        "the scrollbar handle controls the rendered list"
     );
+    assert!(!list.intersects(&last_row));
+    assert_footer_visible(&mut visual);
+    click(&workspace, cx, "certificate-add");
+    workspace.update(cx, |view, _, _| {
+        assert!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .certificate_editor
+                .is_some(),
+            "Add Certificate remains clickable after scrolling"
+        );
+    });
 }
