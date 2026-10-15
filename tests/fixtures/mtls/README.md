@@ -13,6 +13,7 @@ From the repository root, with Python 3 and OpenSSL 3 installed, run exactly:
 
 ```sh
 python3 tests/fixtures/mtls/regenerate.py
+python3 tests/fixtures/mtls/regenerate-pkcs12.py
 openssl x509 -in tests/fixtures/mtls/server.pem -noout -dates -ext subjectAltName
 cargo test --locked -p probe-http -p probe-application -p probe-cli
 ```
