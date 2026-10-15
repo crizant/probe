@@ -19,9 +19,10 @@ impl ProbeApp {
         let mut list = div()
             .id("environment-certificates")
             .debug_selector(|| "environment-certificates".into())
-            .flex_1()
+            .size_full()
             .min_h(px(0.0))
             .overflow_y_scroll()
+            .track_scroll(&dialog.certificates_scroll)
             .flex()
             .flex_col();
         for (index, certificate) in dialog.draft().client_certificates.iter().enumerate() {
@@ -223,8 +224,9 @@ impl ProbeApp {
             );
         }
         let add = cx.weak_entity();
-        div()
-            .mt(px(theme.metrics.spacing_2))
+        let table = div()
+            .id("certificate-table")
+            .debug_selector(|| "certificate-table".into())
             .flex_1()
             .min_h(px(0.0))
             .flex()
@@ -251,18 +253,12 @@ impl ProbeApp {
                     .child(div().flex_1().child("CERTIFICATE")),
             )
             .child(
-                components::dialog_description(theme, CERTIFICATE_ORDER_DESCRIPTION)
-                    .id("certificate-order-description")
-                    .debug_selector(|| "certificate-order-description".into())
-                    .px(px(theme.metrics.spacing_2))
-                    .py(px(theme.metrics.spacing_2))
-                    .flex_none()
-                    .text_size(px(theme.typography.caption_size))
-                    .text_color(theme.colors.text.muted)
-                    .border_b_1()
-                    .border_color(theme.colors.borders.subtle),
+                div().flex_1().min_h(px(0.0)).relative().child(list).child(
+                    Scrollbar::vertical(&dialog.certificates_scroll)
+                        .id("environment-manager-certificates-scrollbar")
+                        .mode(ScrollbarMode::Scrolling),
+                ),
             )
-            .child(list)
             .child(
                 div()
                     .id("certificate-list-footer")
@@ -289,7 +285,23 @@ impl ProbeApp {
                         .flex_none()
                         .disabled(busy),
                     ),
+            );
+        div()
+            .mt(px(theme.metrics.spacing_2))
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(theme.metrics.spacing_2))
+            .child(
+                components::dialog_description(theme, CERTIFICATE_ORDER_DESCRIPTION)
+                    .id("certificate-order-description")
+                    .debug_selector(|| "certificate-order-description".into())
+                    .flex_none()
+                    .text_size(px(theme.typography.caption_size))
+                    .text_color(theme.colors.text.muted),
             )
+            .child(table)
             .into_any_element()
     }
 

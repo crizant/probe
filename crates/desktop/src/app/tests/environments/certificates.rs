@@ -870,3 +870,77 @@ fn certificate_dialog_escape_cancel_and_save_preserve_outer_draft(cx: &mut TestA
     );
     assert_eq!(workspace.yaml(), original_yaml);
 }
+
+#[gpui_kit::test]
+fn certificate_list_scrollbar_reaches_overflow_rows(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "base");
+    click(&workspace, cx, "environment-tab-2");
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .certificates_scroll
+                .max_offset()
+                .y,
+            px(0.0)
+        );
+    });
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog
+                .draft_mut()
+                .client_certificates
+                .extend((0..40).map(|index| ClientCertificate::Pkcs12 {
+                    domain: format!("api-{index}.example.com"),
+                    pkcs12_file_path: "{{certPath}}/client.p12".into(),
+                    passphrase: None,
+                    disabled: false,
+                }));
+        });
+    });
+    let mut visual = workspace.visual(cx);
+    visual.run_until_parked();
+    let list = visual.debug_bounds("environment-certificates").unwrap();
+    let footer = visual.debug_bounds("certificate-list-footer").unwrap();
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: list.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.0), px(-20.0))),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui_kit::TouchPhase::Started,
+    });
+    visual.run_until_parked();
+    let wheel_offset = workspace.update(cx, |view, _, _| {
+        let scroll = &view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificates_scroll;
+        assert!(scroll.max_offset().y > px(0.0));
+        assert!(scroll.offset().y < px(0.0));
+        scroll.offset().y
+    });
+    // Scrolling reveals the shared scrollbar. Clicking its lower track moves the list.
+    visual.simulate_click(
+        point(list.right() - px(2.0), list.bottom() - px(2.0)),
+        Modifiers::default(),
+    );
+    visual.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .certificates_scroll
+                .offset()
+                .y
+                < wheel_offset,
+            "the explicit scrollbar must control the same list as the wheel"
+        );
+    });
+    assert_eq!(
+        visual.debug_bounds("certificate-list-footer").unwrap(),
+        footer
+    );
+}
