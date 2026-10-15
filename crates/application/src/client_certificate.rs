@@ -27,7 +27,7 @@ impl<'a> CertificateScopes<'a> {
         &self,
         request: &PreparedHttpRequest,
         mut interpolate: impl FnMut(&str) -> Result<String, HttpError>,
-    ) -> Result<Option<probe_http::PemClientIdentity>, HttpError> {
+    ) -> Result<Option<probe_http::ClientIdentity>, HttpError> {
         let request = request.request();
         let Some(raw_url) = request.url.as_deref() else {
             return Ok(None);
@@ -65,17 +65,21 @@ impl<'a> CertificateScopes<'a> {
                     private_key_file_path,
                     passphrase,
                     ..
-                } => Ok(Some(probe_http::PemClientIdentity::new(
+                } => Ok(Some(probe_http::ClientIdentity::new(
                     domain,
                     interpolate(certificate_file_path)?,
                     interpolate(private_key_file_path)?,
                     passphrase.as_deref().map(&mut interpolate).transpose()?,
                 ))),
-                probe_core::ClientCertificate::Pkcs12 { .. } => {
-                    Err(HttpError::ClientConfiguration(
-                        "PKCS#12 client certificate execution is not supported yet".into(),
-                    ))
-                }
+                probe_core::ClientCertificate::Pkcs12 {
+                    pkcs12_file_path,
+                    passphrase,
+                    ..
+                } => Ok(Some(probe_http::ClientIdentity::pkcs12(
+                    domain,
+                    interpolate(pkcs12_file_path)?,
+                    passphrase.as_deref().map(&mut interpolate).transpose()?,
+                ))),
             };
         }
         Ok(None)
@@ -103,7 +107,7 @@ mod tests {
         certificates: &[ClientCertificate],
         environments: &[Environment],
         environment: Option<&str>,
-    ) -> Result<Option<probe_http::PemClientIdentity>, HttpError> {
+    ) -> Result<Option<probe_http::ClientIdentity>, HttpError> {
         let prepared = prepare_request(
             &Request {
                 method: Some("GET".into()),
@@ -129,8 +133,8 @@ mod tests {
         .select(&request, |value| Ok(value.to_owned()))
     }
 
-    fn identity(domain: &str, path: &str) -> Option<probe_http::PemClientIdentity> {
-        Some(probe_http::PemClientIdentity::new(
+    fn identity(domain: &str, path: &str) -> Option<probe_http::ClientIdentity> {
+        Some(probe_http::ClientIdentity::new(
             domain.into(),
             path.into(),
             "unused-key.pem".into(),
@@ -254,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn winning_pkcs12_is_an_error_and_never_falls_through() {
+    fn winning_pkcs12_is_selected_and_never_falls_through() {
         let pkcs12 = ClientCertificate::Pkcs12 {
             domain: "localhost".into(),
             pkcs12_file_path: "unused.p12".into(),
@@ -262,31 +266,33 @@ mod tests {
             disabled: false,
         };
         let certificates = [pkcs12.clone(), pem("localhost", "fallback", false)];
-        let error = select("https://localhost", &certificates, &[], None).unwrap_err();
+        let expected = Some(probe_http::ClientIdentity::pkcs12(
+            "localhost".into(),
+            "unused.p12".into(),
+            Some("secret-marker".into()),
+        ));
         assert_eq!(
-            error,
-            HttpError::ClientConfiguration(
-                "PKCS#12 client certificate execution is not supported yet".into()
-            )
+            select("https://localhost", &certificates, &[], None).unwrap(),
+            expected
         );
-        assert!(!format!("{error:?} {error}").contains("secret-marker"));
         let environments = [Environment {
-            name: "local".into(),
             client_certificates: vec![pkcs12],
+            name: "local".into(),
             color: None,
             description: None,
             dot_env_file_path: None,
             variables: Vec::new(),
             extends: None,
         }];
-        assert!(
+        assert_eq!(
             select(
                 "https://localhost",
                 &certificates[1..],
                 &environments,
                 Some("local")
             )
-            .is_err()
+            .unwrap(),
+            expected
         );
     }
 
@@ -417,7 +423,7 @@ mod execution_tests {
             assert_eq!(
                 error,
                 HttpError::ClientConfiguration(
-                    "relative client certificate/key path requires a base directory".into()
+                    "relative client identity path requires a base directory".into()
                 )
             );
         }

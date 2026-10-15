@@ -1,7 +1,7 @@
 //! Public test-only CA fixtures; no production trust override is exposed.
 
 use super::*;
-use crate::PemClientIdentity;
+use crate::ClientIdentity;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use std::{
@@ -34,6 +34,10 @@ fn server(response: String) -> (u16, std::thread::JoinHandle<bool>) {
     let worker = std::thread::spawn(move || {
         let mut roots = RootCertStore::empty();
         roots.add(certs("ca.pem").remove(0)).unwrap();
+        roots
+            .add(certs("pkcs12-shared-root.pem").remove(0))
+            .unwrap();
+        roots.add(certs("pkcs12-chain-root.pem").remove(0)).unwrap();
         let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
             Arc::new(roots),
@@ -79,12 +83,20 @@ async fn client(
 ) -> Client {
     let identity = match identity {
         Some((cert, key)) => {
-            let configuration = PemClientIdentity::new(
-                domain.into(),
-                fixture(cert).to_str().unwrap().into(),
-                fixture(key).to_str().unwrap().into(),
-                None,
-            );
+            let configuration = if cert.ends_with(".p12") {
+                crate::ClientIdentity::pkcs12(
+                    domain.into(),
+                    fixture(cert).to_str().unwrap().into(),
+                    Some("probe-test-only-password".into()),
+                )
+            } else {
+                ClientIdentity::new(
+                    domain.into(),
+                    fixture(cert).to_str().unwrap().into(),
+                    fixture(key).to_str().unwrap().into(),
+                    None,
+                )
+            };
             Some((
                 configuration
                     .load(&ExecutionOptions::default())
@@ -117,6 +129,9 @@ async fn mtls_requires_a_trusted_client_and_valid_identity_succeeds() {
     for (identity, succeeds) in [
         (None, false),
         (Some(("client.pem", "client-pkcs8-key.pem")), true),
+        (Some(("client-protected.p12", "")), true),
+        (Some(("client-intermediates.p12", "")), true),
+        (Some(("client-shared-subject.p12", "")), true),
         (Some(("wrong-client.pem", "wrong-client-key.pem")), false),
     ] {
         let (port, worker) = server(ok());
@@ -135,100 +150,95 @@ async fn mtls_requires_a_trusted_client_and_valid_identity_succeeds() {
 
 #[tokio::test]
 async fn redirect_outside_identity_domain_never_connects_to_destination() {
-    let unrelated = TcpListener::bind("127.0.0.1:0").unwrap();
-    unrelated.set_nonblocking(true).unwrap();
-    let target = unrelated.local_addr().unwrap();
-    let (port, worker) = server(format!(
-        "HTTP/1.1 302 Found\r\nLocation: https://{target}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    ));
-    let error = client(
-        Some(("client.pem", "client-key.pem")),
-        "localhost",
-        true,
-        10,
-    )
-    .await
-    .get(format!("https://localhost:{port}/private"))
-    .send()
-    .await
-    .map_err(map_reqwest_error)
-    .unwrap_err();
-    assert_eq!(error, HttpError::ClientCertificateRedirectBlocked);
-    assert!(error.to_string().contains("redirect blocked"));
-    assert!(worker.join().unwrap());
-    assert_eq!(
-        unrelated.accept().err().unwrap().kind(),
-        std::io::ErrorKind::WouldBlock
-    );
+    for identity in [
+        ("client.pem", "client-key.pem"),
+        ("client-protected.p12", ""),
+    ] {
+        let unrelated = TcpListener::bind("127.0.0.1:0").unwrap();
+        unrelated.set_nonblocking(true).unwrap();
+        let target = unrelated.local_addr().unwrap();
+        let (port, worker) = server(format!(
+            "HTTP/1.1 302 Found\r\nLocation: https://{target}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ));
+        let error = client(Some(identity), "localhost", true, 10)
+            .await
+            .get(format!("https://localhost:{port}/private"))
+            .send()
+            .await
+            .map_err(map_reqwest_error)
+            .unwrap_err();
+        assert_eq!(error, HttpError::ClientCertificateRedirectBlocked);
+        assert!(error.to_string().contains("redirect blocked"));
+        assert!(worker.join().unwrap());
+        assert_eq!(
+            unrelated.accept().err().unwrap().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
 }
 
 #[tokio::test]
 async fn matching_redirects_continue_and_redirect_settings_remain_effective() {
-    let (target_port, target) = server(ok());
-    let (port, origin) = server(format!(
-        "HTTP/1.1 302 Found\r\nLocation: https://localhost:{target_port}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    ));
-    let response = client(
-        Some(("client.pem", "client-key.pem")),
-        "localhost",
-        true,
-        10,
-    )
-    .await
-    .get(format!("https://localhost:{port}/private"))
-    .send()
-    .await
-    .unwrap();
-    assert_eq!(response.status(), 200);
-    assert!(origin.join().unwrap());
-    assert!(target.join().unwrap());
+    for identity in [
+        ("client.pem", "client-key.pem"),
+        ("client-protected.p12", ""),
+    ] {
+        let (target_port, target) = server(ok());
+        let (port, origin) = server(format!(
+            "HTTP/1.1 302 Found\r\nLocation: https://localhost:{target_port}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ));
+        let response = client(Some(identity), "localhost", true, 10)
+            .await
+            .get(format!("https://localhost:{port}/private"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(origin.join().unwrap());
+        assert!(target.join().unwrap());
 
-    for (follow, maximum, fails) in [(false, 10, false), (true, 0, true)] {
-        let (port, worker) = server("HTTP/1.1 302 Found\r\nLocation: /again\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into());
-        let result = client(
-            Some(("client.pem", "client-key.pem")),
-            "localhost",
-            follow,
-            maximum,
-        )
-        .await
-        .get(format!("https://localhost:{port}/private"))
-        .send()
-        .await;
-        assert_eq!(result.is_err(), fails);
-        if let Ok(response) = result {
-            assert_eq!(response.status(), 302);
+        for (follow, maximum, fails) in [(false, 10, false), (true, 0, true)] {
+            let (port, worker) = server("HTTP/1.1 302 Found\r\nLocation: /again\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into());
+            let result = client(Some(identity), "localhost", follow, maximum)
+                .await
+                .get(format!("https://localhost:{port}/private"))
+                .send()
+                .await;
+            assert_eq!(result.is_err(), fails);
+            if let Ok(response) = result {
+                assert_eq!(response.status(), 302);
+            }
+            assert!(worker.join().unwrap());
         }
-        assert!(worker.join().unwrap());
     }
 }
 
 #[tokio::test]
 async fn https_to_http_redirect_never_connects_even_when_hostname_matches() {
-    let plaintext = TcpListener::bind("127.0.0.1:0").unwrap();
-    plaintext.set_nonblocking(true).unwrap();
-    let target_port = plaintext.local_addr().unwrap().port();
-    let (port, worker) = server(format!(
-        "HTTP/1.1 302 Found\r\nLocation: http://localhost:{target_port}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    ));
-    let error = client(
-        Some(("client.pem", "client-key.pem")),
-        "localhost",
-        true,
-        10,
-    )
-    .await
-    .get(format!("https://localhost:{port}/private"))
-    .send()
-    .await
-    .map_err(map_reqwest_error)
-    .unwrap_err();
-    assert_eq!(error, HttpError::ClientCertificateRedirectBlocked);
-    assert!(worker.join().unwrap());
-    assert_eq!(
-        plaintext.accept().err().unwrap().kind(),
-        std::io::ErrorKind::WouldBlock
-    );
+    for identity in [
+        ("client.pem", "client-key.pem"),
+        ("client-protected.p12", ""),
+    ] {
+        let plaintext = TcpListener::bind("127.0.0.1:0").unwrap();
+        plaintext.set_nonblocking(true).unwrap();
+        let target_port = plaintext.local_addr().unwrap().port();
+        let (port, worker) = server(format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://localhost:{target_port}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ));
+        let error = client(Some(identity), "localhost", true, 10)
+            .await
+            .get(format!("https://localhost:{port}/private"))
+            .send()
+            .await
+            .map_err(map_reqwest_error)
+            .unwrap_err();
+        assert_eq!(error, HttpError::ClientCertificateRedirectBlocked);
+        assert!(worker.join().unwrap());
+        assert_eq!(
+            plaintext.accept().err().unwrap().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
 }
 
 #[tokio::test]
@@ -249,7 +259,7 @@ async fn engine_checks_identity_scope_against_built_url_before_connecting() {
     .unwrap();
     let engine = HttpEngine::new().unwrap();
     let options = |domain: &str| ExecutionOptions {
-        client_identity: Some(PemClientIdentity::new(
+        client_identity: Some(ClientIdentity::new(
             domain.into(),
             fixture("client.pem").to_str().unwrap().into(),
             fixture("client-key.pem").to_str().unwrap().into(),
@@ -286,7 +296,7 @@ async fn certificate_bearing_execution_bypasses_an_https_proxy_outside_its_domai
     let proxy_url = format!("https://localhost:{}", proxy.local_addr().unwrap().port());
     let (port, worker) =
         server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".into());
-    let configuration = PemClientIdentity::new(
+    let configuration = ClientIdentity::new(
         "127.0.0.1".into(),
         fixture("client.pem").to_str().unwrap().into(),
         fixture("client-key.pem").to_str().unwrap().into(),

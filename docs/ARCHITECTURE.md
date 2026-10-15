@@ -705,17 +705,14 @@ HTTP and GraphQL execution snapshots certificate scopes through `RequestResoluti
 The application selects after resolving the request URL, using only the selected
 environment's direct declarations first, followed by collection declarations. It
 skips disabled entries and takes the first enabled match; disabled entries never
-mask collection entries, and `extends` never inherits certificates. A winning
-PKCS#12 declaration returns an explicit unsupported configuration error.
+mask collection entries, and `extends` never inherits certificates.
 Preparation retains borrowed resolution inputs and the provider. Certificate scopes
 are built only when converting to HTTP/GraphQL execution. Each enabled domain is
-interpolated before matching, then only the winning PEM entry's paths and passphrase
+interpolated before matching, then only the winning entry's paths and passphrase
 are interpolated. The format-independent core template resolver follows the existing
 selected/inherited Probe environment variables, invocation overrides, nested
 references, secret declarations, and strict/non-strict semantics; it adds no
 variable scopes.
-PKCS#12 material is not resolved while execution is unsupported; its paths and
-passphrases can use the same resolver when execution is added.
 
 HTTP conversion may block on the provider and must run away from the UI thread.
 An invocation-local provider cache reads shared request/certificate secrets once.
@@ -757,7 +754,7 @@ and [Bruno transport](https://github.com/usebruno/bruno/blob/fd0e623bb6a1cf62a08
 Bruno interpolates certificate strings with broader variable scopes than Probe;
 Probe uses only its existing environment and invocation variable system.
 
-`probe-http` receives only a selected `PemClientIdentity`. Absolute paths remain
+`probe-http` receives only a selected `ClientIdentity` (PEM or PKCS#12). Absolute paths remain
 absolute; relative paths use `ExecutionOptions.base_directory`, shared with body
 files, and require a nonempty base directory. No cwd changes or canonicalization
 occur. Certificate chains are leaf-first. RSA PKCS#1, EC SEC1 and PKCS#8 unencrypted
@@ -775,6 +772,42 @@ The transport passphrase and temporary certificate/key buffers zeroize on drop, 
 copy retained inside `reqwest::Identity` is not zeroized. This is memory hygiene,
 not a guarantee that every process-memory copy is erased.
 
+PKCS#12 (`.p12` or `.pfx`) is decoded with RustCrypto `pkcs12`, with
+`pkcs5` for PBES2 decryption. The MAC is verified before decrypting any safe or
+key bag. MAC passwords use NUL-terminated big-endian UTF-16, including
+supplementary-plane characters. Supported MAC digests are SHA-1, SHA-224/256/384/512 and SHA-512/224/256.
+Encryption supports PBKDF2 (HMAC-SHA-1 or SHA-2) with AES-128/192/256-CBC.
+Unencrypted, MAC-less and empty-password archives are accepted. MAC and PBKDF2
+iterations must be in 1..=1,000,000. Scrypt, AES-GCM, legacy PKCS#12 PBE (including RC2,
+3DES and RC4), signed/enveloped content, non-X.509 certificates and unsupported
+bags (including nested safeContents) fail explicitly. OpenSSL 3's modern default
+exports work; legacy exports may need re-exporting with modern encryption.
+There is no OpenSSL runtime/system dependency or native-tls transport.
+
+The archive must contain one distinct private key and one matching leaf certificate.
+Repeated copies of the same key and certificate are accepted; distinct private keys
+or multiple distinct matching leaf certificates (even sharing a key) are rejected with
+"PKCS#12 contains multiple client identities; identity selection is not supported yet".
+Bag aliases and localKeyId never override cryptographic key/certificate matching.
+Certificates are deduplicated before matching; the unique certificate that
+cryptographically matches that key is the leaf.
+Issuer/subject names and signature verification assemble its leaf-first chain,
+excluding duplicate and unrelated certificates and stopping at a missing issuer or
+cycle. Certificates sharing a subject are ordered by their actual signer, including
+self-issued intermediates. The remote server remains responsible for client-chain
+trust, validity, and usage validation.
+Intermediate/root certificates alone do not make an archive ambiguous. Multi-identity
+selection is deferred to a later desktop UI change.
+
+Container reads, MAC verification and decryption occur only during execution, with
+CPU work on a blocking worker. Container, decrypted key/safe, MAC key and assembled
+PEM buffers are zeroizing and never written to disk. RustCrypto's owned ASN.1
+structures and rustls/reqwest may retain additional non-zeroizing memory copies;
+this has the same process-memory hygiene limitations as PEM. PKCS#12 errors are
+typed fixed diagnostics, safe to display even when a certificate passphrase is secret.
+A MAC failure cannot distinguish an incorrect password from damaged authenticated
+contents, so its diagnostic names both possibilities.
+
 Certificate-bearing executions construct a fresh reqwest/rustls client and disable
 all proxies before installing the identity (`ClientBuilder::no_proxy()`), including
 system/environment proxies and explicit builder proxies. HTTPS proxy TLS must not
@@ -784,7 +817,7 @@ the reusable default client. Redirects follow existing limits
 only when the target is HTTPS and matches the selected pattern; otherwise the
 request fails with a clear, secret-safe "redirect blocked" diagnostic without
 connecting to the target. HTTPS-to-HTTP redirects are blocked by the same rule.
-Server certificate and hostname verification remain enabled. No native TLS, PKCS#12 execution,
+Server certificate and hostname verification remain enabled. No native TLS,
 certificate-management UI, environment inheritance, or proprietary YAML fields
 are introduced.
 

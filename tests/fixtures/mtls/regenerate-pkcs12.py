@@ -1,0 +1,127 @@
+"""Build public, test-only PKCS#12 fixtures from existing mTLS PEMs (OpenSSL 3).
+
+Tiny DER helpers construct unusual unencrypted test archives that OpenSSL export
+cannot produce (mismatched keys and multiple keys). No production code uses them.
+"""
+from pathlib import Path
+import subprocess
+
+BASE = Path(__file__).resolve().parent
+
+
+def openssl(*args):
+    return subprocess.check_output(["openssl", *map(str, args)])
+
+
+def tlv(tag, value):
+    length = len(value)
+    size = length.to_bytes((length.bit_length() + 7) // 8, "big")
+    return bytes([tag]) + (bytes([length]) if length < 128 else bytes([128 + len(size)]) + size) + value
+
+
+def seq(*values):
+    return tlv(0x30, b"".join(values))
+
+
+def oid(value):
+    numbers = list(map(int, value.split(".")))
+    result = bytes([40 * numbers[0] + numbers[1]])
+    for number in numbers[2:]:
+        parts = [number & 127]
+        while number > 127:
+            number >>= 7
+            parts.insert(0, 128 | (number & 127))
+        result += bytes(parts)
+    return tlv(6, result)
+
+
+def content(value):
+    return seq(oid("1.2.840.113549.1.7.1"), tlv(0xa0, tlv(4, value)))
+
+
+def key(name):
+    value = openssl("pkcs8", "-topk8", "-nocrypt", "-in", BASE / name, "-outform", "DER")
+    return seq(oid("1.2.840.113549.1.12.10.1.1"), tlv(0xa0, value))
+
+
+def cert(name):
+    value = openssl("x509", "-in", BASE / name, "-outform", "DER")
+    bag = seq(oid("1.2.840.113549.1.9.22.1"), tlv(0xa0, tlv(4, value)))
+    return seq(oid("1.2.840.113549.1.12.10.1.3"), tlv(0xa0, bag))
+
+
+def archive(name, *bags):
+    (BASE / name).write_bytes(seq(tlv(2, b"\x03"), content(seq(content(seq(*bags))))))
+
+
+archive("client-unencrypted.p12", key("client-key.pem"), cert("client.pem"))
+archive("client-chain.p12", cert("ca.pem"), key("client-key.pem"), cert("client.pem"), cert("ca.pem"))
+archive("client-mismatch.p12", key("ec-client-key.pem"), cert("client.pem"))
+archive("client-multiple.p12", key("client-key.pem"), key("ec-client-key.pem"), cert("client.pem"), cert("ec-client.pem"), cert("ca.pem"))
+archive("client-duplicate-key.p12", key("client-key.pem"), key("client-key.pem"), cert("client.pem"))
+archive("client-cert-only.p12", cert("client.pem"), cert("ca.pem"))
+archive("client-key-only.p12", key("client-key.pem"))
+archive("client-unsupported-bag.p12", seq(oid("1.2.840.113549.1.12.10.1.6"), tlv(0xa0, seq(key("ec-client-key.pem")))))
+for name, password, options in [
+    ("client-protected.p12", "probe-test-only-password", []),
+    ("client-unicode-password.p12", "probe-test-🔑", []),
+    ("client-empty-password.pfx", "", []),
+    ("client-aes128.p12", "probe-test-only-password", ["-keypbe", "AES-128-CBC", "-certpbe", "AES-128-CBC", "-macalg", "sha1"]),
+    ("client-legacy.p12", "probe-test-only-password", ["-legacy"]),
+    ("client-no-mac.p12", "probe-test-only-password", ["-nomac"]),
+]:
+    openssl("pkcs12", "-export", "-inkey", BASE / "client-key.pem", "-in", BASE / "client.pem", "-certfile", BASE / "ca.pem", "-out", BASE / name, "-passout", f"pass:{password}", *options)
+
+# Exercise all advertised traditional PKCS#12 MAC digests, with AES-192 as
+# another common PBES2 cipher size. No new private key material is generated.
+for digest in ["sha224", "sha384", "sha512", "sha512-224", "sha512-256"]:
+    openssl("pkcs12", "-export", "-inkey", BASE / "client-key.pem", "-in", BASE / "client.pem", "-out", BASE / f"client-{digest}.p12", "-passout", "pass:probe-test-only-password", "-keypbe", "AES-192-CBC", "-certpbe", "AES-192-CBC", "-macalg", digest)
+
+# An independent three-certificate hierarchy proves intermediate extraction.
+# Keep only public certificates and the already-public client private key.
+import tempfile
+with tempfile.TemporaryDirectory(prefix="probe-p12-chain-") as temporary:
+    scratch = Path(temporary)
+    root_key = scratch / "root-key.pem"
+    intermediate_key = scratch / "intermediate-key.pem"
+    root = BASE / "pkcs12-chain-root.pem"
+    intermediate = BASE / "pkcs12-chain-intermediate.pem"
+    leaf = BASE / "pkcs12-chain-leaf.pem"
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", root_key, "-out", root, "-subj", "/CN=Probe PKCS12 chain root", "-days", "36500", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+    openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", intermediate_key, "-out", scratch / "intermediate.csr", "-subj", "/CN=Probe PKCS12 intermediate")
+    extensions = scratch / "intermediate.ext"
+    extensions.write_text("basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n")
+    openssl("x509", "-req", "-in", scratch / "intermediate.csr", "-CA", root, "-CAkey", root_key, "-set_serial", "10", "-out", intermediate, "-days", "36500", "-extfile", extensions)
+    openssl("req", "-new", "-key", BASE / "client-key.pem", "-out", scratch / "leaf.csr", "-subj", "/CN=Probe PKCS12 chain client")
+    extensions = scratch / "leaf.ext"
+    extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n")
+    openssl("x509", "-req", "-in", scratch / "leaf.csr", "-CA", intermediate, "-CAkey", intermediate_key, "-set_serial", "11", "-out", leaf, "-days", "36500", "-extfile", extensions)
+    archive("client-intermediates.p12", cert(root), key("client-key.pem"), cert(leaf), cert(intermediate))
+
+# Distinct matching leaf certificates are ambiguous even when they share a key.
+archive("client-multiple-leaves.p12", key("client-key.pem"), cert("client.pem"), cert("pkcs12-chain-leaf.pem"), cert("ca.pem"), cert("pkcs12-chain-intermediate.pem"), cert("pkcs12-chain-root.pem"))
+
+
+def shared_subject_chain():
+    """A self-issued intermediate and a decoy CA share the root's DN, not its key."""
+    with tempfile.TemporaryDirectory(prefix="probe-p12-shared-") as temporary:
+        scratch = Path(temporary)
+        root = BASE / "pkcs12-shared-root.pem"
+        intermediate = BASE / "pkcs12-shared-intermediate.pem"
+        decoy = BASE / "pkcs12-shared-decoy.pem"
+        leaf = BASE / "pkcs12-shared-leaf.pem"
+        subject = "/CN=Probe shared-subject CA"
+        for name, output in [("root", root), ("decoy", decoy)]:
+            openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", scratch / f"{name}-key.pem", "-out", output, "-subj", subject, "-days", "36500", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+        openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", scratch / "intermediate-key.pem", "-out", scratch / "intermediate.csr", "-subj", subject)
+        extensions = scratch / "intermediate.ext"
+        extensions.write_text("basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n")
+        openssl("x509", "-req", "-in", scratch / "intermediate.csr", "-CA", root, "-CAkey", scratch / "root-key.pem", "-set_serial", "20", "-out", intermediate, "-days", "36500", "-extfile", extensions)
+        openssl("req", "-new", "-key", BASE / "client-key.pem", "-out", scratch / "leaf.csr", "-subj", "/CN=Probe shared-subject client")
+        extensions = scratch / "leaf.ext"
+        extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n")
+        openssl("x509", "-req", "-in", scratch / "leaf.csr", "-CA", intermediate, "-CAkey", scratch / "intermediate-key.pem", "-set_serial", "21", "-out", leaf, "-days", "36500", "-extfile", extensions)
+        archive("client-shared-subject.p12", cert(root), cert(decoy), key("client-key.pem"), cert(leaf), cert(intermediate))
+
+
+shared_subject_chain()

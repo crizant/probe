@@ -283,7 +283,7 @@ struct ExecutedHttpResponse {
 fn build_client(
     follow_redirects: bool,
     maximum: usize,
-    identity: Option<(reqwest::Identity, crate::PemClientIdentity)>,
+    identity: Option<(reqwest::Identity, crate::ClientIdentity)>,
 ) -> Result<Client, HttpError> {
     configure_client(Client::builder(), follow_redirects, maximum, identity)
 }
@@ -292,7 +292,7 @@ fn configure_client(
     builder: reqwest::ClientBuilder,
     follow_redirects: bool,
     maximum: usize,
-    identity: Option<(reqwest::Identity, crate::PemClientIdentity)>,
+    identity: Option<(reqwest::Identity, crate::ClientIdentity)>,
 ) -> Result<Client, HttpError> {
     let authenticated = identity.is_some();
     let policy = if !follow_redirects {
@@ -328,7 +328,7 @@ fn response_headers(headers: &HeaderMap) -> Vec<ResponseHeader> {
     headers
 }
 
-fn identity_redirect_policy(maximum: usize, identity: crate::PemClientIdentity) -> Policy {
+fn identity_redirect_policy(maximum: usize, identity: crate::ClientIdentity) -> Policy {
     let limit = Policy::limited(maximum);
     Policy::custom(move |attempt| {
         if identity.matches(attempt.url()) {

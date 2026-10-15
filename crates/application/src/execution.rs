@@ -261,7 +261,7 @@ impl fmt::Debug for PreparedRequest<'_> {
 
 /// HTTP engine input whose results are redacted before they are returned.
 pub struct HttpExecution {
-    client_identity: Result<Option<probe_http::PemClientIdentity>, HttpError>,
+    client_identity: Result<Option<probe_http::ClientIdentity>, HttpError>,
     request: PreparedHttpRequest,
     disclosure: SecretDisclosure,
 }
@@ -293,7 +293,7 @@ impl HttpExecution {
     {
         // Selection errors contain only fixed configuration diagnostics or typed
         // resolver errors (variable names, never resolved values). Preserve these
-        // safe errors, including the existing PKCS#12 unsupported diagnostic.
+        // safe errors.
         options.client_identity = self.client_identity?;
         if self.disclosure.uses_secrets() {
             // Cache spool files would retain unredacted response bytes.
@@ -402,7 +402,8 @@ impl SecretDisclosure {
             | HttpError::MissingUrl
             | HttpError::Timeout
             | HttpError::Cancelled
-            | HttpError::ClientCertificateRedirectBlocked => error,
+            | HttpError::ClientCertificateRedirectBlocked
+            | HttpError::Pkcs12(_) => error,
             HttpError::ResponseOutput { path, .. } => HttpError::ResponseOutput {
                 path,
                 message: SECRET_DIAGNOSTIC_WITHHELD.to_owned(),
@@ -520,7 +521,7 @@ mod certificate_variable_tests {
         assert_eq!(*provider.calls.borrow(), ["certPassword"]);
         assert_eq!(
             execution.client_identity,
-            Ok(Some(probe_http::PemClientIdentity::new(
+            Ok(Some(probe_http::ClientIdentity::new(
                 "*.example.com".into(),
                 "inherited/client.pem".into(),
                 "inherited/client-key.pem".into(),
@@ -567,7 +568,7 @@ mod certificate_variable_tests {
         let execution = prepared.into_http().unwrap();
         assert_eq!(
             execution.client_identity,
-            Ok(Some(probe_http::PemClientIdentity::new(
+            Ok(Some(probe_http::ClientIdentity::new(
                 "api.example.com:443".into(),
                 "override/client.pem".into(),
                 "override/client-key.pem".into(),
@@ -665,7 +666,7 @@ mod certificate_variable_tests {
     }
 
     #[test]
-    fn interpolation_preserves_domain_matching_and_pkcs12_rejection() {
+    fn interpolation_preserves_domain_matching_and_selects_pkcs12() {
         let loaded = fixture();
         let provider = Provider::default();
         for host in [
@@ -696,8 +697,8 @@ mod certificate_variable_tests {
         assert!(provider.calls.borrow().is_empty());
         let certificates = [ClientCertificate::Pkcs12 {
             domain: "{{mtlsDomain}}".into(),
-            pkcs12_file_path: "{{unused}}".into(),
-            passphrase: Some("{{unused}}".into()),
+            pkcs12_file_path: "{{directory}}/client.p12".into(),
+            passphrase: Some("{{passwordAlias}}".into()),
             disabled: false,
         }];
         let execution = prepare_request(
@@ -713,11 +714,14 @@ mod certificate_variable_tests {
         .unwrap();
         assert_eq!(
             execution.client_identity,
-            Err(HttpError::ClientConfiguration(
-                "PKCS#12 client certificate execution is not supported yet".into()
-            ))
+            Ok(Some(probe_http::ClientIdentity::pkcs12(
+                "*.example.com".into(),
+                "inherited/client.p12".into(),
+                Some(PASSWORD.into())
+            )))
         );
-        assert!(provider.calls.borrow().is_empty());
+        assert_eq!(*provider.calls.borrow(), ["certPassword"]);
+        assert!(execution.uses_secrets());
     }
 
     #[test]
@@ -758,7 +762,7 @@ mod certificate_variable_tests {
             .into_http()
             .unwrap();
             let expected = matches.then(|| {
-                probe_http::PemClientIdentity::new(
+                probe_http::ClientIdentity::new(
                     domain.into(),
                     "missing-cert.pem".into(),
                     "missing-key.pem".into(),
@@ -775,7 +779,7 @@ mod certificate_variable_tests {
     }
 
     #[tokio::test]
-    async fn pkcs12_keeps_its_safe_unsupported_error_when_request_uses_secrets() {
+    async fn pkcs12_passphrase_participates_in_disclosure_and_safe_errors() {
         let loaded = fixture();
         let provider = Provider::default();
         let mut request = request();
@@ -786,8 +790,12 @@ mod certificate_variable_tests {
         });
         let certificates = [ClientCertificate::Pkcs12 {
             domain: "{{mtlsDomain}}".into(),
-            pkcs12_file_path: "{{unused}}".into(),
-            passphrase: Some("{{unused}}".into()),
+            pkcs12_file_path: Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/mtls/client-protected.p12")
+                .to_str()
+                .unwrap()
+                .into(),
+            passphrase: Some("{{passwordAlias}}".into()),
             disabled: false,
         }];
         let execution = prepare_request(
@@ -812,12 +820,7 @@ mod certificate_variable_tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(
-            error,
-            HttpError::ClientConfiguration(
-                "PKCS#12 client certificate execution is not supported yet".into()
-            )
-        );
+        assert_eq!(error, HttpError::Pkcs12(probe_http::Pkcs12Error::Integrity));
         assert_eq!(*provider.calls.borrow(), ["certPassword"]);
     }
 

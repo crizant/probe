@@ -13,6 +13,7 @@ From the repository root, with Python 3 and OpenSSL 3 installed, run exactly:
 
 ```sh
 python3 tests/fixtures/mtls/regenerate.py
+python3 tests/fixtures/mtls/regenerate-pkcs12.py
 openssl x509 -in tests/fixtures/mtls/server.pem -noout -dates -ext subjectAltName
 cargo test --locked -p probe-http -p probe-application -p probe-cli
 ```
@@ -24,3 +25,23 @@ for the CA key, CSRs and extensions and removes it on exit. No CA private key is
 published. After regeneration, update this expiry reminder to the new server
 expiry and commit all changed fixture PEM files together. OpenSSL is fixture
 maintenance tooling; Probe's production identity loader uses Rust libraries.
+
+PKCS#12 fixtures reuse these public test keys and certificates. Run
+`python3 tests/fixtures/mtls/regenerate-pkcs12.py` after regenerating PEMs (or on its
+own to leave PEMs unchanged). That script records every OpenSSL 3 invocation and
+constructs special unencrypted archives with small Python DER helpers: mismatched
+keys, duplicate keys/certificates, reversed chain order, certificate/key-only stores,
+multiple distinct identities (including separate leaf certificates sharing one key),
+and an unsupported nested bag. OpenSSL exports cover
+AES-128/192/256 and all advertised SHA-1/SHA-2 MACs, empty passwords, encrypted MAC-less content and
+unsupported legacy PBE. Nonempty passwords are `probe-test-only-password`, except the Unicode password
+fixture, which uses `probe-test-🔑` to verify UTF-16 supplementary-plane handling.
+A separate root/intermediate/leaf hierarchy verifies intermediate transmission in
+an actual mTLS handshake; its root and intermediate private keys are discarded.
+OpenSSL is used only to generate fixtures; parsing/decryption tests use RustCrypto.
+
+The shared-subject hierarchy has a root, self-issued intermediate, and unrelated
+decoy CA with the same subject DN and different keys. `shared_subject_chain()` in
+the PKCS#12 generator records its commands, discards all CA private keys, and
+packages its public certificates with the existing public client key. Tests permute
+the candidate issuers and perform an mTLS handshake using the resulting chain.
