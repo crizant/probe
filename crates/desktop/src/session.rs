@@ -173,6 +173,12 @@ pub(crate) struct SessionStore {
 
 impl SessionStore {
     pub(crate) fn for_application() -> Option<Self> {
+        #[cfg(feature = "startup-benchmark")]
+        if let Some(directory) = crate::startup_benchmark::directory() {
+            return Some(Self {
+                path: directory.join("desktop-session.json"),
+            });
+        }
         ProjectDirs::from("dev", "Probe", "Probe").map(|directories| Self {
             path: directories.data_local_dir().join("desktop-session.json"),
         })

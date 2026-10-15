@@ -40,6 +40,8 @@ pub(super) fn response_page_button(
 
 impl Render for ProbeApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(feature = "startup-benchmark")]
+        crate::startup_benchmark::render_frame(!self.pending_tab_reveal, window, cx);
         self.clear_resolved_environment_dialog_error(cx);
         if !cx.has_active_drag()
             && (self.tree_drop_target.is_some() || self.tree_drag_source.is_some())

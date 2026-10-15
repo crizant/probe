@@ -753,6 +753,10 @@ fn header_value<'a>(response: &'a HttpResponse, name: &str) -> Option<&'a str> {
 pub(crate) const RESPONSE_CACHE_QUOTA_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(crate) fn response_cache() -> ResponseCache {
+    #[cfg(feature = "startup-benchmark")]
+    if let Some(directory) = crate::startup_benchmark::directory() {
+        return ResponseCache::new(directory.join("responses"), RESPONSE_CACHE_QUOTA_BYTES);
+    }
     let directory = ProjectDirs::from("dev", "Probe", "Probe")
         .map(|directories| directories.cache_dir().join("responses"))
         .unwrap_or_else(|| std::env::temp_dir().join("probe-responses"));

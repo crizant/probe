@@ -671,6 +671,8 @@ fn render_windows_controls(_: Theme) -> gpui_kit::Div {
 }
 
 pub fn run() {
+    #[cfg(feature = "startup-benchmark")]
+    let benchmark = crate::startup_benchmark::StartupBenchmark::from_environment();
     // The theme has to be known before the window exists. This file is small,
     // so read it once here instead of after the first frame on a background task.
     let startup = LoadedUserConfig::load();
@@ -684,6 +686,10 @@ pub fn run() {
         }
     });
     app.run(move |cx: &mut App| {
+        #[cfg(feature = "startup-benchmark")]
+        if let Some(benchmark) = benchmark {
+            cx.set_global(benchmark);
+        }
         cx.set_app_identity(APPLICATION_ID, APPLICATION_NAME);
         Theme::init(cx);
         bind_platform_hotkeys(cx);

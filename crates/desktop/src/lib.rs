@@ -18,6 +18,8 @@ mod response_string_copy;
 mod response_viewer;
 mod session;
 mod shell;
+#[cfg(feature = "startup-benchmark")]
+mod startup_benchmark;
 mod structure_editor;
 mod synchronization;
 mod syntax;

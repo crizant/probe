@@ -283,3 +283,66 @@ tests, and dependency advisory checks passed. Coverage floors passed (OpenCollec
 87.94% production line coverage); the changed functions' CRAP scores were below 7,
 with request/folder key → selector lookup at 1 and 100% line coverage. Diff-scoped
 mutation testing completed with 17 caught mutations, 3 unviable, and no survivors.
+
+## Desktop startup
+
+Build the opt-in instrumentation and generate representative fixtures first:
+
+```bash
+unset CARGO_TARGET_DIR
+cargo build --release -p probe-desktop --features startup-benchmark
+cargo run -p probe-cli --example generate_performance_fixtures -- \
+  target/performance-fixtures
+python3 scripts/benchmark-desktop-startup.py \
+  --workspace target/performance-fixtures/workspace-100.yml \
+  --workspace target/performance-fixtures/workspace-1000.yml \
+  --workspace target/performance-fixtures/workspace-10000.yml
+```
+
+Run in an active graphical desktop session (Linux requires `DISPLAY` and the GPUI
+runtime packages). Finish compilation and other profiling before timing. Each run
+opens a real window and exits automatically. The runner always measures an empty
+session, then each supplied **generated bundled fixture**, restoring its first
+request tab. It uses a new temporary session and response-cache directory per
+process; the normal session/cache are untouched. Normal user theme configuration
+is still read, so record the theme alongside comparisons. No requests are sent.
+Ordinary builds contain no hooks. Feature-enabled builds behave normally unless
+`PROBE_STARTUP_BENCHMARK_DIR` is set; this variable is reserved for the runner.
+
+Two milestones are recorded:
+
+- `first_frame`: the callback following the initial Probe view's rendered frame.
+- `session_ready`: the callback following a frame with the session loaded,
+  collection integrated, saved tab selected, and pending tab reveal processed.
+  Empty sessions wait for the session read to finish too. Restore failures fail
+  the run instead of producing a successful readiness time.
+
+These are GPUI frame milestones, not compositor presentation or a physical-display
+measurement. Readiness does not wait for unrelated background maintenance or every
+asynchronous syntax-highlighting task. The callback runs on the next frame signal,
+so refresh rate and scheduling affect timings.
+
+Each milestone has `main_ms` (from entry to the desktop `run` function, before user
+configuration and GPUI initialization) and `launch_observed_ms` (from immediately
+before the runner spawns the process until its reader receives the flushed marker).
+The latter includes executable loading, pipe delivery and reader scheduling; it is
+an observed upper bound, not an exact timestamp of frame presentation.
+
+Defaults are three discarded warmups and 30 measured fresh processes per scenario.
+`--runs`, `--warmups`, `--timeout` (seconds), `--binary`, and `--output` are configurable.
+Results include raw samples, median, and nearest-rank p90 in
+`target/desktop-startup.json`, plus the platform and binary SHA-256. A missing
+instrumentation marker, failed restore, nonzero exit, or timeout fails the command;
+a complete report is written only after all scenarios succeed. The runner protocol
+can be checked without launching GPUI:
+
+```bash
+python3 scripts/test-desktop-startup.py
+```
+
+Record the commit, dirty-worktree state, date, CPU, Rust version, theme, and display
+refresh rate with a baseline. Compare the same machine and build profile. These
+repeated launches primarily measure warm filesystem/OS caches; collect the first
+launch after reboot separately when investigating cold startup. Do not infer cold
+startup by deleting Probe's user data or flushing system caches. There is no CI
+latency threshold until representative baselines are stable.

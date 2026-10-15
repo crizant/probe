@@ -88,9 +88,15 @@ impl ProbeApp {
                         view.session = state.clone();
                         if let Some(path) = active_path {
                             view.load_workspace_path(path, Some(state), window, cx);
+                        } else {
+                            #[cfg(feature = "startup-benchmark")]
+                            crate::startup_benchmark::restored(cx);
+                            cx.notify();
                         }
                     }
                     Err(error) => {
+                        #[cfg(feature = "startup-benchmark")]
+                        crate::startup_benchmark::failed(&error.to_string(), cx);
                         view.show_toast(
                             ToastIntent::Error,
                             format!("Could not restore the previous desktop session: {error}"),
@@ -141,8 +147,12 @@ impl ProbeApp {
                             view.restore_shell_state(cx);
                             view.start_workspace_watcher(window, cx);
                             view.persist_session(cx);
+                            #[cfg(feature = "startup-benchmark")]
+                            crate::startup_benchmark::restored(cx);
                         }
                         Err(error) => {
+                            #[cfg(feature = "startup-benchmark")]
+                            crate::startup_benchmark::failed(&error, cx);
                             if let Some(state) = restored_state {
                                 view.session = state;
                                 view.session.clear_active_collection();

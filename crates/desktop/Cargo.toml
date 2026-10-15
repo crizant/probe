@@ -22,6 +22,10 @@ short_description = "A fast, native, local-first API client"
 long_description = "Probe is a native API client for working with local OpenCollection workspaces."
 linux_startup_wm_class = "dev.probe.desktop"
 
+[features]
+# Opt-in instrumentation; ordinary desktop builds contain no benchmark hooks.
+startup-benchmark = []
+
 [dependencies]
 atomic-write-file = "0.3.1"
 directories = "6.0.0"
