@@ -774,7 +774,8 @@ not a guarantee that every process-memory copy is erased.
 
 PKCS#12 (`.p12` or `.pfx`) is decoded with RustCrypto `pkcs12`, with
 `pkcs5` for PBES2 decryption. The MAC is verified before decrypting any safe or
-key bag. Supported MAC digests are SHA-1, SHA-224/256/384/512 and SHA-512/224/256.
+key bag. MAC passwords use NUL-terminated big-endian UTF-16, including
+supplementary-plane characters. Supported MAC digests are SHA-1, SHA-224/256/384/512 and SHA-512/224/256.
 Encryption supports PBKDF2 (HMAC-SHA-1 or SHA-2) with AES-128/192/256-CBC.
 Unencrypted, MAC-less and empty-password archives are accepted. MAC and PBKDF2
 iterations must be in 1..=1,000,000. Scrypt, AES-GCM, legacy PKCS#12 PBE (including RC2,

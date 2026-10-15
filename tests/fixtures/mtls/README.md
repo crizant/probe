@@ -33,7 +33,8 @@ keys, duplicate keys/certificates, reversed chain order, certificate/key-only st
 multiple distinct identities (including separate leaf certificates sharing one key),
 and an unsupported nested bag. OpenSSL exports cover
 AES-128/192/256 and all advertised SHA-1/SHA-2 MACs, empty passwords, encrypted MAC-less content and
-unsupported legacy PBE. All nonempty passwords are `probe-test-only-password`.
+unsupported legacy PBE. Nonempty passwords are `probe-test-only-password`, except the Unicode password
+fixture, which uses `probe-test-🔑` to verify UTF-16 supplementary-plane handling.
 A separate root/intermediate/leaf hierarchy verifies intermediate transmission in
 an actual mTLS handshake; its root and intermediate private keys are discarded.
 OpenSSL is used only to generate fixtures; parsing/decryption tests use RustCrypto.

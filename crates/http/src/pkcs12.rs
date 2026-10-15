@@ -175,18 +175,25 @@ fn verify_mac(mac: &MacData, data: &[u8], password: &str) -> Result<(), HttpErro
     if !(1..=MAX_ITERATIONS as i32).contains(&mac.iterations) {
         return Err(error(INVALID));
     }
+    // PKCS#12 passwords use big-endian UTF-16 with a terminating NUL.
+    // Use RustCrypto's raw KDF entry point rather than its BMPString wrapper,
+    // which rejects valid supplementary-plane passwords exported by OpenSSL.
+    let password = Zeroizing::new(
+        password
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .chain([0, 0])
+            .collect::<Vec<_>>(),
+    );
     macro_rules! verify {
         ($digest:ty) => {{
-            let key = Zeroizing::new(
-                kdf::derive_key_utf8::<$digest>(
-                    password,
-                    mac.mac_salt.as_bytes(),
-                    kdf::Pkcs12KeyType::Mac,
-                    mac.iterations,
-                    <$digest as hmac::digest::OutputSizeUser>::output_size(),
-                )
-                .map_err(|_| error(UNSUPPORTED))?,
-            );
+            let key = Zeroizing::new(kdf::derive_key::<$digest>(
+                &password,
+                mac.mac_salt.as_bytes(),
+                kdf::Pkcs12KeyType::Mac,
+                mac.iterations,
+                <$digest as hmac::digest::OutputSizeUser>::output_size(),
+            ));
             let mut verifier =
                 hmac::Hmac::<$digest>::new_from_slice(&key).map_err(|_| error(INVALID))?;
             verifier.update(data);
@@ -317,6 +324,7 @@ mod tests {
             ("client-intermediates.p12", None),
             ("client-duplicate-key.p12", None),
             ("client-protected.p12", Some(PASS)),
+            ("client-unicode-password.p12", Some("probe-test-🔑")),
             ("client-aes128.p12", Some(PASS)),
             ("client-empty-password.pfx", None),
             ("client-empty-password.pfx", Some("")),
@@ -333,6 +341,7 @@ mod tests {
     fn errors_are_deterministic_and_do_not_disclose_decoded_material() {
         for (name, password, expected) in [
             ("client-protected.p12", None, INTEGRITY),
+            ("client-unicode-password.p12", Some("wrong-🔑"), INTEGRITY),
             (
                 "client-protected.p12",
                 Some("wrong-passphrase-marker"),

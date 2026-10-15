@@ -64,6 +64,7 @@ archive("client-key-only.p12", key("client-key.pem"))
 archive("client-unsupported-bag.p12", seq(oid("1.2.840.113549.1.12.10.1.6"), tlv(0xa0, seq(key("ec-client-key.pem")))))
 for name, password, options in [
     ("client-protected.p12", "probe-test-only-password", []),
+    ("client-unicode-password.p12", "probe-test-🔑", []),
     ("client-empty-password.pfx", "", []),
     ("client-aes128.p12", "probe-test-only-password", ["-keypbe", "AES-128-CBC", "-certpbe", "AES-128-CBC", "-macalg", "sha1"]),
     ("client-legacy.p12", "probe-test-only-password", ["-legacy"]),
