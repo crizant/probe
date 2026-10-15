@@ -1,4 +1,4 @@
-//! PEM identity loading. All diagnostics are fixed strings, never parser output.
+//! Transport identity loading. All diagnostics are fixed strings, never parser output.
 
 use std::{
     fmt,
@@ -14,22 +14,30 @@ use crate::{ExecutionOptions, HttpError};
 
 /// A selected transport identity. This has no collection or environment semantics.
 #[derive(Clone, Eq, PartialEq)]
-pub struct PemClientIdentity {
+pub struct ClientIdentity {
     domain: String,
-    certificate_file_path: String,
-    private_key_file_path: String,
+    material: IdentityMaterial,
     passphrase: Option<Zeroizing<String>>,
 }
 
-impl fmt::Debug for PemClientIdentity {
+#[derive(Clone, Eq, PartialEq)]
+enum IdentityMaterial {
+    Pem { certificate: String, key: String },
+    Pkcs12 { path: String },
+}
+
+/// Backwards-compatible name for the PEM constructor.
+pub type PemClientIdentity = ClientIdentity;
+
+impl fmt::Debug for ClientIdentity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("PemClientIdentity")
+            .debug_struct("ClientIdentity")
             .finish_non_exhaustive()
     }
 }
 
-impl PemClientIdentity {
+impl ClientIdentity {
     /// Retains the selected configuration; performs no I/O or decryption.
     #[must_use]
     pub fn new(
@@ -40,8 +48,20 @@ impl PemClientIdentity {
     ) -> Self {
         Self {
             domain,
-            certificate_file_path,
-            private_key_file_path,
+            material: IdentityMaterial::Pem {
+                certificate: certificate_file_path,
+                key: private_key_file_path,
+            },
+            passphrase: passphrase.map(Zeroizing::new),
+        }
+    }
+
+    /// Retains a PKCS#12 path and passphrase without reading or decrypting it.
+    #[must_use]
+    pub fn pkcs12(domain: String, path: String, passphrase: Option<String>) -> Self {
+        Self {
+            domain,
+            material: IdentityMaterial::Pkcs12 { path },
             passphrase: passphrase.map(Zeroizing::new),
         }
     }
@@ -62,8 +82,29 @@ impl PemClientIdentity {
     }
 
     pub(crate) async fn load(&self, options: &ExecutionOptions) -> Result<Identity, HttpError> {
-        let cert_path = resolve_path(&self.certificate_file_path, options)?;
-        let key_path = resolve_path(&self.private_key_file_path, options)?;
+        let passphrase = self.passphrase.clone();
+        let (cert_path, key_path) = match &self.material {
+            IdentityMaterial::Pkcs12 { path } => {
+                let path = resolve_path(path, options)?;
+                let container = Zeroizing::new(
+                    tokio::fs::read(path)
+                        .await
+                        .map_err(|_| HttpError::Pkcs12(crate::Pkcs12Error::Unreadable))?,
+                );
+                return tokio::task::spawn_blocking(move || {
+                    crate::pkcs12::identity_from_pkcs12(
+                        &container,
+                        passphrase.as_deref().map(String::as_str),
+                    )
+                })
+                .await
+                .map_err(|_| configuration("client identity loading worker failed"))?;
+            }
+            IdentityMaterial::Pem { certificate, key } => (
+                resolve_path(certificate, options)?,
+                resolve_path(key, options)?,
+            ),
+        };
         let cert = Zeroizing::new(
             tokio::fs::read(cert_path)
                 .await
@@ -74,7 +115,6 @@ impl PemClientIdentity {
                 .await
                 .map_err(|_| configuration("cannot read client private key file"))?,
         );
-        let passphrase = self.passphrase.clone();
         // Key derivation can be expensive. Keep it off async/GPUI executor threads.
         tokio::task::spawn_blocking(move || {
             identity_from_pem(&cert, &key, passphrase.as_deref().map(String::as_str))
@@ -282,7 +322,7 @@ mod tests {
             "client-key.pem".into(),
             Some("passphrase-marker".into()),
         );
-        assert_eq!(format!("{identity:?}"), "PemClientIdentity { .. }");
+        assert_eq!(format!("{identity:?}"), "ClientIdentity { .. }");
     }
 
     #[tokio::test]

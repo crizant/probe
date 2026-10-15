@@ -8,6 +8,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- HTTP and GraphQL requests now execute single-identity PKCS#12 (`.p12`/`.pfx`)
+  client certificates alongside PEM in CLI and desktop, with existing variable
+  and secret support. Modern PBES2/PBKDF2 AES-CBC containers are supported;
+  legacy PBE encryption and multi-identity selection remain unsupported.
+
 - Client certificate domains, PEM paths, and passphrases now support Probe
   environment variables and `--var` overrides, including secret variables.
   Dry-run and Copy as cURL leave certificate-only secrets unresolved.

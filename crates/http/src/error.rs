@@ -1,5 +1,33 @@
 use std::{error::Error, fmt, path::PathBuf};
 
+/// Secret-safe PKCS#12 failures. No variant retains parser input or diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pkcs12Error {
+    Unreadable,
+    Invalid,
+    Unsupported,
+    Decryption,
+    Integrity,
+    NoIdentity,
+    Mismatch,
+    MultipleIdentities,
+}
+
+impl fmt::Display for Pkcs12Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Unreadable => "cannot read PKCS#12 client certificate file",
+            Self::Invalid => "malformed or unsupported PKCS#12 container",
+            Self::Unsupported => "unsupported PKCS#12 encryption or algorithm; use PBES2/PBKDF2 with AES-CBC",
+            Self::Decryption => "cannot decrypt PKCS#12: missing or incorrect passphrase",
+            Self::Integrity => "PKCS#12 integrity/MAC verification failed: incorrect or missing passphrase, or damaged container",
+            Self::NoIdentity => "PKCS#12 contains no usable client identity",
+            Self::Mismatch => "PKCS#12 certificate and private key do not match",
+            Self::MultipleIdentities => "PKCS#12 contains multiple client identities; identity selection is not supported yet",
+        })
+    }
+}
+
 /// A request-construction, cancellation, timeout, or transport failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HttpError {
@@ -35,6 +63,8 @@ pub enum HttpError {
     },
     /// The HTTP client could not be configured.
     ClientConfiguration(String),
+    /// A fixed, secret-safe PKCS#12 configuration failure.
+    Pkcs12(Pkcs12Error),
     /// Reqwest rejected the method, URL, headers, or another request component.
     InvalidRequest(String),
     /// The configured total timeout elapsed.
@@ -71,6 +101,7 @@ impl HttpError {
                 | Self::UnsupportedAuthentication(_)
                 | Self::File { .. }
                 | Self::ClientConfiguration(_)
+                | Self::Pkcs12(_)
                 | Self::InvalidRequest(_)
         )
     }
@@ -98,6 +129,7 @@ impl fmt::Display for HttpError {
             Self::File { path, message } => {
                 write!(formatter, "cannot read '{}': {message}", path.display())
             }
+            Self::Pkcs12(error) => write!(formatter, "cannot configure HTTP client: {error}"),
             Self::ClientConfiguration(message) => {
                 write!(formatter, "cannot configure HTTP client: {message}")
             }

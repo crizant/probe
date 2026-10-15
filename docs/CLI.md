@@ -79,7 +79,10 @@ accept Probe environment variables, `--var` overrides, and secret variables.
 files, or decrypt keys. Variables and `--var` overrides can resolve a domain to a
 broad pattern such as `*.com`, so control those values carefully. A domain that
 resolves to an empty or whitespace-only string silently matches nothing.
-PKCS#12 execution and certificate inheritance through `extends` are unsupported.
+PEM and single-identity PKCS#12 (`pkcs12FilePath`, `.p12`/`.pfx`) execute through
+the same transport. PKCS#12 supports modern PBES2/PBKDF2 AES-CBC exports; legacy
+PBE encryption is unsupported. Multiple distinct private keys require future identity
+selection support. Certificate inheritance through `extends` remains unsupported.
 Matching and redirect rules are specified in
 [Architecture](ARCHITECTURE.md#client-certificates-for-http-and-graphql).
 

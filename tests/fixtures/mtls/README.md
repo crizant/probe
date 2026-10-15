@@ -24,3 +24,13 @@ for the CA key, CSRs and extensions and removes it on exit. No CA private key is
 published. After regeneration, update this expiry reminder to the new server
 expiry and commit all changed fixture PEM files together. OpenSSL is fixture
 maintenance tooling; Probe's production identity loader uses Rust libraries.
+
+PKCS#12 fixtures reuse these public test keys and certificates. Run
+`python3 tests/fixtures/mtls/regenerate-pkcs12.py` after regenerating PEMs (or on its
+own to leave PEMs unchanged). That script records every OpenSSL 3 invocation and
+constructs special unencrypted archives with small Python DER helpers: mismatched
+keys, duplicate keys/certificates, reversed chain order, certificate/key-only stores,
+multiple distinct identities, and an unsupported nested bag. OpenSSL exports cover
+AES-256/SHA-256, AES-128/SHA-1, empty passwords, encrypted MAC-less content and
+unsupported legacy PBE. All nonempty passwords are `probe-test-only-password`.
+OpenSSL is used only to generate fixtures; parsing/decryption tests use RustCrypto.
