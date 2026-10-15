@@ -18,6 +18,8 @@ pub(crate) struct CertificateEditor {
     pub(crate) pkcs12: bool,
     pub(crate) disabled: bool,
     pub(crate) revealed: bool,
+    // An untouched explicit empty YAML value differs from an absent passphrase.
+    preserve_empty_passphrase: bool,
     // Domain, PEM certificate, PEM private key, PKCS#12 archive, passphrase.
     pub(crate) inputs: Vec<gpui_kit::Entity<InputState>>,
     pub(crate) _subscriptions: Rc<Vec<gpui_kit::Subscription>>,
@@ -32,24 +34,41 @@ impl std::fmt::Debug for CertificateEditor {
 }
 
 impl CertificateEditor {
+    pub(crate) fn missing_required_field(&self, cx: &App) -> Option<&'static str> {
+        let required: &[(usize, &str)] = if self.pkcs12 {
+            &[(0, "Domain"), (3, "PKCS#12 File")]
+        } else {
+            &[(0, "Domain"), (1, "Certificate"), (2, "Private Key")]
+        };
+        required.iter().find_map(|(index, label)| {
+            self.inputs[*index]
+                .read(cx)
+                .value()
+                .trim()
+                .is_empty()
+                .then_some(*label)
+        })
+    }
+
     pub(crate) fn certificate(&self, cx: &App) -> Option<ClientCertificate> {
+        if self.missing_required_field(cx).is_some() {
+            return None;
+        }
         let values: Vec<_> = self
             .inputs
             .iter()
-            .map(|input| input.read(cx).value().to_string())
+            .enumerate()
+            .map(|(index, input)| {
+                let value = input.read(cx).value();
+                if index == 4 {
+                    value.to_string()
+                } else {
+                    value.trim().to_owned()
+                }
+            })
             .collect();
-        let required = if self.pkcs12 {
-            vec![0, 3]
-        } else {
-            vec![0, 1, 2]
-        };
-        if required
-            .iter()
-            .any(|index| values[*index].trim().is_empty())
-        {
-            return None;
-        }
-        let passphrase = (!values[4].is_empty()).then(|| values[4].clone());
+        let passphrase =
+            (self.preserve_empty_passphrase || !values[4].is_empty()).then(|| values[4].clone());
         Some(if self.pkcs12 {
             ClientCertificate::Pkcs12 {
                 domain: values[0].clone(),
@@ -88,6 +107,7 @@ impl ProbeApp {
         let mut values = vec![String::new(); 5];
         let mut pkcs12 = false;
         let mut disabled = false;
+        let mut preserve_empty_passphrase = false;
         if let Some(index) = index {
             let Some(certificate) = dialog.draft().client_certificates.get(index) else {
                 return;
@@ -107,6 +127,7 @@ impl ProbeApp {
                         String::new(),
                         passphrase.clone().unwrap_or_default(),
                     ];
+                    preserve_empty_passphrase = passphrase.as_deref() == Some("");
                     disabled = *off;
                 }
                 ClientCertificate::Pkcs12 {
@@ -118,6 +139,7 @@ impl ProbeApp {
                     values[0] = domain.clone();
                     values[3] = pkcs12_file_path.clone();
                     values[4] = passphrase.clone().unwrap_or_default();
+                    preserve_empty_passphrase = passphrase.as_deref() == Some("");
                     disabled = *off;
                     pkcs12 = true;
                 }
@@ -135,11 +157,25 @@ impl ProbeApp {
                     input.set_value(value, window, cx);
                     input
                 });
-                subscriptions.push(cx.subscribe_in(&input, window, |_, _, event, _, cx| {
-                    if let InputEvent::Change = event {
-                        cx.notify();
-                    }
-                }));
+                subscriptions.push(cx.subscribe_in(
+                    &input,
+                    window,
+                    move |view, input, event, _, cx| {
+                        if let InputEvent::Change = event {
+                            if index == 4
+                                && !input.read(cx).value().is_empty()
+                                && let Some(editor) = view
+                                    .environment_manager_dialog
+                                    .as_mut()
+                                    .and_then(|dialog| dialog.certificate_editor.as_mut())
+                                && editor.inputs.get(4) == Some(input)
+                            {
+                                editor.preserve_empty_passphrase = false;
+                            }
+                            cx.notify();
+                        }
+                    },
+                ));
                 input
             })
             .collect();
@@ -150,6 +186,7 @@ impl ProbeApp {
             pkcs12,
             disabled,
             revealed: false,
+            preserve_empty_passphrase,
             inputs,
             _subscriptions: Rc::new(subscriptions),
         });

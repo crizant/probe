@@ -61,6 +61,7 @@ impl ProbeApp {
             let down = cx.weak_entity();
             let mut card = div()
                 .id(("environment-certificate", index))
+                .debug_selector(move || format!("environment-certificate-{index}"))
                 .p(px(theme.metrics.spacing_2))
                 .border_1()
                 .border_color(theme.colors.borders.standard)
@@ -341,6 +342,15 @@ impl ProbeApp {
             }
         }
         form = form.child(components::dialog_description(theme, "Domain and file paths are required. Paths and passphrases accept {{variables}}. Prefer {{secretVariable}} for passphrases; literal values are saved in the collection."));
+        let missing_field = editor.missing_required_field(cx);
+        if let Some(field) = missing_field {
+            form = form.child(
+                components::dialog_description(theme, format!("{field} is required."))
+                    .id("certificate-required-field")
+                    .debug_selector(|| "certificate-required-field".into())
+                    .text_color(theme.colors.status.error),
+            );
+        }
         let cancel = cx.weak_entity();
         let save = cx.weak_entity();
         form.child(
@@ -363,7 +373,7 @@ impl ProbeApp {
                     "Save",
                     components::DialogActionStyle::Primary,
                     None,
-                    editor.certificate(cx).is_none(),
+                    missing_field.is_some(),
                     move |_, window, cx| {
                         let _ =
                             save.update(cx, |view, cx| view.save_certificate_editor(window, cx));

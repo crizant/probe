@@ -818,8 +818,20 @@ only when the target is HTTPS and matches the selected pattern; otherwise the
 request fails with a clear, secret-safe "redirect blocked" diagnostic without
 connecting to the target. HTTPS-to-HTTP redirects are blocked by the same rule.
 Server certificate and hostname verification remain enabled. No native TLS,
-certificate-management UI, environment inheritance, or proprietary YAML fields
-are introduced.
+certificate inheritance, or proprietary YAML fields are introduced.
+
+The desktop Environment Manager has Variables, Secrets, and Client Certificates
+tabs. The certificate tab edits only the selected environment's direct
+`client_certificates`; parent-environment certificates are neither shown nor
+editable. PEM and PKCS#12 forms provide editable paths with Browse, masked
+passphrases with reveal, required-field feedback, enable/disable, and declaration
+ordering. Browse uses workspace-relative paths where possible without copying
+files. Saving trims domains and paths while retaining passphrase text verbatim,
+including an untouched explicit empty value. Literal passphrases remain in YAML;
+the editor does not write to the credential store. Changes use the existing
+`Environment` draft and `prepare_environment_replace_with_description` path,
+including dirty-state protection and external reload/conflict handling.
+Collection-level certificate UI remains deferred.
 
 ## OpenCollection Validation
 
