@@ -134,9 +134,7 @@ fn resolve_path(path: &str, options: &ExecutionOptions) -> Result<PathBuf, HttpE
         .base_directory
         .as_ref()
         .filter(|base| !base.as_os_str().is_empty())
-        .ok_or_else(|| {
-            configuration("relative client certificate/key path requires a base directory")
-        })?;
+        .ok_or_else(|| configuration("relative client identity path requires a base directory"))?;
     Ok(base.join(path))
 }
 
@@ -338,7 +336,7 @@ mod tests {
         assert_eq!(
             identity.load(&ExecutionOptions::default()).await.err(),
             Some(configuration(
-                "relative client certificate/key path requires a base directory"
+                "relative client identity path requires a base directory"
             ))
         );
         let empty_base = ExecutionOptions {
@@ -348,7 +346,7 @@ mod tests {
         assert_eq!(
             identity.load(&empty_base).await.err(),
             Some(configuration(
-                "relative client certificate/key path requires a base directory"
+                "relative client identity path requires a base directory"
             ))
         );
         let absolute = ClientIdentity::new(

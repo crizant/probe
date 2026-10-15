@@ -535,6 +535,21 @@ mod tests {
     }
 
     #[test]
+    fn mac_iterations_above_the_limit_are_rejected_before_verification() {
+        for iterations in [1_000_001, 2_000_000] {
+            let mut pfx = Pfx::from_der(&read("client-protected.p12")).unwrap();
+            pfx.mac_data.as_mut().unwrap().iterations = iterations;
+            let failure = identity_from_pkcs12(&pfx.to_der().unwrap(), Some(PASS)).unwrap_err();
+            assert_eq!(failure, error(INVALID));
+            assert!(failure.is_configuration());
+            assert_eq!(
+                failure.to_string(),
+                "cannot configure HTTP client: malformed or unsupported PKCS#12 container"
+            );
+        }
+    }
+
+    #[test]
     fn pbkdf2_iterations_above_the_limit_are_rejected_before_decryption() {
         for iterations in [1_000_001, 2_000_000] {
             let parameters = pkcs5::pbes2::Parameters::generate_pbkdf2_sha256_aes128cbc(
@@ -568,7 +583,7 @@ mod tests {
         assert_eq!(
             relative.load(&ExecutionOptions::default()).await.err(),
             Some(HttpError::ClientConfiguration(
-                "relative client certificate/key path requires a base directory".into()
+                "relative client identity path requires a base directory".into()
             ))
         );
         let absolute = ClientIdentity::pkcs12(

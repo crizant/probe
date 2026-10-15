@@ -18,7 +18,7 @@ impl fmt::Display for Pkcs12Error {
         f.write_str(match self {
             Self::Unreadable => "cannot read PKCS#12 client certificate file",
             Self::Invalid => "malformed or unsupported PKCS#12 container",
-            Self::Unsupported => "unsupported PKCS#12 encryption or algorithm; use PBES2/PBKDF2 with AES-CBC",
+            Self::Unsupported => "unsupported PKCS#12 algorithm or encryption scheme",
             Self::Decryption => "cannot decrypt PKCS#12: missing or incorrect passphrase",
             Self::Integrity => "PKCS#12 integrity/MAC verification failed: incorrect or missing passphrase, or damaged container",
             Self::NoIdentity => "PKCS#12 contains no usable client identity",

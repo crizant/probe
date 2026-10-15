@@ -423,7 +423,7 @@ mod execution_tests {
             assert_eq!(
                 error,
                 HttpError::ClientConfiguration(
-                    "relative client certificate/key path requires a base directory".into()
+                    "relative client identity path requires a base directory".into()
                 )
             );
         }
