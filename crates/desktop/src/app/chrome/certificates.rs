@@ -21,10 +21,9 @@ impl ProbeApp {
             .min_h(px(0.0))
             .overflow_y_scroll()
             .flex()
-            .flex_col()
-            .gap(px(theme.metrics.spacing_2));
+            .flex_col();
         for (index, certificate) in dialog.draft().client_certificates.iter().enumerate() {
-            let (domain, kind, paths, passphrase, disabled) = match certificate {
+            let (domain, kind, summary, passphrase, disabled) = match certificate {
                 ClientCertificate::Pem {
                     domain,
                     certificate_file_path,
@@ -34,10 +33,9 @@ impl ProbeApp {
                 } => (
                     domain,
                     "PEM",
-                    vec![
-                        format!("Certificate: {certificate_file_path}"),
-                        format!("Private Key: {private_key_file_path}"),
-                    ],
+                    format!(
+                        "Certificate: {certificate_file_path} · Private Key: {private_key_file_path}"
+                    ),
                     passphrase,
                     *disabled,
                 ),
@@ -49,7 +47,7 @@ impl ProbeApp {
                 } => (
                     domain,
                     "PKCS#12",
-                    vec![format!("PKCS#12 File: {pkcs12_file_path}")],
+                    format!("PKCS#12 File: {pkcs12_file_path}"),
                     passphrase,
                     *disabled,
                 ),
@@ -59,117 +57,168 @@ impl ProbeApp {
             let toggle = cx.weak_entity();
             let up = cx.weak_entity();
             let down = cx.weak_entity();
-            let mut card = div()
-                .id(("environment-certificate", index))
-                .debug_selector(move || format!("environment-certificate-{index}"))
-                .p(px(theme.metrics.spacing_2))
-                .border_1()
-                .border_color(theme.colors.borders.standard)
-                .rounded(px(theme.metrics.radius_small))
-                .flex()
-                .flex_col()
-                .gap(px(theme.metrics.spacing_1))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(theme.metrics.spacing_2))
-                        .child(components::truncated_label(domain.clone()).flex_1())
-                        .child(kind)
-                        .child(components::editor_action_button(
-                            theme,
-                            format!("certificate-toggle-{index}"),
-                            if disabled { "Disabled" } else { "Enabled" },
-                            busy,
-                            move |_, _, cx| {
-                                let _ = toggle.update(cx, |view, cx| {
-                                    view.apply_environment_manager_draft(cx, |dialog| {
-                                        match &mut dialog.draft_mut().client_certificates[index] {
-                                            ClientCertificate::Pem { disabled, .. }
-                                            | ClientCertificate::Pkcs12 { disabled, .. } => {
-                                                *disabled = !*disabled
+            list = list.child(
+                div()
+                    .id(("environment-certificate", index))
+                    .debug_selector(move || format!("environment-certificate-{index}"))
+                    .w_full()
+                    .flex_none()
+                    .px(px(theme.metrics.spacing_2))
+                    .py(px(theme.metrics.spacing_2))
+                    .flex()
+                    .items_center()
+                    .gap(px(theme.metrics.spacing_2))
+                    .border_b_1()
+                    .border_color(theme.colors.borders.subtle)
+                    .child(
+                        div()
+                            .w(px(44.0))
+                            .flex_none()
+                            .debug_selector(move || format!("certificate-toggle-{index}"))
+                            .child(components::switch(
+                                theme,
+                                format!("certificate-enabled-{index}"),
+                                format!("Enable certificate for {domain}"),
+                                !disabled,
+                                busy,
+                                move |enabled, _, cx| {
+                                    let _ = toggle.update(cx, |view, cx| {
+                                        view.apply_environment_manager_draft(cx, |dialog| {
+                                            match &mut dialog.draft_mut().client_certificates[index]
+                                            {
+                                                ClientCertificate::Pem { disabled, .. }
+                                                | ClientCertificate::Pkcs12 { disabled, .. } => {
+                                                    *disabled = !enabled
+                                                }
                                             }
+                                        })
+                                    });
+                                },
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(theme.metrics.spacing_1))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(theme.metrics.spacing_2))
+                                    .child(
+                                        components::truncated_label(domain.clone())
+                                            .flex_1()
+                                            .min_w(px(0.0)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .text_size(px(theme.typography.caption_size))
+                                            .text_color(theme.colors.text.muted)
+                                            .child(kind),
+                                    )
+                                    .when(passphrase.is_some(), |row| {
+                                        row.child(
+                                            div()
+                                                .flex_none()
+                                                .text_size(px(theme.typography.caption_size))
+                                                .text_color(theme.colors.text.muted)
+                                                .child("Passphrase: ••••••••"),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                components::truncated_label(summary)
+                                    .text_size(px(theme.typography.caption_size))
+                                    .text_color(theme.colors.text.muted),
+                            ),
+                    )
+                    .child(
+                        components::editor_action_button(
+                            theme,
+                            format!("certificate-edit-{index}"),
+                            "Edit",
+                            busy,
+                            move |_, window, cx| {
+                                let _ = edit.update(cx, |view, cx| {
+                                    view.open_certificate_editor(Some(index), window, cx)
+                                });
+                            },
+                        )
+                        .flex_none(),
+                    )
+                    .child(
+                        components::icon_button(
+                            theme,
+                            format!("certificate-up-{index}"),
+                            "Move certificate up",
+                            components::chevron_icon(theme, true),
+                            move |_, _, cx| {
+                                let _ = up.update(cx, |view, cx| {
+                                    view.apply_environment_manager_draft(cx, |dialog| {
+                                        if index > 0 {
+                                            dialog
+                                                .draft_mut()
+                                                .client_certificates
+                                                .swap(index, index - 1);
                                         }
                                     })
                                 });
                             },
-                        )),
-                );
-            for path in paths {
-                card = card.child(
-                    components::truncated_label(path).text_color(theme.colors.text.secondary),
-                );
-            }
-            if passphrase.is_some() {
-                card = card.child("Passphrase: ••••••••");
-            }
-            card = card.child(
-                div()
-                    .flex()
-                    .gap(px(theme.metrics.spacing_2))
-                    .child(components::editor_action_button(
-                        theme,
-                        format!("certificate-edit-{index}"),
-                        "Edit",
-                        busy,
-                        move |_, window, cx| {
-                            let _ = edit.update(cx, |view, cx| {
-                                view.open_certificate_editor(Some(index), window, cx)
-                            });
-                        },
-                    ))
-                    .child(components::editor_action_button(
-                        theme,
-                        format!("certificate-delete-{index}"),
-                        "Delete",
-                        busy,
-                        move |_, _, cx| {
-                            let _ = delete.update(cx, |view, cx| {
-                                view.apply_environment_manager_draft(cx, |dialog| {
-                                    dialog.draft_mut().client_certificates.remove(index);
-                                })
-                            });
-                        },
-                    ))
-                    .child(components::editor_action_button(
-                        theme,
-                        format!("certificate-up-{index}"),
-                        "Move up",
-                        busy || index == 0,
-                        move |_, _, cx| {
-                            let _ = up.update(cx, |view, cx| {
-                                view.apply_environment_manager_draft(cx, |dialog| {
-                                    if index > 0 {
-                                        dialog
-                                            .draft_mut()
-                                            .client_certificates
-                                            .swap(index, index - 1);
-                                    }
-                                })
-                            });
-                        },
-                    ))
-                    .child(components::editor_action_button(
-                        theme,
-                        format!("certificate-down-{index}"),
-                        "Move down",
-                        busy || index + 1 == dialog.draft().client_certificates.len(),
-                        move |_, _, cx| {
-                            let _ = down.update(cx, |view, cx| {
-                                view.apply_environment_manager_draft(cx, |dialog| {
-                                    let certificates = &mut dialog.draft_mut().client_certificates;
-                                    if index + 1 < certificates.len() {
-                                        certificates.swap(index, index + 1);
-                                    }
-                                })
-                            });
-                        },
-                    )),
+                        )
+                        .flex_none()
+                        .disabled(busy || index == 0),
+                    )
+                    .child(
+                        components::icon_button(
+                            theme,
+                            format!("certificate-down-{index}"),
+                            "Move certificate down",
+                            components::chevron_icon(theme, false),
+                            move |_, _, cx| {
+                                let _ = down.update(cx, |view, cx| {
+                                    view.apply_environment_manager_draft(cx, |dialog| {
+                                        let certificates =
+                                            &mut dialog.draft_mut().client_certificates;
+                                        if index + 1 < certificates.len() {
+                                            certificates.swap(index, index + 1);
+                                        }
+                                    })
+                                });
+                            },
+                        )
+                        .flex_none()
+                        .disabled(busy || index + 1 == dialog.draft().client_certificates.len()),
+                    )
+                    .child(
+                        components::remove_row_button(
+                            theme,
+                            format!("certificate-delete-{index}"),
+                            format!("Remove certificate for {domain}"),
+                            move |_, _, cx| {
+                                let _ = delete.update(cx, |view, cx| {
+                                    view.apply_environment_manager_draft(cx, |dialog| {
+                                        dialog.draft_mut().client_certificates.remove(index);
+                                    })
+                                });
+                            },
+                        )
+                        .flex_none()
+                        .disabled(busy),
+                    ),
             );
-            list = list.child(card);
         }
         if dialog.draft().client_certificates.is_empty() {
-            list = list.child("No client certificates in this environment.");
+            list = list.child(
+                div()
+                    .px(px(theme.metrics.spacing_2))
+                    .py(px(theme.metrics.spacing_2))
+                    .text_color(theme.colors.text.muted)
+                    .child("No client certificates in this environment."),
+            );
         }
         let add = cx.weak_entity();
         div()
@@ -178,20 +227,54 @@ impl ProbeApp {
             .min_h(px(0.0))
             .flex()
             .flex_col()
-            .gap(px(theme.metrics.spacing_2))
+            .overflow_hidden()
+            .rounded(px(theme.metrics.radius_small))
+            .border_1()
+            .border_color(theme.colors.borders.standard)
+            .child(
+                div()
+                    .h(px(30.0))
+                    .flex_none()
+                    .px(px(theme.metrics.spacing_2))
+                    .flex()
+                    .items_center()
+                    .gap(px(theme.metrics.spacing_2))
+                    .bg(theme.colors.surfaces.raised)
+                    .border_b_1()
+                    .border_color(theme.colors.borders.subtle)
+                    .text_size(px(theme.typography.caption_size))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.colors.text.muted)
+                    .child(div().w(px(44.0)).child("ON"))
+                    .child(div().flex_1().child("CERTIFICATE")),
+            )
             .child(list)
             .child(
-                components::editor_add_button(
-                    theme,
-                    "certificate-add",
-                    "Add Certificate",
-                    move |_, window, cx| {
-                        let _ = add.update(cx, |view, cx| {
-                            view.open_certificate_editor(None, window, cx)
-                        });
-                    },
-                )
-                .disabled(busy),
+                div()
+                    .id("certificate-list-footer")
+                    .debug_selector(|| "certificate-list-footer".into())
+                    .w_full()
+                    .flex_none()
+                    .px(px(theme.metrics.spacing_2))
+                    .py(px(theme.metrics.spacing_1))
+                    .flex()
+                    .items_center()
+                    .border_t_1()
+                    .border_color(theme.colors.borders.subtle)
+                    .child(
+                        components::editor_add_button(
+                            theme,
+                            "certificate-add",
+                            "Add Certificate",
+                            move |_, window, cx| {
+                                let _ = add.update(cx, |view, cx| {
+                                    view.open_certificate_editor(None, window, cx)
+                                });
+                            },
+                        )
+                        .flex_none()
+                        .disabled(busy),
+                    ),
             )
             .into_any_element()
     }
@@ -302,11 +385,10 @@ impl ProbeApp {
                 );
             if (1..=3).contains(&field) {
                 let view = cx.weak_entity();
-                row = row.child(components::editor_action_button(
+                row = row.child(components::browse_file_button(
                     theme,
                     format!("certificate-browse-{field}"),
-                    "Browse…",
-                    false,
+                    format!("Browse {label}"),
                     move |_, window, cx| {
                         let _ = view.update(cx, |view, cx| {
                             view.browse_certificate_path(field, window, cx)

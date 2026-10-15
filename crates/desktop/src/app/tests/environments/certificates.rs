@@ -72,6 +72,12 @@ fn certificate_tabs_keep_variables_and_secrets_and_mask_passphrases(cx: &mut Tes
             .is_none()
     );
     click(&workspace, cx, "environment-tab-2");
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-list-footer")
+            .is_some()
+    );
     click(&workspace, cx, "certificate-add");
     fill(&workspace, cx, 0, "api.example.com");
     fill(&workspace, cx, 1, "{{certPath}}");
@@ -202,6 +208,15 @@ fn certificate_crud_order_disable_save_and_dirty_switching(cx: &mut TestAppConte
         fill(&workspace, cx, 4, "literal password");
         click(&workspace, cx, "certificate-save");
     }
+    let original_order = certificates(&workspace, cx);
+    click(&workspace, cx, "certificate-up-0");
+    click(&workspace, cx, "certificate-down-1");
+    assert_eq!(
+        certificates(&workspace, cx),
+        original_order,
+        "boundary chevrons must be disabled"
+    );
+    // These clicks now exercise the same switches used by Variables.
     click(&workspace, cx, "certificate-toggle-0");
     click(&workspace, cx, "certificate-toggle-1");
     click(&workspace, cx, "certificate-up-1");
