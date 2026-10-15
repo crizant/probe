@@ -620,7 +620,7 @@ impl ProbeApp {
                     components::editor_add_button(
                         theme,
                         "environment-manager-add-variable",
-                        "Add variable",
+                        "Add Variable",
                         move |_, _, cx| {
                             let _ = add_variable_view.update(cx, |view, cx| {
                                 view.add_environment_manager_variable(
@@ -645,7 +645,7 @@ impl ProbeApp {
                     components::editor_add_button(
                         theme,
                         "environment-manager-add-secret",
-                        "Add secret",
+                        "Add Secret",
                         move |_, _, cx| {
                             let _ = add_secret_view.update(cx, |view, cx| {
                                 view.add_environment_manager_variable(

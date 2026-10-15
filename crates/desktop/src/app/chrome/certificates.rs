@@ -297,6 +297,7 @@ impl ProbeApp {
                 components::dialog_description(theme, CERTIFICATE_ORDER_DESCRIPTION)
                     .id("certificate-order-description")
                     .debug_selector(|| "certificate-order-description".into())
+                    .pl(px(theme.metrics.spacing_2))
                     .flex_none()
                     .text_size(px(theme.typography.caption_size))
                     .text_color(theme.colors.text.muted),
