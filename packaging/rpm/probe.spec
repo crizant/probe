@@ -9,7 +9,7 @@ Name:           probe
 Version:        %{probe_version}
 Release:        1
 Summary:        Fast, native, local-first API client
-License:        MIT OR Apache-2.0
+License:        Apache-2.0
 URL:            https://github.com/crizant/probe
 
 %description
