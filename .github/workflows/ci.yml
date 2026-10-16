@@ -72,6 +72,24 @@ jobs:
       - name: Validate RPM packages
         run: bash scripts/test-rpm.sh
 
+  deb:
+    name: DEB packaging
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install DEB packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            binutils \
+            desktop-file-utils \
+            file \
+            gcc \
+            libc6-dev \
+            dpkg-dev
+      - name: Validate DEB packages
+        run: bash scripts/test-deb.sh
+
   advisories:
     name: Dependency advisories
     runs-on: ubuntu-latest

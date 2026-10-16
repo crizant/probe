@@ -302,12 +302,65 @@ jobs:
             dist/rpm/probe-desktop-*.rpm
           if-no-files-found: error
 
+  package-deb:
+    name: Package Linux DEBs
+    needs:
+      - build-cli
+      - build-desktop
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install DEB packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            binutils \
+            desktop-file-utils \
+            file \
+            dpkg-dev \
+            libvulkan1 \
+            libwayland-client0 \
+            libwayland-cursor0 \
+            libwayland-egl1 \
+            libx11-xcb1 \
+            libxkbcommon-x11-0
+      - name: Download Linux release archives
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-*-linux-x64
+          path: dist/archives
+          merge-multiple: true
+      - name: Package release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/extract/cli dist/extract/desktop
+          tar -xzf "dist/archives/probe-cli-${version}-linux-x64.tar.gz" -C dist/extract/cli
+          tar -xzf "dist/archives/probe-desktop-${version}-linux-x64.tar.gz" -C dist/extract/desktop
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          scripts/build-deb.sh \
+            --cli dist/extract/cli/probe \
+            --desktop dist/extract/desktop/probe-desktop \
+            --expect-version "$version" \
+            --output-dir dist/deb
+      - name: Upload DEB artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-deb-linux-x64
+          path: |
+            dist/deb/probe-cli-*.deb
+            dist/deb/probe-desktop-*.deb
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub Release
     needs:
       - build-cli
       - build-desktop
       - package-rpm
+      - package-deb
     runs-on: ubuntu-latest
     permissions:
       contents: write
