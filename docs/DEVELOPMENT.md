@@ -40,6 +40,46 @@ packaging with stand-in binaries.
 `scripts/build-rpm.sh` runs `scripts/verify-rpm.sh` before copying packages
 into the release output.
 
+## Linux DEB Packages
+
+Tagged releases also publish `probe-cli-<version>-linux-x64.deb` and
+`probe-desktop-<version>-linux-x64.deb`. The `package-deb` release job downloads
+and extracts the existing CLI and desktop Linux tarballs; it never builds Probe.
+The packages are named `probe` and `probe-desktop`, with architecture `amd64`.
+They install executables in `/usr/bin`; desktop also installs the shared desktop
+file and hicolor icons, depends on `hicolor-icon-theme`, and recommends the exact
+matching CLI version.
+
+On a Debian/Ubuntu amd64 host, install `dpkg-dev`, `binutils`, `file`, and
+`desktop-file-utils`, plus the runtime libraries needed by the supplied binaries.
+`dpkg-shlibdeps` derives package dependencies from each actual ELF using the
+host's Debian symbols/shlibs metadata. Missing libraries or dependency metadata
+fail the build. Development packages are not copied into package dependencies.
+
+```bash
+scripts/build-deb.sh --cli path/to/probe --desktop path/to/probe-desktop \
+  --output-dir dist/deb
+scripts/verify-deb.sh dist/deb
+bash scripts/test-deb.sh
+```
+
+The version comes from `Cargo.toml`; `--expect-version` checks the original
+SemVer. Debian control versions use a tilde for prereleases and revision `-1`
+(e.g. `0.11.0-beta.1` becomes `0.11.0~beta.1-1`). Build metadata is omitted
+from control versions because it has no SemVer precedence. Asset filenames keep
+the complete original SemVer. Packaging never strips or rewrites binaries and
+checks extracted executables against the supplied files before publishing output.
+Both packages are staged and verified before replacing matching output files;
+unrelated output files are preserved. CI tests packaging with small ELF stand-ins
+(`gcc` and `libc6-dev` are needed for those tests).
+
+These are upstream binary packages, not Debian source packages. Release dependency
+metadata is generated on Ubuntu 22.04 to match the existing Linux build baseline;
+this does not guarantee compatibility with every Debian/Ubuntu release. Target
+systems must provide the required library ABIs and versions. ELF dependency scans
+do not discover libraries loaded only at runtime, graphics drivers, or desktop
+portal services. Desktop launch still needs a working graphical session.
+
 ## Rust and Async Work
 
 - Prefer normal ownership, GPUI entity ownership, message passing, task results, and
