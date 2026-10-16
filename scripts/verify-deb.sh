@@ -10,7 +10,7 @@ version="$(workspace_version "$repo_root/Cargo.toml")" || die 'cannot read works
 deb_version="$(deb_version_from_semver "$version")" || die "unsupported SemVer: $version"
 output_dir="$1"
 [[ -d "$output_dir" ]] || die "DEB output directory not found: $output_dir"
-for tool in dpkg-deb file desktop-file-validate; do
+for tool in dpkg-deb file desktop-file-validate gzip md5sum; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
 done
 extract="$(mktemp -d)"
@@ -29,15 +29,25 @@ for name in probe probe-desktop; do
   [[ -x "$root/usr/bin/$name" ]] || die "missing executable: $name"
   description="$(file -b "$root/usr/bin/$name")"
   [[ "$description" == *"ELF 64-bit"*"executable"*x86-64* ]] || die "not an x86_64 ELF executable: $name"
-  cmp -s "$root/usr/share/doc/$name/copyright" "$repo_root/LICENSE" || die "incorrect license: $name"
+  cmp -s "$root/usr/share/doc/$name/copyright" "$repo_root/packaging/deb/copyright" || die "incorrect license: $name"
   cmp -s "$root/usr/share/doc/$name/README.md" "$repo_root/README.md" || die "incorrect README: $name"
+  dpkg-deb --control "$package" "$root/DEBIAN"
+  [[ -s "$root/DEBIAN/md5sums" ]] || die "missing md5sums: $name"
+  (cd "$root" && md5sum --check --quiet DEBIAN/md5sums) || die "invalid payload checksums: $name"
+  changelog="$(gzip -cd "$root/usr/share/doc/$name/changelog.Debian.gz")"
+  [[ "$changelog" == "probe ($deb_version) unstable; urgency=medium"* ]] || die "incorrect changelog: $name"
   if [[ "$name" == probe ]]; then
-    help_output="$("$root/usr/bin/probe" --help)"
-    [[ -n "$help_output" ]] || die 'packaged CLI produced no --help output'
+    version_output="$("$root/usr/bin/probe" --version)"
+    [[ "$version_output" == "probe $version" ]] || die "packaged CLI version is '$version_output', expected 'probe $version'"
   else
     depends="$(dpkg-deb --field "$package" Depends)"
     [[ ", $depends," == *", hicolor-icon-theme,"* ]] || die 'missing hicolor-icon-theme dependency'
-    [[ "$(dpkg-deb --field "$package" Recommends)" == "probe (= $deb_version)" ]] || die 'incorrect CLI recommendation'
+    [[ ", $depends," == *", libvulkan1,"* ]] || die 'missing Vulkan loader dependency'
+    recommends="$(dpkg-deb --field "$package" Recommends)"
+    [[ ", $recommends," == *", probe (= $deb_version),"* ]] || die 'incorrect CLI recommendation'
+    for library in libwayland-client0 libwayland-egl1 libegl1; do
+      [[ ", $recommends," == *", $library,"* ]] || die "missing $library recommendation"
+    done
     desktop_file=usr/share/applications/dev.probe.desktop.desktop
     cmp -s "$root/$desktop_file" "$repo_root/packaging/linux/dev.probe.desktop.desktop" || die 'incorrect desktop file'
     desktop-file-validate "$root/$desktop_file"

@@ -28,6 +28,7 @@ done
 command -v gcc >/dev/null 2>&1 || die "gcc is required"
 command -v dpkg-deb >/dev/null 2>&1 || die "dpkg-deb is required"
 
+export SOURCE_DATE_EPOCH=1700000000
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -36,6 +37,10 @@ cat >"$tmp/probe.c" <<'EOF'
 #include <string.h>
 
 int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--version") == 0) {
+        puts("probe " PROBE_VERSION);
+        return 0;
+    }
     if (argc > 1 && strcmp(argv[1], "--help") == 0) {
 #ifdef DESKTOP
         puts("probe-desktop");
@@ -47,8 +52,8 @@ int main(int argc, char **argv) {
     return 0;
 }
 EOF
-gcc -o "$tmp/probe" "$tmp/probe.c"
-gcc -DDESKTOP -o "$tmp/probe-desktop" "$tmp/probe.c"
+gcc "-DPROBE_VERSION=\"$version\"" -o "$tmp/probe" "$tmp/probe.c"
+gcc "-DPROBE_VERSION=\"$version\"" -DDESKTOP -o "$tmp/probe-desktop" "$tmp/probe.c"
 description="$(file -b "$tmp/probe")"
 case "$description" in
   *x86-64* | *x86_64*) ;;
@@ -134,12 +139,14 @@ stage_tree() {
   mkdir -p \
     "$dest/scripts" \
     "$dest/packaging/linux" \
+    "$dest/packaging/deb" \
     "$dest/crates/desktop/assets/app-icon/linux"
   cp -p "$repo_root/scripts/build-deb.sh" "$dest/scripts/build-deb.sh"
   cp -p "$repo_root/scripts/verify-deb.sh" "$dest/scripts/verify-deb.sh"
   cp -p "$repo_root/scripts/workspace-version.sh" "$dest/scripts/workspace-version.sh"
   cp -p "$repo_root/packaging/linux/dev.probe.desktop.desktop" \
     "$dest/packaging/linux/dev.probe.desktop.desktop"
+  cp -p "$repo_root/packaging/deb/copyright" "$dest/packaging/deb/copyright"
   cp -p "$repo_root/LICENSE" "$dest/LICENSE"
   cp -p "$repo_root/README.md" "$dest/README.md"
   cp -R "$repo_root/crates/desktop/assets/app-icon/linux/hicolor" \
@@ -178,8 +185,14 @@ set -e
   || die "--expect-version accepted the converted DEB version"
 grep -q 'does not match expected version' "$tmp/prerelease-expect.err" \
   || die "--expect-version did not reject the converted DEB version"
+if bash "$tmp/prerelease/scripts/build-deb.sh" --cli "$tmp/probe" \
+  --desktop "$tmp/probe-desktop" --output-dir "$tmp/wrong-version" >"$tmp/version.out" 2>&1; then
+  die 'packaging accepted a CLI binary with the wrong --version'
+fi
+grep -q 'packaged CLI version' "$tmp/version.out" || die 'version verification did not fail'
+gcc "-DPROBE_VERSION=\"$prerelease\"" -o "$tmp/prerelease-probe" "$tmp/probe.c"
 bash "$tmp/prerelease/scripts/build-deb.sh" \
-  --cli "$tmp/probe" \
+  --cli "$tmp/prerelease-probe" \
   --desktop "$tmp/probe-desktop" \
   --expect-version "$prerelease" \
   --output-dir "$tmp/prerelease-out"
@@ -191,6 +204,15 @@ packaged_deb_version="$(
   || die "prerelease DEB version is ${packaged_deb_version}, expected ${deb_prerelease}"
 [[ -f "$tmp/prerelease-out/probe-desktop-${prerelease}-linux-x64.deb" ]] \
   || die "prerelease desktop asset did not keep the SemVer filename"
+
+# Packaging the same bytes at different input mtimes must be reproducible.
+touch -d '@1800000000' "$tmp/probe" "$tmp/probe-desktop"
+bash "$repo_root/scripts/build-deb.sh" --cli "$tmp/probe" --desktop "$tmp/probe-desktop" \
+  --output-dir "$tmp/reproduced"
+for asset in probe-cli probe-desktop; do
+  cmp "$output/$asset-$version-linux-x64.deb" "$tmp/reproduced/$asset-$version-linux-x64.deb" \
+    || die "non-reproducible $asset package"
+done
 
 # Inspect dependency metadata derived from real dynamically linked stand-ins.
 for asset in probe-cli probe-desktop; do
@@ -214,6 +236,30 @@ if bash "$repo_root/scripts/verify-deb.sh" "$tmp/tampered" >"$tmp/tampered.out" 
   die 'verification accepted incorrect package architecture'
 fi
 grep -q 'incorrect architecture' "$tmp/tampered.out" || die 'verifier failed for an unexpected reason'
+# Each library loaded by name must be represented in desktop metadata.
+for library in libvulkan1 libwayland-client0 libwayland-egl1 libegl1; do
+  root="$tmp/without-$library"
+  dpkg-deb --raw-extract "$output/probe-desktop-$version-linux-x64.deb" "$root"
+  sed -i "s/, $library//" "$root/DEBIAN/control"
+  chmod 0755 "$root/DEBIAN"
+  dpkg-deb --root-owner-group --build "$root" "$tmp/tampered/probe-desktop-$version-linux-x64.deb" >/dev/null
+  cp "$output/probe-cli-$version-linux-x64.deb" "$tmp/tampered/"
+  if bash "$repo_root/scripts/verify-deb.sh" "$tmp/tampered" >"$tmp/library.out" 2>&1; then
+    die "verifier accepted missing $library metadata"
+  fi
+  grep -q "missing.*${library/libvulkan1/Vulkan loader}" "$tmp/library.out" || die 'unexpected verifier failure'
+done
+# A payload edit must invalidate the generated md5sums.
+root="$tmp/changed-payload"
+dpkg-deb --raw-extract "$output/probe-cli-$version-linux-x64.deb" "$root"
+printf 'changed\n' >>"$root/usr/bin/probe"
+chmod 0755 "$root/DEBIAN"
+dpkg-deb --root-owner-group --build "$root" "$tmp/tampered/probe-cli-$version-linux-x64.deb" >/dev/null
+cp "$output/probe-desktop-$version-linux-x64.deb" "$tmp/tampered/"
+if bash "$repo_root/scripts/verify-deb.sh" "$tmp/tampered" >"$tmp/payload.out" 2>&1; then
+  die 'verifier accepted a modified payload'
+fi
+grep -q 'invalid payload checksums' "$tmp/payload.out" || die 'payload checksum verification did not fail'
 if bash "$repo_root/scripts/verify-deb.sh" "$stale" >"$tmp/verify.out" 2>&1; then
   die 'verification accepted stale non-packages'
 fi

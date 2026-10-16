@@ -83,7 +83,7 @@ output_dir="${output_dir:-$repo_root/dist/deb}"
 [[ -f "$desktop_bin" ]] || die "desktop binary not found: ${desktop_bin}"
 [[ -x "$cli_bin" && -x "$desktop_bin" ]] || die "prebuilt binaries must be executable"
 
-for tool in dpkg dpkg-deb dpkg-shlibdeps file desktop-file-validate; do
+for tool in dpkg dpkg-deb dpkg-shlibdeps file desktop-file-validate gzip md5sum; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
 done
 
@@ -94,6 +94,16 @@ for binary in "$cli_bin" "$desktop_bin"; do
     *) die "DEB packages support only Linux x86_64 executables; $binary is $description" ;;
   esac
 done
+
+# A caller may supply the release timestamp. Otherwise use the source commit,
+# never the wall clock. Exported tarball source trees must supply the epoch.
+if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then
+  SOURCE_DATE_EPOCH="$(git -C "$repo_root" log -1 --format=%ct)" \
+    || die 'set SOURCE_DATE_EPOCH when packaging outside a Git checkout'
+fi
+[[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || die 'SOURCE_DATE_EPOCH must be a nonnegative integer'
+export SOURCE_DATE_EPOCH
+changelog_date="$(LC_ALL=C date -u -d "@$SOURCE_DATE_EPOCH" '+%a, %d %b %Y %H:%M:%S +0000')"
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
@@ -112,10 +122,10 @@ EOF
 
 package_binary() {
   local name="$1" binary="$2" asset="$3"
-  local root="$stage/debian/$name" dependencies
+  local root="$stage/debian/$name" dependencies synopsis details
   mkdir -p "$root/DEBIAN"
   install -D -p -m 0755 "$binary" "$root/usr/bin/$name"
-  install -D -p -m 0644 "$repo_root/LICENSE" "$root/usr/share/doc/$name/copyright"
+  install -D -p -m 0644 "$repo_root/packaging/deb/copyright" "$root/usr/share/doc/$name/copyright"
   install -D -p -m 0644 "$repo_root/README.md" "$root/usr/share/doc/$name/README.md"
   # Analyze the staged ELF, not a build dependency list. Missing libraries or
   # missing Debian shlibs/symbols metadata are fatal; never guess dependencies.
@@ -134,7 +144,9 @@ package_binary() {
     || die "dpkg-shlibdeps did not return Depends for $name"
   dependencies="${dependencies#shlibs:Depends=}"
   if [[ "$name" == probe-desktop ]]; then
-    dependencies="${dependencies:+$dependencies, }hicolor-icon-theme"
+    # GPUI loads these libraries by name; ELF DT_NEEDED scanning cannot see
+    # them. Vulkan is required for rendering; Wayland/EGL are optional on X11.
+    dependencies="${dependencies:+$dependencies, }hicolor-icon-theme, libvulkan1"
     install -D -p -m 0644 "$repo_root/packaging/linux/dev.probe.desktop.desktop" \
       "$root/usr/share/applications/dev.probe.desktop.desktop"
     desktop-file-validate "$root/usr/share/applications/dev.probe.desktop.desktop"
@@ -144,6 +156,25 @@ package_binary() {
         "$root/usr/share/icons/hicolor/${size}x${size}/apps/dev.probe.desktop.png"
     done
   fi
+  if [[ "$name" == probe ]]; then
+    synopsis='command-line client for local API collections'
+    details=' Validate OpenCollection collections and run HTTP requests from the terminal.
+ Probe keeps API collections and environments in local files, with structured
+ output for scripts and automation.'
+  else
+    synopsis='native desktop client for local API collections'
+    details=' Create and run HTTP requests in a native graphical interface.
+ Probe manages OpenCollection collections and environments in local files
+ and shares the same request engine as the Probe command-line client.'
+  fi
+  cat >"$root/usr/share/doc/$name/changelog.Debian" <<EOF
+probe ($deb_version) unstable; urgency=medium
+
+  * Package upstream Probe $version prebuilt Linux binaries.
+
+ -- Probe Contributors <probe@users.noreply.github.com>  $changelog_date
+EOF
+  gzip -n -9 "$root/usr/share/doc/$name/changelog.Debian"
   cat >"$root/DEBIAN/control" <<EOF
 Package: $name
 Version: $deb_version
@@ -153,15 +184,21 @@ Priority: optional
 Maintainer: Probe Contributors <probe@users.noreply.github.com>
 Homepage: https://github.com/crizant/probe
 Installed-Size: $(du -sk "$root/usr" | awk '{print $1}')
-Description: Fast, native, local-first API client ($name)
- Probe provides native tools for local API work.
+Description: $synopsis
+$details
 EOF
   if [[ -n "$dependencies" ]]; then
     printf 'Depends: %s\n' "$dependencies" >>"$root/DEBIAN/control"
   fi
   if [[ "$name" == probe-desktop ]]; then
-    printf 'Recommends: probe (= %s)\n' "$deb_version" >>"$root/DEBIAN/control"
+    printf 'Recommends: probe (= %s), libwayland-client0, libwayland-egl1, libegl1\n' "$deb_version" >>"$root/DEBIAN/control"
   fi
+  # Debian records checksums relative to the package root, excluding DEBIAN.
+  (cd "$root" && find usr -type f -print0 | LC_ALL=C sort -z | xargs -0 md5sum) \
+    >"$root/DEBIAN/md5sums"
+  chmod 0644 "$root/DEBIAN/"* "$root/usr/share/doc/$name/changelog.Debian.gz"
+  # Normalize generated and input mtimes as well as directory timestamps.
+  find "$root" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
   # dpkg-deb only archives the payload: no stripping or other ELF rewriting.
   find "$root" -type d -exec chmod 0755 {} +
   dpkg-deb --root-owner-group -Zxz --build "$root" \

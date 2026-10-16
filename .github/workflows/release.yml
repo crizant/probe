@@ -319,10 +319,6 @@ jobs:
             desktop-file-utils \
             file \
             dpkg-dev \
-            libasound2 \
-            libfontconfig1 \
-            libglib2.0-0 \
-            libssl3 \
             libvulkan1 \
             libwayland-client0 \
             libwayland-cursor0 \
@@ -343,6 +339,7 @@ jobs:
           mkdir -p dist/extract/cli dist/extract/desktop
           tar -xzf "dist/archives/probe-cli-${version}-linux-x64.tar.gz" -C dist/extract/cli
           tar -xzf "dist/archives/probe-desktop-${version}-linux-x64.tar.gz" -C dist/extract/desktop
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           scripts/build-deb.sh \
             --cli dist/extract/cli/probe \
             --desktop dist/extract/desktop/probe-desktop \
