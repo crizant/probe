@@ -4,7 +4,10 @@ use probe_core::{FieldPatch, Request, RequestProtocol, RequestProtocolError, Req
 use probe_opencollection::load_workspace;
 use serde_yaml_ng::Value;
 
-use super::support::{TemporaryPath, fixture, temporary_path};
+use super::{
+    request,
+    support::{TemporaryPath, fixture, temporary_path},
+};
 
 fn request_document(protocol: &str, runtime: Option<&str>) -> Value {
     let mut request: Value = serde_yaml_ng::from_str(&format!(
@@ -20,10 +23,10 @@ fn request_document(protocol: &str, runtime: Option<&str>) -> Value {
 fn document_text(bundled: bool, request: Value) -> String {
     let document = if bundled {
         let mut root: Value = serde_yaml_ng::from_str(
-            "opencollection: 1.0.0\ninfo: {name: Runtime preservation}\nbundled: true\nitems: []\n",
+            "opencollection: 1.0.0\ninfo: {name: Runtime preservation}\nbundled: true\n",
         )
         .unwrap();
-        root["items"].as_sequence_mut().unwrap().push(request);
+        root["items"] = Value::Sequence(vec![request]);
         root
     } else {
         request
@@ -68,29 +71,16 @@ fn clearing_assertions_only_removes_the_assertion_field_and_its_emptied_containe
                     write_workspace(bundled, request_document(protocol, runtime));
                 let expected = document_text(bundled, request_document(protocol, expected_runtime));
                 let mut loaded = load_workspace(&root).unwrap();
-                // Repeated Clear must not create a runtime mapping or remove a
-                // pre-existing empty mapping or another runtime declaration.
+                let clear = RequestUpdate {
+                    assertions: FieldPatch::Clear,
+                    ..Default::default()
+                };
+                // Repeated Clear preserves absent/empty runtimes and other runtime fields.
                 for _ in 0..2 {
-                    loaded
-                        .update_request(
-                            selector,
-                            &RequestUpdate {
-                                assertions: FieldPatch::Clear,
-                                ..Default::default()
-                            },
-                        )
-                        .unwrap();
+                    loaded.update_request(selector, &clear).unwrap();
                     assert_eq!(fs::read_to_string(&file).unwrap(), expected);
                     let reloaded = load_workspace(&root).unwrap();
-                    assert_eq!(
-                        reloaded
-                            .workspace()
-                            .request(reloaded.request_key(selector).unwrap())
-                            .unwrap()
-                            .runtime
-                            .assertions,
-                        None
-                    );
+                    assert_eq!(request(&reloaded, selector).runtime.assertions, None);
                 }
             }
         }
@@ -108,39 +98,45 @@ fn websocket_assertion_set_and_clear_leave_the_domain_and_saved_yaml_unchanged()
                 write_workspace(bundled, request_document("websocket", runtime));
             let source = fs::read(&file).unwrap();
             let mut loaded = load_workspace(&root).unwrap();
-            let original = loaded
-                .workspace()
-                .request(loaded.request_key(selector).unwrap())
-                .unwrap()
-                .clone();
+            let original = request(&loaded, selector).clone();
             for assertions in [FieldPatch::Set(vec![]), FieldPatch::Clear] {
                 let update = RequestUpdate {
                     assertions,
                     ..Default::default()
                 };
-                let mut request = original.clone();
+                let mut edited = original.clone();
                 assert!(matches!(
-                    update.apply(&mut request),
+                    update.apply(&mut edited),
                     Err(RequestProtocolError::UnsupportedField {
                         protocol: RequestProtocol::WebSocket,
                         field: "runtime assertions"
                     })
                 ));
-                assert_eq!(request, original);
+                assert_eq!(edited, original);
                 assert!(loaded.update_request(selector, &update).is_err());
                 assert_eq!(fs::read(&file).unwrap(), source);
-                assert_eq!(
-                    loaded
-                        .workspace()
-                        .request(loaded.request_key(selector).unwrap()),
-                    Some(&original)
-                );
+                assert_eq!(request(&loaded, selector), &original);
                 // Prepared saves use the YAML update path directly.
                 assert!(
                     loaded
-                        .prepare_request_save(selector, update)
+                        .prepare_request_save(selector, update.clone())
                         .unwrap()
                         .execute()
+                        .is_err()
+                );
+                assert_eq!(fs::read(&file).unwrap(), source);
+                assert!(
+                    loaded
+                        .apply_structure(super::StructureOperation::CreateRequest {
+                            parent: None,
+                            index: None,
+                            name: "WebSocket".into(),
+                            method: None,
+                            url: Some("wss://example.com".into()),
+                            protocol: RequestProtocol::WebSocket,
+                            graphql: None,
+                            update: Some(update),
+                        })
                         .is_err()
                 );
                 assert_eq!(fs::read(&file).unwrap(), source);
@@ -157,11 +153,7 @@ fn reconciliation_conflict_keeps_baseline_runtime_yaml_when_saving_an_unrelated_
             let document = request_document(protocol, Some(runtime));
             let (root, file, selector) = write_workspace(bundled, document.clone());
             let mut loaded = load_workspace(&root).unwrap();
-            let baseline = loaded
-                .workspace()
-                .request(loaded.request_key(selector).unwrap())
-                .unwrap()
-                .clone();
+            let baseline = request(&loaded, selector).clone();
             let mut local = baseline.clone();
             local.runtime.assertions = None;
             local.url = Some("https://example.com/edited".into());
@@ -180,32 +172,7 @@ fn reconciliation_conflict_keeps_baseline_runtime_yaml_when_saving_an_unrelated_
                 document_text(bundled, expected)
             );
             let reloaded = load_workspace(&root).unwrap();
-            assert_eq!(
-                reloaded
-                    .workspace()
-                    .request(reloaded.request_key(selector).unwrap()),
-                Some(&merged)
-            );
-        }
-    }
-}
-
-#[test]
-fn malformed_non_first_assertion_reports_its_index_in_both_layouts() {
-    let runtime = "{assertions: [{expression: response.status, operator: equals, value: '200'}, {expression: response.body.token, operator: isDefined}, {expression: response.status, operator: equals, value: 200}]}";
-    let expected = "runtime.assertions[2]: assertion.value must be a string";
-    for bundled in [true, false] {
-        for protocol in ["http", "graphql"] {
-            let document = request_document(protocol, Some(runtime));
-            let (root, _, _) = write_workspace(bundled, document.clone());
-            let error = load_workspace(&root).unwrap_err().to_string();
-            assert!(error.ends_with(expected), "{error}");
-            if bundled {
-                let error = super::parse(&document_text(true, document))
-                    .unwrap_err()
-                    .to_string();
-                assert!(error.ends_with(expected), "{error}");
-            }
+            assert_eq!(request(&reloaded, selector), &merged);
         }
     }
 }
@@ -268,50 +235,92 @@ fn bundled_domain_creation_rejects_websocket_assertions_before_writing_any_files
 }
 
 #[test]
-fn invalid_assertion_descriptions_have_indexed_field_specific_errors_only() {
-    let expected = "runtime.assertions[1]: assertion.description must be a string, null, or an object containing only string fields 'content' and 'type'";
+fn malformed_runtime_fields_fail_normal_parsing_loading_and_validation() {
+    // One table drives every normal entry point in both layouts and protocols.
+    let mut cases = Vec::new();
+    for runtime in ["null", "[]", "text"] {
+        cases.push((
+            format!("runtime: {runtime}"),
+            "runtime must be an object".to_owned(),
+        ));
+    }
+    for assertions in ["null", "{}", "text"] {
+        cases.push((
+            format!("runtime: {{assertions: {assertions}}}"),
+            "runtime.assertions must be an array".to_owned(),
+        ));
+    }
+    for entry in [
+        "null",
+        "[]",
+        "{}",
+        "{expression: x}",
+        "{operator: equals}",
+        "{expression: 200, operator: equals}",
+        "{expression: x, operator: false}",
+        "{expression: x, operator: equals, value: 200}",
+        "{expression: x, operator: equals, value: null}",
+        "{expression: x, operator: equals, disabled: 'false'}",
+        "{expression: x, operator: equals, disabled: null}",
+        "{expression: x, operator: equals, unexpected: x}",
+    ] {
+        // Every error must identify the malformed third entry.
+        cases.push((format!("runtime: {{assertions: [{{expression: x, operator: equals}}, {{expression: y, operator: isDefined}}, {entry}]}}"), "runtime.assertions[2]: ".to_owned()));
+    }
+    cases.push(("runtime: {assertions: [{expression: x, operator: equals}, {expression: y, operator: isDefined}, {expression: response.status, operator: equals, value: 200}]}".into(), "runtime.assertions[2]: assertion.value must be a string".into()));
+    for description in [
+        "42",
+        "false",
+        "[]",
+        "{}",
+        "{content: text}",
+        "{type: text/plain}",
+        "{content: 42, type: text/plain}",
+        "{content: text, type: false}",
+        "{content: text, type: text/plain, extra: text}",
+    ] {
+        cases.push((format!("runtime: {{assertions: [{{expression: x, operator: equals}}, {{expression: x, operator: equals, description: {description}}}]}}"), "runtime.assertions[1]: assertion.description must be a string, null, or an object containing only string fields 'content' and 'type'".to_owned()));
+    }
+    // Shared documentation diagnostics must remain unchanged outside assertions.
+    cases.extend([
+        (
+            "info: {description: {content: text}}".into(),
+            "documentation object must contain only content and type".into(),
+        ),
+        (
+            "docs: {content: text}".into(),
+            "request docs must be a string; an object or null is invalid".into(),
+        ),
+    ]);
     for bundled in [true, false] {
         for protocol in ["http", "graphql"] {
-            for description in [
-                "42",
-                "false",
-                "[]",
-                "{}",
-                "{content: text}",
-                "{type: text/plain}",
-                "{content: 42, type: text/plain}",
-                "{content: text, type: false}",
-                "{content: text, type: text/plain, extra: text}",
-            ] {
-                let runtime = format!(
-                    "{{assertions: [{{expression: x, operator: equals}}, {{expression: x, operator: equals, description: {description}}}]}}"
-                );
-                let (root, _, _) =
-                    write_workspace(bundled, request_document(protocol, Some(&runtime)));
-                let error = load_workspace(&root).unwrap_err().to_string();
-                assert!(error.ends_with(expected), "{error}");
-            }
-            // The same invalid object retains the existing messages outside assertions.
-            for (field, expected) in [
-                (
-                    "description",
-                    "documentation object must contain only content and type",
-                ),
-                (
-                    "docs",
-                    "request docs must be a string; an object or null is invalid",
-                ),
-            ] {
-                let mut request = request_document(protocol, None);
-                let invalid = serde_yaml_ng::from_str("{content: text}").unwrap();
-                if field == "description" {
-                    request["info"][field] = invalid;
-                } else {
-                    request[field] = invalid;
+            for (fields, expected) in &cases {
+                let mut document = request_document(protocol, None);
+                let fields: Value = serde_yaml_ng::from_str(fields).unwrap();
+                for (field, value) in fields.as_mapping().unwrap() {
+                    if field == "info" {
+                        document["info"]["description"] = value["description"].clone();
+                    } else {
+                        document[field.clone()] = value.clone();
+                    }
                 }
-                let (root, _, _) = write_workspace(bundled, request);
-                let error = load_workspace(&root).unwrap_err().to_string();
-                assert!(error.ends_with(expected), "{error}");
+                let (root, _, _) = write_workspace(bundled, document.clone());
+                let mut errors = vec![load_workspace(&root).unwrap_err().to_string()];
+                if bundled {
+                    let source = document_text(true, document);
+                    errors.push(super::parse(&source).unwrap_err().to_string());
+                    errors.push(
+                        probe_opencollection::load_workspace_from_str(&source)
+                            .unwrap_err()
+                            .to_string(),
+                    );
+                }
+                for error in errors {
+                    assert!(
+                        error.contains(expected),
+                        "{protocol}, bundled={bundled}: {error}"
+                    );
+                }
             }
         }
     }

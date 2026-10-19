@@ -1,14 +1,36 @@
 use std::fs;
 
-use probe_core::{Collection, CollectionItem, Documentation, FieldPatch, RequestUpdate};
+use probe_core::{Collection, CollectionItem, Documentation, FieldPatch, Request, RequestUpdate};
 use probe_opencollection::{
-    create_bundled_workspace_from_collection, load_workspace, load_workspace_from_str, parse,
+    LoadedWorkspace, StructureOperation, create_bundled_workspace_from_collection, load_workspace,
+    parse,
 };
 
 #[path = "assertions/runtime_persistence.rs"]
 mod runtime_persistence;
 mod support;
-use support::{copy_directory, fixture, temporary_path};
+use support::{TemporaryPath, copy_directory, fixture, temporary_path};
+
+fn fixture_workspace(bundled: bool) -> TemporaryPath {
+    let path = temporary_path(if bundled {
+        "assertions.yml"
+    } else {
+        "assertions"
+    });
+    if bundled {
+        fs::copy(fixture("assertions-bundled.yml"), &path).unwrap();
+    } else {
+        copy_directory(&fixture("assertions-unbundled"), &path);
+    }
+    path
+}
+
+fn request<'a>(loaded: &'a LoadedWorkspace, selector: &str) -> &'a Request {
+    loaded
+        .workspace()
+        .request(loaded.request_key(selector).unwrap())
+        .unwrap()
+}
 
 #[test]
 fn projects_http_and_graphql_assertions_without_interpreting_fields() {
@@ -48,6 +70,13 @@ fn projects_http_and_graphql_assertions_without_interpreting_fields() {
     let assertion = &graphql.runtime.assertions.as_ref().unwrap()[0];
     assert_eq!(assertion.value.as_deref(), Some("{{minimumUsers}}"));
     assert_eq!(assertion.disabled, Some(true));
+    let environment = probe_core::resolve_environment_with_overrides(&[], None, &[]).unwrap();
+    assert_eq!(
+        probe_core::resolve_request_strict(graphql, &environment)
+            .unwrap()
+            .runtime,
+        graphql.runtime
+    );
     assert_eq!(
         parse(&parsed.to_yaml().unwrap()).unwrap().collection(),
         parsed.collection()
@@ -55,42 +84,35 @@ fn projects_http_and_graphql_assertions_without_interpreting_fields() {
 }
 
 #[test]
-fn bundled_and_unbundled_unrelated_edits_and_domain_copy_preserve_assertions() {
+fn both_layouts_preserve_assertions_through_edits_creation_duplication_and_domain_copy() {
     for bundled in [true, false] {
-        let path = temporary_path(if bundled {
-            "assertions.yml"
-        } else {
-            "assertions"
-        });
-        if bundled {
-            fs::copy(fixture("assertions-bundled.yml"), &path).unwrap();
-        } else {
-            copy_directory(&fixture("assertions-unbundled"), &path);
-        }
+        let path = fixture_workspace(bundled);
         let mut loaded = load_workspace(&path).unwrap();
         let selectors: Vec<_> = loaded
             .requests()
             .iter()
-            .map(|request| request.selector().to_owned())
+            .map(|r| r.selector().to_owned())
             .collect();
+        let mut copied_items = Vec::new();
         for selector in &selectors {
-            let key = loaded.request_key(selector).unwrap();
-            let before = loaded.workspace().request(key).unwrap().clone();
+            let before = request(&loaded, selector).clone();
             let file = if bundled {
                 path.to_path_buf()
             } else {
                 path.join(selector)
             };
-            let original: serde_yaml_ng::Value =
+            let source: serde_yaml_ng::Value =
                 serde_yaml_ng::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
-            let expected_text = serde_yaml_ng::to_string(&original).unwrap().replace(
+            let expected = serde_yaml_ng::to_string(&source).unwrap().replace(
                 before.url.as_deref().unwrap(),
                 "https://example.com/changed",
             );
             let mut edited = before.clone();
             edited.url = Some("https://example.com/changed".into());
             let update = RequestUpdate::between(Some(&before), &edited).unwrap();
+            // Exercise immediate and prepared saves, and compare the complete saved YAML.
             if before.kind.is_graphql() {
+                let key = loaded.request_key(selector).unwrap();
                 *loaded.request_mut(key).unwrap() = edited.clone();
                 let saved = loaded
                     .prepare_request_save(selector, update)
@@ -101,22 +123,81 @@ fn bundled_and_unbundled_unrelated_edits_and_domain_copy_preserve_assertions() {
             } else {
                 loaded.update_request(selector, &update).unwrap();
             }
-            assert_eq!(fs::read_to_string(&file).unwrap(), expected_text);
-            let reloaded = load_workspace(&path).unwrap();
-            let key = reloaded.request_key(selector).unwrap();
-            assert_eq!(reloaded.workspace().request(key), Some(&edited));
-        }
-        // Copy through the domain into a fresh file, without retained source YAML.
-        let collection = Collection {
-            items: loaded
-                .requests()
-                .iter()
-                .map(|request| {
-                    CollectionItem::Request(
-                        loaded.workspace().request(request.key()).unwrap().clone(),
-                    )
+            assert_eq!(fs::read_to_string(&file).unwrap(), expected);
+            assert_eq!(request(&load_workspace(&path).unwrap(), selector), &edited);
+            copied_items.push(CollectionItem::Request(edited.clone()));
+
+            // Creation assigns a new sequence instead of accepting the source sequence.
+            let mut copy = edited.clone();
+            copy.metadata.sequence = None;
+            let created = loaded
+                .apply_structure(StructureOperation::CreateRequest {
+                    parent: None,
+                    index: None,
+                    name: format!("Copied {}", edited.kind.as_str()),
+                    method: edited.method.clone(),
+                    url: edited.url.clone(),
+                    protocol: edited.kind.protocol(),
+                    graphql: None,
+                    update: Some(RequestUpdate::between(None, &copy).unwrap()),
                 })
-                .collect(),
+                .unwrap()
+                .selector
+                .unwrap();
+            let duplicate = loaded
+                .apply_structure(StructureOperation::DuplicateRequest {
+                    selector: created.clone(),
+                })
+                .unwrap()
+                .selector
+                .unwrap();
+            let reloaded = load_workspace(&path).unwrap();
+            for selector in [&created, &duplicate] {
+                assert_eq!(request(&reloaded, selector).runtime, edited.runtime);
+            }
+
+            // Structural writes may assign sibling sequence numbers.
+            edited = request(&reloaded, selector).clone();
+            // Replacement preserves literal operators/empty RHS; [] and absence stay distinct.
+            let before = edited.clone();
+            edited.runtime.assertions.as_mut().unwrap()[0].operator =
+                " operator unchanged by Probe ".into();
+            edited.runtime.assertions.as_mut().unwrap()[0].value = Some(String::new());
+            let update = RequestUpdate::between(Some(&before), &edited).unwrap();
+            assert!(!update.is_empty());
+            for (assertions, expected) in [
+                (update.assertions, edited.runtime.assertions.clone()),
+                (FieldPatch::Set(vec![]), Some(vec![])),
+                (FieldPatch::Clear, None),
+            ] {
+                edited.runtime.assertions = expected;
+                loaded
+                    .update_request(
+                        selector,
+                        &RequestUpdate {
+                            assertions,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(request(&load_workspace(&path).unwrap(), selector), &edited);
+                copied_items.push(CollectionItem::Request(edited.clone()));
+            }
+        }
+        // Empty schema strings are valid and do not imply optional fields.
+        let empty = probe_core::Assertion {
+            expression: String::new(),
+            operator: String::new(),
+            value: None,
+            disabled: None,
+            description: None,
+        };
+        let mut empty_request = Request::default();
+        empty_request.runtime.assertions = Some(vec![empty]);
+        copied_items.push(CollectionItem::Request(empty_request));
+        // A fresh domain copy cannot rely on retained source YAML.
+        let collection = Collection {
+            items: copied_items,
             ..Default::default()
         };
         let copy = temporary_path("assertions-copy.yml");
@@ -127,298 +208,15 @@ fn bundled_and_unbundled_unrelated_edits_and_domain_copy_preserve_assertions() {
                 .collection(),
             &collection
         );
-        let saved = if bundled {
-            fs::read_to_string(&path).unwrap()
+        let http_file = if bundled {
+            path.to_path_buf()
         } else {
-            fs::read_to_string(path.join("http.yml")).unwrap()
+            path.join("http.yml")
         };
-        assert!(saved.contains("preserve scripts"));
-    }
-}
-
-#[test]
-fn assertion_updates_replace_clear_and_preserve_empty_lists_in_both_layouts() {
-    for bundled in [true, false] {
-        let path = temporary_path(if bundled { "updates.yml" } else { "updates" });
-        if bundled {
-            fs::copy(fixture("assertions-bundled.yml"), &path).unwrap();
-        } else {
-            copy_directory(&fixture("assertions-unbundled"), &path);
-        }
-        let mut loaded = load_workspace(&path).unwrap();
-        for selector in if bundled {
-            ["items/0", "items/1"]
-        } else {
-            ["http.yml", "graphql.yml"]
-        } {
-            let key = loaded.request_key(selector).unwrap();
-            let before = loaded.workspace().request(key).unwrap().clone();
-            let mut edited = before.clone();
-            edited.runtime.assertions.as_mut().unwrap()[0].operator =
-                " operator unchanged by Probe ".into();
-            edited.runtime.assertions.as_mut().unwrap()[0].value = Some(String::new());
-            let update = RequestUpdate::between(Some(&before), &edited).unwrap();
-            assert!(!update.is_empty());
-            loaded.update_request(selector, &update).unwrap();
-            let reloaded = load_workspace(&path).unwrap();
-            assert_eq!(
-                reloaded
-                    .workspace()
-                    .request(reloaded.request_key(selector).unwrap()),
-                Some(&edited)
-            );
-            for (patch, expected) in [
-                (FieldPatch::Set(vec![]), Some(vec![])),
-                (FieldPatch::Clear, None),
-            ] {
-                loaded
-                    .update_request(
-                        selector,
-                        &RequestUpdate {
-                            assertions: patch,
-                            ..Default::default()
-                        },
-                    )
-                    .unwrap();
-                let reloaded = load_workspace(&path).unwrap();
-                assert_eq!(
-                    reloaded
-                        .workspace()
-                        .request(reloaded.request_key(selector).unwrap())
-                        .unwrap()
-                        .runtime
-                        .assertions,
-                    expected
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn malformed_assertions_fail_normal_loading_and_validation() {
-    let invalid = [
-        "null",
-        "{}",
-        "text",
-        "[null]",
-        "[[]]",
-        "[{}]",
-        "[{expression: response.status}]",
-        "[{operator: equals}]",
-        "[{expression: 200, operator: equals}]",
-        "[{expression: x, operator: false}]",
-        "[{expression: x, operator: equals, value: 200}]",
-        "[{expression: x, operator: equals, value: null}]",
-        "[{expression: x, operator: equals, disabled: 'false'}]",
-        "[{expression: x, operator: equals, disabled: null}]",
-        "[{expression: x, operator: equals, description: 123}]",
-        "[{expression: x, operator: equals, description: {content: x}}]",
-        "[{expression: x, operator: equals, description: {content: x, type: text/plain, extra: x}}]",
-        "[{expression: x, operator: equals, unexpected: x}]",
-    ];
-    for protocol in ["http", "graphql"] {
-        for assertions in invalid {
-            let source = format!(
-                "opencollection: 1.0.0\ninfo: {{name: Invalid}}\nbundled: true\nitems:\n  - info: {{type: {protocol}}}\n    runtime:\n      assertions: {assertions}\n"
-            );
-            let expected_error = if assertions.starts_with('[') {
-                "runtime.assertions[0]: "
-            } else {
-                "runtime.assertions must be an array"
-            };
-            assert!(
-                parse(&source)
-                    .unwrap_err()
-                    .to_string()
-                    .contains(expected_error),
-                "{source}"
-            );
-            assert!(
-                load_workspace_from_str(&source)
-                    .unwrap_err()
-                    .to_string()
-                    .contains(expected_error),
-                "{source}"
-            );
-            let path = temporary_path("invalid-assertions");
-            fs::create_dir(&path).unwrap();
-            fs::write(
-                path.join("opencollection.yml"),
-                "opencollection: 1.0.0\ninfo: {name: Invalid}\nbundled: false\n",
-            )
-            .unwrap();
-            fs::write(
-                path.join("request.yml"),
-                format!("info: {{type: {protocol}}}\nruntime:\n  assertions: {assertions}\n"),
-            )
-            .unwrap();
-            assert!(
-                load_workspace(&path)
-                    .unwrap_err()
-                    .to_string()
-                    .contains(expected_error),
-                "{assertions}"
-            );
-        }
-    }
-}
-
-#[test]
-fn accepts_schema_strings_without_normalization_and_distinguishes_list_presence() {
-    for runtime in [
-        "",
-        "runtime: {}",
-        "runtime: {assertions: []}",
-        "runtime: {assertions: [{expression: '', operator: ''}]}",
-    ] {
-        let source = format!(
-            "opencollection: 1.0.0\ninfo: {{name: Presence}}\nbundled: true\nitems:\n  - info: {{type: http}}\n    {runtime}\n"
-        );
-        let parsed = parse(&source).unwrap();
-        let CollectionItem::Request(request) = &parsed.collection().items[0] else {
-            panic!()
-        };
-        if runtime.contains("expression") {
-            let assertion = &request.runtime.assertions.as_ref().unwrap()[0];
-            assert_eq!(assertion.expression, "");
-            assert_eq!(assertion.operator, "");
-            assert_eq!(assertion.value, None);
-            assert_eq!(assertion.disabled, None);
-            assert_eq!(assertion.description, None);
-        } else {
-            assert_eq!(
-                request.runtime.assertions,
-                runtime.contains("assertions").then(Vec::new)
-            );
-        }
-        let copy = temporary_path("presence.yml");
-        create_bundled_workspace_from_collection(&copy, parsed.collection()).unwrap();
-        assert_eq!(
-            parse(&fs::read_to_string(&copy).unwrap())
+        assert!(
+            fs::read_to_string(http_file)
                 .unwrap()
-                .collection(),
-            parsed.collection()
+                .contains("preserve scripts")
         );
-    }
-    for runtime in ["null", "[]", "text"] {
-        let source = format!(
-            "opencollection: 1.0.0\ninfo: {{name: Invalid}}\nbundled: true\nitems:\n  - info: {{type: http}}\n    runtime: {runtime}\n"
-        );
-        assert!(load_workspace_from_str(&source).is_err());
-    }
-}
-
-#[test]
-fn assertion_values_are_not_interpolated_during_request_resolution() {
-    let parsed = parse(&fs::read_to_string(fixture("assertions-bundled.yml")).unwrap()).unwrap();
-    let CollectionItem::Request(request) = &parsed.collection().items[1] else {
-        panic!()
-    };
-    let environment = probe_core::resolve_environment_with_overrides(&[], None, &[]).unwrap();
-    let resolved = probe_core::resolve_request_strict(request, &environment).unwrap();
-    assert_eq!(resolved.runtime, request.runtime);
-}
-
-#[test]
-fn websocket_assertion_updates_are_rejected_without_mutating_the_request() {
-    let mut request = probe_core::Request {
-        kind: probe_core::RequestKind::WebSocket { message: None },
-        ..Default::default()
-    };
-    let original = request.clone();
-    let update = RequestUpdate {
-        assertions: FieldPatch::Set(vec![]),
-        ..Default::default()
-    };
-    assert!(matches!(
-        update.apply(&mut request),
-        Err(probe_core::RequestProtocolError::UnsupportedField {
-            protocol: probe_core::RequestProtocol::WebSocket,
-            ..
-        })
-    ));
-    assert_eq!(request, original);
-
-    // Structural creation writes through the YAML update path before projection.
-    let path = temporary_path("websocket-assertions.yml");
-    fs::copy(fixture("assertions-bundled.yml"), &path).unwrap();
-    let source = fs::read(&path).unwrap();
-    let mut loaded = load_workspace(&path).unwrap();
-    assert!(
-        loaded
-            .apply_structure(probe_opencollection::StructureOperation::CreateRequest {
-                parent: None,
-                index: None,
-                name: "WebSocket".into(),
-                method: None,
-                url: Some("wss://example.com".into()),
-                protocol: probe_core::RequestProtocol::WebSocket,
-                graphql: None,
-                update: Some(update),
-            })
-            .is_err()
-    );
-    assert_eq!(fs::read(&path).unwrap(), source);
-}
-
-#[test]
-fn request_creation_and_duplication_preserve_assertions_in_both_layouts() {
-    for bundled in [true, false] {
-        let path = temporary_path(if bundled { "create.yml" } else { "create" });
-        if bundled {
-            fs::copy(fixture("assertions-bundled.yml"), &path).unwrap();
-        } else {
-            copy_directory(&fixture("assertions-unbundled"), &path);
-        }
-        let mut loaded = load_workspace(&path).unwrap();
-        for selector in if bundled {
-            ["items/0", "items/1"]
-        } else {
-            ["http.yml", "graphql.yml"]
-        } {
-            let mut original = loaded
-                .workspace()
-                .request(loaded.request_key(selector).unwrap())
-                .unwrap()
-                .clone();
-            // Creation assigns a fresh sibling sequence.
-            original.metadata.sequence = None;
-            let update = RequestUpdate::between(None, &original).unwrap();
-            let result = loaded
-                .apply_structure(probe_opencollection::StructureOperation::CreateRequest {
-                    parent: None,
-                    index: None,
-                    name: format!("Copied {}", original.kind.as_str()),
-                    method: original.method.clone(),
-                    url: original.url.clone(),
-                    protocol: original.kind.protocol(),
-                    graphql: None,
-                    update: Some(update),
-                })
-                .unwrap();
-            let created = result.selector.unwrap();
-            let reloaded = load_workspace(&path).unwrap();
-            let created_request = reloaded
-                .workspace()
-                .request(reloaded.request_key(&created).unwrap())
-                .unwrap();
-            assert_eq!(created_request.runtime, original.runtime);
-            let result = loaded
-                .apply_structure(probe_opencollection::StructureOperation::DuplicateRequest {
-                    selector: created,
-                })
-                .unwrap();
-            let reloaded = load_workspace(&path).unwrap();
-            let duplicated = result.selector.unwrap();
-            assert_eq!(
-                reloaded
-                    .workspace()
-                    .request(reloaded.request_key(&duplicated).unwrap())
-                    .unwrap()
-                    .runtime,
-                original.runtime
-            );
-        }
     }
 }
