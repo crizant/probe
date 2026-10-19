@@ -31,7 +31,7 @@ atomic-write-file = "0.3.1"
 directories = "6.0.0"
 icondata = { version = "0.7.0", default-features = false, features = ["lucide"] }
 # Kit coordinates GPUI and the unstyled base; Probe owns all presentation.
-gpui-kit = { version = "0.7.3", default-features = false }
+gpui-kit = { version = "0.8.0", default-features = false }
 probe-application = { path = "../application" }
 probe-core = { path = "../core" }
 probe-http = { path = "../http" }
@@ -60,7 +60,7 @@ keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 futures-util = "0.3.34"
 tempfile = "3.27.0"
-gpui-kit = { version = "0.7.3", default-features = false, features = ["test-support"] }
+gpui-kit = { version = "0.8.0", default-features = false, features = ["test-support"] }
 
 [lints]
 workspace = true

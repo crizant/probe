@@ -113,6 +113,9 @@ impl RenderOnce for ProbeEditor {
             let state = cx.new(|cx| {
                 let mut editor = EditorState::new(window, cx)
                     .placeholder(placeholder.clone())
+                    // Kit 0.8 enables macOS bounce by default; keep Probe's
+                    // existing request and response editor scrolling behavior.
+                    .scroll_bounce(false)
                     .smart_indent(language.as_ref() == "json")
                     .folding(false)
                     // Let the shortcut reach Probe’s search card; the native
