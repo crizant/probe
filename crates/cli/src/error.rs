@@ -235,6 +235,7 @@ impl CliError {
                 Self::invalid_arguments(error.to_string())
             }
             CreateError::Load(error) => Self::invalid_workspace(error.to_string()),
+            CreateError::Protocol(_) => Self::invalid_workspace(error.to_string()),
             CreateError::Serialize(_) | CreateError::Io { .. } => Self {
                 category: "persistence_error",
                 message: error.to_string(),
@@ -357,6 +358,23 @@ pub(crate) fn import_diagnostic_json(diagnostic: &ImportDiagnostic) -> Value {
 mod session_errors {
     use super::CliError;
     use probe_application::SessionError;
+
+    #[test]
+    fn protocol_creation_errors_keep_the_existing_validation_category() {
+        let protocol = probe_core::RequestProtocolError::UnsupportedField {
+            protocol: probe_core::RequestProtocol::WebSocket,
+            field: "runtime assertions",
+        };
+        let mapped = CliError::create(probe_opencollection::CreateError::Protocol(protocol));
+        assert_eq!(
+            (mapped.category, mapped.exit_code),
+            ("invalid_workspace", 3)
+        );
+        assert_eq!(
+            mapped.message,
+            "cannot create OpenCollection workspace: native WebSocket requests do not support runtime assertions"
+        );
+    }
 
     #[test]
     fn session_categories_use_typed_variants_and_safe_status_detail() {

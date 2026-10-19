@@ -1,0 +1,15 @@
+info:
+  name: Query users
+  type: graphql
+graphql:
+  method: POST
+  url: https://example.com/graphql
+  body:
+    query: '{ users { name } }'
+runtime:
+  assertions:
+    - expression: response.body.data.users.length
+      operator: greaterThan
+      value: '{{minimumUsers}}'
+      disabled: true
+      description: GraphQL users

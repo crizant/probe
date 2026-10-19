@@ -10,6 +10,7 @@ use std::{error::Error as StdError, fmt};
 use probe_core::{Collection, validate_environments};
 use serde_yaml_ng::Value;
 
+mod assertions;
 mod debug;
 mod document;
 mod projection;
