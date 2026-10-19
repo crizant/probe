@@ -187,23 +187,30 @@ fn probe_search_card_uses_native_session(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("editor-search-card").is_some());
     cx.simulate_input(window.into(), "needle");
     cx.run_until_parked();
-    let (before, active_match) = editor.read_with(cx, |editor, _| {
-        assert!(editor.search_session().is_active());
-        assert_eq!(editor.search_session().query, "needle");
-        assert_eq!(editor.search_session().matcher.len(), 2);
-        (
-            editor.scroll_offset(),
-            editor.search_session().matcher.current_match_index(),
-        )
-    });
+    window
+        .update(cx, |_, _, cx| {
+            editor.update(cx, |editor, cx| {
+                assert!(editor.search_session().is_active());
+                assert_eq!(editor.search_session().query, "needle");
+                assert_eq!(editor.search_session().matcher.len(), 2);
+                if editor.search_session().matcher.current_match_index() != 0 {
+                    editor.previous_search_match(cx);
+                }
+                editor.next_search_match(cx);
+                assert_eq!(editor.search_session().matcher.current_match_index(), 1);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let before = editor.read_with(cx, |editor, _| editor.scroll_offset());
     window
         .update(cx, |_, _, cx| {
             editor.update(cx, |editor, cx| {
                 editor.set_search_query("needle", true, cx);
                 assert_eq!(
                     editor.search_session().matcher.current_match_index(),
-                    active_match,
-                    "refreshing the same query must retain its active occurrence"
+                    1,
+                    "refreshing the same query must retain the second occurrence"
                 );
             });
         })
@@ -213,8 +220,8 @@ fn probe_search_card_uses_native_session(cx: &mut TestAppContext) {
     editor.read_with(cx, |editor, _| {
         assert_eq!(
             editor.search_session().matcher.current_match_index(),
-            (active_match + 1) % 2,
-            "Enter advances from the viewport-anchored occurrence and wraps"
+            0,
+            "Enter wraps from the second occurrence to the first"
         );
         assert_ne!(editor.scroll_offset(), before);
     });
