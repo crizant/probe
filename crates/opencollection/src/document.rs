@@ -307,7 +307,7 @@ pub(crate) fn request_docs_from_yaml(
     }
 }
 
-fn yaml_error(message: &str) -> serde_yaml_ng::Error {
+pub(crate) fn yaml_error(message: &str) -> serde_yaml_ng::Error {
     <serde_yaml_ng::Error as serde::de::Error>::custom(message)
 }
 

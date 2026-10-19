@@ -1490,17 +1490,21 @@ pub(crate) fn apply_request_update(
     }
     let websocket = protocol == RequestProtocol::WebSocket;
     validate_websocket_fields(websocket, update)?;
-    if !update.assertions.is_unchanged() {
-        let runtime = mapping_child(request, "runtime")?;
-        set_optional(
-            runtime,
-            "assertions",
-            match &update.assertions {
-                FieldPatch::Set(assertions) => Some(assertions_value(assertions)),
-                FieldPatch::Clear => None,
-                FieldPatch::Unchanged => unreachable!("assertions patch was checked"),
-            },
-        );
+    match &update.assertions {
+        FieldPatch::Unchanged => {}
+        FieldPatch::Set(assertions) => {
+            let runtime = mapping_child(request, "runtime")?;
+            runtime.insert(string_key("assertions"), assertions_value(assertions));
+        }
+        FieldPatch::Clear => {
+            // Clear never creates runtime, and preserves an originally empty map.
+            if let Some(runtime) = request.get_mut("runtime").and_then(Value::as_mapping_mut)
+                && runtime.remove("assertions").is_some()
+                && runtime.is_empty()
+            {
+                request.remove("runtime");
+            }
+        }
     }
 
     let details_name = protocol.as_str();
@@ -1613,7 +1617,7 @@ fn validate_websocket_fields(websocket: bool, update: &RequestUpdate) -> Result<
             ))
         };
     }
-    let field = if matches!(update.assertions, FieldPatch::Set(_)) {
+    let field = if !update.assertions.is_unchanged() {
         "runtime assertions"
     } else if matches!(update.method, FieldPatch::Set(_)) {
         "an HTTP method"

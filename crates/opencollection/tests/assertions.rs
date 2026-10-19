@@ -5,6 +5,8 @@ use probe_opencollection::{
     create_bundled_workspace_from_collection, load_workspace, load_workspace_from_str, parse,
 };
 
+#[path = "assertions/runtime_persistence.rs"]
+mod runtime_persistence;
 mod support;
 use support::{copy_directory, fixture, temporary_path};
 
@@ -74,6 +76,17 @@ fn bundled_and_unbundled_unrelated_edits_and_domain_copy_preserve_assertions() {
         for selector in &selectors {
             let key = loaded.request_key(selector).unwrap();
             let before = loaded.workspace().request(key).unwrap().clone();
+            let file = if bundled {
+                path.to_path_buf()
+            } else {
+                path.join(selector)
+            };
+            let original: serde_yaml_ng::Value =
+                serde_yaml_ng::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+            let expected_text = serde_yaml_ng::to_string(&original).unwrap().replace(
+                before.url.as_deref().unwrap(),
+                "https://example.com/changed",
+            );
             let mut edited = before.clone();
             edited.url = Some("https://example.com/changed".into());
             let update = RequestUpdate::between(Some(&before), &edited).unwrap();
@@ -88,6 +101,7 @@ fn bundled_and_unbundled_unrelated_edits_and_domain_copy_preserve_assertions() {
             } else {
                 loaded.update_request(selector, &update).unwrap();
             }
+            assert_eq!(fs::read_to_string(&file).unwrap(), expected_text);
             let reloaded = load_workspace(&path).unwrap();
             let key = reloaded.request_key(selector).unwrap();
             assert_eq!(reloaded.workspace().request(key), Some(&edited));

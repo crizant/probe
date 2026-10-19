@@ -517,7 +517,7 @@ impl RequestUpdate {
             protocol: RequestProtocol::WebSocket,
             field,
         };
-        if matches!(self.assertions, FieldPatch::Set(_)) {
+        if !self.assertions.is_unchanged() {
             return Err(unsupported("runtime assertions"));
         }
         if matches!(self.method, FieldPatch::Set(_)) {
