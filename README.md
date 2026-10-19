@@ -277,3 +277,7 @@ generation.
 
 Desktop work follows the native, platform-aware contract in
 [docs/DESIGN.md](docs/DESIGN.md).
+
+## Contact
+
+Have questions, feedback, or suggestions? Feel free to reach out to me on [X (@CodeFurioso)](https://x.com/CodeFurioso).
