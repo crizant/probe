@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use probe_core::{FieldPatch, Request, RequestProtocol, RequestProtocolError, RequestUpdate};
-use probe_opencollection::load_workspace;
+use probe_opencollection::{SaveError, load_workspace};
 use serde_yaml_ng::Value;
 
 use super::{
@@ -124,20 +124,34 @@ fn websocket_assertion_set_and_clear_leave_the_domain_and_saved_yaml_unchanged()
                     "{context}"
                 );
                 assert_eq!(edited, original, "{context}");
+                let error = loaded.update_request(selector, &update).unwrap_err();
                 assert!(
-                    loaded.update_request(selector, &update).is_err(),
-                    "{context}"
+                    matches!(
+                        &error,
+                        SaveError::Protocol(RequestProtocolError::UnsupportedField {
+                            protocol: RequestProtocol::WebSocket,
+                            field: "runtime assertions"
+                        })
+                    ),
+                    "{context}: {error}"
                 );
                 assert_eq!(fs::read(&file).unwrap(), source, "{context}");
                 assert_eq!(request(&loaded, selector), &original, "{context}");
                 // Prepared saves use the YAML update path directly.
+                let error = loaded
+                    .prepare_request_save(selector, update.clone())
+                    .unwrap()
+                    .execute()
+                    .unwrap_err();
                 assert!(
-                    loaded
-                        .prepare_request_save(selector, update.clone())
-                        .unwrap()
-                        .execute()
-                        .is_err(),
-                    "{context}"
+                    matches!(
+                        &error,
+                        SaveError::Protocol(RequestProtocolError::UnsupportedField {
+                            protocol: RequestProtocol::WebSocket,
+                            field: "runtime assertions"
+                        })
+                    ),
+                    "{context}: {error}"
                 );
                 assert_eq!(fs::read(&file).unwrap(), source, "{context}");
                 let error = loaded
