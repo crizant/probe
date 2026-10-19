@@ -67,6 +67,7 @@ fn clearing_assertions_only_removes_the_assertion_field_and_its_emptied_containe
                 (Some(scripts), Some(scripts)),
                 (Some(scripts_and_assertions), Some(scripts)),
             ] {
+                let context = format!("{protocol} bundled={bundled} runtime={runtime:?}");
                 let (root, file, selector) =
                     write_workspace(bundled, request_document(protocol, runtime));
                 let expected = document_text(bundled, request_document(protocol, expected_runtime));
@@ -78,9 +79,13 @@ fn clearing_assertions_only_removes_the_assertion_field_and_its_emptied_containe
                 // Repeated Clear preserves absent/empty runtimes and other runtime fields.
                 for _ in 0..2 {
                     loaded.update_request(selector, &clear).unwrap();
-                    assert_eq!(fs::read_to_string(&file).unwrap(), expected);
+                    assert_eq!(fs::read_to_string(&file).unwrap(), expected, "{context}");
                     let reloaded = load_workspace(&root).unwrap();
-                    assert_eq!(request(&reloaded, selector).runtime.assertions, None);
+                    assert_eq!(
+                        request(&reloaded, selector).runtime.assertions,
+                        None,
+                        "{context}"
+                    );
                 }
             }
         }
@@ -100,46 +105,59 @@ fn websocket_assertion_set_and_clear_leave_the_domain_and_saved_yaml_unchanged()
             let mut loaded = load_workspace(&root).unwrap();
             let original = request(&loaded, selector).clone();
             for assertions in [FieldPatch::Set(vec![]), FieldPatch::Clear] {
+                let context = format!(
+                    "websocket bundled={bundled} runtime={runtime:?} assertions={assertions:?}"
+                );
                 let update = RequestUpdate {
                     assertions,
                     ..Default::default()
                 };
                 let mut edited = original.clone();
-                assert!(matches!(
-                    update.apply(&mut edited),
-                    Err(RequestProtocolError::UnsupportedField {
-                        protocol: RequestProtocol::WebSocket,
-                        field: "runtime assertions"
-                    })
-                ));
-                assert_eq!(edited, original);
-                assert!(loaded.update_request(selector, &update).is_err());
-                assert_eq!(fs::read(&file).unwrap(), source);
-                assert_eq!(request(&loaded, selector), &original);
+                assert!(
+                    matches!(
+                        update.apply(&mut edited),
+                        Err(RequestProtocolError::UnsupportedField {
+                            protocol: RequestProtocol::WebSocket,
+                            field: "runtime assertions"
+                        })
+                    ),
+                    "{context}"
+                );
+                assert_eq!(edited, original, "{context}");
+                assert!(
+                    loaded.update_request(selector, &update).is_err(),
+                    "{context}"
+                );
+                assert_eq!(fs::read(&file).unwrap(), source, "{context}");
+                assert_eq!(request(&loaded, selector), &original, "{context}");
                 // Prepared saves use the YAML update path directly.
                 assert!(
                     loaded
                         .prepare_request_save(selector, update.clone())
                         .unwrap()
                         .execute()
-                        .is_err()
+                        .is_err(),
+                    "{context}"
                 );
-                assert_eq!(fs::read(&file).unwrap(), source);
+                assert_eq!(fs::read(&file).unwrap(), source, "{context}");
+                let error = loaded
+                    .apply_structure(super::StructureOperation::CreateRequest {
+                        parent: None,
+                        index: None,
+                        name: "WebSocket".into(),
+                        method: None,
+                        url: Some("wss://example.com".into()),
+                        protocol: RequestProtocol::WebSocket,
+                        graphql: None,
+                        update: Some(update),
+                    })
+                    .unwrap_err();
                 assert!(
-                    loaded
-                        .apply_structure(super::StructureOperation::CreateRequest {
-                            parent: None,
-                            index: None,
-                            name: "WebSocket".into(),
-                            method: None,
-                            url: Some("wss://example.com".into()),
-                            protocol: RequestProtocol::WebSocket,
-                            graphql: None,
-                            update: Some(update),
-                        })
-                        .is_err()
+                    matches!(&error, probe_opencollection::StructureError::InvalidDocument(message)
+                        if message == "native WebSocket requests do not support runtime assertions"),
+                    "{context}: {error}"
                 );
-                assert_eq!(fs::read(&file).unwrap(), source);
+                assert_eq!(fs::read(&file).unwrap(), source, "{context}");
             }
         }
     }
@@ -150,6 +168,7 @@ fn reconciliation_conflict_keeps_baseline_runtime_yaml_when_saving_an_unrelated_
     let runtime = "{scripts: [{type: before-request, code: 'console.log(1)'}], assertions: [{expression: response.status, operator: equals, value: '200', disabled: false, description: null}]}";
     for bundled in [true, false] {
         for protocol in ["http", "graphql"] {
+            let context = format!("{protocol} bundled={bundled} runtime={runtime:?}");
             let document = request_document(protocol, Some(runtime));
             let (root, file, selector) = write_workspace(bundled, document.clone());
             let mut loaded = load_workspace(&root).unwrap();
@@ -160,19 +179,20 @@ fn reconciliation_conflict_keeps_baseline_runtime_yaml_when_saving_an_unrelated_
             let mut incoming = baseline.clone();
             incoming.runtime.assertions.as_mut().unwrap()[0].value = Some("201".into());
             let (merged, conflicts) = Request::reconcile(&baseline, &local, &incoming);
-            assert_eq!(conflicts, ["runtime"]);
-            assert_eq!(merged.runtime, baseline.runtime);
+            assert_eq!(conflicts, ["runtime"], "{context}");
+            assert_eq!(merged.runtime, baseline.runtime, "{context}");
             let update = RequestUpdate::between(Some(&baseline), &merged).unwrap();
-            assert!(update.assertions.is_unchanged());
+            assert!(update.assertions.is_unchanged(), "{context}");
             loaded.update_request(selector, &update).unwrap();
             let mut expected = document;
             expected[protocol]["url"] = Value::String("https://example.com/edited".into());
             assert_eq!(
                 fs::read_to_string(&file).unwrap(),
-                document_text(bundled, expected)
+                document_text(bundled, expected),
+                "{context}"
             );
             let reloaded = load_workspace(&root).unwrap();
-            assert_eq!(request(&reloaded, selector), &merged);
+            assert_eq!(request(&reloaded, selector), &merged, "{context}");
         }
     }
 }
@@ -191,6 +211,7 @@ fn bundled_domain_creation_rejects_websocket_assertions_before_writing_any_files
     }];
     for assertions in [vec![], assertions] {
         for nested in [false, true] {
+            let context = format!("websocket nested={nested} assertions={assertions:?}");
             let request = CollectionItem::Request(Request {
                 kind: RequestKind::WebSocket { message: None },
                 runtime: RequestRuntime {
@@ -217,18 +238,23 @@ fn bundled_domain_creation_rejects_websocket_assertions_before_writing_any_files
                 protocol: RequestProtocol::WebSocket,
                 field: "runtime assertions",
             };
-            assert!(matches!(&error, CreateError::Protocol(source) if *source == expected));
+            assert!(
+                matches!(&error, CreateError::Protocol(source) if *source == expected),
+                "{context}: {error}"
+            );
             assert_eq!(
                 error.to_string(),
-                format!("cannot create OpenCollection workspace: {expected}")
+                format!("cannot create OpenCollection workspace: {expected}"),
+                "{context}"
             );
             assert_eq!(
                 std::error::Error::source(&error).unwrap().to_string(),
-                expected.to_string()
+                expected.to_string(),
+                "{context}"
             );
             assert!(
                 !root.exists(),
-                "rejected creation must not create files or parent directories"
+                "{context}: rejected creation must not create files or parent directories"
             );
         }
     }
@@ -294,9 +320,9 @@ fn malformed_runtime_fields_fail_normal_parsing_loading_and_validation() {
     ]);
     for bundled in [true, false] {
         for protocol in ["http", "graphql"] {
-            for (fields, expected) in &cases {
+            for (input, expected) in &cases {
                 let mut document = request_document(protocol, None);
-                let fields: Value = serde_yaml_ng::from_str(fields).unwrap();
+                let fields: Value = serde_yaml_ng::from_str(input).unwrap();
                 for (field, value) in fields.as_mapping().unwrap() {
                     if field == "info" {
                         document["info"]["description"] = value["description"].clone();
@@ -318,7 +344,7 @@ fn malformed_runtime_fields_fail_normal_parsing_loading_and_validation() {
                 for error in errors {
                     assert!(
                         error.contains(expected),
-                        "{protocol}, bundled={bundled}: {error}"
+                        "{protocol} bundled={bundled} input={input:?}: {error}"
                     );
                 }
             }

@@ -96,6 +96,10 @@ fn both_layouts_preserve_assertions_through_edits_creation_duplication_and_domai
         let mut copied_items = Vec::new();
         for selector in &selectors {
             let before = request(&loaded, selector).clone();
+            let context = format!(
+                "{} bundled={bundled} selector={selector}",
+                before.kind.as_str()
+            );
             let file = if bundled {
                 path.to_path_buf()
             } else {
@@ -123,8 +127,13 @@ fn both_layouts_preserve_assertions_through_edits_creation_duplication_and_domai
             } else {
                 loaded.update_request(selector, &update).unwrap();
             }
-            assert_eq!(fs::read_to_string(&file).unwrap(), expected);
-            assert_eq!(request(&load_workspace(&path).unwrap(), selector), &edited);
+            assert_eq!(fs::read_to_string(&file).unwrap(), expected, "{context}");
+            assert_eq!(
+                request(&load_workspace(&path).unwrap(), selector),
+                &edited,
+                "{context} assertions={:?}",
+                edited.runtime.assertions
+            );
             copied_items.push(CollectionItem::Request(edited.clone()));
 
             // Creation assigns a new sequence instead of accepting the source sequence.
@@ -153,7 +162,11 @@ fn both_layouts_preserve_assertions_through_edits_creation_duplication_and_domai
                 .unwrap();
             let reloaded = load_workspace(&path).unwrap();
             for selector in [&created, &duplicate] {
-                assert_eq!(request(&reloaded, selector).runtime, edited.runtime);
+                assert_eq!(
+                    request(&reloaded, selector).runtime,
+                    edited.runtime,
+                    "{context} copy={selector}"
+                );
             }
 
             // Structural writes may assign sibling sequence numbers.
@@ -164,7 +177,7 @@ fn both_layouts_preserve_assertions_through_edits_creation_duplication_and_domai
                 " operator unchanged by Probe ".into();
             edited.runtime.assertions.as_mut().unwrap()[0].value = Some(String::new());
             let update = RequestUpdate::between(Some(&before), &edited).unwrap();
-            assert!(!update.is_empty());
+            assert!(!update.is_empty(), "{context}");
             for (assertions, expected) in [
                 (update.assertions, edited.runtime.assertions.clone()),
                 (FieldPatch::Set(vec![]), Some(vec![])),
@@ -180,7 +193,12 @@ fn both_layouts_preserve_assertions_through_edits_creation_duplication_and_domai
                         },
                     )
                     .unwrap();
-                assert_eq!(request(&load_workspace(&path).unwrap(), selector), &edited);
+                assert_eq!(
+                    request(&load_workspace(&path).unwrap(), selector),
+                    &edited,
+                    "{context} assertions={:?}",
+                    edited.runtime.assertions
+                );
                 copied_items.push(CollectionItem::Request(edited.clone()));
             }
         }
@@ -206,7 +224,8 @@ fn both_layouts_preserve_assertions_through_edits_creation_duplication_and_domai
             parse(&fs::read_to_string(&copy).unwrap())
                 .unwrap()
                 .collection(),
-            &collection
+            &collection,
+            "bundled={bundled} domain copy"
         );
         let http_file = if bundled {
             path.to_path_buf()
@@ -216,7 +235,8 @@ fn both_layouts_preserve_assertions_through_edits_creation_duplication_and_domai
         assert!(
             fs::read_to_string(http_file)
                 .unwrap()
-                .contains("preserve scripts")
+                .contains("preserve scripts"),
+            "bundled={bundled}"
         );
     }
 }
