@@ -213,7 +213,7 @@ fn malformed_non_first_assertion_reports_its_index_in_both_layouts() {
 #[test]
 fn bundled_domain_creation_rejects_websocket_assertions_before_writing_any_files() {
     use probe_core::{Assertion, Collection, CollectionItem, Folder, RequestKind, RequestRuntime};
-    use probe_opencollection::{CreateError, LoadError, create_bundled_workspace_from_collection};
+    use probe_opencollection::{CreateError, create_bundled_workspace_from_collection};
 
     let assertions = vec![Assertion {
         expression: "response.status".into(),
@@ -249,15 +249,70 @@ fn bundled_domain_creation_rejects_websocket_assertions_before_writing_any_files
             let expected = RequestProtocolError::UnsupportedField {
                 protocol: RequestProtocol::WebSocket,
                 field: "runtime assertions",
-            }
-            .to_string();
-            assert!(
-                matches!(error, CreateError::Load(LoadError::Validation { message, .. }) if message == expected)
+            };
+            assert!(matches!(&error, CreateError::Protocol(source) if *source == expected));
+            assert_eq!(
+                error.to_string(),
+                format!("cannot create OpenCollection workspace: {expected}")
+            );
+            assert_eq!(
+                std::error::Error::source(&error).unwrap().to_string(),
+                expected.to_string()
             );
             assert!(
                 !root.exists(),
                 "rejected creation must not create files or parent directories"
             );
+        }
+    }
+}
+
+#[test]
+fn invalid_assertion_descriptions_have_indexed_field_specific_errors_only() {
+    let expected = "runtime.assertions[1]: assertion.description must be a string, null, or an object containing only string fields 'content' and 'type'";
+    for bundled in [true, false] {
+        for protocol in ["http", "graphql"] {
+            for description in [
+                "42",
+                "false",
+                "[]",
+                "{}",
+                "{content: text}",
+                "{type: text/plain}",
+                "{content: 42, type: text/plain}",
+                "{content: text, type: false}",
+                "{content: text, type: text/plain, extra: text}",
+            ] {
+                let runtime = format!(
+                    "{{assertions: [{{expression: x, operator: equals}}, {{expression: x, operator: equals, description: {description}}}]}}"
+                );
+                let (root, _, _) =
+                    write_workspace(bundled, request_document(protocol, Some(&runtime)));
+                let error = load_workspace(&root).unwrap_err().to_string();
+                assert!(error.ends_with(expected), "{error}");
+            }
+            // The same invalid object retains the existing messages outside assertions.
+            for (field, expected) in [
+                (
+                    "description",
+                    "documentation object must contain only content and type",
+                ),
+                (
+                    "docs",
+                    "request docs must be a string; an object or null is invalid",
+                ),
+            ] {
+                let mut request = request_document(protocol, None);
+                let invalid = serde_yaml_ng::from_str("{content: text}").unwrap();
+                if field == "description" {
+                    request["info"][field] = invalid;
+                } else {
+                    request[field] = invalid;
+                }
+                let (root, _, _) = write_workspace(bundled, request);
+                let error = load_workspace(&root).unwrap_err().to_string();
+                assert!(error.ends_with(expected), "{error}");
+            }
         }
     }
 }

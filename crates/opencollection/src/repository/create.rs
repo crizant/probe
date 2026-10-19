@@ -38,12 +38,7 @@ pub fn create_bundled_workspace_from_collection(
     if path.is_dir() {
         return Err(CreateError::IsDirectory(path));
     }
-    let document = bundled_collection_value(collection).map_err(|error| {
-        CreateError::Load(LoadError::Validation {
-            path: path.clone(),
-            message: error.to_string(),
-        })
-    })?;
+    let document = bundled_collection_value(collection).map_err(CreateError::Protocol)?;
     let source = serde_yaml_ng::to_string(&document).map_err(CreateError::Serialize)?;
     let source = source.strip_prefix("---\n").unwrap_or(&source);
     // Validate the complete document before creating the destination. This keeps

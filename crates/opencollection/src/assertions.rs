@@ -63,7 +63,9 @@ fn assertion(value: &Value) -> Result<Assertion, serde_yaml_ng::Error> {
         operator,
         value: optional_string(mapping, "value")?,
         disabled,
-        description: optional_documentation(mapping.get("description"))?,
+        description: optional_documentation(mapping.get("description")).map_err(|_| {
+            yaml_error("assertion.description must be a string, null, or an object containing only string fields 'content' and 'type'")
+        })?,
     })
 }
 

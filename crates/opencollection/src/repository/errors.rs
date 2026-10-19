@@ -11,6 +11,8 @@ pub enum CreateError {
     AlreadyExists(PathBuf),
     /// The destination is a directory.
     IsDirectory(PathBuf),
+    /// A request declares fields unsupported by its protocol.
+    Protocol(RequestProtocolError),
     /// YAML serialization failed.
     Serialize(serde_yaml_ng::Error),
     /// A filesystem operation failed.
@@ -36,6 +38,12 @@ impl fmt::Display for CreateError {
                     path.display()
                 )
             }
+            Self::Protocol(source) => {
+                write!(
+                    formatter,
+                    "cannot create OpenCollection workspace: {source}"
+                )
+            }
             Self::Serialize(source) => {
                 write!(formatter, "cannot serialize OpenCollection YAML: {source}")
             }
@@ -50,6 +58,7 @@ impl fmt::Display for CreateError {
 impl Error for CreateError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Protocol(source) => Some(source),
             Self::Serialize(source) => Some(source),
             Self::Io { source, .. } => Some(source),
             Self::Load(error) => Some(error),
