@@ -189,3 +189,75 @@ fn reconciliation_conflict_keeps_baseline_runtime_yaml_when_saving_an_unrelated_
         }
     }
 }
+
+#[test]
+fn malformed_non_first_assertion_reports_its_index_in_both_layouts() {
+    let runtime = "{assertions: [{expression: response.status, operator: equals, value: '200'}, {expression: response.body.token, operator: isDefined}, {expression: response.status, operator: equals, value: 200}]}";
+    let expected = "runtime.assertions[2]: assertion.value must be a string";
+    for bundled in [true, false] {
+        for protocol in ["http", "graphql"] {
+            let document = request_document(protocol, Some(runtime));
+            let (root, _, _) = write_workspace(bundled, document.clone());
+            let error = load_workspace(&root).unwrap_err().to_string();
+            assert!(error.ends_with(expected), "{error}");
+            if bundled {
+                let error = super::parse(&document_text(true, document))
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.ends_with(expected), "{error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn bundled_domain_creation_rejects_websocket_assertions_before_writing_any_files() {
+    use probe_core::{Assertion, Collection, CollectionItem, Folder, RequestKind, RequestRuntime};
+    use probe_opencollection::{CreateError, LoadError, create_bundled_workspace_from_collection};
+
+    let assertions = vec![Assertion {
+        expression: "response.status".into(),
+        operator: "equals".into(),
+        value: Some("200".into()),
+        disabled: None,
+        description: None,
+    }];
+    for assertions in [vec![], assertions] {
+        for nested in [false, true] {
+            let request = CollectionItem::Request(Request {
+                kind: RequestKind::WebSocket { message: None },
+                runtime: RequestRuntime {
+                    assertions: Some(assertions.clone()),
+                },
+                ..Default::default()
+            });
+            let item = if nested {
+                CollectionItem::Folder(Folder {
+                    items: vec![request],
+                    ..Default::default()
+                })
+            } else {
+                request
+            };
+            let collection = Collection {
+                items: vec![item],
+                ..Default::default()
+            };
+            let root = temporary_path("rejected-websocket-domain");
+            let output = root.join("nested/collection.yml");
+            let error = create_bundled_workspace_from_collection(&output, &collection).unwrap_err();
+            let expected = RequestProtocolError::UnsupportedField {
+                protocol: RequestProtocol::WebSocket,
+                field: "runtime assertions",
+            }
+            .to_string();
+            assert!(
+                matches!(error, CreateError::Load(LoadError::Validation { message, .. }) if message == expected)
+            );
+            assert!(
+                !root.exists(),
+                "rejected creation must not create files or parent directories"
+            );
+        }
+    }
+}

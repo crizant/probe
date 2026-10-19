@@ -20,7 +20,15 @@ pub(crate) fn request_runtime(
             let entries = value
                 .as_sequence()
                 .ok_or_else(|| yaml_error("runtime.assertions must be an array"))?;
-            entries.iter().map(assertion).collect()
+            entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    assertion(entry).map_err(|error| {
+                        yaml_error(&format!("runtime.assertions[{index}]: {error}"))
+                    })
+                })
+                .collect()
         })
         .transpose()?;
     Ok(RequestRuntime { assertions })

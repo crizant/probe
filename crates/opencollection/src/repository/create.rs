@@ -1,5 +1,5 @@
 use super::*;
-use probe_core::{RequestKind, RequestProtocol};
+use probe_core::{RequestKind, RequestProtocol, RequestProtocolError};
 use serde::Serialize;
 
 /// Creates an empty bundled OpenCollection YAML file at `path` and loads it.
@@ -38,7 +38,12 @@ pub fn create_bundled_workspace_from_collection(
     if path.is_dir() {
         return Err(CreateError::IsDirectory(path));
     }
-    let document = bundled_collection_value(collection);
+    let document = bundled_collection_value(collection).map_err(|error| {
+        CreateError::Load(LoadError::Validation {
+            path: path.clone(),
+            message: error.to_string(),
+        })
+    })?;
     let source = serde_yaml_ng::to_string(&document).map_err(CreateError::Serialize)?;
     let source = source.strip_prefix("---\n").unwrap_or(&source);
     // Validate the complete document before creating the destination. This keeps
@@ -133,7 +138,9 @@ struct NewCollectionInfo<'a> {
     name: &'a str,
 }
 
-fn bundled_collection_value(collection: &probe_core::Collection) -> Value {
+fn bundled_collection_value(
+    collection: &probe_core::Collection,
+) -> Result<Value, RequestProtocolError> {
     let mut root = serde_yaml_ng::Mapping::new();
     root.insert(
         string_key("opencollection"),
@@ -171,9 +178,15 @@ fn bundled_collection_value(collection: &probe_core::Collection) -> Value {
     }
     root.insert(
         string_key("items"),
-        Value::Sequence(collection.items.iter().map(collection_item_value).collect()),
+        Value::Sequence(
+            collection
+                .items
+                .iter()
+                .map(collection_item_value)
+                .collect::<Result<_, _>>()?,
+        ),
     );
-    Value::Mapping(root)
+    Ok(Value::Mapping(root))
 }
 
 fn collection_info_value(metadata: &probe_core::CollectionMetadata) -> Value {
@@ -214,8 +227,8 @@ fn collection_info_value(metadata: &probe_core::CollectionMetadata) -> Value {
     Value::Mapping(info)
 }
 
-fn collection_item_value(item: &CollectionItem) -> Value {
-    match item {
+fn collection_item_value(item: &CollectionItem) -> Result<Value, RequestProtocolError> {
+    Ok(match item {
         CollectionItem::Folder(folder) => {
             let mut item = item_info_value(&folder.metadata, "folder");
             if let Some(docs) = &folder.docs {
@@ -223,7 +236,13 @@ fn collection_item_value(item: &CollectionItem) -> Value {
             }
             item.insert(
                 string_key("items"),
-                Value::Sequence(folder.items.iter().map(collection_item_value).collect()),
+                Value::Sequence(
+                    folder
+                        .items
+                        .iter()
+                        .map(collection_item_value)
+                        .collect::<Result<_, _>>()?,
+                ),
             );
             Value::Mapping(item)
         }
@@ -232,6 +251,12 @@ fn collection_item_value(item: &CollectionItem) -> Value {
             let mut item = item_info_value(&request.metadata, section);
             let mut details = serde_yaml_ng::Mapping::new();
             let websocket = request.kind.is_websocket();
+            if websocket && request.runtime.assertions.is_some() {
+                return Err(RequestProtocolError::UnsupportedField {
+                    protocol: RequestProtocol::WebSocket,
+                    field: "runtime assertions",
+                });
+            }
             if let Some(method) = request.method.as_ref().filter(|_| !websocket) {
                 details.insert(string_key("method"), Value::String(method.clone()));
             }
@@ -270,7 +295,7 @@ fn collection_item_value(item: &CollectionItem) -> Value {
                 details.insert(string_key("auth"), authentication_value(authentication));
             }
             item.insert(string_key(section), Value::Mapping(details));
-            if let Some(assertions) = request.runtime.assertions.as_ref().filter(|_| !websocket) {
+            if let Some(assertions) = request.runtime.assertions.as_ref() {
                 let mut runtime = serde_yaml_ng::Mapping::new();
                 runtime.insert(string_key("assertions"), assertions_value(assertions));
                 item.insert(string_key("runtime"), Value::Mapping(runtime));
@@ -286,7 +311,7 @@ fn collection_item_value(item: &CollectionItem) -> Value {
             }
             Value::Mapping(item)
         }
-    }
+    })
 }
 
 fn graphql_body_value(body: &probe_core::GraphqlBody) -> Value {

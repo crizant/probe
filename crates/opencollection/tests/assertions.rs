@@ -222,8 +222,25 @@ fn malformed_assertions_fail_normal_loading_and_validation() {
             let source = format!(
                 "opencollection: 1.0.0\ninfo: {{name: Invalid}}\nbundled: true\nitems:\n  - info: {{type: {protocol}}}\n    runtime:\n      assertions: {assertions}\n"
             );
-            assert!(parse(&source).is_err(), "{source}");
-            assert!(load_workspace_from_str(&source).is_err(), "{source}");
+            let expected_error = if assertions.starts_with('[') {
+                "runtime.assertions[0]: "
+            } else {
+                "runtime.assertions must be an array"
+            };
+            assert!(
+                parse(&source)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected_error),
+                "{source}"
+            );
+            assert!(
+                load_workspace_from_str(&source)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected_error),
+                "{source}"
+            );
             let path = temporary_path("invalid-assertions");
             fs::create_dir(&path).unwrap();
             fs::write(
@@ -236,7 +253,13 @@ fn malformed_assertions_fail_normal_loading_and_validation() {
                 format!("info: {{type: {protocol}}}\nruntime:\n  assertions: {assertions}\n"),
             )
             .unwrap();
-            assert!(load_workspace(&path).is_err(), "{assertions}");
+            assert!(
+                load_workspace(&path)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected_error),
+                "{assertions}"
+            );
         }
     }
 }
