@@ -1490,6 +1490,19 @@ pub(crate) fn apply_request_update(
     }
     let websocket = protocol == RequestProtocol::WebSocket;
     validate_websocket_fields(websocket, update)?;
+    if !update.assertions.is_unchanged() {
+        let runtime = mapping_child(request, "runtime")?;
+        set_optional(
+            runtime,
+            "assertions",
+            match &update.assertions {
+                FieldPatch::Set(assertions) => Some(assertions_value(assertions)),
+                FieldPatch::Clear => None,
+                FieldPatch::Unchanged => unreachable!("assertions patch was checked"),
+            },
+        );
+    }
+
     let details_name = protocol.as_str();
     if !update.method.is_unchanged()
         || !update.url.is_unchanged()
@@ -1600,7 +1613,9 @@ fn validate_websocket_fields(websocket: bool, update: &RequestUpdate) -> Result<
             ))
         };
     }
-    let field = if matches!(update.method, FieldPatch::Set(_)) {
+    let field = if matches!(update.assertions, FieldPatch::Set(_)) {
+        "runtime assertions"
+    } else if matches!(update.method, FieldPatch::Set(_)) {
         "an HTTP method"
     } else if update
         .query_parameters

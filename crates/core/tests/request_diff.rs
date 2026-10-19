@@ -421,6 +421,15 @@ fn reconciliation_covers_every_request_field_and_preserves_conflict_order() {
                 )]
                 .into(),
             }),
+            runtime: probe_core::RequestRuntime {
+                assertions: Some(vec![probe_core::Assertion {
+                    expression: value.into(),
+                    operator: "equals".into(),
+                    value: None,
+                    disabled: None,
+                    description: None,
+                }]),
+            },
             settings: probe_core::RequestSettings {
                 max_redirects: Some(sequence as usize),
                 ..Default::default()
@@ -451,6 +460,7 @@ fn reconciliation_covers_every_request_field_and_preserves_conflict_order() {
             "path parameters",
             "body",
             "authentication",
+            "runtime",
             "settings",
         ]
     );

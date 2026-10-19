@@ -372,3 +372,33 @@ pub(super) fn auth_property_value(value: &AuthenticationValue) -> Value {
         ),
     }
 }
+
+/// Serializes declarations without interpreting expressions, operators, or values.
+pub(super) fn assertions_value(assertions: &[probe_core::Assertion]) -> Value {
+    Value::Sequence(
+        assertions
+            .iter()
+            .map(|assertion| {
+                let mut mapping = serde_yaml_ng::Mapping::new();
+                mapping.insert(
+                    string_key("expression"),
+                    Value::String(assertion.expression.clone()),
+                );
+                mapping.insert(
+                    string_key("operator"),
+                    Value::String(assertion.operator.clone()),
+                );
+                if let Some(value) = &assertion.value {
+                    mapping.insert(string_key("value"), Value::String(value.clone()));
+                }
+                if let Some(disabled) = assertion.disabled {
+                    mapping.insert(string_key("disabled"), Value::Bool(disabled));
+                }
+                if let Some(description) = &assertion.description {
+                    mapping.insert(string_key("description"), documentation_value(description));
+                }
+                Value::Mapping(mapping)
+            })
+            .collect(),
+    )
+}

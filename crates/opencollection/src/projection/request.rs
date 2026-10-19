@@ -96,6 +96,7 @@ fn project_item_contents(
         }
         Some(NativeItemType::Request(RequestProtocol::Http)) => {
             let docs = request_docs_from_yaml(docs.as_ref())?;
+            let runtime = crate::assertions::request_runtime(value.get("runtime"))?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_domain()?;
             let http = item.http.unwrap_or_default();
@@ -128,11 +129,13 @@ fn project_item_contents(
                 path_parameters,
                 authentication,
                 settings,
+                runtime,
                 kind: RequestKind::Http { body },
             })))
         }
         Some(NativeItemType::Request(RequestProtocol::Graphql)) => {
             let docs = request_docs_from_yaml(docs.as_ref())?;
+            let runtime = crate::assertions::request_runtime(value.get("runtime"))?;
             let item: ItemDocument = serde_yaml_ng::from_value(value)?;
             let settings = item.settings.into_domain()?;
             let graphql = item.graphql.unwrap_or_default();
@@ -164,6 +167,7 @@ fn project_item_contents(
                 path_parameters,
                 authentication,
                 settings,
+                runtime,
                 kind: RequestKind::Graphql { body },
             })))
         }
@@ -205,6 +209,7 @@ fn project_item_contents(
                 path_parameters: Vec::new(),
                 authentication,
                 settings,
+                runtime: Default::default(),
                 kind: RequestKind::WebSocket { message },
             })))
         }

@@ -270,6 +270,12 @@ fn collection_item_value(item: &CollectionItem) -> Value {
                 details.insert(string_key("auth"), authentication_value(authentication));
             }
             item.insert(string_key(section), Value::Mapping(details));
+            if let Some(assertions) = request.runtime.assertions.as_ref().filter(|_| !websocket) {
+                let mut runtime = serde_yaml_ng::Mapping::new();
+                runtime.insert(string_key("assertions"), assertions_value(assertions));
+                item.insert(string_key("runtime"), Value::Mapping(runtime));
+            }
+
             if let Some(settings) =
                 request_settings_value(&request.settings, request.kind.protocol())
             {

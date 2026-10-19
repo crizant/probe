@@ -244,6 +244,13 @@ protocol. OpenCollection projection maps `info.type` and the matching
 `http`/`graphql`/`websocket` section to and from `RequestKind`, and imports build the
 same model directly.
 
+HTTP and GraphQL `runtime.assertions` project into `RequestRuntime` as assertion
+declarations with unmodified expressions, operators, and optional string values.
+Optional disabled flags and descriptions retain their presence, including explicit
+false, empty strings, and null descriptions. The shared request update, reconciliation,
+and collection writer preserve these declarations. Assertions are not evaluated or
+interpolated during request preparation. Other runtime fields remain in source YAML.
+
 A WebSocket request reuses the common URL, headers, authentication, docs, metadata, and
 settings fields. OpenCollection WebSocket details define no method, parameters, or HTTP
 body, so those fields stay empty and updates that set them are rejected. The message is

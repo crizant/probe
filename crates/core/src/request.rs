@@ -29,8 +29,32 @@ pub struct Request {
     pub kind: RequestKind,
     /// Request authentication configuration.
     pub authentication: Option<Authentication>,
+    /// OpenCollection runtime declarations. Assertions are stored without evaluation.
+    pub runtime: RequestRuntime,
     /// Execution settings.
     pub settings: RequestSettings,
+}
+
+/// Supported OpenCollection request runtime declarations.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RequestRuntime {
+    /// Response assertions, preserving an omitted list and an explicitly empty list.
+    pub assertions: Option<Vec<Assertion>>,
+}
+
+/// An OpenCollection assertion declaration. Fields are stored exactly as written.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Assertion {
+    /// Expression to evaluate in a future assertion runtime.
+    pub expression: String,
+    /// Operator as written in OpenCollection; no operator interpretation is performed.
+    pub operator: String,
+    /// Expected value, distinguishing an omitted value from an empty string.
+    pub value: Option<String>,
+    /// Optional disabled flag, including an explicitly written false.
+    pub disabled: Option<bool>,
+    /// Optional OpenCollection description, including explicit null.
+    pub description: Option<Documentation>,
 }
 
 impl Request {
@@ -38,7 +62,7 @@ impl Request {
     ///
     /// Equal edits and changes on only one side merge. Differing edits to
     /// the same field conflict, leaving that field at its baseline value.
-    /// Metadata fields merge separately; lists, settings, and protocol/body
+    /// Metadata fields merge separately; lists, runtime, settings, and protocol/body
     /// state each remain one conflict unit.
     #[must_use]
     pub fn reconcile(baseline: &Self, local: &Self, incoming: &Self) -> (Self, Vec<&'static str>) {
@@ -105,6 +129,13 @@ impl Request {
                 &local.authentication,
                 &incoming.authentication,
                 "authentication",
+                &mut conflicts,
+            ),
+            runtime: reconcile_field(
+                &baseline.runtime,
+                &local.runtime,
+                &incoming.runtime,
+                "runtime",
                 &mut conflicts,
             ),
             settings: reconcile_field(
@@ -217,6 +248,8 @@ impl<T> FieldPatch<T> {
 /// A non-interactive partial update to a native request.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RequestUpdate {
+    /// Replacement OpenCollection runtime assertions.
+    pub assertions: FieldPatch<Vec<Assertion>>,
     /// Replacement request name. Removing a name is unsupported and rejected by `between`.
     pub name: Option<String>,
     /// Replacement description.
@@ -299,6 +332,13 @@ impl RequestUpdate {
             ));
         }
         let update = Self {
+            assertions: if base.and_then(|request| request.runtime.assertions.as_ref())
+                != current.runtime.assertions.as_ref()
+            {
+                FieldPatch::from_optional(current.runtime.assertions.clone())
+            } else {
+                FieldPatch::Unchanged
+            },
             name: (base.and_then(|request| request.metadata.name.as_ref())
                 != current.metadata.name.as_ref())
             .then(|| current.metadata.name.clone())
@@ -395,7 +435,8 @@ impl RequestUpdate {
     /// Returns whether every field is unchanged.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.name.is_none()
+        self.assertions.is_unchanged()
+            && self.name.is_none()
             && self.description.is_unchanged()
             && self.docs.is_unchanged()
             && self.method.is_unchanged()
@@ -454,6 +495,7 @@ impl RequestUpdate {
         }
         self.description.apply(&mut request.metadata.description);
         self.docs.apply(&mut request.docs);
+        self.assertions.apply(&mut request.runtime.assertions);
         self.method.apply(&mut request.method);
         self.url.apply(&mut request.url);
         if let Some(headers) = &self.headers {
@@ -475,6 +517,9 @@ impl RequestUpdate {
             protocol: RequestProtocol::WebSocket,
             field,
         };
+        if matches!(self.assertions, FieldPatch::Set(_)) {
+            return Err(unsupported("runtime assertions"));
+        }
         if matches!(self.method, FieldPatch::Set(_)) {
             return Err(unsupported("an HTTP method"));
         }

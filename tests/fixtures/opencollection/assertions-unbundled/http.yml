@@ -1,0 +1,30 @@
+info:
+  name: List users
+  type: http
+http:
+  method: GET
+  url: https://example.com/users
+runtime:
+  scripts:
+    - type: before-request
+      code: console.log('preserve scripts');
+  assertions:
+    - expression: response.status
+      operator: equals
+      value: "200"
+      disabled: false
+      description: Response status should be 200
+    - expression: response.body.users.length
+      operator: greaterThan
+      value: "0"
+      disabled: false
+    - expression: ' response.body.name '
+      operator: equals
+      value: ""
+      disabled: true
+      description:
+        content: '**An empty name**'
+        type: text/markdown
+    - expression: response.body.token
+      operator: isDefined
+      description: null

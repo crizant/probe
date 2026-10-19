@@ -8,6 +8,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- HTTP and GraphQL OpenCollection runtime assertions now load, validate, and
+  persist through bundled and unbundled request saves and collection copies.
+  Assertion declarations are preserved without evaluation.
+
 - The desktop Environment Manager now has Variables, Secrets, and Client Certificates
   tabs. Add, edit, disable, reorder, and remove environment PEM and PKCS#12
   declarations, including variable paths and masked literal or templated passphrases.
