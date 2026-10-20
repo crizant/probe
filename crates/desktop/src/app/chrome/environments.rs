@@ -965,10 +965,13 @@ impl ProbeApp {
             .debug_selector(|| "environment-manager-dialog".into())
             .h(px(600.0))
             .max_h(relative(0.9))
-            .child(components::dialog_title(
-                theme,
-                format!("Environments — {}", self.workspace_name()),
-            ));
+            .child(
+                components::dialog_title(
+                    theme,
+                    format!("Environments — {}", self.workspace_name()),
+                )
+                .pl(px(theme.metrics.spacing_2)),
+            );
         content = content
             .child(
                 div()
