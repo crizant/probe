@@ -80,19 +80,18 @@ impl ProbeApp {
     }
 
     fn continue_pending_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_close.take() else {
+            return;
+        };
         if !self.pending_environment_saves.is_empty() {
-            if self.pending_close.take().is_some() {
-                self.prompt_pending_environment_conflict(window, cx);
-            }
+            self.prompt_pending_environment_conflict(window, cx);
             return;
         }
-        if let Some(pending) = self.pending_close.take() {
-            let dirty = self.pending_close_dirty_keys(&pending);
-            if dirty.is_empty() && self.pending_overview_targets(&pending).is_empty() {
-                self.finish_pending_close(pending, window, cx);
-            } else {
-                self.prompt_unsaved(dirty, pending, window, cx);
-            }
+        let dirty = self.pending_close_dirty_keys(&pending);
+        if dirty.is_empty() && self.pending_overview_targets(&pending).is_empty() {
+            self.finish_pending_close(pending, window, cx);
+        } else {
+            self.prompt_unsaved(dirty, pending, window, cx);
         }
     }
 }

@@ -550,8 +550,9 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         self.environment_save_task = None;
+        self.environment_save_workspace_path = None;
         let result = result.and_then(|saved| {
-            if self.environment_save_workspace_path != self.workspace_path {
+            if save_workspace_path != self.workspace_path {
                 return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
             }
             self.loaded_workspace
@@ -560,17 +561,12 @@ impl ProbeApp {
                 .complete_environment_save(saved)
         });
         match result {
-            Ok(()) => {
-                self.environment_save_workspace_path = None;
-                self.pump_workspace_writes(window, cx);
-            }
+            Ok(()) => self.pump_workspace_writes(window, cx),
             Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
-                self.environment_save_workspace_path = None;
                 self.pending_close = None;
                 self.recover_committed_save(save_workspace_path, None, window, cx);
             }
             Err(error) => {
-                self.environment_save_workspace_path = None;
                 self.pending_close = None;
                 self.show_toast(
                     ToastIntent::Error,
