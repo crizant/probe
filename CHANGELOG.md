@@ -8,6 +8,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- File tree hover highlights are easier to see in dark mode.
+
 - Request tab titles and remaining text buttons keep descenders such as g, p,
   and y fully visible.
 

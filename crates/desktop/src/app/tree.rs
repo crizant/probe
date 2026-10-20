@@ -81,7 +81,7 @@ pub(crate) fn tree_row_button(
                 .text_color(theme.colors.text.primary)
         })
         .when(!selected, |row| {
-            row.hover(move |row| row.bg(theme.colors.surfaces.window))
+            row.hover(move |row| row.bg(theme.sidebar_hover()))
         })
         .cursor_pointer()
 }

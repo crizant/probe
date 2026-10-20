@@ -235,13 +235,27 @@ impl Theme {
         gpui_theme.resizable.active_handle = Some(theme.colors.borders.focused.into());
     }
 
+    /// Navigation row hover derived from the existing surfaces.
+    #[must_use]
+    pub fn sidebar_hover(self) -> Rgba {
+        match self.appearance {
+            ThemeAppearance::Light => self.colors.surfaces.window,
+            ThemeAppearance::Dark => self
+                .colors
+                .surfaces
+                .sidebar
+                .blend(self.colors.surfaces.overlay.opacity(0.75)),
+        }
+    }
+
     /// Editor caret selection wash derived from the active accent.
     #[must_use]
     pub fn editor_selection(self) -> Hsla {
-        match self.appearance {
-            ThemeAppearance::Light => hsla(0.092, 0.767, 0.500, 0.25),
-            ThemeAppearance::Dark => hsla(0.098, 0.858, 0.580, 0.24),
-        }
+        let opacity = match self.appearance {
+            ThemeAppearance::Light => 0.25,
+            ThemeAppearance::Dark => 0.24,
+        };
+        self.colors.actions.accent.opacity(opacity).into()
     }
 
     /// Elevation shadow color for temporary raised surfaces.
@@ -389,6 +403,21 @@ pub(crate) fn appearance_override(mode: ThemeMode) -> Option<WindowAppearance> {
 
 /// Porcelain Honey — Probe's light theme based on the creamy app icon background.
 fn porcelain_honey() -> Colors {
+    let text = TextColors {
+        primary: rgba(0x4b4641ff),     // warm graphite
+        accent: rgba(0xae4d00ff),      // deep orange for tinted surfaces
+        secondary: rgba(0x6c655eff),   // soft graphite
+        muted: rgba(0x756e66ff),       // stone graphite
+        placeholder: rgba(0xa9a199ff), // stone
+        inverse: rgba(0xffffffff),     // on-accent
+    };
+    let actions = ActionColors {
+        accent: rgba(0xe7821bff),   // reference orange
+        hover: rgba(0xd96f10ff),    // burnished orange
+        pressed: rgba(0xb9570cff),  // deep orange
+        disabled: rgba(0xe7e1d9ff), // porcelain edge
+        disabled_foreground: text.placeholder,
+    };
     Colors {
         surfaces: SurfaceColors {
             window: rgba(0xf8f6f2ff),  // warm porcelain
@@ -398,37 +427,24 @@ fn porcelain_honey() -> Colors {
             overlay: rgba(0xfdfbf8ff), // warm overlay
             scrim: rgba(0x0000003d),   // black @ ~24%
         },
-        text: TextColors {
-            primary: rgba(0x4b4641ff),     // warm graphite
-            accent: rgba(0xae4d00ff),      // deep orange for tinted surfaces
-            secondary: rgba(0x6c655eff),   // soft graphite
-            muted: rgba(0x756e66ff),       // stone graphite
-            placeholder: rgba(0xa9a199ff), // stone
-            inverse: rgba(0xffffffff),     // on-accent
-        },
+        text,
         borders: BorderColors {
             subtle: rgba(0xe7e1d9ff),   // porcelain edge
             standard: rgba(0xdcd4cbff), // light stone divider
             strong: rgba(0xc5b9adff),   // grounded divider
-            focused: rgba(0xe7821b99),  // orange focus
+            focused: actions.accent.opacity(0.6),
         },
         scrollbar: ScrollbarColors {
-            thumb: rgba(0x8b837aff),        // quiet graphite
-            thumb_hover: rgba(0x6c655eff),  // soft graphite
-            thumb_active: rgba(0x4b4641ff), // warm graphite
+            thumb: rgba(0x8b837aff), // quiet graphite
+            thumb_hover: text.secondary,
+            thumb_active: text.primary,
         },
-        actions: ActionColors {
-            accent: rgba(0xe7821bff),              // reference orange
-            hover: rgba(0xd96f10ff),               // burnished orange
-            pressed: rgba(0xb9570cff),             // deep orange
-            disabled: rgba(0xe7e1d9ff),            // porcelain edge
-            disabled_foreground: rgba(0xa9a199ff), // stone
-        },
+        actions,
         selection: SelectionColors {
-            active_background: rgba(0xe7821bff),   // filled reference orange
-            active_foreground: rgba(0xffffffff),   // on-accent
+            active_background: actions.accent,
+            active_foreground: text.inverse,
             inactive_background: rgba(0xebe5deff), // parchment wash
-            inactive_foreground: rgba(0x4b4641ff), // warm graphite
+            inactive_foreground: text.primary,
         },
         status: StatusColors {
             success: rgba(0x2d8a5bff),       // jade
@@ -469,6 +485,21 @@ fn porcelain_honey() -> Colors {
 
 /// Graphite Honey — Probe's dark theme, paired with Porcelain Honey.
 fn graphite_honey() -> Colors {
+    let text = TextColors {
+        primary: rgba(0xe9e6e0ff),     // soft off-white
+        accent: rgba(0xd98e26ff),      // golden orange for tinted surfaces
+        secondary: rgba(0xcac5bdff),   // muted text
+        muted: rgba(0xa7a19aff),       // graphite text
+        placeholder: rgba(0x807c76ff), // stone
+        inverse: rgba(0x1d1e22ff),     // on-accent
+    };
+    let actions = ActionColors {
+        accent: rgba(0xd98e26ff),   // filled golden orange
+        hover: rgba(0xf0a338ff),    // bright golden orange
+        pressed: rgba(0xb97620ff),  // deep golden orange
+        disabled: rgba(0x33353aa6), // graphite edge
+        disabled_foreground: text.placeholder,
+    };
     Colors {
         surfaces: SurfaceColors {
             window: rgba(0x1d1e22ff),  // deep carbon
@@ -478,37 +509,24 @@ fn graphite_honey() -> Colors {
             overlay: rgba(0x292a2eff), // dark metal overlay
             scrim: rgba(0x00000059),   // black @ ~35%
         },
-        text: TextColors {
-            primary: rgba(0xe9e6e0ff),     // soft off-white
-            accent: rgba(0xd98e26ff),      // golden orange for tinted surfaces
-            secondary: rgba(0xcac5bdff),   // muted text
-            muted: rgba(0xa7a19aff),       // graphite text
-            placeholder: rgba(0x807c76ff), // stone
-            inverse: rgba(0x1d1e22ff),     // on-accent
-        },
+        text,
         borders: BorderColors {
             subtle: rgba(0x33353aa6),   // graphite edge
             standard: rgba(0x45474dc2), // graphite divider
             strong: rgba(0x606268d9),   // grounded divider
-            focused: rgba(0xd98e2699),  // quiet orange focus
+            focused: actions.accent.opacity(0.6),
         },
         scrollbar: ScrollbarColors {
-            thumb: rgba(0xa7a19aff),        // graphite
-            thumb_hover: rgba(0xcac5bdff),  // lifted graphite
-            thumb_active: rgba(0xe9e6e0ff), // soft off-white
+            thumb: rgba(0xa7a19aff), // graphite
+            thumb_hover: text.secondary,
+            thumb_active: text.primary,
         },
-        actions: ActionColors {
-            accent: rgba(0xd98e26ff),              // filled golden orange
-            hover: rgba(0xf0a338ff),               // bright golden orange
-            pressed: rgba(0xb97620ff),             // deep golden orange
-            disabled: rgba(0x33353aa6),            // graphite edge
-            disabled_foreground: rgba(0x807c76ff), // stone
-        },
+        actions,
         selection: SelectionColors {
-            active_background: rgba(0xd98e26ff),   // filled golden orange
-            active_foreground: rgba(0x1d1e22ff),   // carbon
+            active_background: actions.accent,
+            active_foreground: text.inverse,
             inactive_background: rgba(0x33353aa6), // graphite edge
-            inactive_foreground: rgba(0xe9e6e0ff), // soft off-white
+            inactive_foreground: text.primary,
         },
         status: StatusColors {
             success: rgba(0x79d19aff),       // jade
