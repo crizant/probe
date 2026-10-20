@@ -2,6 +2,7 @@ use std::{
     fs,
     ops::Deref,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -39,12 +40,14 @@ impl Drop for TemporaryPath {
 }
 
 pub fn temporary_path(suffix: &str) -> TemporaryPath {
+    static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
+    let sequence = NEXT_PATH.fetch_add(1, Ordering::Relaxed);
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock should be after the Unix epoch")
         .as_nanos();
     TemporaryPath(std::env::temp_dir().join(format!(
-        "probe-persistence-{}-{unique}-{suffix}",
+        "probe-persistence-{}-{unique}-{sequence}-{suffix}",
         std::process::id()
     )))
 }

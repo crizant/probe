@@ -6,7 +6,10 @@ use gpui_kit::{
 use probe_core::{ItemKind, Workspace, WorkspaceItemRef};
 
 use crate::{
-    components, shell::ShellState, theme::Theme, tree_search::TreeSearchMatches,
+    components,
+    shell::ShellState,
+    theme::{Theme, ThemeAppearance},
+    tree_search::TreeSearchMatches,
     user_config::ThemeMode,
 };
 
@@ -77,11 +80,18 @@ pub(crate) fn tree_row_button(
         .line_height(relative(1.25))
         .rounded(px(theme.metrics.radius_small))
         .when(selected, |row| {
-            row.bg(theme.colors.selection.inactive_background)
-                .text_color(theme.colors.text.primary)
+            let background = match theme.appearance {
+                ThemeAppearance::Light => theme.colors.selection.inactive_background,
+                ThemeAppearance::Dark => theme
+                    .colors
+                    .surfaces
+                    .sidebar
+                    .blend(theme.colors.borders.standard.alpha(0.7)),
+            };
+            row.bg(background).text_color(theme.colors.text.primary)
         })
         .when(!selected, |row| {
-            row.hover(move |row| row.bg(theme.colors.surfaces.window))
+            row.hover(move |row| row.bg(theme.sidebar_hover()))
         })
         .cursor_pointer()
 }
