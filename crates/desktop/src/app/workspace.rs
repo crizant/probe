@@ -382,49 +382,92 @@ impl ProbeApp {
                         );
                     });
                 }
-                let reload_path = workspace_path.clone();
-                let reload = cx
-                    .background_spawn(async move {
-                        if !events_reload_workspace(&events, &reload_path) {
-                            return None;
-                        }
-                        let hints = rename_hints(&events, &reload_path);
-                        Some((load_workspace(&reload_path), hints))
-                    })
-                    .await;
-                let Some((result, hints)) = reload else {
-                    if disconnected {
+                loop {
+                    let Ok(baseline) =
+                        view.update_in(cx, |view, _, _| view.watched_workspace_baseline())
+                    else {
                         return;
-                    }
-                    continue;
-                };
-                let _ = view.update_in(cx, |view, window, cx| {
-                    if view.workspace_path.as_ref() != Some(&workspace_path) {
-                        return;
-                    }
-                    if view.structure_task.is_some() {
-                        return;
-                    }
-                    match result {
-                        Ok(fresh) => {
-                            view.reconcile_filesystem_workspace(fresh, hints, window, cx);
+                    };
+                    let Some(baseline) = baseline else {
+                        cx.background_executor().timer(WATCH_DEBOUNCE).await;
+                        continue;
+                    };
+                    let reload_path = workspace_path.clone();
+                    let reload = cx
+                        .background_spawn({
+                            let events = events.clone();
+                            async move {
+                                if !events_reload_workspace(&events, &reload_path) {
+                                    return None;
+                                }
+                                let hints = rename_hints(&events, &reload_path);
+                                Some((load_workspace(&reload_path), hints))
+                            }
+                        })
+                        .await;
+                    let Some((result, hints)) = reload else {
+                        break;
+                    };
+                    let retry = view.update_in(cx, |view, window, cx| {
+                        if view.workspace_path.as_ref() != Some(&workspace_path) {
+                            return false;
                         }
-                        Err(error) => {
-                            view.show_toast(
-                                ToastIntent::Warning,
-                                format!(
-                                    "The collection changed on disk but is not yet valid: {error}. The last valid version is still open."
-                                ),
-                                cx,
-                            );
-                        }
+                        !view.apply_watched_workspace(baseline, result, hints, window, cx)
+                    });
+                    if !matches!(retry, Ok(true)) {
+                        break;
                     }
-                });
+                    // A write may have started or completed while the snapshot was
+                    // loading. Keep the events and read again after writes drain.
+                    cx.background_executor().timer(WATCH_DEBOUNCE).await;
+                }
                 if disconnected {
                     return;
                 }
             }
         }));
+    }
+
+    fn watched_workspace_baseline(&self) -> Option<probe_opencollection::WorkspaceBaseline> {
+        // Tooltip edits are already in the workspace, including edits queued
+        // behind the active save. Replacing it now would discard those values
+        // and invalidate the save's retained source baseline.
+        if self.loading || self.has_active_workspace_write() || self.has_pending_environment_work()
+        {
+            return None;
+        }
+        self.loaded_workspace
+            .as_ref()
+            .map(LoadedWorkspace::baseline)
+    }
+
+    /// Returns false when the watcher must read a new snapshot before applying it.
+    pub(super) fn apply_watched_workspace(
+        &mut self,
+        baseline: probe_opencollection::WorkspaceBaseline,
+        result: Result<LoadedWorkspace, probe_opencollection::LoadError>,
+        hints: BTreeMap<String, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.watched_workspace_baseline() != Some(baseline) {
+            return false;
+        }
+        match result {
+            Ok(fresh) => {
+                self.reconcile_filesystem_workspace(fresh, hints, window, cx);
+            }
+            Err(error) => {
+                self.show_toast(
+                    ToastIntent::Warning,
+                    format!(
+                        "The collection changed on disk but is not yet valid: {error}. The last valid version is still open."
+                    ),
+                    cx,
+                );
+            }
+        }
+        true
     }
 
     pub(super) fn local_request_states(&self) -> Vec<LocalRequestState<'_>> {

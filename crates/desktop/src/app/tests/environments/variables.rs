@@ -398,3 +398,140 @@ items:
         );
     });
 }
+
+#[gpui_kit::test]
+fn watcher_defers_a_committed_environment_save_and_preserves_queued_tooltip_edits(
+    cx: &mut TestAppContext,
+) {
+    let workspace = EnvironmentWorkspace::writable(cx, "watcher-environment-save");
+    select_first_request(&workspace, cx);
+    workspace.update(cx, |view, window, cx| {
+        let loaded = view.loaded_workspace.as_mut().unwrap();
+        let baseline = loaded.baseline();
+        loaded
+            .set_environment_variable("development", "host", "first.example".into())
+            .unwrap();
+        let saved = loaded
+            .prepare_environment_variable_save("development", "host")
+            .unwrap()
+            .execute()
+            .unwrap();
+        // Hold the completion callback after the atomic write has reached disk.
+        view.environment_save_task = Some(cx.spawn(async |_, _| std::future::pending().await));
+        let snapshot = probe_opencollection::load_workspace(&workspace.path).unwrap();
+        assert!(
+            !view.apply_watched_workspace(baseline, Ok(snapshot), BTreeMap::new(), window, cx,)
+        );
+        view.update_environment_variable("host", "latest.example".into(), window, cx);
+        view.update_environment_variable("token", "latest-token".into(), window, cx);
+        view.environment_save_task = None;
+        view.loaded_workspace
+            .as_mut()
+            .unwrap()
+            .complete_environment_save(saved)
+            .unwrap();
+
+        // The gap between saves must also protect edits still in the queue.
+        let baseline = view.loaded_workspace.as_ref().unwrap().baseline();
+        let snapshot = probe_opencollection::load_workspace(&workspace.path).unwrap();
+        assert!(
+            !view.apply_watched_workspace(baseline, Ok(snapshot), BTreeMap::new(), window, cx,)
+        );
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("latest.example")
+        );
+        assert_eq!(
+            resolved_variable(view, "token").as_deref(),
+            Some("latest-token")
+        );
+        view.pump_workspace_writes(window, cx);
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.environment_save_task.is_none());
+        assert!(view.pending_environment_saves.is_empty());
+        let baseline = view.loaded_workspace.as_ref().unwrap().baseline();
+        assert!(view.apply_watched_workspace(
+            baseline,
+            probe_opencollection::load_workspace(&workspace.path),
+            BTreeMap::new(),
+            window,
+            cx,
+        ));
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("latest.example")
+        );
+        assert_eq!(
+            resolved_variable(view, "token").as_deref(),
+            Some("latest-token")
+        );
+        assert!(view.application_dialog.is_none());
+        assert!(view.toasts.is_empty(), "{:?}", toast_debug(view));
+    });
+    assert_eq!(
+        saved_development_variable(&workspace, "host").as_deref(),
+        Some("latest.example")
+    );
+    assert_eq!(
+        saved_development_variable(&workspace, "token").as_deref(),
+        Some("latest-token")
+    );
+}
+
+#[gpui_kit::test]
+fn watcher_retries_a_snapshot_loaded_before_a_save_and_still_reports_external_conflicts(
+    cx: &mut TestAppContext,
+) {
+    let workspace = EnvironmentWorkspace::writable(cx, "watcher-stale-snapshot");
+    let key = select_first_request(&workspace, cx);
+    // Capture a snapshot before a save starts, then deliver it after completion.
+    let (baseline, stale) = workspace.update(cx, |view, window, cx| {
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        let baseline = loaded.baseline();
+        let stale = probe_opencollection::load_workspace(&workspace.path).unwrap();
+        view.update_environment_variable("host", "newest.example".into(), window, cx);
+        (baseline, stale)
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.environment_save_task.is_none());
+        assert!(!view.apply_watched_workspace(baseline, Ok(stale), BTreeMap::new(), window, cx,));
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("newest.example")
+        );
+        view.edit_request(key, |request| request.method = Some("POST".into()), cx);
+        let source = fs::read_to_string(&workspace.path).unwrap();
+        fs::write(
+            &workspace.path,
+            source.replacen("method: GET", "method: PATCH", 1),
+        )
+        .unwrap();
+        let baseline = view.loaded_workspace.as_ref().unwrap().baseline();
+        assert!(view.apply_watched_workspace(
+            baseline,
+            probe_opencollection::load_workspace(&workspace.path),
+            BTreeMap::new(),
+            window,
+            cx,
+        ));
+        assert!(matches!(
+            view.application_dialog,
+            Some(ApplicationDialog::FilesystemConflict { .. })
+        ));
+        assert_eq!(
+            view.loaded_workspace
+                .as_ref()
+                .unwrap()
+                .workspace()
+                .request(key)
+                .unwrap()
+                .method
+                .as_deref(),
+            Some("POST")
+        );
+        assert!(view.toasts.is_empty(), "{:?}", toast_debug(view));
+    });
+}
