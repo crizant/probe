@@ -249,7 +249,11 @@ declarations with unmodified expressions, operators, and optional string values.
 Optional disabled flags and descriptions retain their presence, including explicit
 false, empty strings, and null descriptions. The shared request update, reconciliation,
 and collection writer preserve these declarations. Assertions are not evaluated or
-interpolated during request preparation. Other runtime fields remain in source YAML.
+interpolated during request preparation. The standalone application-layer
+[`evaluate_assertions`](ASSERTIONS.md) operation accepts declarations, an HTTP or
+GraphQL response, and the existing variable-resolution inputs. It returns ordered,
+value-free outcomes without execution integration. Other runtime fields remain in
+source YAML.
 
 A WebSocket request reuses the common URL, headers, authentication, docs, metadata, and
 settings fields. OpenCollection WebSocket details define no method, parameters, or HTTP
