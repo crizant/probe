@@ -293,6 +293,7 @@ impl ProbeApp {
         self.shell.reset_for_workspace();
         self.reset_collection_ui();
         self.pending_environment_saves.clear();
+        self.failed_environment_saves.clear();
         self.environment_save_workspace_path = None;
         self.restore_selected_environment();
         self.rebuild_visible_tree_rows();
@@ -316,6 +317,15 @@ impl ProbeApp {
                 return;
             }
         };
+        self.watch_workspace(watcher, window, cx);
+    }
+
+    pub(super) fn watch_workspace(
+        &mut self,
+        watcher: WorkspaceWatcher,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let WorkspaceWatcher {
             watcher,
             receiver,
@@ -392,6 +402,13 @@ impl ProbeApp {
                         cx.background_executor().timer(WATCH_DEBOUNCE).await;
                         continue;
                     };
+                    #[cfg(test)]
+                    if let Ok(Some((reached, release))) =
+                        view.update_in(cx, |view, _, _| view.filesystem_reload_gate.take())
+                    {
+                        let _ = reached.send(());
+                        let _ = release.await;
+                    }
                     let reload_path = workspace_path.clone();
                     let reload = cx
                         .background_spawn({
@@ -458,17 +475,7 @@ impl ProbeApp {
                 } else {
                     // Reconciliation merges request drafts only. Keep unsaved
                     // environment values until the user explicitly chooses disk.
-                    let conflicts = self
-                        .pending_environment_saves
-                        .iter()
-                        .map(|(environment, name)| {
-                            SynchronizationConflict::PendingEnvironmentSave {
-                                environment: environment.clone(),
-                                name: name.clone(),
-                            }
-                        })
-                        .collect();
-                    self.prompt_filesystem_conflict(conflicts, window, cx);
+                    self.prompt_pending_environment_conflict(window, cx);
                 }
             }
             Err(error) => {
@@ -482,6 +489,24 @@ impl ProbeApp {
             }
         }
         true
+    }
+
+    pub(super) fn prompt_pending_environment_conflict(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let conflicts = self
+            .pending_environment_saves
+            .iter()
+            .map(
+                |(environment, name)| SynchronizationConflict::PendingEnvironmentSave {
+                    environment: environment.clone(),
+                    name: name.clone(),
+                },
+            )
+            .collect();
+        self.prompt_filesystem_conflict(conflicts, window, cx);
     }
 
     pub(super) fn local_request_states(&self) -> Vec<LocalRequestState<'_>> {
@@ -775,6 +800,7 @@ impl ProbeApp {
                             if let ReconcileResult::Applied(reconciled) = result {
                                 view.apply_reconciled_workspace(*reconciled, cx);
                                 view.pending_environment_saves.clear();
+                                view.failed_environment_saves.clear();
                                 view.show_toast(
                                     ToastIntent::Warning,
                                     "Reloaded the collection from disk; conflicting local edits were discarded.",

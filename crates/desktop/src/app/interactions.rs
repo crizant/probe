@@ -476,8 +476,9 @@ impl ProbeApp {
             .set_environment_variable(&environment, name, value)
             .is_ok()
         {
-            self.pending_environment_saves
-                .insert((environment, name.to_owned()));
+            let key = (environment, name.to_owned());
+            self.failed_environment_saves.remove(&key);
+            self.pending_environment_saves.insert(key);
             self.pump_workspace_writes(window, cx);
             cx.notify();
         }
@@ -488,9 +489,16 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> ControlFlow<()> {
-        let Some((environment, name)) = self.pending_environment_saves.pop_first() else {
+        let Some((environment, name)) = self
+            .pending_environment_saves
+            .difference(&self.failed_environment_saves)
+            .next()
+            .cloned()
+        else {
             return ControlFlow::Break(());
         };
+        self.pending_environment_saves
+            .remove(&(environment.clone(), name.clone()));
         let Some(loaded) = &self.loaded_workspace else {
             self.pending_environment_saves.insert((environment, name));
             return ControlFlow::Break(());
@@ -498,6 +506,8 @@ impl ProbeApp {
         let prepared = match loaded.prepare_environment_variable_save(&environment, &name) {
             Ok(prepared) => prepared,
             Err(error) => {
+                self.failed_environment_saves
+                    .insert((environment.clone(), name.clone()));
                 self.pending_environment_saves.insert((environment, name));
                 self.pending_close = None;
                 self.show_toast(
@@ -505,7 +515,7 @@ impl ProbeApp {
                     format!("Could not save environment variable: {error}"),
                     cx,
                 );
-                return ControlFlow::Break(());
+                return ControlFlow::Continue(());
             }
         };
         self.environment_save_workspace_path = self.workspace_path.clone();
@@ -515,40 +525,80 @@ impl ProbeApp {
                 .background_spawn(async move { prepared.execute() })
                 .await;
             let _ = view.update_in(window, |view, window, cx| {
-                view.environment_save_task = None;
-                let result = result.and_then(|saved| {
-                    if view.environment_save_workspace_path != view.workspace_path {
-                        return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
-                    }
-                    view.loaded_workspace
-                        .as_mut()
-                        .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
-                        .complete_environment_save(saved)
-                });
-                match result {
-                    Ok(()) => {
-                        view.environment_save_workspace_path = None;
-                        view.pump_workspace_writes(window, cx);
-                    }
-                    Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
-                        view.environment_save_workspace_path = None;
-                        view.pending_close = None;
-                        view.recover_committed_save(save_workspace_path, None, window, cx);
-                    }
-                    Err(error) => {
-                        view.environment_save_workspace_path = None;
-                        view.pending_close = None;
-                        view.show_toast(
-                            ToastIntent::Error,
-                            format!("Could not save environment variable: {error}"),
-                            cx,
-                        );
-                    }
-                }
-                cx.notify();
+                view.complete_environment_variable_save(
+                    (environment, name),
+                    save_workspace_path,
+                    result,
+                    window,
+                    cx,
+                );
             });
         }));
         cx.notify();
         ControlFlow::Continue(())
+    }
+
+    pub(super) fn complete_environment_variable_save(
+        &mut self,
+        key: (String, String),
+        save_workspace_path: Option<PathBuf>,
+        result: Result<
+            probe_opencollection::CompletedEnvironmentSave,
+            probe_opencollection::SaveError,
+        >,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.environment_save_task = None;
+        let result = result.and_then(|saved| {
+            if self.environment_save_workspace_path != self.workspace_path {
+                return Err(probe_opencollection::SaveError::CommittedButNotIntegrated);
+            }
+            self.loaded_workspace
+                .as_mut()
+                .ok_or(probe_opencollection::SaveError::CommittedButNotIntegrated)?
+                .complete_environment_save(saved)
+        });
+        match result {
+            Ok(()) => {
+                self.environment_save_workspace_path = None;
+                self.pump_workspace_writes(window, cx);
+            }
+            Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
+                self.environment_save_workspace_path = None;
+                self.pending_close = None;
+                self.recover_committed_save(save_workspace_path, None, window, cx);
+            }
+            Err(error) => {
+                self.environment_save_workspace_path = None;
+                self.pending_close = None;
+                self.show_toast(
+                    ToastIntent::Error,
+                    format!("Could not save environment variable: {error}"),
+                    cx,
+                );
+                if self.workspace_path == save_workspace_path {
+                    let conflict = matches!(
+                        error,
+                        probe_opencollection::SaveError::ConcurrentModification(_)
+                            | probe_opencollection::SaveError::StaleCompletion
+                    );
+                    // If a newer edit of this variable is already queued, it
+                    // may run once after a non-conflict failure; never
+                    // automatically retry the failed value itself.
+                    if self.pending_environment_saves.insert(key.clone()) {
+                        self.failed_environment_saves.insert(key);
+                    }
+                    if conflict {
+                        self.failed_environment_saves
+                            .extend(self.pending_environment_saves.iter().cloned());
+                        self.prompt_pending_environment_conflict(window, cx);
+                    } else {
+                        self.pump_workspace_writes(window, cx);
+                    }
+                }
+            }
+        }
+        cx.notify();
     }
 }

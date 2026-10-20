@@ -588,3 +588,285 @@ fn watcher_surfaces_blocked_environment_saves_without_discarding_edits(cx: &mut 
         assert!(view.application_dialog.is_none());
     });
 }
+
+#[gpui_kit::test]
+fn environment_queue_continues_past_a_preparation_failure(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "environment-preparation-failure");
+    select_first_request(&workspace, cx);
+    let invalid = ("absent".to_owned(), "missing".to_owned());
+    workspace.update(cx, |view, window, cx| {
+        view.pending_environment_saves.insert(invalid.clone());
+        view.update_environment_variable("token", "queued-token".into(), window, cx);
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.environment_save_task.is_none());
+        assert_eq!(
+            view.pending_environment_saves,
+            std::collections::BTreeSet::from([invalid.clone()])
+        );
+        assert_eq!(
+            view.failed_environment_saves,
+            view.pending_environment_saves
+        );
+        let errors = toast_debug(view);
+        view.pump_workspace_writes(window, cx);
+        assert_eq!(
+            toast_debug(view),
+            errors,
+            "failed preparation must not be retried"
+        );
+    });
+    assert_eq!(
+        saved_development_variable(&workspace, "token").as_deref(),
+        Some("queued-token")
+    );
+}
+
+#[gpui_kit::test]
+fn environment_write_failure_preserves_the_failed_edit_and_drains_newer_edits(
+    cx: &mut TestAppContext,
+) {
+    for name in ["host", "token"] {
+        let workspace =
+            EnvironmentWorkspace::writable(cx, &format!("environment-io-failure-{name}"));
+        select_first_request(&workspace, cx);
+        workspace.update(cx, |view, window, cx| {
+            // The completion boundary receives an I/O failure after a newer edit
+            // has arrived. Subsequent writes use the real repository and disk.
+            view.loaded_workspace
+                .as_mut()
+                .unwrap()
+                .set_environment_variable("development", "host", "failed.example".into())
+                .unwrap();
+            view.environment_save_task = Some(cx.spawn(async |_, _| std::future::pending().await));
+            view.environment_save_workspace_path = view.workspace_path.clone();
+            view.update_environment_variable(name, "newer-value".into(), window, cx);
+            view.complete_environment_variable_save(
+                ("development".into(), "host".into()),
+                Some(workspace.path.clone()),
+                Err(probe_opencollection::SaveError::Io {
+                    path: workspace.path.clone(),
+                    source: std::io::Error::other("write failed"),
+                }),
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            saved_development_variable(&workspace, name).as_deref(),
+            Some("newer-value")
+        );
+        workspace.update(cx, |view, window, cx| {
+            assert!(view.environment_save_task.is_none());
+            if name == "token" {
+                assert_eq!(
+                    resolved_variable(view, "host").as_deref(),
+                    Some("failed.example")
+                );
+                assert_eq!(
+                    saved_development_variable(&workspace, "host").as_deref(),
+                    Some("dev.example.com")
+                );
+                assert!(
+                    view.failed_environment_saves
+                        .contains(&("development".into(), "host".into()))
+                );
+                let errors = toast_debug(view);
+                view.pump_workspace_writes(window, cx);
+                assert_eq!(toast_debug(view), errors);
+                // Finishing the other write must not close a workspace with a failed edit.
+                view.request_close_workspace(window, cx);
+                assert!(view.loaded_workspace.is_some());
+                assert!(matches!(
+                    view.application_dialog,
+                    Some(ApplicationDialog::FilesystemConflict { .. })
+                ));
+                view.handle_application_dialog_action(
+                    ApplicationDialogAction::KeepLocal,
+                    window,
+                    cx,
+                );
+                view.update_environment_variable(
+                    "host",
+                    "explicit-retry.example".into(),
+                    window,
+                    cx,
+                );
+            } else {
+                assert!(view.pending_environment_saves.is_empty());
+                assert!(view.failed_environment_saves.is_empty());
+            }
+        });
+        cx.run_until_parked();
+        workspace.update(cx, |view, _, _| {
+            assert!(view.pending_environment_saves.is_empty());
+            assert!(view.failed_environment_saves.is_empty());
+            assert!(view.environment_save_task.is_none());
+        });
+        if name == "token" {
+            assert_eq!(
+                saved_development_variable(&workspace, "host").as_deref(),
+                Some("explicit-retry.example")
+            );
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn environment_source_conflict_pauses_queued_writes_and_retains_all_values(
+    cx: &mut TestAppContext,
+) {
+    let workspace = EnvironmentWorkspace::writable(cx, "environment-source-conflict");
+    select_first_request(&workspace, cx);
+    let source = fs::read_to_string(&workspace.path).unwrap();
+    let external = source.replacen("method: GET", "method: PATCH", 1);
+    workspace.update(cx, |view, window, cx| {
+        view.update_environment_variable("host", "submitted.example".into(), window, cx);
+        view.update_environment_variable("host", "latest.example".into(), window, cx);
+        view.update_environment_variable("token", "latest-token".into(), window, cx);
+        fs::write(&workspace.path, &external).unwrap();
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.environment_save_task.is_none());
+        assert_eq!(view.pending_environment_saves.len(), 2);
+        assert_eq!(
+            view.failed_environment_saves,
+            view.pending_environment_saves
+        );
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("latest.example")
+        );
+        assert_eq!(
+            resolved_variable(view, "token").as_deref(),
+            Some("latest-token")
+        );
+        assert!(matches!(
+            view.application_dialog,
+            Some(ApplicationDialog::FilesystemConflict { .. })
+        ));
+        let errors = toast_debug(view);
+        view.pump_workspace_writes(window, cx);
+        assert_eq!(
+            toast_debug(view),
+            errors,
+            "a source conflict must not automatically retry writes"
+        );
+        view.handle_application_dialog_action(ApplicationDialogAction::KeepLocal, window, cx);
+        assert_eq!(view.pending_environment_saves.len(), 2);
+    });
+    cx.run_until_parked();
+    assert_eq!(fs::read_to_string(&workspace.path).unwrap(), external);
+}
+
+#[gpui_kit::test]
+fn filesystem_watcher_waits_for_writes_and_retries_with_the_original_events(
+    cx: &mut TestAppContext,
+) {
+    use crate::filesystem::{WATCH_DEBOUNCE, WATCH_POLL, WorkspaceWatcher};
+    let workspace = EnvironmentWorkspace::writable(cx, "watcher-retry-loop");
+    select_first_request(&workspace, cx);
+    let mut watcher = WorkspaceWatcher::start(&workspace.path).unwrap();
+    // Feed deterministic events into the production loop; OS delivery is not
+    // part of the save/reload scheduling contract under test.
+    let (events, receiver) = std::sync::mpsc::channel();
+    watcher.receiver = receiver;
+    let (reached, mut checkpoint) = oneshot::channel();
+    let (release, wait) = oneshot::channel();
+    let original = workspace.update(cx, |view, window, cx| {
+        view.filesystem_reload_gate = Some((reached, wait));
+        view.environment_save_task = Some(cx.spawn(async |_, _| std::future::pending().await));
+        view.watch_workspace(watcher, window, cx);
+        view.loaded_workspace.as_ref().unwrap().baseline()
+    });
+    let source = fs::read_to_string(&workspace.path).unwrap();
+    fs::write(&workspace.path, &source).unwrap();
+    events
+        .send(Ok(notify::Event::new(notify::EventKind::Modify(
+            notify::event::ModifyKind::Data(notify::event::DataChange::Any),
+        ))
+        .add_path(workspace.path.clone())))
+        .unwrap();
+    cx.run_until_parked();
+    cx.executor().advance_clock(WATCH_POLL + WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    assert!(matches!(
+        checkpoint.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(view.loaded_workspace.as_ref().unwrap().baseline(), original);
+        view.environment_save_task = None;
+    });
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    assert_eq!(
+        checkpoint.try_recv(),
+        Ok(()),
+        "watcher captured its baseline after the write drained"
+    );
+
+    let (reached, mut retried) = oneshot::channel();
+    let (finish, wait) = oneshot::channel();
+    let saved = workspace.update(cx, |view, _, _| {
+        // Advance the repository baseline after the watcher's checkpoint. The
+        // loaded snapshot must be retried even though no write is now active.
+        let loaded = view.loaded_workspace.as_mut().unwrap();
+        loaded
+            .update_environment_variable("development", "host", "latest.example".into())
+            .unwrap();
+        let source = fs::read_to_string(&workspace.path).unwrap();
+        fs::write(
+            &workspace.path,
+            source.replacen("method: GET", "method: PATCH", 1),
+        )
+        .unwrap();
+        view.filesystem_reload_gate = Some((reached, wait));
+        loaded.baseline()
+    });
+    release.send(()).unwrap();
+    cx.run_until_parked();
+    assert!(matches!(
+        retried.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    assert_eq!(
+        retried.try_recv(),
+        Ok(()),
+        "the same event batch reached a second baseline capture"
+    );
+    finish.send(()).unwrap();
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        assert_ne!(
+            loaded.baseline(),
+            saved,
+            "retry must apply the fresh snapshot"
+        );
+        assert_eq!(
+            loaded
+                .workspace()
+                .request(loaded.requests()[0].key())
+                .unwrap()
+                .method
+                .as_deref(),
+            Some("PATCH")
+        );
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("latest.example")
+        );
+        assert!(view.application_dialog.is_none());
+        assert!(view.toasts.is_empty(), "{:?}", toast_debug(view));
+        view.filesystem_watch_task = None;
+        view.filesystem_watcher = None;
+    });
+}

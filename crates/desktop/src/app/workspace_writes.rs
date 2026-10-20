@@ -70,12 +70,22 @@ impl ProbeApp {
         WorkspaceWriteQueues {
             busy: self.loading || self.has_active_workspace_write(),
             requests: self.persistence.has_outstanding_saves(),
-            environment: !self.pending_environment_saves.is_empty(),
+            environment: self
+                .pending_environment_saves
+                .difference(&self.failed_environment_saves)
+                .next()
+                .is_some(),
             documentation: !self.pending_documentation_saves.is_empty(),
         }
     }
 
     fn continue_pending_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pending_environment_saves.is_empty() {
+            if self.pending_close.take().is_some() {
+                self.prompt_pending_environment_conflict(window, cx);
+            }
+            return;
+        }
         if let Some(pending) = self.pending_close.take() {
             let dirty = self.pending_close_dirty_keys(&pending);
             if dirty.is_empty() && self.pending_overview_targets(&pending).is_empty() {
