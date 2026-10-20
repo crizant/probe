@@ -51,22 +51,29 @@ value, not an absent property. Traversing incompatible types returns
 
 ## Values and operators
 
-Expected values are interpolated before literal parsing:
+Expected values that contain `{{` are interpolated before literal parsing.
+Values with no interpolation are used as written and do not resolve an
+environment or request secrets. Each assertion still resolves independently.
 
 - JSON numeric literals become numbers; `true`, `false`, and `null` become their
   respective JSON types. Surrounding whitespace on these literals is ignored.
+- Unquoted text that only begins with a digit or sign, and is not a JSON number,
+  stays a string. `2024-01-01`, `1.0.0`, `200 OK`, and `+200` are strings.
+  `+200` is the string `"+200"` and is not equal to the number 200. A JSON
+  number that does not fit serde_json's finite representation, such as `1e9999`,
+  is still an error.
 - Double-quoted JSON string literals retain string semantics and decode JSON
-  escapes, so `"200"` compares as a string. YAML quoting alone is removed by YAML
-  parsing: use `value: '"200"'` to store an explicitly quoted string literal.
+  escapes, so `"200"` compares as a string. Malformed quoted strings error.
+  YAML quoting alone is removed by YAML parsing: use `value: '"200"'` to store
+  an explicitly quoted string literal.
 - Other text, including the empty string, remains a string with its whitespace
   preserved. Single-quoted expression literals and JSON array/object literals
-  are not supported. Quote numeric-looking strings explicitly; malformed numbers,
-  nonfinite numbers, malformed quoted strings, and unsupported literals error.
+  are not supported. Nonfinite numbers and unsupported literals error.
 
 | Operator | Supported operands and behavior |
 | --- | --- |
 | `equals`, `notEquals` | Typed JSON equality or its negation; different JSON types are unequal, with no coercion. Numbers compare numerically, including integer versus floating representations. |
-| `contains`, `notContains` | String substring matching or its negation, case sensitive. Both operands must be strings. |
+| `contains`, `notContains` | Case-sensitive substring match when the actual value is a string. The needle is the expected value's source text, so `"2024-01-01"` contains `2024` and `1e3` matches those characters rather than `1000`. Quoted strings contribute their decoded text. Non-string actuals, including numbers, are `IncompatibleOperands`; `200` contains `20` errors. |
 | `greaterThan`, `lessThan` | Strict numeric ordering. Both operands must be numbers. |
 | `isNull`, `isNotNull` | Test an existing value for JSON null or its negation. No expected value is required; a supplied value is ignored without interpolation. |
 
@@ -87,11 +94,12 @@ cannot recover its original values. Request execution is intentionally unchanged
 ## Variables and disclosure
 
 The evaluator reuses `resolve_environment_for_templates_with_provider` and
-`ResolvedEnvironment::interpolate_strict`. The `RequestResolution` input supplies
-the same selected environment, inheritance, invocation overrides, workspace
-identity, and provider context used for requests. Disabled declarations shadow
-inherited values according to the existing resolver. Only secrets reachable from
-an active binary assertion's value are requested, including transitive references.
+`ResolvedEnvironment::interpolate_strict` when an expected value contains `{{`.
+The `RequestResolution` input supplies the same selected environment, inheritance,
+invocation overrides, workspace identity, and provider context used for requests.
+Disabled declarations shadow inherited values according to the existing resolver.
+Only secrets reachable from an active binary assertion value that contains
+interpolation are requested, including transitive references.
 Each assertion resolves independently; provider values are not cached across
 assertions, so callers should provide stable values for an evaluation batch.
 

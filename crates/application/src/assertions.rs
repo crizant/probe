@@ -2,7 +2,7 @@
 //!
 //! See `docs/ASSERTIONS.md` for the deliberately restricted evaluation language.
 
-use std::{cmp::Ordering, fmt};
+use std::{borrow::Cow, cmp::Ordering, fmt};
 
 use probe_core::{Assertion, SecretProvider, resolve_environment_for_templates_with_provider};
 use probe_http::HttpResponse;
@@ -66,7 +66,8 @@ impl std::error::Error for AssertionError {}
 /// response, without mutating the declarations, response, or collection.
 ///
 /// Uses the existing environment resolver and provider, scoped to each active
-/// binary assertion's value. One resolution error cannot abort later assertions.
+/// binary assertion value that contains `{{` interpolation. Values without a
+/// template are not resolved. One resolution error cannot abort later assertions.
 /// Missing references always error, even in non-strict request mode: unresolved
 /// templates cannot prove an assertion. Request-sending semantics are unchanged.
 /// Unary operators ignore their optional value. Providers may block; interactive
@@ -135,18 +136,11 @@ fn evaluate_one(
 ) -> Result<bool, AssertionError> {
     let operator = Operator::parse(&assertion.operator)?;
     let path = parse_expression(&assertion.expression)?;
-    let actual = match path {
-        None => Value::from(response.status),
+    let actual = match path.as_deref() {
+        None => Cow::Owned(Value::from(response.status)),
         Some(path) => {
-            let body = body.get_or_insert_with(|| {
-                if !response.body_complete {
-                    Err(AssertionError::BodyUnavailable)
-                } else {
-                    serde_json::from_slice(&response.body)
-                        .map_err(|_| AssertionError::InvalidJsonBody)
-                }
-            });
-            select(body.as_ref().map_err(|error| *error)?, &path)?
+            let parsed = parsed_body(body, response)?;
+            select(parsed, path)?
         }
     };
     match operator {
@@ -158,6 +152,46 @@ fn evaluate_one(
         .value
         .as_deref()
         .ok_or(AssertionError::MissingExpectedValue)?;
+    let resolved = resolve_expected(template, resolution, secrets)?;
+    if matches!(operator, Operator::Contains | Operator::NotContains) {
+        let Value::String(actual) = actual.as_ref() else {
+            return Err(AssertionError::IncompatibleOperands);
+        };
+        let needle = substring_needle(resolved.as_ref())?;
+        let found = actual.contains(needle.as_ref());
+        return Ok(found == matches!(operator, Operator::Contains));
+    }
+    let expected = parse_expected(resolved.as_ref())?;
+    compare(actual.as_ref(), operator, &expected)
+}
+
+fn parsed_body<'a>(
+    body: &'a mut Option<Result<Value, AssertionError>>,
+    response: &HttpResponse,
+) -> Result<&'a Value, AssertionError> {
+    if body.is_none() {
+        *body = Some(if !response.body_complete {
+            Err(AssertionError::BodyUnavailable)
+        } else {
+            serde_json::from_slice(&response.body).map_err(|_| AssertionError::InvalidJsonBody)
+        });
+    }
+    match body.as_ref() {
+        Some(Ok(value)) => Ok(value),
+        Some(Err(error)) => Err(*error),
+        None => unreachable!("response body was just stored"),
+    }
+}
+
+/// Plain expected values do not consult environments or secret providers.
+fn resolve_expected<'a>(
+    template: &'a str,
+    resolution: &RequestResolution<'_>,
+    secrets: &dyn SecretProvider,
+) -> Result<Cow<'a, str>, AssertionError> {
+    if !template.contains("{{") {
+        return Ok(Cow::Borrowed(template));
+    }
     let environment = resolve_environment_for_templates_with_provider(
         [template],
         resolution.environments,
@@ -167,11 +201,10 @@ fn evaluate_one(
         resolution.workspace_identity,
     )
     .map_err(|_| AssertionError::VariableResolution)?;
-    let resolved = environment
+    environment
         .interpolate_strict(template)
-        .map_err(|_| AssertionError::VariableResolution)?;
-    let expected = parse_expected(&resolved)?;
-    compare(&actual, operator, &expected)
+        .map(Cow::Owned)
+        .map_err(|_| AssertionError::VariableResolution)
 }
 
 enum Segment<'a> {
@@ -223,7 +256,7 @@ fn parse_expression(input: &str) -> Result<Option<Vec<Segment<'_>>>, AssertionEr
     Ok(Some(path))
 }
 
-fn select(body: &Value, path: &[Segment<'_>]) -> Result<Value, AssertionError> {
+fn select<'a>(body: &'a Value, path: &[Segment<'_>]) -> Result<Cow<'a, Value>, AssertionError> {
     let mut value = body;
     for (position, segment) in path.iter().enumerate() {
         value = match (segment, value) {
@@ -234,15 +267,15 @@ fn select(body: &Value, path: &[Segment<'_>]) -> Result<Value, AssertionError> {
                 array.get(*index).ok_or(AssertionError::MissingProperty)?
             }
             (Segment::Property("length"), Value::Array(array)) if position + 1 == path.len() => {
-                return Ok(Value::from(array.len()));
+                return Ok(Cow::Owned(Value::from(array.len())));
             }
             (Segment::Property("length"), Value::String(string)) if position + 1 == path.len() => {
-                return Ok(Value::from(string.chars().count()));
+                return Ok(Cow::Owned(Value::from(string.chars().count())));
             }
             _ => return Err(AssertionError::IncompatibleOperands),
         };
     }
-    Ok(value.clone())
+    Ok(Cow::Borrowed(value))
 }
 
 fn parse_expected(input: &str) -> Result<Value, AssertionError> {
@@ -252,21 +285,84 @@ fn parse_expected(input: &str) -> Result<Value, AssertionError> {
             .map(Value::String)
             .map_err(|_| AssertionError::InvalidExpectedValue);
     }
-    if matches!(literal, "true" | "false" | "null")
-        || literal.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+')
-    {
-        let value: Value =
-            serde_json::from_str(literal).map_err(|_| AssertionError::InvalidExpectedValue)?;
-        return match value {
-            Value::Number(_) | Value::Bool(_) | Value::Null => Ok(value),
-            _ => Err(AssertionError::InvalidExpectedValue),
-        };
+    if matches!(literal, "true" | "false" | "null") {
+        return serde_json::from_str(literal).map_err(|_| AssertionError::InvalidExpectedValue);
     }
-    if literal.starts_with(['\'', '[', '{']) || matches!(literal, "NaN" | "Infinity" | "-Infinity")
+    if literal.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+') {
+        if let Ok(value) = serde_json::from_str::<Value>(literal) {
+            return match value {
+                Value::Number(number) => Ok(Value::Number(number)),
+                _ => Err(AssertionError::InvalidExpectedValue),
+            };
+        }
+        // `1e9999` is a JSON number that does not fit. `2024-01-01` and `+200` are not.
+        if is_json_number(literal) || matches!(literal, "NaN" | "Infinity" | "-Infinity") {
+            return Err(AssertionError::InvalidExpectedValue);
+        }
+    } else if literal.starts_with(['\'', '[', '{'])
+        || matches!(literal, "NaN" | "Infinity" | "-Infinity")
     {
         return Err(AssertionError::InvalidExpectedValue);
     }
     Ok(Value::String(input.to_owned()))
+}
+
+/// Needle for `contains` when the actual value is already a string.
+///
+/// Numbers, booleans, and null keep the literal's spelling (`1e3`, not `1000`).
+/// Quoted JSON strings contribute their decoded text.
+fn substring_needle(resolved: &str) -> Result<Cow<'_, str>, AssertionError> {
+    match parse_expected(resolved)? {
+        Value::String(text) => Ok(Cow::Owned(text)),
+        Value::Number(_) | Value::Bool(_) | Value::Null => Ok(Cow::Borrowed(resolved.trim())),
+        _ => Err(AssertionError::InvalidExpectedValue),
+    }
+}
+
+fn is_json_number(literal: &str) -> bool {
+    let bytes = literal.as_bytes();
+    let mut index = usize::from(bytes.first() == Some(&b'-'));
+    let Some(first) = bytes.get(index) else {
+        return false;
+    };
+    if !first.is_ascii_digit() {
+        return false;
+    }
+    if *first == b'0' {
+        index += 1;
+    } else {
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+    }
+    if bytes.get(index) == Some(&b'.') {
+        index += 1;
+        if !bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            return false;
+        }
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+    }
+    if bytes
+        .get(index)
+        .is_some_and(|byte| matches!(byte, b'e' | b'E'))
+    {
+        index += 1;
+        if bytes
+            .get(index)
+            .is_some_and(|byte| matches!(byte, b'+' | b'-'))
+        {
+            index += 1;
+        }
+        if !bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            return false;
+        }
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+    }
+    index == bytes.len()
 }
 
 fn compare(actual: &Value, operator: Operator, expected: &Value) -> Result<bool, AssertionError> {
@@ -277,12 +373,6 @@ fn compare(actual: &Value, operator: Operator, expected: &Value) -> Result<bool,
                 _ => actual == expected,
             };
             Ok(equal == matches!(operator, Operator::Equals))
-        }
-        Operator::Contains | Operator::NotContains => {
-            let (Value::String(actual), Value::String(expected)) = (actual, expected) else {
-                return Err(AssertionError::IncompatibleOperands);
-            };
-            Ok(actual.contains(expected) == matches!(operator, Operator::Contains))
         }
         Operator::GreaterThan | Operator::LessThan => {
             let (Value::Number(actual), Value::Number(expected)) = (actual, expected) else {
@@ -295,8 +385,8 @@ fn compare(actual: &Value, operator: Operator, expected: &Value) -> Result<bool,
             };
             Ok(number_cmp(actual, expected) == wanted)
         }
-        Operator::IsNull | Operator::IsNotNull => {
-            unreachable!("unary operators handled before resolution")
+        Operator::Contains | Operator::NotContains | Operator::IsNull | Operator::IsNotNull => {
+            unreachable!("handled before typed comparison")
         }
     }
 }

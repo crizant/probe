@@ -137,6 +137,16 @@ fn length_applies_only_to_the_final_segment() {
         outcome(body, "response.body.length.n", "equals", Some("1")),
         AssertionOutcome::Passed
     );
+    // One supplementary-plane scalar, not its UTF-16 or UTF-8 length.
+    assert_eq!(
+        outcome(
+            "\"😀\"".as_bytes(),
+            "response.body.length",
+            "equals",
+            Some("1")
+        ),
+        AssertionOutcome::Passed
+    );
     for (path, length) in [
         ("response.body.items.length.n", "2"),
         ("response.body.text.length.n", "4"),
@@ -256,12 +266,10 @@ fn invalid_literals_and_incompatible_comparisons_are_explicit_errors() {
         "\"unclosed",
         "[1]",
         "{}",
-        "01",
         "1e9999",
         "NaN",
         "Infinity",
-        "+1",
-        "1x",
+        "-Infinity",
     ] {
         assert_eq!(
             outcome(b"1", "response.body", "equals", Some(literal)),
@@ -274,7 +282,8 @@ fn invalid_literals_and_incompatible_comparisons_are_explicit_errors() {
         ("true", "greaterThan", "1"),
         ("null", "lessThan", "1"),
         ("[1]", "contains", "1"),
-        ("\"123\"", "notContains", "2"),
+        ("200", "contains", "20"),
+        ("200", "notContains", "20"),
     ] {
         assert_eq!(
             outcome(actual.as_bytes(), "response.body", operator, Some(expected)),
@@ -294,6 +303,57 @@ fn invalid_literals_and_incompatible_comparisons_are_explicit_errors() {
             AssertionOutcome::Error(AssertionError::MissingExpectedValue)
         );
     }
+}
+
+#[test]
+fn unquoted_non_numbers_remain_strings_and_contains_uses_their_text() {
+    for (body, expected, passed) in [
+        (r#""2024-01-01""#, "2024-01-01", true),
+        (r#""1.0.0""#, "1.0.0", true),
+        (r#""200 OK""#, "200 OK", true),
+        (r#""+200""#, "+200", true),
+        (r#""01""#, "01", true),
+        ("200", "+200", false),
+        ("200", "200 OK", false),
+        ("1", "01", false),
+        ("1", "+1", false),
+        ("1", "1x", false),
+    ] {
+        assert_eq!(
+            outcome(body.as_bytes(), "response.body", "equals", Some(expected)),
+            if passed {
+                AssertionOutcome::Passed
+            } else {
+                AssertionOutcome::Failed
+            },
+            "{body} equals {expected}"
+        );
+    }
+    assert_eq!(
+        outcome(
+            br#""2024-01-01""#,
+            "response.body",
+            "contains",
+            Some("2024")
+        ),
+        AssertionOutcome::Passed
+    );
+    assert_eq!(
+        outcome(br#""x1e3y""#, "response.body", "contains", Some("1e3")),
+        AssertionOutcome::Passed
+    );
+    assert_eq!(
+        outcome(br#""1000""#, "response.body", "contains", Some("1e3")),
+        AssertionOutcome::Failed
+    );
+    assert_eq!(
+        outcome(br#""123""#, "response.body", "notContains", Some("2")),
+        AssertionOutcome::Failed
+    );
+    assert_eq!(
+        outcome(br#""123""#, "response.body", "notContains", Some("9")),
+        AssertionOutcome::Passed
+    );
 }
 
 #[test]
@@ -617,6 +677,65 @@ fn disabled_and_unary_assertions_do_not_resolve_ignored_values() {
         )
         .is_empty()
     );
+}
+
+#[test]
+fn values_without_templates_skip_environment_resolution() {
+    let loaded = fixture();
+    let provider = Provider {
+        value: Err(SecretError),
+        calls: Cell::new(0),
+    };
+    let missing = RequestResolution {
+        environments: loaded.workspace().environments(),
+        environment: Some("does-not-exist"),
+        workspace_identity: Some("fixture"),
+        ..RequestResolution::default()
+    };
+    let results = evaluate_assertions(
+        &[
+            assertion("response.status", "equals", Some("200")),
+            assertion("response.status", "equals", Some("{{status}}")),
+            assertion("response.body", "contains", Some("200")),
+        ],
+        &response(br#""200""#),
+        &missing,
+        &provider,
+    );
+    assert_eq!(
+        results
+            .into_iter()
+            .map(|result| result.outcome)
+            .collect::<Vec<_>>(),
+        [
+            AssertionOutcome::Passed,
+            AssertionOutcome::Error(AssertionError::VariableResolution),
+            AssertionOutcome::Passed,
+        ]
+    );
+    assert_eq!(provider.calls.get(), 0);
+
+    let child = RequestResolution {
+        environments: loaded.workspace().environments(),
+        environment: Some("child"),
+        workspace_identity: Some("fixture"),
+        ..RequestResolution::default()
+    };
+    let results = evaluate_assertions(
+        &[
+            assertion("response.status", "equals", Some("200")),
+            assertion("response.status", "equals", Some("{{token}}")),
+        ],
+        &response(b""),
+        &child,
+        &provider,
+    );
+    assert_eq!(results[0].outcome, AssertionOutcome::Passed);
+    assert_eq!(
+        results[1].outcome,
+        AssertionOutcome::Error(AssertionError::VariableResolution)
+    );
+    assert_eq!(provider.calls.get(), 1);
 }
 
 #[test]
