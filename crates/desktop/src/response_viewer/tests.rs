@@ -648,6 +648,27 @@ fn page_reads_started_before_a_reload_settle_on_the_remapped_request() {
 }
 
 #[test]
+fn a_stale_result_is_ignored_when_the_document_at_its_key_was_replaced() {
+    let key = request_key();
+    let response = large_json_response();
+    let mut viewer = super::ResponseViewerState::default();
+    viewer.insert(key, prepare_document(&response, 31).0);
+    let (replacement, pretty_pending, _) = prepare_document(&response, 32);
+    assert!(pretty_pending);
+    viewer.insert(key, replacement.clone());
+
+    viewer.apply_pretty(
+        key,
+        31,
+        pretty_body(&response.body, ResponseBodySyntax::Json),
+    );
+
+    let document = viewer.document(key).unwrap();
+    assert!(document.pretty_pending);
+    assert_eq!(document, &replacement);
+}
+
+#[test]
 fn results_for_replaced_or_closed_documents_are_ignored_after_a_reload() {
     let old_key = request_key();
     let new_key = replacement_request_key();

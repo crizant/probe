@@ -286,6 +286,7 @@ impl ProbeApp {
         self.execution.clear();
         self.websocket.clear();
         self.response_viewer.clear();
+        self.send_and_save_targets.clear();
         self.loaded_workspace = Some(workspace);
         self.detached_requests.clear();
         self.workspace_path = Some(path);

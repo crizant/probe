@@ -4185,6 +4185,116 @@ fn send_and_save_picker_follows_the_request_across_reloads(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn send_and_save_sends_the_remapped_request_when_a_path_is_chosen_after_reload(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = writable_bundled_fixture("reload-send-and-save-chosen");
+    // The address refuses connections, so the send fails without network I/O
+    // and nothing is written to the destination.
+    fs::write(
+        &fixture,
+        fs::read_to_string(&fixture)
+            .unwrap()
+            .replace("https://api.example.com/pets", "http://127.0.0.1:1/pets"),
+    )
+    .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let old_key = workspace.requests()[0].key();
+    assert_eq!(
+        workspace
+            .workspace()
+            .request(old_key)
+            .unwrap()
+            .url
+            .as_deref(),
+        Some("http://127.0.0.1:1/pets")
+    );
+    let destination = std::env::temp_dir().join(format!(
+        "probe-reload-send-and-save-{}.bin",
+        std::process::id()
+    ));
+    // The execution runtime wakes GPUI tasks from Tokio threads.
+    cx.executor().allow_parking();
+    let new_key = window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(old_key, cx);
+            view.choose_send_and_save(old_key, window, cx);
+            let middle_key = reload_unchanged_fixture(view, &fixture)[&old_key];
+            reload_unchanged_fixture(view, &fixture)[&middle_key]
+        })
+        .unwrap();
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection({
+        let destination = destination.clone();
+        move |_| Some(destination)
+    });
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.send_and_save_targets.is_empty());
+            assert!(view.execution.response(new_key).is_some());
+            assert!(view.execution.response(old_key).is_none());
+        })
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while window
+        .update(cx, |view, _, _| {
+            view.execution
+                .response(new_key)
+                .is_some_and(crate::execution::ResponseState::is_running)
+        })
+        .unwrap()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the Send and Save execution"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        cx.run_until_parked();
+    }
+    window
+        .update(cx, |view, _, _| {
+            assert!(matches!(
+                view.execution.response(new_key),
+                Some(crate::execution::ResponseState::Failed(_))
+            ));
+        })
+        .unwrap();
+    assert!(!destination.exists());
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui_kit::test]
+fn switching_collections_discards_open_send_and_save_targets(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.choose_send_and_save(key, window, cx);
+            assert!(!view.send_and_save_targets.is_empty());
+            let other = probe_opencollection::load_workspace(&fixture).unwrap();
+            view.set_workspace(fixture, other);
+            assert!(view.send_and_save_targets.is_empty());
+        })
+        .unwrap();
+    cx.simulate_new_path_selection(|_| Some(std::env::temp_dir().join("probe-unused.bin")));
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| assert!(view.execution_service.is_none()))
+        .unwrap();
+}
+
+#[gpui_kit::test]
 fn send_and_save_does_not_send_a_request_removed_by_reload(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
