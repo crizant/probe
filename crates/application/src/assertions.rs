@@ -289,16 +289,12 @@ fn parse_expected(input: &str) -> Result<Value, AssertionError> {
         return serde_json::from_str(literal).map_err(|_| AssertionError::InvalidExpectedValue);
     }
     if literal.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+') {
-        match serde_json::from_str::<Value>(literal) {
-            Ok(Value::Number(number)) => return Ok(Value::Number(number)),
-            // `1e9999` is a JSON number serde_json refuses to represent.
-            // `2024-01-01` and `+200` fail as ordinary syntax and stay strings.
-            Err(error) if json_number_out_of_range(&error) => {
-                return Err(AssertionError::InvalidExpectedValue);
-            }
-            Ok(_) | Err(_) => {}
+        if let Ok(Value::Number(number)) = serde_json::from_str(literal) {
+            return Ok(Value::Number(number));
         }
-        if matches!(literal, "NaN" | "Infinity" | "-Infinity") {
+        // Grammar match with a failed parse means the number does not fit,
+        // as with `1e400`. Syntax such as `2024-01-01` and `+200` stays text.
+        if is_json_number(literal) || matches!(literal, "NaN" | "Infinity" | "-Infinity") {
             return Err(AssertionError::InvalidExpectedValue);
         }
     } else if literal.starts_with(['\'', '[', '{'])
@@ -309,9 +305,48 @@ fn parse_expected(input: &str) -> Result<Value, AssertionError> {
     Ok(Value::String(input.to_owned()))
 }
 
-fn json_number_out_of_range(error: &serde_json::Error) -> bool {
-    // serde_json does not expose this code; the message is its stable wording.
-    error.to_string().starts_with("number out of range")
+/// RFC 8259 number grammar: optional `-`, integer without leading zeroes,
+/// optional fraction, optional exponent. This does not apply serde_json's range.
+fn is_json_number(literal: &str) -> bool {
+    let after_sign = literal.strip_prefix('-').unwrap_or(literal);
+    let Some(after_int) = take_json_int(after_sign) else {
+        return false;
+    };
+    let Some(after_frac) = take_json_frac(after_int) else {
+        return false;
+    };
+    let Some(after_exp) = take_json_exp(after_frac) else {
+        return false;
+    };
+    after_exp.is_empty()
+}
+
+fn take_json_int(input: &str) -> Option<&str> {
+    match input.as_bytes().first() {
+        Some(b'0') => Some(&input[1..]),
+        Some(b'1'..=b'9') => take_digits(input),
+        _ => None,
+    }
+}
+
+fn take_json_frac(input: &str) -> Option<&str> {
+    let Some(after_dot) = input.strip_prefix('.') else {
+        return Some(input);
+    };
+    take_digits(after_dot)
+}
+
+fn take_json_exp(input: &str) -> Option<&str> {
+    let Some(after_mark) = input.strip_prefix(['e', 'E']) else {
+        return Some(input);
+    };
+    let after_sign = after_mark.strip_prefix(['+', '-']).unwrap_or(after_mark);
+    take_digits(after_sign)
+}
+
+fn take_digits(input: &str) -> Option<&str> {
+    let len = input.bytes().take_while(u8::is_ascii_digit).count();
+    if len == 0 { None } else { Some(&input[len..]) }
 }
 
 /// Needle for `contains` when the actual value is already a string.

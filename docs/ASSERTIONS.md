@@ -58,10 +58,11 @@ environment or request secrets. Each assertion still resolves independently.
 - JSON numeric literals become numbers; `true`, `false`, and `null` become their
   respective JSON types. Surrounding whitespace on these literals is ignored.
 - Unquoted text that only begins with a digit or sign, and is not a JSON number,
-  stays a string. `2024-01-01`, `1.0.0`, `200 OK`, and `+200` are strings.
-  `+200` is the string `"+200"` and is not equal to the number 200. A JSON
-  number that does not fit serde_json's finite representation, such as `1e9999`,
-  is still an error.
+  stays a string. `2024-01-01`, `1.0.0`, `200 OK`, `+200`, `01`, `1.`, and `-`
+  are strings. A leading dot, as in `.5`, is not a JSON number either.
+  `+200` is the string `"+200"` and is not equal to the number 200. Text that
+  matches JSON number grammar but does not fit serde_json's finite
+  representation, such as `1e400` or `1e9999`, is still an error.
 - Double-quoted JSON string literals retain string semantics and decode JSON
   escapes, so `"200"` compares as a string. Malformed quoted strings error.
   YAML quoting alone is removed by YAML parsing: use `value: '"200"'` to store
