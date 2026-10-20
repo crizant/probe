@@ -12,6 +12,10 @@ pub(crate) struct LocalRequestState<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SynchronizationConflict {
+    PendingEnvironmentSave {
+        environment: String,
+        name: String,
+    },
     Modified {
         selector: String,
         fields: Vec<&'static str>,
@@ -27,6 +31,11 @@ pub(crate) enum SynchronizationConflict {
 impl SynchronizationConflict {
     pub(crate) fn description(&self) -> String {
         match self {
+            Self::PendingEnvironmentSave { environment, name } => {
+                format!(
+                    "environment {environment} has unsaved edits to {name} that prevent reloading"
+                )
+            }
             Self::Modified { selector, fields } => {
                 format!(
                     "{selector} changed locally and on disk ({})",

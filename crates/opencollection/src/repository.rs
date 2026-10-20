@@ -184,6 +184,14 @@ impl LoadedWorkspace {
         self.baseline
     }
 
+    /// Whether both workspaces retain the same filesystem document paths and
+    /// exact source bytes. Ignores local domain edits and runtime identities.
+    /// In-memory workspaces have no retained source and never match.
+    #[must_use]
+    pub fn has_same_source(&self, other: &Self) -> bool {
+        !self.documents.is_empty() && self.documents == other.documents
+    }
+
     fn check_baseline(&self, baseline: WorkspaceBaseline) -> Result<(), SaveError> {
         if self.baseline == baseline {
             Ok(())

@@ -7,6 +7,7 @@ impl ProbeApp {
         self.websocket.clear();
         self.response_viewer.clear();
         self.pending_environment_saves.clear();
+        self.failed_environment_saves.clear();
         self.environment_save_workspace_path = None;
         self.loaded_workspace = None;
         self.detached_requests.clear();
