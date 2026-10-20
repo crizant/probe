@@ -760,3 +760,112 @@ fn filesystem_watcher_waits_for_writes_and_retries_with_the_original_events(
         view.filesystem_watcher = None;
     });
 }
+
+#[gpui_kit::test]
+fn watcher_ignores_own_successful_save_while_another_variable_remains_unsaved(
+    cx: &mut TestAppContext,
+) {
+    use crate::filesystem::{WATCH_DEBOUNCE, WATCH_POLL, WorkspaceWatcher};
+    let workspace = EnvironmentWorkspace::writable(cx, "watcher-own-save-with-failed-edit");
+    workspace.select_environment(cx, "development");
+    let mut watcher = WorkspaceWatcher::start(&workspace.path).unwrap();
+    let (events, receiver) = std::sync::mpsc::channel();
+    watcher.receiver = receiver;
+    let (reached, mut checkpoint) = oneshot::channel();
+    let (release, wait) = oneshot::channel();
+    workspace.update(cx, |view, window, cx| {
+        view.loaded_workspace
+            .as_mut()
+            .unwrap()
+            .set_environment_variable("development", "host", "unsaved.example".into())
+            .unwrap();
+        view.complete_environment_variable_save(
+            ("development".into(), "host".into()),
+            Some(workspace.path.clone()),
+            Err(probe_opencollection::SaveError::Io {
+                path: workspace.path.clone(),
+                source: std::io::Error::other("write failed"),
+            }),
+            window,
+            cx,
+        );
+        view.update_environment_variable("token", "saved-token".into(), window, cx);
+        view.filesystem_reload_gate = Some((reached, wait));
+        view.watch_workspace(watcher, window, cx);
+    });
+    cx.run_until_parked();
+    let baseline = workspace.update(cx, |view, _, _| {
+        view.loaded_workspace.as_ref().unwrap().baseline()
+    });
+    let event = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Data(
+        notify::event::DataChange::Any,
+    )))
+    .add_path(workspace.path.clone());
+    events.send(Ok(event.clone())).unwrap();
+    cx.executor().advance_clock(WATCH_POLL);
+    cx.run_until_parked();
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    assert_eq!(
+        checkpoint.try_recv(),
+        Ok(()),
+        "the successful write reached the watcher loop"
+    );
+    release.send(()).unwrap();
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(
+            view.application_dialog.is_none(),
+            "an own write is not an external conflict"
+        );
+        assert_eq!(view.loaded_workspace.as_ref().unwrap().baseline(), baseline);
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("unsaved.example")
+        );
+        assert!(
+            view.pending_environment_saves
+                .contains(&("development".into(), "host".into()))
+        );
+        assert_eq!(
+            view.failed_environment_saves,
+            view.pending_environment_saves
+        );
+    });
+    assert_eq!(
+        saved_development_variable(&workspace, "host").as_deref(),
+        Some("dev.example.com")
+    );
+    assert_eq!(
+        saved_development_variable(&workspace, "token").as_deref(),
+        Some("saved-token")
+    );
+
+    // A later external change must still be noticed, even if its parsed values
+    // are identical. Comparing only domain values would miss this comment.
+    let source = fs::read_to_string(&workspace.path).unwrap();
+    let external = format!("{source}\n# External comment\n");
+    fs::write(&workspace.path, &external).unwrap();
+    events.send(Ok(event)).unwrap();
+    cx.executor().advance_clock(WATCH_POLL);
+    cx.run_until_parked();
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(matches!(
+            view.application_dialog,
+            Some(ApplicationDialog::FilesystemConflict { .. })
+        ));
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("unsaved.example")
+        );
+        assert!(
+            view.pending_environment_saves
+                .contains(&("development".into(), "host".into()))
+        );
+        view.filesystem_watch_task = None;
+        view.filesystem_watcher = None;
+    });
+    assert_eq!(fs::read_to_string(&workspace.path).unwrap(), external);
+}

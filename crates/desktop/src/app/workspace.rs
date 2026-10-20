@@ -472,9 +472,13 @@ impl ProbeApp {
             Ok(fresh) => {
                 if self.pending_environment_saves.is_empty() {
                     self.reconcile_filesystem_workspace(fresh, hints, window, cx);
-                } else {
-                    // Reconciliation merges request drafts only. Keep unsaved
-                    // environment values until the user explicitly chooses disk.
+                } else if !self
+                    .loaded_workspace
+                    .as_ref()
+                    .is_some_and(|loaded| loaded.has_same_source(&fresh))
+                {
+                    // Own writes already refreshed the retained source. Leave
+                    // pending values in memory; only changed source needs a choice.
                     self.prompt_pending_environment_conflict(window, cx);
                 }
             }
