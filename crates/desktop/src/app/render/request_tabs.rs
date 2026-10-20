@@ -152,6 +152,7 @@ impl ProbeApp {
                     .items_center()
                     .gap(px(theme.metrics.spacing_1))
                     .overflow_hidden()
+                    .line_height(relative(1.25))
                     .rounded_tl(px(theme.metrics.radius_medium))
                     .rounded_tr(px(theme.metrics.radius_medium))
                     .when(drop_before, |tab| {

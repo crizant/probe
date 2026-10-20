@@ -163,6 +163,7 @@ impl RenderOnce for DropdownButton {
                 .rounded_bl(px(radius))
                 .rounded_tr(px(0.0))
                 .rounded_br(px(0.0))
+                .line_height(relative(1.25))
                 .on_click(move |event, window, cx| on_click(event, window, cx))
                 .child(self.label),
             theme,
@@ -292,6 +293,7 @@ pub(crate) fn text_button(
         .cursor_pointer()
         .font_family(theme.typography.interface_family)
         .text_size(px(theme.typography.caption_size))
+        .line_height(relative(1.25))
         .text_color(theme.colors.text.secondary)
         .hover(move |button| button.text_color(theme.colors.actions.accent))
         .focus_visible(move |button| button.border_color(theme.colors.borders.focused))
@@ -353,6 +355,7 @@ fn action_button(
         .rounded(px(theme.metrics.radius_small))
         .font_family(theme.typography.interface_family)
         .text_size(px(theme.typography.body_size))
+        .line_height(relative(1.25))
         .border_1()
         .when(!disabled, |button| button.cursor_pointer());
     match kind {
@@ -599,6 +602,7 @@ pub(crate) fn dialog_choice_button(
         .rounded(px(theme.metrics.radius_small))
         .font_family(theme.typography.interface_family)
         .text_size(px(theme.typography.body_size))
+        .line_height(relative(1.25))
         .text_color(theme.colors.text.primary)
         .bg(theme.colors.surfaces.raised)
         .border_1()
