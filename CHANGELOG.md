@@ -6,6 +6,13 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Desktop responses that finish while the collection reloads from disk now
+  appear instead of leaving the response viewer empty or stuck formatting,
+  inspecting, encoding, or loading a page. Send and Save sends the reloaded
+  request after its destination is chosen.
+
 ## [1.1.0] - 2026-10-20
 
 ### Added
