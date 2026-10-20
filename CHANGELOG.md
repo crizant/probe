@@ -40,6 +40,7 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
+- Desktop editor carets now use the fixed 1px width provided by upstream GPUI Kit.
 - JSON editors now use native smart indentation on Enter, including GraphQL
   Variables and Extensions.
 - JSON body editors auto-close braces, brackets, and double quotes using tracked
