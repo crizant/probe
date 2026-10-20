@@ -429,11 +429,9 @@ impl ProbeApp {
     }
 
     fn watched_workspace_baseline(&self) -> Option<probe_opencollection::WorkspaceBaseline> {
-        // Tooltip edits are already in the workspace, including edits queued
-        // behind the active save. Replacing it now would discard those values
-        // and invalidate the save's retained source baseline.
-        if self.loading || self.has_active_workspace_write() || self.has_pending_environment_work()
-        {
+        // The write pump starts the next save before yielding. An idle queue can
+        // instead mean preparation failed; let the watcher surface that conflict.
+        if self.loading || self.has_active_workspace_write() {
             return None;
         }
         self.loaded_workspace
@@ -455,7 +453,23 @@ impl ProbeApp {
         }
         match result {
             Ok(fresh) => {
-                self.reconcile_filesystem_workspace(fresh, hints, window, cx);
+                if self.pending_environment_saves.is_empty() {
+                    self.reconcile_filesystem_workspace(fresh, hints, window, cx);
+                } else {
+                    // Reconciliation merges request drafts only. Keep unsaved
+                    // environment values until the user explicitly chooses disk.
+                    let conflicts = self
+                        .pending_environment_saves
+                        .iter()
+                        .map(|(environment, name)| {
+                            SynchronizationConflict::PendingEnvironmentSave {
+                                environment: environment.clone(),
+                                name: name.clone(),
+                            }
+                        })
+                        .collect();
+                    self.prompt_filesystem_conflict(conflicts, window, cx);
+                }
             }
             Err(error) => {
                 self.show_toast(
@@ -760,6 +774,7 @@ impl ProbeApp {
                             let result = reconcile(&clean_local, workspace, &BTreeMap::new());
                             if let ReconcileResult::Applied(reconciled) = result {
                                 view.apply_reconciled_workspace(*reconciled, cx);
+                                view.pending_environment_saves.clear();
                                 view.show_toast(
                                     ToastIntent::Warning,
                                     "Reloaded the collection from disk; conflicting local edits were discarded.",

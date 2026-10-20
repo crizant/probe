@@ -431,12 +431,6 @@ fn watcher_defers_a_committed_environment_save_and_preserves_queued_tooltip_edit
             .complete_environment_save(saved)
             .unwrap();
 
-        // The gap between saves must also protect edits still in the queue.
-        let baseline = view.loaded_workspace.as_ref().unwrap().baseline();
-        let snapshot = probe_opencollection::load_workspace(&workspace.path).unwrap();
-        assert!(
-            !view.apply_watched_workspace(baseline, Ok(snapshot), BTreeMap::new(), window, cx,)
-        );
         assert_eq!(
             resolved_variable(view, "host").as_deref(),
             Some("latest.example")
@@ -533,5 +527,64 @@ fn watcher_retries_a_snapshot_loaded_before_a_save_and_still_reports_external_co
             Some("POST")
         );
         assert!(view.toasts.is_empty(), "{:?}", toast_debug(view));
+    });
+}
+
+#[gpui_kit::test]
+fn watcher_surfaces_blocked_environment_saves_without_discarding_edits(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "watcher-blocked-environment");
+    // In-memory sources cannot prepare saves. Keep a real path for watcher reloads.
+    let source = fs::read_to_string(&workspace.path).unwrap();
+    let loaded = probe_opencollection::load_workspace_from_str(&source).unwrap();
+    workspace.update(cx, |view, _, _| {
+        view.set_workspace(workspace.path.clone(), loaded)
+    });
+    select_first_request(&workspace, cx);
+    workspace.update(cx, |view, window, cx| {
+        view.update_environment_variable("host", "unsaved.example".into(), window, cx);
+        assert!(view.environment_save_task.is_none());
+        assert!(view.pending_environment_saves.contains(&("development".into(), "host".into())));
+        assert!(toast_debug(view).iter().any(|toast| toast.contains("Could not save environment variable")));
+        fs::write(&workspace.path, source.replacen("method: GET", "method: PATCH", 1)).unwrap();
+        let baseline = view.loaded_workspace.as_ref().unwrap().baseline();
+        // This event is handled, rather than retried indefinitely while idle.
+        assert!(view.apply_watched_workspace(
+            baseline, probe_opencollection::load_workspace(&workspace.path), BTreeMap::new(), window, cx,
+        ));
+        assert!(matches!(&view.application_dialog, Some(ApplicationDialog::FilesystemConflict { detail, .. }) if detail.contains("unsaved edits to host")));
+        assert_eq!(resolved_variable(view, "host").as_deref(), Some("unsaved.example"));
+        view.handle_application_dialog_action(ApplicationDialogAction::KeepLocal, window, cx);
+        assert_eq!(resolved_variable(view, "host").as_deref(), Some("unsaved.example"));
+        assert!(!view.pending_environment_saves.is_empty());
+        // Later external changes still reach the existing conflict UI.
+        fs::write(&workspace.path, source.replacen("method: GET", "method: PUT", 1)).unwrap();
+        assert!(view.apply_watched_workspace(
+            baseline, probe_opencollection::load_workspace(&workspace.path), BTreeMap::new(), window, cx,
+        ));
+        assert!(matches!(view.application_dialog, Some(ApplicationDialog::FilesystemConflict { .. })));
+        view.handle_application_dialog_action(ApplicationDialogAction::UseDisk, window, cx);
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.pending_environment_saves.is_empty());
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("dev.example.com")
+        );
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        let key = loaded.requests()[0].key();
+        assert_eq!(
+            loaded.workspace().request(key).unwrap().method.as_deref(),
+            Some("PUT")
+        );
+        let baseline = loaded.baseline();
+        assert!(view.apply_watched_workspace(
+            baseline,
+            probe_opencollection::load_workspace(&workspace.path),
+            BTreeMap::new(),
+            window,
+            cx,
+        ));
+        assert!(view.application_dialog.is_none());
     });
 }
