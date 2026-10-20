@@ -200,7 +200,9 @@ fn parse_expression(input: &str) -> Result<Option<Vec<Segment<'_>>>, AssertionEr
             path.push(Segment::Property(name));
             rest = &property[end..];
         } else if let Some(index) = rest.strip_prefix('[') {
-            let end = index.find(']').ok_or(AssertionError::UnsupportedExpression)?;
+            let end = index
+                .find(']')
+                .ok_or(AssertionError::UnsupportedExpression)?;
             let digits = &index[..end];
             if digits.is_empty()
                 || !digits.bytes().all(|b| b.is_ascii_digit())
@@ -225,12 +227,12 @@ fn select(body: &Value, path: &[Segment<'_>]) -> Result<Value, AssertionError> {
     let mut value = body;
     for (position, segment) in path.iter().enumerate() {
         value = match (segment, value) {
-            (Segment::Property(name), Value::Object(object)) => object
-                .get(*name)
-                .ok_or(AssertionError::MissingProperty)?,
-            (Segment::Index(index), Value::Array(array)) => array
-                .get(*index)
-                .ok_or(AssertionError::MissingProperty)?,
+            (Segment::Property(name), Value::Object(object)) => {
+                object.get(*name).ok_or(AssertionError::MissingProperty)?
+            }
+            (Segment::Index(index), Value::Array(array)) => {
+                array.get(*index).ok_or(AssertionError::MissingProperty)?
+            }
             (Segment::Property("length"), Value::Array(array)) if position + 1 == path.len() => {
                 return Ok(Value::from(array.len()));
             }
@@ -251,7 +253,8 @@ fn parse_expected(input: &str) -> Result<Value, AssertionError> {
             .map_err(|_| AssertionError::InvalidExpectedValue);
     }
     if matches!(literal, "true" | "false" | "null")
-        || literal.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+') {
+        || literal.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+')
+    {
         let value: Value =
             serde_json::from_str(literal).map_err(|_| AssertionError::InvalidExpectedValue)?;
         return match value {
@@ -259,7 +262,8 @@ fn parse_expected(input: &str) -> Result<Value, AssertionError> {
             _ => Err(AssertionError::InvalidExpectedValue),
         };
     }
-    if literal.starts_with(['\'', '[', '{']) || matches!(literal, "NaN" | "Infinity" | "-Infinity") {
+    if literal.starts_with(['\'', '[', '{']) || matches!(literal, "NaN" | "Infinity" | "-Infinity")
+    {
         return Err(AssertionError::InvalidExpectedValue);
     }
     Ok(Value::String(input.to_owned()))
@@ -333,11 +337,7 @@ fn number_cmp(a: &Number, b: &Number) -> Ordering {
         bd.resize(width, b'0');
         ae.cmp(&be).then_with(|| ad.cmp(&bd))
     };
-    if an {
-        magnitude.reverse()
-    } else {
-        magnitude
-    }
+    if an { magnitude.reverse() } else { magnitude }
 }
 
 #[cfg(test)]
