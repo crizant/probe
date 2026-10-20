@@ -491,6 +491,7 @@ impl ProbeApp {
             .items_center()
             .gap(px(theme.metrics.spacing_1))
             .overflow_hidden()
+            .line_height(relative(1.25))
             .cursor_pointer()
             .on_click(move |_, _, cx| {
                 let selector = selector.clone();

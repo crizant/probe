@@ -62,6 +62,7 @@ impl ProbeApp {
                     .accessibility_label(format!("Open {label} folder overview"))
                     .flex_none()
                     .max_w(px(220.0))
+                    .line_height(relative(1.25))
                     .cursor_pointer()
                     .hover(move |segment| segment.text_color(theme.colors.text.primary))
                     .child(components::truncated_label(label.to_owned()))

@@ -41,6 +41,7 @@ impl ProbeApp {
                     .px(px(theme.metrics.spacing_2))
                     .flex()
                     .items_center()
+                    .line_height(relative(1.25))
                     .rounded(px(theme.metrics.radius_small))
                     .text_color(theme.colors.text.secondary)
                     .when(selected, |button| {

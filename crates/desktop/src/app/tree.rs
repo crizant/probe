@@ -1,7 +1,7 @@
 use gpui_kit::base::Button;
 use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window,
-    div, prelude::FluentBuilder as _, px,
+    div, prelude::FluentBuilder as _, px, relative,
 };
 use probe_core::{ItemKind, Workspace, WorkspaceItemRef};
 
@@ -74,6 +74,7 @@ pub(crate) fn tree_row_button(
         .items_center()
         .gap(px(theme.metrics.spacing_1))
         .overflow_hidden()
+        .line_height(relative(1.25))
         .rounded(px(theme.metrics.radius_small))
         .when(selected, |row| {
             row.bg(theme.colors.selection.inactive_background)

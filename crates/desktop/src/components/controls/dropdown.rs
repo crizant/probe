@@ -499,6 +499,7 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
             .justify_between()
             .gap(px(theme.metrics.spacing_1))
             .overflow_hidden()
+            .line_height(relative(1.25))
             .rounded(px(theme.metrics.radius_small))
             .bg(theme.colors.surfaces.raised)
             .border_1()

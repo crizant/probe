@@ -459,6 +459,7 @@ impl ProbeApp {
                     .items_center()
                     .gap(px(theme.metrics.spacing_2))
                     .overflow_hidden()
+                    .line_height(relative(1.25))
                     .rounded(px(theme.metrics.radius_small))
                     .border_1()
                     .border_color(theme.colors.borders.subtle)

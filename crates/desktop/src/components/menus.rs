@@ -143,6 +143,7 @@ fn menu_row_button(
         .items_center()
         .justify_start()
         .overflow_hidden()
+        .line_height(relative(1.25))
         .rounded(px(theme.metrics.radius_small))
         .font_family(theme.typography.interface_family)
         .text_size(px(theme.typography.body_size))
