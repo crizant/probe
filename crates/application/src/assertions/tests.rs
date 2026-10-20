@@ -107,6 +107,49 @@ fn paths_arrays_lengths_and_real_length_properties() {
 }
 
 #[test]
+fn property_names_include_underscore_and_dollar() {
+    let body = br#"{"user_name":"Ada","$ref":"users","_id":7}"#;
+    for (path, expected) in [
+        ("response.body.user_name", "Ada"),
+        ("response.body.$ref", "users"),
+        ("response.body._id", "7"),
+    ] {
+        assert_eq!(
+            outcome(body, path, "equals", Some(expected)),
+            AssertionOutcome::Passed,
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn length_applies_only_to_the_final_segment() {
+    let body = br#"{"items":["ab","cde"],"text":"abcd","length":{"n":1}}"#;
+    assert_eq!(
+        outcome(body, "response.body.items.length", "equals", Some("2")),
+        AssertionOutcome::Passed
+    );
+    assert_eq!(
+        outcome(body, "response.body.text.length", "equals", Some("4")),
+        AssertionOutcome::Passed
+    );
+    assert_eq!(
+        outcome(body, "response.body.length.n", "equals", Some("1")),
+        AssertionOutcome::Passed
+    );
+    for (path, length) in [
+        ("response.body.items.length.n", "2"),
+        ("response.body.text.length.n", "4"),
+    ] {
+        assert_eq!(
+            outcome(body, path, "equals", Some(length)),
+            AssertionOutcome::Error(AssertionError::IncompatibleOperands),
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn typed_literals_and_every_operator() {
     for (body, operator, expected, passed) in [
         ("200", "equals", "200.0", true),
@@ -188,6 +231,12 @@ fn numeric_comparisons_do_not_round_large_integers_to_float() {
         ("-0.0", "equals", "0", true),
         ("-0.01", "lessThan", "0", true),
         ("0", "greaterThan", "-1", true),
+        // Positive, negative, and fractional exponents, including an integer spelling.
+        ("1e19", "equals", "10000000000000000000", true),
+        ("1e20", "greaterThan", "1e19", true),
+        ("1e-7", "lessThan", "1e-6", true),
+        ("-1e20", "lessThan", "-1e19", true),
+        ("1e16", "greaterThan", "1e15", true),
     ] {
         assert_eq!(
             outcome(actual.as_bytes(), "response.body", operator, Some(expected)),
@@ -289,6 +338,7 @@ fn unsupported_syntax_and_operators_are_never_interpolated_or_executed() {
         "response.body.",
         "response.body[01]",
         "response.body[-1]",
+        "response.body[+1]",
         "response.body[99999999999999999999999999]",
         "response.body[0",
         "response.body['name']",
@@ -706,63 +756,74 @@ fn every_diagnostic_path_withholds_untrusted_inputs() {
             b"null".as_slice(),
             true,
             AssertionError::UnsupportedExpression,
+            "unsupported assertion expression",
         ),
         (
             assertion("response.status", SECRET, Some("{{token}}")),
             b"null".as_slice(),
             true,
             AssertionError::UnsupportedOperator,
+            "unsupported assertion operator",
         ),
         (
             assertion("response.status", "equals", None),
             b"null".as_slice(),
             true,
             AssertionError::MissingExpectedValue,
+            "operator requires an expected value",
         ),
         (
             assertion("response.status", "equals", Some("{{missing}}")),
             b"null".as_slice(),
             true,
             AssertionError::VariableResolution,
+            "assertion variable resolution failed or a value is unavailable",
         ),
         (
             assertion("response.status", "equals", Some("\"{{token}}")),
             b"null".as_slice(),
             true,
             AssertionError::InvalidExpectedValue,
+            "invalid or unsupported expected literal",
         ),
         (
             assertion("response.body", "isNotNull", None),
             SECRET.as_bytes(),
             false,
             AssertionError::BodyUnavailable,
+            "complete in-memory response body is unavailable",
         ),
         (
             assertion("response.body", "isNotNull", None),
             SECRET.as_bytes(),
             true,
             AssertionError::InvalidJsonBody,
+            "response body is not valid JSON",
         ),
         (
             assertion("response.body.absent", "isNull", None),
             b"{}".as_slice(),
             true,
             AssertionError::MissingProperty,
+            "response property or array index does not exist",
         ),
         (
             assertion("response.status", "greaterThan", Some("{{token}}")),
             b"null".as_slice(),
             true,
             AssertionError::IncompatibleOperands,
+            "operator does not support these operand types",
         ),
     ];
-    for (mut assertion, body, complete, error) in cases {
+    for (mut assertion, body, complete, error, message) in cases {
         assertion.description = Some(probe_core::Documentation::Text(SECRET.into()));
         let mut response = response(body);
         response.body_complete = complete;
         response.body_retention_error = Some(SECRET.into());
         let results = evaluate_assertions(&[assertion], &response, &resolution, &provider);
         assert_eq!(results[0].outcome, AssertionOutcome::Error(error));
+        assert_eq!(error.to_string(), message);
+        assert!(!message.contains(SECRET));
         assert!(!format!("{results:?}").contains(SECRET));
         assert!(!error.to_string().contains(SECRET));
         assert!(!format!("{error:?}").contains(SECRET));
