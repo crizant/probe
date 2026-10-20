@@ -49,6 +49,7 @@ impl ProbeApp {
                             .bg(selected_background)
                             .text_color(theme.colors.actions.accent)
                     })
+                    .when(!busy, |button| button.cursor_pointer())
                     .when(!selected && !busy, |button| {
                         button.hover(move |button| {
                             button.bg(theme.colors.selection.inactive_background)
