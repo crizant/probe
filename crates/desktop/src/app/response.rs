@@ -164,9 +164,12 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) {
         let completed = result.is_ok();
-        self.execution
-            .finish(key, generation, result, saved_to.clone());
-        self.refresh_response_document(key, cx);
+        if let Some(key) = self
+            .execution
+            .finish(key, generation, result, saved_to.clone())
+        {
+            self.refresh_response_document(key, cx);
+        }
         if completed && let Some(path) = saved_to {
             self.show_toast(
                 ToastIntent::Success,
@@ -323,10 +326,13 @@ impl ProbeApp {
             let _ = view.update(cx, |view, cx| {
                 match result {
                     Ok(body) => {
-                        view.response_viewer
-                            .apply_page(key, generation, offset, body);
-                        view.start_base64_encoding(key, cx);
-                        view.start_hex_encoding(key, cx);
+                        if let Some(key) = view
+                            .response_viewer
+                            .apply_page(key, generation, offset, body)
+                        {
+                            view.start_base64_encoding(key, cx);
+                            view.start_hex_encoding(key, cx);
+                        }
                     }
                     Err(error) => view.response_viewer.fail_page(
                         key,
@@ -363,26 +369,31 @@ impl ProbeApp {
         self.transient.request_execution_menu_open = false;
         cx.notify();
         let filename = suggested_request_filename(request);
+        self.send_and_save_generation = self.send_and_save_generation.wrapping_add(1);
+        let generation = self.send_and_save_generation;
+        self.send_and_save_targets.insert(generation, key);
         let receiver = cx.prompt_for_new_path(&download_directory(), Some(&filename));
         let view = cx.weak_entity();
         window
             .spawn(cx, async move |cx| {
-                let destination = match receiver.await {
-                    Ok(Ok(Some(path))) => path,
-                    Ok(Ok(None)) | Err(_) => return,
-                    Ok(Err(error)) => {
-                        let _ = view.update_in(cx, |view, _, cx| {
+                let destination = receiver.await;
+                let _ = view.update_in(cx, |view, _, cx| {
+                    let target = view.send_and_save_targets.remove(&generation);
+                    match destination {
+                        Ok(Ok(Some(path))) => {
+                            if let Some(key) = target {
+                                view.start_request(key, Some(path), cx);
+                            }
+                        }
+                        Ok(Ok(None)) | Err(_) => {}
+                        Ok(Err(error)) => {
                             view.show_toast(
                                 ToastIntent::Error,
                                 format!("Could not open the download destination picker: {error}"),
                                 cx,
                             );
-                        });
-                        return;
+                        }
                     }
-                };
-                let _ = view.update_in(cx, |view, _, cx| {
-                    view.start_request(key, Some(destination), cx);
                 });
             })
             .detach();

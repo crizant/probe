@@ -851,6 +851,12 @@ impl ProbeApp {
                     .map(|new_key| (new_key, section)),
             );
         }
+        self.send_and_save_targets.retain(|_, key| {
+            remaps.get(key).is_some_and(|new_key| {
+                *key = *new_key;
+                true
+            })
+        });
         if let Some(StructureDialog {
             mode: StructureDialogMode::SaveDetachedRequest { key },
             ..
