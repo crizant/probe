@@ -289,14 +289,16 @@ fn parse_expected(input: &str) -> Result<Value, AssertionError> {
         return serde_json::from_str(literal).map_err(|_| AssertionError::InvalidExpectedValue);
     }
     if literal.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+') {
-        if let Ok(value) = serde_json::from_str::<Value>(literal) {
-            return match value {
-                Value::Number(number) => Ok(Value::Number(number)),
-                _ => Err(AssertionError::InvalidExpectedValue),
-            };
+        match serde_json::from_str::<Value>(literal) {
+            Ok(Value::Number(number)) => return Ok(Value::Number(number)),
+            // `1e9999` is a JSON number serde_json refuses to represent.
+            // `2024-01-01` and `+200` fail as ordinary syntax and stay strings.
+            Err(error) if json_number_out_of_range(&error) => {
+                return Err(AssertionError::InvalidExpectedValue);
+            }
+            Ok(_) | Err(_) => {}
         }
-        // `1e9999` is a JSON number that does not fit. `2024-01-01` and `+200` are not.
-        if is_json_number(literal) || matches!(literal, "NaN" | "Infinity" | "-Infinity") {
+        if matches!(literal, "NaN" | "Infinity" | "-Infinity") {
             return Err(AssertionError::InvalidExpectedValue);
         }
     } else if literal.starts_with(['\'', '[', '{'])
@@ -305,6 +307,11 @@ fn parse_expected(input: &str) -> Result<Value, AssertionError> {
         return Err(AssertionError::InvalidExpectedValue);
     }
     Ok(Value::String(input.to_owned()))
+}
+
+fn json_number_out_of_range(error: &serde_json::Error) -> bool {
+    // serde_json does not expose this code; the message is its stable wording.
+    error.to_string().starts_with("number out of range")
 }
 
 /// Needle for `contains` when the actual value is already a string.
@@ -317,52 +324,6 @@ fn substring_needle(resolved: &str) -> Result<Cow<'_, str>, AssertionError> {
         Value::Number(_) | Value::Bool(_) | Value::Null => Ok(Cow::Borrowed(resolved.trim())),
         _ => Err(AssertionError::InvalidExpectedValue),
     }
-}
-
-fn is_json_number(literal: &str) -> bool {
-    let bytes = literal.as_bytes();
-    let mut index = usize::from(bytes.first() == Some(&b'-'));
-    let Some(first) = bytes.get(index) else {
-        return false;
-    };
-    if !first.is_ascii_digit() {
-        return false;
-    }
-    if *first == b'0' {
-        index += 1;
-    } else {
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-    }
-    if bytes.get(index) == Some(&b'.') {
-        index += 1;
-        if !bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            return false;
-        }
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-    }
-    if bytes
-        .get(index)
-        .is_some_and(|byte| matches!(byte, b'e' | b'E'))
-    {
-        index += 1;
-        if bytes
-            .get(index)
-            .is_some_and(|byte| matches!(byte, b'+' | b'-'))
-        {
-            index += 1;
-        }
-        if !bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            return false;
-        }
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-    }
-    index == bytes.len()
 }
 
 fn compare(actual: &Value, operator: Operator, expected: &Value) -> Result<bool, AssertionError> {
