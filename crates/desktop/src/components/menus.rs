@@ -116,6 +116,7 @@ pub(crate) fn app_menu_trigger(
         .rounded(px(theme.metrics.radius_small))
         .font_family(theme.typography.interface_family)
         .text_size(px(theme.typography.body_size))
+        .line_height(relative(1.25))
         .text_color(theme.colors.text.primary)
         .hover(move |button| button.bg(theme.colors.surfaces.sidebar))
         .focus_visible(move |button| button.border_1().border_color(theme.colors.borders.focused))

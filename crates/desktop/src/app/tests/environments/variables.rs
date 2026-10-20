@@ -398,3 +398,474 @@ items:
         );
     });
 }
+
+#[gpui_kit::test]
+fn environment_queue_continues_past_a_preparation_failure(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "environment-preparation-failure");
+    workspace.select_environment(cx, "development");
+    let invalid = ("absent".to_owned(), "missing".to_owned());
+    workspace.update(cx, |view, window, cx| {
+        view.pending_environment_saves.insert(invalid.clone());
+        view.update_environment_variable("token", "queued-token".into(), window, cx);
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.environment_save_task.is_none());
+        assert_eq!(
+            view.pending_environment_saves,
+            std::collections::BTreeSet::from([invalid.clone()])
+        );
+        assert_eq!(
+            view.failed_environment_saves,
+            view.pending_environment_saves
+        );
+        let errors = toast_debug(view);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Could not save environment variable"))
+        );
+        view.pump_workspace_writes(window, cx);
+        assert_eq!(
+            toast_debug(view),
+            errors,
+            "failed preparation must not be retried"
+        );
+    });
+    assert_eq!(
+        saved_development_variable(&workspace, "token").as_deref(),
+        Some("queued-token")
+    );
+}
+
+#[gpui_kit::test]
+fn environment_write_failure_preserves_the_failed_edit_and_drains_newer_edits(
+    cx: &mut TestAppContext,
+) {
+    for name in ["host", "token"] {
+        let workspace =
+            EnvironmentWorkspace::writable(cx, &format!("environment-io-failure-{name}"));
+        workspace.select_environment(cx, "development");
+        workspace.update(cx, |view, window, cx| {
+            // The completion boundary receives an I/O failure after a newer edit
+            // has arrived. Subsequent writes use the real repository and disk.
+            view.loaded_workspace
+                .as_mut()
+                .unwrap()
+                .set_environment_variable("development", "host", "failed.example".into())
+                .unwrap();
+            view.environment_save_task = Some(cx.spawn(async |_, _| std::future::pending().await));
+            view.environment_save_workspace_path = view.workspace_path.clone();
+            view.update_environment_variable(name, "newer-value".into(), window, cx);
+            view.complete_environment_variable_save(
+                ("development".into(), "host".into()),
+                Some(workspace.path.clone()),
+                Err(probe_opencollection::SaveError::Io {
+                    path: workspace.path.clone(),
+                    source: std::io::Error::other("write failed"),
+                }),
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            saved_development_variable(&workspace, name).as_deref(),
+            Some("newer-value")
+        );
+        workspace.update(cx, |view, window, cx| {
+            assert!(view.environment_save_task.is_none());
+            if name == "token" {
+                assert_eq!(
+                    resolved_variable(view, "host").as_deref(),
+                    Some("failed.example")
+                );
+                assert_eq!(
+                    saved_development_variable(&workspace, "host").as_deref(),
+                    Some("dev.example.com")
+                );
+                assert!(
+                    view.failed_environment_saves
+                        .contains(&("development".into(), "host".into()))
+                );
+                // Finishing the other write must not close a workspace with a failed edit.
+                view.request_close_workspace(window, cx);
+                assert!(view.loaded_workspace.is_some());
+                assert!(matches!(
+                    view.application_dialog,
+                    Some(ApplicationDialog::FilesystemConflict { .. })
+                ));
+                view.handle_application_dialog_action(
+                    ApplicationDialogAction::KeepLocal,
+                    window,
+                    cx,
+                );
+                view.update_environment_variable(
+                    "host",
+                    "explicit-retry.example".into(),
+                    window,
+                    cx,
+                );
+            }
+        });
+        cx.run_until_parked();
+        workspace.update(cx, |view, _, _| {
+            assert!(view.pending_environment_saves.is_empty());
+            assert!(view.failed_environment_saves.is_empty());
+            assert!(view.environment_save_task.is_none());
+        });
+        if name == "token" {
+            assert_eq!(
+                saved_development_variable(&workspace, "host").as_deref(),
+                Some("explicit-retry.example")
+            );
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn environment_source_conflict_pauses_queued_writes_and_retains_all_values(
+    cx: &mut TestAppContext,
+) {
+    let workspace = EnvironmentWorkspace::writable(cx, "environment-source-conflict");
+    workspace.select_environment(cx, "development");
+    let source = fs::read_to_string(&workspace.path).unwrap();
+    let external = source.replacen("method: GET", "method: PATCH", 1);
+    workspace.update(cx, |view, window, cx| {
+        view.update_environment_variable("host", "submitted.example".into(), window, cx);
+        view.update_environment_variable("host", "latest.example".into(), window, cx);
+        view.update_environment_variable("token", "latest-token".into(), window, cx);
+        fs::write(&workspace.path, &external).unwrap();
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.environment_save_task.is_none());
+        assert_eq!(
+            view.failed_environment_saves,
+            view.pending_environment_saves
+        );
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("latest.example")
+        );
+        assert_eq!(
+            resolved_variable(view, "token").as_deref(),
+            Some("latest-token")
+        );
+        assert!(matches!(
+            view.application_dialog,
+            Some(ApplicationDialog::FilesystemConflict { .. })
+        ));
+        let errors = toast_debug(view);
+        view.pump_workspace_writes(window, cx);
+        assert_eq!(
+            toast_debug(view),
+            errors,
+            "a source conflict must not automatically retry writes"
+        );
+        view.handle_application_dialog_action(ApplicationDialogAction::KeepLocal, window, cx);
+        assert_eq!(view.pending_environment_saves.len(), 2);
+    });
+    cx.run_until_parked();
+    assert_eq!(fs::read_to_string(&workspace.path).unwrap(), external);
+    workspace.update(cx, |view, window, cx| {
+        // A blocked queue must consume later watcher events without dropping
+        // local values or repeatedly retrying the event batch.
+        fs::write(&workspace.path, external.replacen("method: PATCH", "method: PUT", 1)).unwrap();
+        let baseline = view.loaded_workspace.as_ref().unwrap().baseline();
+        assert!(view.apply_watched_workspace(
+            baseline, probe_opencollection::load_workspace(&workspace.path), BTreeMap::new(), window, cx,
+        ));
+        assert!(matches!(&view.application_dialog, Some(ApplicationDialog::FilesystemConflict { detail, .. }) if detail.contains("unsaved edits to host")));
+        assert_eq!(resolved_variable(view, "host").as_deref(), Some("latest.example"));
+        view.handle_application_dialog_action(ApplicationDialogAction::UseDisk, window, cx);
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.pending_environment_saves.is_empty());
+        assert!(view.failed_environment_saves.is_empty());
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("dev.example.com")
+        );
+        assert_eq!(
+            resolved_variable(view, "token").as_deref(),
+            Some("development-token")
+        );
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        assert_eq!(
+            loaded
+                .workspace()
+                .request(loaded.requests()[0].key())
+                .unwrap()
+                .method
+                .as_deref(),
+            Some("PUT")
+        );
+        let baseline = loaded.baseline();
+        assert!(view.apply_watched_workspace(
+            baseline,
+            probe_opencollection::load_workspace(&workspace.path),
+            BTreeMap::new(),
+            window,
+            cx,
+        ));
+        assert!(view.application_dialog.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn filesystem_watcher_waits_for_writes_and_retries_with_the_original_events(
+    cx: &mut TestAppContext,
+) {
+    use crate::filesystem::{WATCH_DEBOUNCE, WATCH_POLL, WorkspaceWatcher};
+    let workspace = EnvironmentWorkspace::writable(cx, "watcher-retry-loop");
+    workspace.select_environment(cx, "development");
+    let mut watcher = WorkspaceWatcher::start(&workspace.path).unwrap();
+    // Feed deterministic events into the production loop; OS delivery is not
+    // part of the save/reload scheduling contract under test.
+    let (events, receiver) = std::sync::mpsc::channel();
+    watcher.receiver = receiver;
+    let (reached, mut checkpoint) = oneshot::channel();
+    let (release, wait) = oneshot::channel();
+    let (original, committed) = workspace.update(cx, |view, window, cx| {
+        let loaded = view.loaded_workspace.as_mut().unwrap();
+        let baseline = loaded.baseline();
+        loaded
+            .set_environment_variable("development", "host", "first.example".into())
+            .unwrap();
+        let committed = loaded
+            .prepare_environment_variable_save("development", "host")
+            .unwrap()
+            .execute()
+            .unwrap();
+        view.filesystem_reload_gate = Some((reached, wait));
+        view.environment_save_task = Some(cx.spawn(async |_, _| std::future::pending().await));
+        view.environment_save_workspace_path = view.workspace_path.clone();
+        view.update_environment_variable("host", "queued.example".into(), window, cx);
+        view.update_environment_variable("token", "queued-token".into(), window, cx);
+        // A snapshot can arrive after the atomic write but before completion.
+        assert!(!view.apply_watched_workspace(
+            baseline,
+            probe_opencollection::load_workspace(&workspace.path),
+            BTreeMap::new(),
+            window,
+            cx,
+        ));
+        view.watch_workspace(watcher, window, cx);
+        (baseline, committed)
+    });
+    let event = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Data(
+        notify::event::DataChange::Any,
+    )))
+    .add_path(workspace.path.clone());
+    events.send(Ok(event)).unwrap();
+    cx.run_until_parked();
+    cx.executor().advance_clock(WATCH_POLL);
+    cx.run_until_parked();
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    assert!(matches!(
+        checkpoint.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    workspace.update(cx, |view, window, cx| {
+        assert_eq!(view.loaded_workspace.as_ref().unwrap().baseline(), original);
+        view.complete_environment_variable_save(
+            ("development".into(), "host".into()),
+            Some(workspace.path.clone()),
+            Ok(committed),
+            window,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    assert_eq!(
+        checkpoint.try_recv(),
+        Ok(()),
+        "watcher captured its baseline after the write drained"
+    );
+
+    let (reached, mut retried) = oneshot::channel();
+    let (finish, wait) = oneshot::channel();
+    assert_eq!(
+        saved_development_variable(&workspace, "host").as_deref(),
+        Some("queued.example")
+    );
+    assert_eq!(
+        saved_development_variable(&workspace, "token").as_deref(),
+        Some("queued-token")
+    );
+    workspace.update(cx, |view, window, cx| {
+        // Finish another real save after the checkpoint, invalidating the
+        // captured baseline even though no write is active at integration.
+        view.update_environment_variable("host", "latest.example".into(), window, cx);
+    });
+    cx.run_until_parked();
+    let saved = workspace.update(cx, |view, _, _| {
+        assert!(view.environment_save_task.is_none());
+        assert!(view.pending_environment_saves.is_empty());
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        let source = fs::read_to_string(&workspace.path).unwrap();
+        fs::write(
+            &workspace.path,
+            source.replacen("method: GET", "method: PATCH", 1),
+        )
+        .unwrap();
+        view.filesystem_reload_gate = Some((reached, wait));
+        loaded.baseline()
+    });
+    release.send(()).unwrap();
+    cx.run_until_parked();
+    assert!(matches!(
+        retried.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    assert_eq!(
+        retried.try_recv(),
+        Ok(()),
+        "the same event batch reached a second baseline capture"
+    );
+    finish.send(()).unwrap();
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        assert_ne!(
+            loaded.baseline(),
+            saved,
+            "retry must apply the fresh snapshot"
+        );
+        assert_eq!(
+            loaded
+                .workspace()
+                .request(loaded.requests()[0].key())
+                .unwrap()
+                .method
+                .as_deref(),
+            Some("PATCH")
+        );
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("latest.example")
+        );
+        assert!(view.application_dialog.is_none());
+        assert!(view.toasts.is_empty(), "{:?}", toast_debug(view));
+    });
+    workspace.update(cx, |view, _, _| {
+        view.filesystem_watch_task = None;
+        view.filesystem_watcher = None;
+    });
+}
+
+#[gpui_kit::test]
+fn watcher_ignores_own_successful_save_while_another_variable_remains_unsaved(
+    cx: &mut TestAppContext,
+) {
+    use crate::filesystem::{WATCH_DEBOUNCE, WATCH_POLL, WorkspaceWatcher};
+    let workspace = EnvironmentWorkspace::writable(cx, "watcher-own-save-with-failed-edit");
+    workspace.select_environment(cx, "development");
+    let mut watcher = WorkspaceWatcher::start(&workspace.path).unwrap();
+    let (events, receiver) = std::sync::mpsc::channel();
+    watcher.receiver = receiver;
+    let (reached, mut checkpoint) = oneshot::channel();
+    let (release, wait) = oneshot::channel();
+    workspace.update(cx, |view, window, cx| {
+        view.loaded_workspace
+            .as_mut()
+            .unwrap()
+            .set_environment_variable("development", "host", "unsaved.example".into())
+            .unwrap();
+        view.complete_environment_variable_save(
+            ("development".into(), "host".into()),
+            Some(workspace.path.clone()),
+            Err(probe_opencollection::SaveError::Io {
+                path: workspace.path.clone(),
+                source: std::io::Error::other("write failed"),
+            }),
+            window,
+            cx,
+        );
+        view.update_environment_variable("token", "saved-token".into(), window, cx);
+        view.filesystem_reload_gate = Some((reached, wait));
+        view.watch_workspace(watcher, window, cx);
+    });
+    cx.run_until_parked();
+    let baseline = workspace.update(cx, |view, _, _| {
+        view.loaded_workspace.as_ref().unwrap().baseline()
+    });
+    let event = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Data(
+        notify::event::DataChange::Any,
+    )))
+    .add_path(workspace.path.clone());
+    events.send(Ok(event.clone())).unwrap();
+    cx.executor().advance_clock(WATCH_POLL);
+    cx.run_until_parked();
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    assert_eq!(
+        checkpoint.try_recv(),
+        Ok(()),
+        "the successful write reached the watcher loop"
+    );
+    release.send(()).unwrap();
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(
+            view.application_dialog.is_none(),
+            "an own write is not an external conflict"
+        );
+        assert_eq!(view.loaded_workspace.as_ref().unwrap().baseline(), baseline);
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("unsaved.example")
+        );
+        assert!(
+            view.pending_environment_saves
+                .contains(&("development".into(), "host".into()))
+        );
+        assert_eq!(
+            view.failed_environment_saves,
+            view.pending_environment_saves
+        );
+    });
+    assert_eq!(
+        saved_development_variable(&workspace, "host").as_deref(),
+        Some("dev.example.com")
+    );
+    assert_eq!(
+        saved_development_variable(&workspace, "token").as_deref(),
+        Some("saved-token")
+    );
+
+    // A later external change must still be noticed, even if its parsed values
+    // are identical. Comparing only domain values would miss this comment.
+    let source = fs::read_to_string(&workspace.path).unwrap();
+    let external = format!("{source}\n# External comment\n");
+    fs::write(&workspace.path, &external).unwrap();
+    events.send(Ok(event)).unwrap();
+    cx.executor().advance_clock(WATCH_POLL);
+    cx.run_until_parked();
+    cx.executor().advance_clock(WATCH_DEBOUNCE);
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(matches!(
+            view.application_dialog,
+            Some(ApplicationDialog::FilesystemConflict { .. })
+        ));
+        assert_eq!(
+            resolved_variable(view, "host").as_deref(),
+            Some("unsaved.example")
+        );
+        assert!(
+            view.pending_environment_saves
+                .contains(&("development".into(), "host".into()))
+        );
+        view.filesystem_watch_task = None;
+        view.filesystem_watcher = None;
+    });
+    assert_eq!(fs::read_to_string(&workspace.path).unwrap(), external);
+}

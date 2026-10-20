@@ -16,6 +16,7 @@ fn editor_button_base(
         .flex()
         .items_center()
         .justify_center()
+        .line_height(relative(1.25))
         .rounded(px(theme.metrics.radius_small))
         .text_size(px(theme.typography.caption_size))
         .text_color(if selected {
@@ -164,6 +165,7 @@ fn tab_button_base(
         .aria_selected(selected)
         .aria_position_in_set(position)
         .aria_size_of_set(size)
+        .line_height(relative(1.25))
         .focus_visible(move |tab| tab.border_color(theme.colors.borders.focused))
         .cursor_pointer()
         .on_click(on_click)

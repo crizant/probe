@@ -285,6 +285,9 @@ pub(crate) struct ProbeApp {
     environment_save_workspace_path: Option<PathBuf>,
     environment_manager_close_after_save: bool,
     pending_environment_saves: BTreeSet<(String, String)>,
+    // Failed keys stay pending for reload/close protection, but require a new
+    // edit before they can be attempted again automatically.
+    failed_environment_saves: BTreeSet<(String, String)>,
     structure_task: Option<Task<()>>,
     filesystem_watcher: Option<notify::RecommendedWatcher>,
     filesystem_watch_task: Option<Task<()>>,
@@ -335,6 +338,11 @@ pub(crate) struct ProbeApp {
     tab_drop_target: Option<(crate::shell::OpenTab, bool)>,
     pending_tab_reveal: bool,
     frame_variable_context: Option<components::VariableContext>,
+    #[cfg(test)]
+    filesystem_reload_gate: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
     #[cfg(test)]
     variable_context_frames: Cell<usize>,
     #[cfg(test)]
@@ -431,6 +439,7 @@ impl ProbeApp {
             environment_save_workspace_path: None,
             environment_manager_close_after_save: false,
             pending_environment_saves: BTreeSet::new(),
+            failed_environment_saves: BTreeSet::new(),
             structure_task: None,
             filesystem_watcher: None,
             filesystem_watch_task: None,
@@ -481,6 +490,8 @@ impl ProbeApp {
             tab_drop_target: None,
             pending_tab_reveal: false,
             frame_variable_context: None,
+            #[cfg(test)]
+            filesystem_reload_gate: None,
             #[cfg(test)]
             variable_context_frames: Cell::new(0),
             #[cfg(test)]

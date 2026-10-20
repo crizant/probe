@@ -294,6 +294,7 @@ impl ProbeApp {
         self.shell.reset_for_workspace();
         self.reset_collection_ui();
         self.pending_environment_saves.clear();
+        self.failed_environment_saves.clear();
         self.environment_save_workspace_path = None;
         self.restore_selected_environment();
         self.rebuild_visible_tree_rows();
@@ -317,6 +318,15 @@ impl ProbeApp {
                 return;
             }
         };
+        self.watch_workspace(watcher, window, cx);
+    }
+
+    pub(super) fn watch_workspace(
+        &mut self,
+        watcher: WorkspaceWatcher,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let WorkspaceWatcher {
             watcher,
             receiver,
@@ -383,49 +393,125 @@ impl ProbeApp {
                         );
                     });
                 }
-                let reload_path = workspace_path.clone();
-                let reload = cx
-                    .background_spawn(async move {
-                        if !events_reload_workspace(&events, &reload_path) {
-                            return None;
-                        }
-                        let hints = rename_hints(&events, &reload_path);
-                        Some((load_workspace(&reload_path), hints))
-                    })
-                    .await;
-                let Some((result, hints)) = reload else {
-                    if disconnected {
+                loop {
+                    let Ok(baseline) =
+                        view.update_in(cx, |view, _, _| view.watched_workspace_baseline())
+                    else {
                         return;
+                    };
+                    let Some(baseline) = baseline else {
+                        cx.background_executor().timer(WATCH_DEBOUNCE).await;
+                        continue;
+                    };
+                    #[cfg(test)]
+                    if let Ok(Some((reached, release))) =
+                        view.update_in(cx, |view, _, _| view.filesystem_reload_gate.take())
+                    {
+                        let _ = reached.send(());
+                        let _ = release.await;
                     }
-                    continue;
-                };
-                let _ = view.update_in(cx, |view, window, cx| {
-                    if view.workspace_path.as_ref() != Some(&workspace_path) {
-                        return;
-                    }
-                    if view.structure_task.is_some() {
-                        return;
-                    }
-                    match result {
-                        Ok(fresh) => {
-                            view.reconcile_filesystem_workspace(fresh, hints, window, cx);
+                    let reload_path = workspace_path.clone();
+                    let reload = cx
+                        .background_spawn({
+                            let events = events.clone();
+                            async move {
+                                if !events_reload_workspace(&events, &reload_path) {
+                                    return None;
+                                }
+                                let hints = rename_hints(&events, &reload_path);
+                                Some((load_workspace(&reload_path), hints))
+                            }
+                        })
+                        .await;
+                    let Some((result, hints)) = reload else {
+                        break;
+                    };
+                    let retry = view.update_in(cx, |view, window, cx| {
+                        if view.workspace_path.as_ref() != Some(&workspace_path) {
+                            return false;
                         }
-                        Err(error) => {
-                            view.show_toast(
-                                ToastIntent::Warning,
-                                format!(
-                                    "The collection changed on disk but is not yet valid: {error}. The last valid version is still open."
-                                ),
-                                cx,
-                            );
-                        }
+                        !view.apply_watched_workspace(baseline, result, hints, window, cx)
+                    });
+                    if !matches!(retry, Ok(true)) {
+                        break;
                     }
-                });
+                    // A write may have started or completed while the snapshot was
+                    // loading. Keep the events and read again after writes drain.
+                    cx.background_executor().timer(WATCH_DEBOUNCE).await;
+                }
                 if disconnected {
                     return;
                 }
             }
         }));
+    }
+
+    fn watched_workspace_baseline(&self) -> Option<probe_opencollection::WorkspaceBaseline> {
+        // The write pump starts the next save before yielding. An idle queue can
+        // instead mean preparation failed; let the watcher surface that conflict.
+        if self.loading || self.has_active_workspace_write() {
+            return None;
+        }
+        self.loaded_workspace
+            .as_ref()
+            .map(LoadedWorkspace::baseline)
+    }
+
+    /// Returns false when the watcher must read a new snapshot before applying it.
+    pub(super) fn apply_watched_workspace(
+        &mut self,
+        baseline: probe_opencollection::WorkspaceBaseline,
+        result: Result<LoadedWorkspace, probe_opencollection::LoadError>,
+        hints: BTreeMap<String, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.watched_workspace_baseline() != Some(baseline) {
+            return false;
+        }
+        match result {
+            Ok(fresh) => {
+                if self.pending_environment_saves.is_empty() {
+                    self.reconcile_filesystem_workspace(fresh, hints, window, cx);
+                } else if !self
+                    .loaded_workspace
+                    .as_ref()
+                    .is_some_and(|loaded| loaded.has_same_source(&fresh))
+                {
+                    // Own writes already refreshed the retained source. Leave
+                    // pending values in memory; only changed source needs a choice.
+                    self.prompt_pending_environment_conflict(window, cx);
+                }
+            }
+            Err(error) => {
+                self.show_toast(
+                    ToastIntent::Warning,
+                    format!(
+                        "The collection changed on disk but is not yet valid: {error}. The last valid version is still open."
+                    ),
+                    cx,
+                );
+            }
+        }
+        true
+    }
+
+    pub(super) fn prompt_pending_environment_conflict(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let conflicts = self
+            .pending_environment_saves
+            .iter()
+            .map(
+                |(environment, name)| SynchronizationConflict::PendingEnvironmentSave {
+                    environment: environment.clone(),
+                    name: name.clone(),
+                },
+            )
+            .collect();
+        self.prompt_filesystem_conflict(conflicts, window, cx);
     }
 
     pub(super) fn local_request_states(&self) -> Vec<LocalRequestState<'_>> {
@@ -718,6 +804,8 @@ impl ProbeApp {
                             let result = reconcile(&clean_local, workspace, &BTreeMap::new());
                             if let ReconcileResult::Applied(reconciled) = result {
                                 view.apply_reconciled_workspace(*reconciled, cx);
+                                view.pending_environment_saves.clear();
+                                view.failed_environment_saves.clear();
                                 view.show_toast(
                                     ToastIntent::Warning,
                                     "Reloaded the collection from disk; conflicting local edits were discarded.",

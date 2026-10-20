@@ -1164,3 +1164,60 @@ fn stale_completion_error_has_a_diagnostic_and_io_errors_keep_their_source() {
     };
     assert!(std::error::Error::source(&error).is_some());
 }
+
+#[test]
+fn retained_source_comparison_ignores_local_edits_and_tracks_exact_saved_documents() {
+    for bundled in [true, false] {
+        let path = temporary_path(if bundled {
+            "same-source.yml"
+        } else {
+            "same-source"
+        });
+        let copy = temporary_path(if bundled {
+            "same-source-copy.yml"
+        } else {
+            "same-source-copy"
+        });
+        if bundled {
+            fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+            fs::copy(&path, &copy).unwrap();
+        } else {
+            copy_directory(&fixture("unbundled"), &path);
+            copy_directory(&path, &copy);
+        }
+        let mut loaded = load_workspace(&path).unwrap();
+        let original = load_workspace(&path).unwrap();
+        assert!(loaded.has_same_source(&original));
+        assert!(!loaded.has_same_source(&load_workspace(&copy).unwrap()));
+        loaded
+            .set_environment_variable("development", "baseUrl", "https://local.example".into())
+            .unwrap();
+        assert!(
+            loaded.has_same_source(&original),
+            "unsaved values do not change the retained source"
+        );
+        let prepared = loaded
+            .prepare_environment_variable_save("development", "baseUrl")
+            .unwrap();
+        loaded
+            .complete_environment_save(prepared.execute().unwrap())
+            .unwrap();
+        assert!(!loaded.has_same_source(&original));
+        assert!(loaded.has_same_source(&load_workspace(&path).unwrap()));
+        let document = if bundled {
+            path.to_path_buf()
+        } else {
+            path.join("opencollection.yml")
+        };
+        let source = fs::read_to_string(&document).unwrap();
+        fs::write(&document, format!("{source}\n# External comment\n")).unwrap();
+        assert!(
+            !loaded.has_same_source(&load_workspace(&path).unwrap()),
+            "source-only changes also matter"
+        );
+    }
+    let memory =
+        load_workspace_from_str(&fs::read_to_string(fixture("phase4-environments.yml")).unwrap())
+            .unwrap();
+    assert!(!memory.has_same_source(&memory));
+}
