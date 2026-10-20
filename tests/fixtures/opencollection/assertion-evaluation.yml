@@ -1,0 +1,71 @@
+opencollection: 1.0.0
+info:
+  name: Assertion evaluation
+bundled: true
+config:
+  environments:
+    - name: base
+      variables:
+        - name: status
+          value: '201'
+        - name: text
+          value: base
+        - name: disabled
+          value: hidden
+          disabled: true
+        - secret: true
+          name: token
+          type: string
+        - name: alias
+          value: '{{token}}'
+    - name: child
+      extends: base
+      variables:
+        - name: status
+          value: '200'
+        - name: text
+          value: child
+        - name: embedded
+          value: 'prefix-{{text}}-suffix'
+    - name: disabled-secret
+      extends: base
+      variables:
+        - secret: true
+          name: token
+          disabled: true
+items:
+  - info:
+      name: HTTP assertions
+      type: http
+    http:
+      method: GET
+      url: https://example.com/users
+    runtime:
+      assertions:
+        - expression: response.status
+          operator: equals
+          value: '{{status}}'
+        - expression: response.body.users[0].name
+          operator: equals
+          value: Ada
+        - expression: response.body.users.length
+          operator: greaterThan
+          value: '0'
+  - info:
+      name: GraphQL assertions
+      type: graphql
+    graphql:
+      method: POST
+      url: https://example.com/graphql
+      body:
+        query: '{ users { name } }'
+    runtime:
+      assertions:
+        - expression: response.status
+          operator: equals
+          value: '200'
+        - expression: response.body.data.users[0].name
+          operator: equals
+          value: Ada
+        - expression: response.body.errors
+          operator: isNull
