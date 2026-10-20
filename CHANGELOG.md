@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-20
+
 ### Fixed
 
 - File tree hover and selection highlights are easier to distinguish in dark mode.
@@ -594,6 +596,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[1.1.1]: https://github.com/crizant/probe/releases/tag/v1.1.1
 [1.1.0]: https://github.com/crizant/probe/releases/tag/v1.1.0
 [1.0.1]: https://github.com/crizant/probe/releases/tag/v1.0.1
 [1.0.0]: https://github.com/crizant/probe/releases/tag/v1.0.0
