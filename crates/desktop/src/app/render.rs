@@ -22,6 +22,7 @@ pub(super) fn response_page_button(
         .disabled(disabled)
         .px(px(theme.metrics.spacing_2))
         .h(px(theme.metrics.control_height - 8.0))
+        .line_height(relative(1.25))
         .rounded(px(theme.metrics.radius_small))
         .border_1()
         .border_color(theme.colors.borders.standard)

@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Request tab titles and remaining text buttons keep descenders such as g, p,
+  and y fully visible.
+
 ## [1.1.0] - 2026-10-20
 
 ### Added
