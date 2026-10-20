@@ -559,3 +559,140 @@ fn an_unretained_large_response_exposes_only_the_raw_preview() {
     );
     assert!(!document.can_load_next_page());
 }
+
+fn reload_remap(
+    from: probe_core::RequestKey,
+    to: probe_core::RequestKey,
+) -> std::collections::BTreeMap<probe_core::RequestKey, probe_core::RequestKey> {
+    std::collections::BTreeMap::from([(from, to)])
+}
+
+fn large_json_response() -> HttpResponse {
+    let body = format!("{{\"value\":\"{}\"}}", "x".repeat(super::SYNC_PRETTY_BYTES));
+    response(body.as_bytes(), "application/json")
+}
+
+#[test]
+fn background_results_started_before_a_reload_apply_to_the_remapped_request() {
+    let old_key = request_key();
+    let new_key = replacement_request_key();
+    let response = large_json_response();
+    let (document, pretty_pending, inspection_pending) = prepare_document(&response, 11);
+    assert!(pretty_pending && inspection_pending);
+    let mut viewer = super::ResponseViewerState::default();
+    viewer.insert(old_key, document);
+    viewer.set_tab(old_key, ResponseViewerTab::Raw);
+    viewer.set_raw_view(old_key, RawBodyView::Base64);
+    let (generation, bytes, revision) = viewer.take_base64_job(old_key).unwrap();
+
+    viewer.remap_requests(&reload_remap(old_key, new_key));
+    viewer.apply_pretty(
+        old_key,
+        generation,
+        pretty_body(&response.body, ResponseBodySyntax::Json),
+    );
+    viewer.apply_inspection(
+        old_key,
+        generation,
+        crate::response_inspector::inspect_response_body(&response.body),
+    );
+    viewer.apply_base64(old_key, generation, revision, encode_base64(&bytes));
+
+    assert!(viewer.document(old_key).is_none());
+    let document = viewer.document(new_key).unwrap();
+    assert!(!document.pretty_pending);
+    assert!(document.pretty_text.contains('\n'));
+    assert!(!document.inspection_pending);
+    assert!(!document.base64_pending);
+    assert_eq!(viewer.visible_text(new_key), encode_base64(&bytes));
+
+    viewer.set_raw_view(new_key, RawBodyView::Hex);
+    let (generation, bytes, offset, revision) = viewer.take_hex_job(new_key).unwrap();
+    viewer.remap_requests(&reload_remap(new_key, old_key));
+    viewer.apply_hex(
+        new_key,
+        generation,
+        offset,
+        revision,
+        encode_hex(&bytes, offset),
+    );
+    let document = viewer.document(old_key).unwrap();
+    assert!(!document.hex_pending);
+    assert_eq!(document.hex_text, encode_hex(&bytes, offset));
+}
+
+#[test]
+fn page_reads_started_before_a_reload_settle_on_the_remapped_request() {
+    let old_key = request_key();
+    let new_key = replacement_request_key();
+    let first_page = vec![b'x'; RESPONSE_PAGE_BYTES];
+    let mut viewer = super::ResponseViewerState::default();
+    viewer.insert(old_key, file_backed_document(&first_page, 4, "text/plain"));
+
+    let (generation, offset) = viewer.begin_page(old_key, PageDirection::Next).unwrap();
+    viewer.remap_requests(&reload_remap(old_key, new_key));
+    assert_eq!(
+        viewer.apply_page(old_key, generation, offset, b"last".to_vec()),
+        Some(new_key)
+    );
+    let document = viewer.document(new_key).unwrap();
+    assert_eq!(document.raw_text.as_ref(), "last");
+    assert!(!document.page_pending);
+
+    let (generation, _) = viewer.begin_page(new_key, PageDirection::Previous).unwrap();
+    viewer.remap_requests(&reload_remap(new_key, old_key));
+    viewer.fail_page(new_key, generation, "unreadable".to_owned());
+    let document = viewer.document(old_key).unwrap();
+    assert!(!document.page_pending);
+    assert_eq!(document.pretty_notice.as_deref(), Some("unreadable"));
+}
+
+#[test]
+fn a_stale_result_is_ignored_when_the_document_at_its_key_was_replaced() {
+    let key = request_key();
+    let response = large_json_response();
+    let mut viewer = super::ResponseViewerState::default();
+    viewer.insert(key, prepare_document(&response, 31).0);
+    let (replacement, pretty_pending, _) = prepare_document(&response, 32);
+    assert!(pretty_pending);
+    viewer.insert(key, replacement.clone());
+
+    viewer.apply_pretty(
+        key,
+        31,
+        pretty_body(&response.body, ResponseBodySyntax::Json),
+    );
+
+    let document = viewer.document(key).unwrap();
+    assert!(document.pretty_pending);
+    assert_eq!(document, &replacement);
+}
+
+#[test]
+fn results_for_replaced_or_closed_documents_are_ignored_after_a_reload() {
+    let old_key = request_key();
+    let new_key = replacement_request_key();
+    let response = large_json_response();
+    let mut viewer = super::ResponseViewerState::default();
+    viewer.insert(old_key, prepare_document(&response, 21).0);
+    viewer.remap_requests(&reload_remap(old_key, new_key));
+    viewer.insert(new_key, prepare_document(&response, 22).0);
+
+    viewer.apply_pretty(
+        old_key,
+        21,
+        pretty_body(&response.body, ResponseBodySyntax::Json),
+    );
+    assert!(viewer.document(new_key).unwrap().pretty_pending);
+    assert_eq!(viewer.current_key(old_key, 22), Some(new_key));
+
+    viewer.remove(new_key);
+    viewer.apply_pretty(
+        old_key,
+        22,
+        pretty_body(&response.body, ResponseBodySyntax::Json),
+    );
+    assert_eq!(viewer.current_key(old_key, 22), None);
+    assert!(viewer.document(old_key).is_none());
+    assert!(viewer.document(new_key).is_none());
+}

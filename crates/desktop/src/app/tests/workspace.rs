@@ -4018,6 +4018,316 @@ fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps
     fs::remove_file(fixture).unwrap();
 }
 
+/// Reloads `fixture` as an unchanged disk copy, which assigns every request a
+/// new runtime key, and returns the old-to-new key mapping.
+fn reload_unchanged_fixture(
+    view: &mut ProbeApp,
+    fixture: &std::path::Path,
+) -> BTreeMap<probe_core::RequestKey, probe_core::RequestKey> {
+    let old = view.loaded_workspace.as_ref().unwrap();
+    let fresh = probe_opencollection::load_workspace(fixture).unwrap();
+    let selector_remaps = old
+        .requests()
+        .iter()
+        .map(|located| (located.selector().to_owned(), located.selector().to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    let key_remaps = request_key_remaps(old, &fresh, &selector_remaps);
+    let baselines = fresh
+        .requests()
+        .iter()
+        .filter_map(|located| {
+            fresh
+                .workspace()
+                .request(located.key())
+                .cloned()
+                .map(|request| (located.key(), request))
+        })
+        .collect::<Vec<_>>();
+    view.install_reloaded_workspace(fresh, baselines, &key_remaps, &BTreeMap::new());
+    key_remaps
+}
+
+#[gpui_kit::test]
+fn http_completion_after_reload_shows_the_response_for_the_remapped_request(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = writable_bundled_fixture("reload-http-completion");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let old_key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(old_key, cx);
+            let (cancel, _) = oneshot::channel();
+            let generation = view.execution.begin(old_key, cancel);
+
+            let new_key = reload_unchanged_fixture(view, &fixture)[&old_key];
+            view.complete_execution(old_key, generation, Ok(tab_response()), None, cx);
+
+            assert!(matches!(
+                view.execution.response(new_key),
+                Some(crate::execution::ResponseState::Complete { .. })
+            ));
+            assert!(view.response_viewer.document(new_key).is_some());
+            assert_eq!(view.shell.active_tab(), Some(new_key));
+        })
+        .unwrap();
+
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui_kit::test]
+fn response_jobs_running_across_reloads_finish_on_the_remapped_request(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = writable_bundled_fixture("reload-response-jobs");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let first_key = workspace.requests()[0].key();
+    let mut response = tab_response();
+    response.body = format!(
+        "{{\"value\":\"{}\"}}",
+        "x".repeat(crate::response_viewer::SYNC_PRETTY_BYTES)
+    )
+    .into_bytes();
+    response.size = response.body.len();
+    let second_key = window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(first_key, cx);
+            view.response_viewer
+                .set_tab(first_key, ResponseViewerTab::Raw);
+            view.response_viewer
+                .set_raw_view(first_key, RawBodyView::Base64);
+            let (cancel, _) = oneshot::channel();
+            let generation = view.execution.begin(first_key, cancel);
+            view.complete_execution(first_key, generation, Ok(response), None, cx);
+            let document = view.response_viewer.document(first_key).unwrap();
+            assert!(document.pretty_pending);
+            assert!(document.inspection_pending);
+            assert!(document.base64_pending);
+
+            reload_unchanged_fixture(view, &fixture)[&first_key]
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let third_key = window
+        .update(cx, |view, _, cx| {
+            let document = view.response_viewer.document(second_key).unwrap();
+            assert!(!document.pretty_pending);
+            assert!(!document.inspection_pending);
+            assert!(!document.base64_pending);
+            assert!(!document.base64_text.is_empty());
+
+            view.set_raw_body_view(RawBodyView::Hex, cx);
+            assert!(
+                view.response_viewer
+                    .document(second_key)
+                    .unwrap()
+                    .hex_pending
+            );
+            reload_unchanged_fixture(view, &fixture)[&second_key]
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            let document = view.response_viewer.document(third_key).unwrap();
+            assert!(!document.hex_pending);
+            assert!(!document.hex_text.is_empty());
+        })
+        .unwrap();
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui_kit::test]
+fn send_and_save_picker_follows_the_request_across_reloads(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = writable_bundled_fixture("reload-send-and-save");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let old_key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(old_key, cx);
+            view.choose_send_and_save(old_key, window, cx);
+            let mut key = old_key;
+            for _ in 0..2 {
+                key = reload_unchanged_fixture(view, &fixture)[&key];
+                assert_eq!(
+                    view.send_and_save_targets
+                        .values()
+                        .copied()
+                        .collect::<Vec<_>>(),
+                    [key]
+                );
+            }
+        })
+        .unwrap();
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.send_and_save_targets.is_empty());
+            assert!(view.execution_service.is_none());
+        })
+        .unwrap();
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui_kit::test]
+fn send_and_save_sends_the_remapped_request_when_a_path_is_chosen_after_reload(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = writable_bundled_fixture("reload-send-and-save-chosen");
+    // The address refuses connections, so the send fails without network I/O
+    // and nothing is written to the destination.
+    fs::write(
+        &fixture,
+        fs::read_to_string(&fixture)
+            .unwrap()
+            .replace("https://api.example.com/pets", "http://127.0.0.1:1/pets"),
+    )
+    .unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let old_key = workspace.requests()[0].key();
+    assert_eq!(
+        workspace
+            .workspace()
+            .request(old_key)
+            .unwrap()
+            .url
+            .as_deref(),
+        Some("http://127.0.0.1:1/pets")
+    );
+    let destination = std::env::temp_dir().join(format!(
+        "probe-reload-send-and-save-{}.bin",
+        std::process::id()
+    ));
+    // The execution runtime wakes GPUI tasks from Tokio threads.
+    cx.executor().allow_parking();
+    let new_key = window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(old_key, cx);
+            view.choose_send_and_save(old_key, window, cx);
+            let middle_key = reload_unchanged_fixture(view, &fixture)[&old_key];
+            reload_unchanged_fixture(view, &fixture)[&middle_key]
+        })
+        .unwrap();
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection({
+        let destination = destination.clone();
+        move |_| Some(destination)
+    });
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.send_and_save_targets.is_empty());
+            assert!(view.execution.response(new_key).is_some());
+            assert!(view.execution.response(old_key).is_none());
+        })
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while window
+        .update(cx, |view, _, _| {
+            view.execution
+                .response(new_key)
+                .is_some_and(crate::execution::ResponseState::is_running)
+        })
+        .unwrap()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the Send and Save execution"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        cx.run_until_parked();
+    }
+    window
+        .update(cx, |view, _, _| {
+            assert!(matches!(
+                view.execution.response(new_key),
+                Some(crate::execution::ResponseState::Failed(_))
+            ));
+        })
+        .unwrap();
+    assert!(!destination.exists());
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui_kit::test]
+fn switching_collections_discards_open_send_and_save_targets(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.choose_send_and_save(key, window, cx);
+            assert!(!view.send_and_save_targets.is_empty());
+            let other = probe_opencollection::load_workspace(&fixture).unwrap();
+            view.set_workspace(fixture, other);
+            assert!(view.send_and_save_targets.is_empty());
+        })
+        .unwrap();
+    cx.simulate_new_path_selection(|_| Some(std::env::temp_dir().join("probe-unused.bin")));
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| assert!(view.execution_service.is_none()))
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn send_and_save_does_not_send_a_request_removed_by_reload(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = writable_bundled_fixture("reload-send-and-save-removed");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = workspace.requests()[0].key();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_request(key, cx);
+            view.choose_send_and_save(key, window, cx);
+            let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+            view.install_reloaded_workspace(fresh, Vec::new(), &BTreeMap::new(), &BTreeMap::new());
+            assert!(view.send_and_save_targets.is_empty());
+        })
+        .unwrap();
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| Some(std::env::temp_dir().join("probe-unused.bin")));
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, _, _| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            for located in loaded.requests() {
+                assert!(view.execution.response(located.key()).is_none());
+            }
+            assert!(view.execution_service.is_none());
+        })
+        .unwrap();
+    fs::remove_file(fixture).unwrap();
+}
+
 fn writable_documentation_fixture(name: &str) -> PathBuf {
     let path = writable_structure_fixture(name);
     fs::write(

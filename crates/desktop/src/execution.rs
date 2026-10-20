@@ -103,20 +103,23 @@ impl ExecutionState {
         generation
     }
 
+    /// Records the result of execution `generation` and returns the request's
+    /// current key, or `None` when the execution was superseded, cancelled, or
+    /// removed.
     pub(crate) fn finish(
         &mut self,
         key: RequestKey,
         generation: u64,
         result: Result<HttpResponse, HttpError>,
         saved_to: Option<SavedResponseBody>,
-    ) {
+    ) -> Option<RequestKey> {
         let key = self.resolve_key(key);
         if self
             .active
             .get(&key)
             .is_none_or(|active| active.generation != generation)
         {
-            return;
+            return None;
         }
         self.active.remove(&key);
         self.key_aliases.retain(|_, target| *target != key);
@@ -126,6 +129,7 @@ impl ExecutionState {
             Err(error) => ResponseState::Failed(error.to_string()),
         };
         self.responses.insert(key, response);
+        Some(key)
     }
 
     pub(crate) fn report_progress(
@@ -877,7 +881,10 @@ mod tests {
         let (second, _) = oneshot::channel();
         let second_generation = state.begin(key, second);
 
-        state.finish(key, first_generation, Ok(response(201)), None);
+        assert_eq!(
+            state.finish(key, first_generation, Ok(response(201)), None),
+            None
+        );
         assert!(matches!(
             state.response(key),
             Some(ResponseState::Running { .. })
@@ -983,7 +990,10 @@ mod tests {
             Some(ResponseState::Running { .. })
         ));
 
-        state.finish(old_key, generation, Ok(response(202)), None);
+        assert_eq!(
+            state.finish(old_key, generation, Ok(response(202)), None),
+            Some(new_key)
+        );
 
         assert!(matches!(
             state.response(new_key),
@@ -1035,7 +1045,10 @@ mod tests {
 
         state.remap_requests(&BTreeMap::from([(retained, new_retained)]));
         assert!(removed_receiver.try_recv().is_ok());
-        state.finish(removed, removed_generation, Ok(response(201)), None);
+        assert_eq!(
+            state.finish(removed, removed_generation, Ok(response(201)), None),
+            None
+        );
         assert!(state.response(replacement).is_none());
         state.finish(retained, retained_generation, Ok(response(202)), None);
         assert!(

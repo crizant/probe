@@ -264,6 +264,38 @@ impl ResponseViewerState {
             .collect();
     }
 
+    /// Finds the request that currently owns document `generation`.
+    ///
+    /// Background jobs capture the key from when they started; a workspace
+    /// reload may since have moved the document to a new key. Generations are
+    /// unique per viewer, so they identify the document across remaps.
+    pub(crate) fn current_key(
+        &self,
+        key: probe_core::RequestKey,
+        generation: u64,
+    ) -> Option<probe_core::RequestKey> {
+        if self
+            .documents
+            .get(&key)
+            .is_some_and(|document| document.generation == generation)
+        {
+            return Some(key);
+        }
+        self.documents
+            .iter()
+            .find(|(_, document)| document.generation == generation)
+            .map(|(key, _)| *key)
+    }
+
+    fn current_document_mut(
+        &mut self,
+        key: probe_core::RequestKey,
+        generation: u64,
+    ) -> Option<&mut PreparedDocument> {
+        let key = self.current_key(key, generation)?;
+        self.documents.get_mut(&key)
+    }
+
     pub(crate) fn set_tab(&mut self, key: probe_core::RequestKey, tab: ResponseViewerTab) {
         self.selections.entry(key).or_default().tab = tab;
     }
@@ -330,13 +362,10 @@ impl ResponseViewerState {
         page_revision: u64,
         encoded: String,
     ) {
-        let Some(document) = self.documents.get_mut(&key) else {
+        let Some(document) = self.current_document_mut(key, generation) else {
             return;
         };
-        if document.generation != generation
-            || !document.base64_pending
-            || document.page_revision != page_revision
-        {
+        if !document.base64_pending || document.page_revision != page_revision {
             return;
         }
         document.base64_text = encoded;
@@ -351,11 +380,10 @@ impl ResponseViewerState {
         page_revision: u64,
         encoded: String,
     ) {
-        let Some(document) = self.documents.get_mut(&key) else {
+        let Some(document) = self.current_document_mut(key, generation) else {
             return;
         };
-        if document.generation != generation
-            || !document.hex_pending
+        if !document.hex_pending
             || document.page_offset != offset
             || document.page_revision != page_revision
         {
@@ -371,10 +399,10 @@ impl ResponseViewerState {
         generation: u64,
         pretty: PrettyBody,
     ) {
-        let Some(document) = self.documents.get_mut(&key) else {
+        let Some(document) = self.current_document_mut(key, generation) else {
             return;
         };
-        if document.generation != generation || !document.pretty_pending {
+        if !document.pretty_pending {
             return;
         }
         let pretty_succeeded = pretty.notice.is_none();
@@ -395,10 +423,10 @@ impl ResponseViewerState {
         generation: u64,
         inspection: ResponseInspection,
     ) {
-        let Some(document) = self.documents.get_mut(&key) else {
+        let Some(document) = self.current_document_mut(key, generation) else {
             return;
         };
-        if document.generation != generation || !document.inspection_pending {
+        if !document.inspection_pending {
             return;
         }
         document.inspection = inspection;
@@ -435,18 +463,18 @@ impl ResponseViewerState {
         Some((document.generation, offset))
     }
 
+    /// Applies a loaded page and returns the request that now shows it.
     pub(crate) fn apply_page(
         &mut self,
         key: probe_core::RequestKey,
         generation: u64,
         offset: usize,
         body: Vec<u8>,
-    ) {
-        let Some(document) = self.documents.get_mut(&key) else {
-            return;
-        };
-        if document.generation != generation || !document.page_pending {
-            return;
+    ) -> Option<probe_core::RequestKey> {
+        let key = self.current_key(key, generation)?;
+        let document = self.documents.get_mut(&key)?;
+        if !document.page_pending {
+            return None;
         }
         document.page_offset = offset;
         document.page_len = body.len();
@@ -466,6 +494,7 @@ impl ResponseViewerState {
         document.pretty_notice = None;
         document.inspection_ranges.clear();
         document.page_pending = false;
+        Some(key)
     }
 
     pub(crate) fn fail_page(
@@ -474,10 +503,10 @@ impl ResponseViewerState {
         generation: u64,
         message: String,
     ) {
-        let Some(document) = self.documents.get_mut(&key) else {
+        let Some(document) = self.current_document_mut(key, generation) else {
             return;
         };
-        if document.generation == generation && document.page_pending {
+        if document.page_pending {
             document.page_pending = false;
             document.pretty_notice = Some(message);
         }
