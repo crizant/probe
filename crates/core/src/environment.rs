@@ -258,13 +258,10 @@ impl<'a> SecretRedactor<'a> {
     #[must_use]
     pub fn with_json_literals(mut self) -> Self {
         fn escaped_form(text: &str, output: &mut Vec<String>) {
-            // JSON escaping only changes quotes, backslashes, and control bytes.
-            if text
-                .bytes()
-                .any(|byte| byte == b'"' || byte == b'\\' || byte < 0x20)
-            {
-                let encoded = serde_json::to_string(text).expect("strings serialize");
-                output.push(encoded[1..encoded.len() - 1].to_owned());
+            let encoded = serde_json::to_string(text).expect("strings serialize");
+            let escaped = &encoded[1..encoded.len() - 1];
+            if escaped != text {
+                output.push(escaped.to_owned());
             }
         }
         fn collect_strings(value: &serde_json::Value, output: &mut Vec<String>) {
