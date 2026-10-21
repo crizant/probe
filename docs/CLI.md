@@ -824,11 +824,15 @@ use the same unified secret redactor as response presentation, including secrets
 resolved by later assertions. Strings are decoded before redaction; numbers use
 JSON spelling. Structured values are JSON display text and may be fully redacted.
 After redaction, values longer than 512 Unicode characters end with
-`… [truncated]` and set `actualTruncated: true`. Actual values appear only in JSON
-assertion results; the existing error message and human/quiet stderr remain the
-single counts line. Existing fields, exit codes, flags, outcome names, and error
-categories are unchanged. `BodyUnavailable` still emits the `body_unavailable`
-category; its shared display wording is used by the desktop, not CLI output.
+`… [truncated]` and set `actualTruncated: true`. Human failure diagnostics follow
+the counts line with each failed or errored assertion, identified by source and
+1-based index. Failed checks show the already
+redacted actual display text, including truncation markers; errored checks show
+the shared value-free diagnostic. Successful human output separates the response
+body and assertion summary with one blank line. Quiet stderr and JSON error
+messages retain the single counts line. Existing JSON fields, exit codes, flags,
+outcome names, and error categories are unchanged. `BodyUnavailable` still emits
+the `body_unavailable` category.
 Expressions, descriptions, and expected values remain absent from CLI result
 diagnostics.
 

@@ -23,6 +23,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
+- CLI assertion failures now identify each failed or errored check by source and
+  index, with redacted actual values or safe error diagnostics. Successful human
+  output separates the response body and assertion summary with a blank line.
+  JSON and quiet output are unchanged.
+
 - Desktop assertion results now group failed checks first and show an inline
   summary, a failure count in the tab, descriptions, safe actual values, and
   distinct skipped and evaluation-error states. Keyboard selection, copy, and
@@ -31,7 +36,7 @@ Release dates use Australia/Brisbane time (UTC+10).
   show matching outcomes from the latest send.
 - Shared assertion results and CLI JSON now include redacted actual display values
   and truncation metadata as additive JSON fields. Values are redacted before
-  truncation; existing CLI fields, human/quiet diagnostics, flags, and exit codes
+  truncation; existing CLI JSON fields, quiet diagnostics, flags, and exit codes
   are unchanged.
 
 ### Breaking changes from Probe v1.1.1

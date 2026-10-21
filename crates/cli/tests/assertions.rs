@@ -222,7 +222,11 @@ fn human_and_quiet_summaries_keep_failures_and_exit_codes() {
                 assert!(output.stdout.is_empty());
                 assert_eq!(
                     String::from_utf8(output.stderr).unwrap(),
-                    "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n"
+                    if quiet {
+                        "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n"
+                    } else {
+                        "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n\n  ✗ CLI assertion #1 — Failed\n    Got: 200\n"
+                    }
                 );
             } else if quiet {
                 assert!(output.stdout.is_empty());
@@ -241,7 +245,7 @@ fn human_and_quiet_summaries_keep_failures_and_exit_codes() {
 #[test]
 fn human_and_quiet_mixed_summaries_count_disabled_assertions_and_errors() {
     let assertions = format!(
-        "{ASSERTIONS}    - expression: response.status\n      operator: equals\n      value: '{{{{alias}}}}'\n    - expression: another-disabled-expression\n      operator: invalid\n      disabled: true\n"
+        "{ASSERTIONS}    - expression: response.status\n      operator: equals\n      value: '{{{{alias}}}}'\n    - expression: another-disabled-expression\n      operator: invalid\n      disabled: true\n    - expression: response.body.name\n      operator: equals\n      value: SECRET_EXPECTED\n      description: SECRET_DESCRIPTION\n"
     );
     for quiet in [false, true] {
         let (url, server) = serve_once(br#"{"name":"John Doe"}"#.to_vec(), "application/json");
@@ -260,7 +264,19 @@ fn human_and_quiet_mixed_summaries_count_disabled_assertions_and_errors() {
         assert!(output.stdout.is_empty());
         assert_eq!(
             String::from_utf8(output.stderr).unwrap(),
-            "error[assertion_failed]: Assertions: 2 passed, 1 failed, 2 errors, 2 disabled\n"
+            if quiet {
+                "error[assertion_failed]: Assertions: 2 passed, 2 failed, 2 errors, 2 disabled\n"
+            } else {
+                concat!(
+                    "error[assertion_failed]: Assertions: 2 passed, 2 failed, 2 errors, 2 disabled\n",
+                    "\n  ! Collection assertion #4 — Error\n",
+                    "    Reason: assertion variable resolution failed or a value is unavailable\n",
+                    "\n  ✗ Collection assertion #6 — Failed\n    Got: John Doe\n",
+                    "\n  ✗ CLI assertion #1 — Failed\n    Got: 200\n",
+                    "\n  ! CLI assertion #2 — Error\n",
+                    "    Reason: response property or array index does not exist\n",
+                )
+            }
         );
         server.join().unwrap();
         cleanup(path);
@@ -711,31 +727,128 @@ fn overlapping_assertion_and_request_secrets_never_leave_echoed_fragments_in_out
 }
 
 #[test]
-fn json_failure_actual_is_bounded_and_marks_truncation() {
+fn failure_actual_is_bounded_and_marks_truncation_in_human_and_json() {
+    for mode in ["--json", "human"] {
+        let (url, server) = serve_once(
+            serde_json::to_vec(&"é".repeat(600)).unwrap(),
+            "application/json",
+        );
+        let path = workspace(&url, "http", "", true);
+        let mut flags = vec!["--assert", "response.body equals short"];
+        if mode == "--json" {
+            flags.push(mode);
+        }
+        let output = run(&path, true, &flags);
+        assert_eq!(output.status.code(), Some(9));
+        let actual = format!("{}… [truncated]", "é".repeat(512));
+        if mode == "--json" {
+            assert!(output.stderr.is_empty());
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                value["error"]["message"],
+                "Assertions: 0 passed, 1 failed, 0 errors, 0 disabled"
+            );
+            let result = &value["error"]["details"]["assertions"][0];
+            assert_eq!(result["outcome"], "failed");
+            assert_eq!(result["actual"], actual);
+            assert_eq!(result["actualTruncated"], true);
+        } else {
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains(&format!("Got: {actual}\n")), "{stderr}");
+        }
+        for bytes in [&output.stdout, &output.stderr] {
+            assert!(!String::from_utf8_lossy(bytes).contains(&"é".repeat(513)));
+        }
+        server.join().unwrap();
+        cleanup(path);
+    }
+}
+
+#[test]
+fn human_failure_actual_escapes_terminal_controls_and_preserves_unicode() {
+    let actual = "Jane\nforged line\roverwrite\u{1b}[31mé界🙂\u{1b}[0m";
+    for json in [false, true] {
+        let (url, server) = serve_once(serde_json::to_vec(actual).unwrap(), "application/json");
+        let path = workspace(&url, "http", "", true);
+        let mut flags = vec!["--assert", "response.body equals short"];
+        if json {
+            flags.push("--json");
+        }
+        let output = run(&path, true, &flags);
+        assert_eq!(output.status.code(), Some(9));
+        if json {
+            assert!(output.stderr.is_empty());
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                value["error"]["details"]["assertions"][0],
+                serde_json::json!({
+                    "source": "cli", "index": 0, "outcome": "failed",
+                    "actual": actual, "actualTruncated": false,
+                })
+            );
+        } else {
+            assert!(output.stdout.is_empty());
+            assert_eq!(
+                String::from_utf8(output.stderr).unwrap(),
+                concat!(
+                    "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n",
+                    "\n  ✗ CLI assertion #1 — Failed\n",
+                    "    Got: Jane\\nforged line\\roverwrite\\u{1b}[31mé界🙂\\u{1b}[0m\n",
+                )
+            );
+        }
+        server.join().unwrap();
+        cleanup(path);
+    }
+}
+
+#[test]
+fn human_summary_has_one_blank_line_after_response_body() {
+    for body in ["body", "body\n", "body\r\n", "body\n\n", "body  \n"] {
+        let (url, server) = serve_once(body.as_bytes().to_vec(), "text/plain");
+        let path = workspace(&url, "http", "", true);
+        let output = run(&path, true, &["--assert", "response.status equals 200"]);
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        let human = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            human.ends_with(&format!(
+                "{}\n\nAssertions: 1 passed, 0 failed, 0 errors, 0 disabled\n",
+                body.trim_end_matches(['\r', '\n'])
+            )),
+            "{human}"
+        );
+        server.join().unwrap();
+        cleanup(path);
+    }
+}
+
+#[test]
+fn failed_human_actuals_use_secrets_disclosed_by_later_assertions() {
+    let assertions = "runtime:\n  assertions:\n    - expression: response.body.token\n      operator: equals\n      value: SECRET_EXPECTED\n      description: SECRET_DESCRIPTION\n    - expression: response.body.token\n      operator: equals\n      value: '{{alias}}'\n";
     let (url, server) = serve_once(
-        serde_json::to_vec(&"é".repeat(600)).unwrap(),
+        format!("{{\"token\":\"{SECRET}\"}}").into_bytes(),
         "application/json",
     );
-    let path = workspace(&url, "http", "", true);
-    let output = run(
-        &path,
-        true,
-        &["--json", "--assert", "response.body equals short"],
-    );
+    let path = workspace(&url, "http", assertions, true);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&path)
+        .arg("items/0")
+        .args(["--environment", "local", "--secret-provider", "env"])
+        .env(SECRET, SECRET)
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(9));
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(output.stdout.is_empty());
     assert_eq!(
-        value["error"]["message"],
-        "Assertions: 0 passed, 1 failed, 0 errors, 0 disabled"
+        String::from_utf8(output.stderr).unwrap(),
+        concat!(
+            "error[assertion_failed]: Assertions: 1 passed, 1 failed, 0 errors, 0 disabled\n",
+            "\n  ✗ Collection assertion #1 — Failed\n    Got: [REDACTED]\n",
+        )
     );
-    let result = &value["error"]["details"]["assertions"][0];
-    assert_eq!(result["outcome"], "failed");
-    assert_eq!(
-        result["actual"],
-        format!("{}… [truncated]", "é".repeat(512))
-    );
-    assert_eq!(result["actualTruncated"], true);
-    assert!(!String::from_utf8_lossy(&output.stdout).contains(&"é".repeat(513)));
     server.join().unwrap();
     cleanup(path);
 }
