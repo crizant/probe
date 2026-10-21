@@ -892,7 +892,8 @@ async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present(
             assert!(executed.response.body_file.is_some());
             assert!(cache_path.is_dir());
             drop(executed);
-            std::fs::remove_dir_all(cache_path).unwrap();
+            // Background body cleanup can recreate quota.lock during removal.
+            let _ = std::fs::remove_dir_all(cache_path);
         }
     }
 }
