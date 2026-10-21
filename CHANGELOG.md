@@ -11,16 +11,28 @@ Release dates use Australia/Brisbane time (UTC+10).
 - Desktop HTTP and GraphQL requests now have an Assertions editor with an enable
   switch, expression, operator, expected value, and description fields using the
   normal Save workflow. Every send evaluates its declarations and shows
-  numbered Passed, Failed, Error, and Disabled results in a response Assertions
-  tab with coloured summary counts and declaration columns, including for truncated
-  responses. Failed checks keep the response visible.
+  Passed, Failed, Evaluation Error, and Skipped results in a response Assertions
+  tab, including for truncated responses. Failed checks keep the response visible.
   Plain assertions retain full response paging and streamed file saves; direct
   saves consistently refuse requests that may use secrets. Adding then deleting
   an unsaved assertion restores the original absent or explicitly empty list.
 
 - CLI assertion checks run against original responses before secret redaction,
   using the request's environment, overrides, and cached secret provider. JSON,
-  human, and quiet output keep assertion diagnostics free of sensitive values.
+  human, and quiet output keep resolved secrets out of assertion results.
+
+### Changed
+
+- Desktop assertion results now group failed checks first and show an inline
+  summary, a failure count in the tab, descriptions, safe actual values, and
+  distinct skipped and evaluation-error states. Keyboard selection, copy, and
+  jump-to-editor actions make failures easier to inspect. Empty descriptions use
+  a compact reveal control, unary expected values stay disabled, and editor rows
+  show matching outcomes from the latest send.
+- Shared assertion results and CLI JSON now include redacted actual display values
+  and truncation metadata. Human/quiet failure output includes the observed value.
+  Values are redacted before truncation; CLI flags, exit codes, and existing
+  outcome/error fields are unchanged.
 
 ### Breaking changes from Probe v1.1.1
 

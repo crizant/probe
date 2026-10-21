@@ -376,6 +376,8 @@ pub(crate) fn run(
                 result.index - collection.len()
             },
             outcome: result.outcome,
+            actual: result.actual,
+            actual_truncated: result.actual_truncated,
         })
         .collect();
     if outcomes.iter().any(|result| {
@@ -464,6 +466,8 @@ pub(crate) struct RunAssertionResult {
     pub(crate) source: &'static str,
     pub(crate) index: usize,
     pub(crate) outcome: AssertionOutcome,
+    pub(crate) actual: Option<String>,
+    pub(crate) actual_truncated: bool,
 }
 
 pub(crate) fn assertion_json(result: &RunAssertionResult) -> serde_json::Value {
@@ -474,6 +478,10 @@ pub(crate) fn assertion_json(result: &RunAssertionResult) -> serde_json::Value {
         AssertionOutcome::Error(_) => "error",
     };
     let mut json = json!({ "source": result.source, "index": result.index, "outcome": outcome });
+    if let Some(actual) = &result.actual {
+        json["actual"] = json!(actual);
+        json["actualTruncated"] = json!(result.actual_truncated);
+    }
     if let AssertionOutcome::Error(error) = result.outcome {
         let category = match error {
             AssertionError::UnsupportedExpression => "unsupported_expression",
@@ -504,7 +512,25 @@ pub(crate) fn assertion_summary(results: &[RunAssertionResult]) -> String {
             AssertionOutcome::Error(_) => errors += 1,
         }
     }
-    format!("Assertions: {passed} passed, {failed} failed, {errors} errors, {disabled} disabled")
+    let mut summary = format!(
+        "Assertions: {passed} passed, {failed} failed, {errors} errors, {disabled} disabled"
+    );
+    for result in results
+        .iter()
+        .filter(|result| result.outcome == AssertionOutcome::Failed)
+    {
+        if let Some(actual) = &result.actual {
+            use std::fmt::Write as _;
+            let _ = write!(
+                summary,
+                "\n{} assertion {}: got {}",
+                result.source,
+                result.index + 1,
+                serde_json::to_string(actual).expect("display text is serializable")
+            );
+        }
+    }
+    summary
 }
 
 fn response_output(

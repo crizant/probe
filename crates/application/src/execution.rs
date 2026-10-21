@@ -107,6 +107,7 @@ pub fn prepare_request<'a>(
 pub(crate) struct CachedSecrets<'a> {
     provider: &'a dyn SecretProvider,
     values: RefCell<BTreeMap<String, Result<Option<SecretValue>, SecretError>>>,
+    derived_values: RefCell<Vec<SecretValue>>,
 }
 
 impl<'a> CachedSecrets<'a> {
@@ -114,7 +115,27 @@ impl<'a> CachedSecrets<'a> {
         Self {
             provider,
             values: RefCell::new(BTreeMap::new()),
+            derived_values: RefCell::new(Vec::new()),
         }
+    }
+    pub(crate) fn record_assertion_disclosure(&self, text: String) {
+        self.derived_values
+            .borrow_mut()
+            .push(SecretValue::new(text));
+    }
+
+    pub(crate) fn redaction_values(&self) -> Vec<SecretValue> {
+        let values: Vec<_> = self
+            .values
+            .borrow()
+            .values()
+            .filter_map(|result| match result {
+                Ok(Some(value)) => Some(value.clone()),
+                _ => None,
+            })
+            .chain(self.derived_values.borrow().iter().cloned())
+            .collect();
+        values
     }
 }
 
@@ -173,7 +194,7 @@ impl<'a> PreparedRequest<'a> {
     }
 
     /// Executes HTTP/GraphQL assertions against original response bytes, returning
-    /// only value-free results and the redacted response. Uses the preparation's
+    /// only redacted, bounded actual values and the redacted response. Reuses the
     /// cached provider for the entire batch, including request/certificate secrets.
     pub async fn execute_with_assertions<C, P>(
         self,
@@ -213,7 +234,16 @@ impl<'a> PreparedRequest<'a> {
             &provider,
             |environment| environments.push(environment),
         );
-        executed.response = disclosure.redact_response_with(executed.response, &environments);
+        let fetched = provider.redaction_values();
+        let redactor =
+            SecretRedactor::from_environments(disclosure.secrets.iter().chain(&environments))
+                .with_values(&fetched)
+                .with_json_literals();
+        let outcomes = outcomes
+            .into_iter()
+            .map(|result| result.redact(&redactor))
+            .collect();
+        executed.response = disclosure.redact_response_using(executed.response, &redactor);
         Ok((executed, outcomes))
     }
 
@@ -509,17 +539,21 @@ impl SecretDisclosure {
 
     fn redact_response_with(
         &self,
-        mut response: HttpResponse,
+        response: HttpResponse,
         environments: &[ResolvedEnvironment],
     ) -> HttpResponse {
         // The request/certificate disclosure and every assertion environment must
         // participate in one longest-first match against the original bytes.
         let secrets = SecretRedactor::from_environments(self.secrets.iter().chain(environments));
-        if !self.uses_secrets()
-            && !environments
-                .iter()
-                .any(ResolvedEnvironment::has_resolved_secrets)
-        {
+        self.redact_response_using(response, &secrets)
+    }
+
+    fn redact_response_using(
+        &self,
+        mut response: HttpResponse,
+        secrets: &SecretRedactor<'_>,
+    ) -> HttpResponse {
+        if secrets.is_empty() {
             return response;
         }
         // A redirect may encode or transform secret bytes, so only the

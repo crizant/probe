@@ -1349,6 +1349,9 @@ async fn assertion_execution_uses_original_bytes_and_one_cached_secret_for_the_w
             ]
         );
         assert!(!format!("{executed:?} {outcomes:?}").contains(SECRET));
+        assert_eq!(outcomes[0].actual.as_deref(), Some("[REDACTED]"));
+        assert_eq!(outcomes[1].actual.as_deref(), Some("[REDACTED]"));
+        assert!(outcomes[2].actual.is_none());
         assert_eq!(executed.response.body, br#"{"token":"[REDACTED]"}"#);
         assert!(
             executed

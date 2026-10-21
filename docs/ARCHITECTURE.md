@@ -252,7 +252,8 @@ and collection writer preserve these declarations. Assertions are not evaluated 
 interpolated during request preparation. The standalone application-layer
 [`evaluate_assertions`](ASSERTIONS.md) operation accepts declarations, an HTTP or
 GraphQL response, and the existing variable-resolution inputs. It returns ordered,
-value-free outcomes. CLI and desktop execution use `PreparedRequest::execute_with_assertions`
+outcomes with safe, bounded actual observations. CLI and desktop execution use
+`PreparedRequest::execute_with_assertions`
 to evaluate the original HTTP/GraphQL response before redaction, reusing the same
 engine and preparation's `CachedSecrets`. Assertion-only secrets also participate
 in redaction; the adapter receives only safe outcomes and redacted response data.
@@ -399,7 +400,7 @@ PreparedRequest::execute_with_assertions → probe-http engine → network (reqw
      ↓
 shared assertion evaluator (original response; successful exchanges only)
      ↓
-redacted ExecutedResponse + value-free assertion outcomes
+redacted ExecutedResponse + outcomes with bounded, redacted actual values
      ↓
 CLI source/index mapping and formatter
      ↓
@@ -674,9 +675,14 @@ assertion declarations captured when the send begins, beside the redacted respon
 The existing generation and key-alias checks accept or reject the whole completion;
 there is no separate results store. Response document preparation and highlighting
 continue to consume only redacted bytes. A new send clears the old document and
-replaces the response state. The response Assertions tab displays declaration columns
+replaces the response state. The response Assertions tab displays declarations and safe actual values
 from that snapshot, so subsequent draft edits cannot relabel earlier results.
-Diagnostics never retain resolved operands, secrets, or original response bodies.
+Evaluation-error diagnostics retain no operands, secrets, or original response
+bodies. Actual values are redacted with the entire batch's disclosure (including
+partially failed resolution and decoded literal forms), then bounded to 512
+Unicode characters. Pending observations share the parsed JSON body only inside
+the application boundary. Response list selection and editor reveal/focus state
+use their existing per-request owners and remapping/cleanup paths.
 The shared boundary disables spooling only when request/certificate resolution
 uses secrets or active assertion values may
 reach secrets (including uncertain resolution). Its metadata preflight never

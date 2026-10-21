@@ -921,7 +921,12 @@ mod tests {
     fn outcomes(
         outcome: probe_application::AssertionOutcome,
     ) -> Vec<probe_application::AssertionResult> {
-        vec![probe_application::AssertionResult { index: 0, outcome }]
+        vec![probe_application::AssertionResult {
+            actual: None,
+            actual_truncated: false,
+            index: 0,
+            outcome,
+        }]
     }
 
     #[test]

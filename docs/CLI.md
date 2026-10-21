@@ -807,8 +807,8 @@ When collection or CLI assertions are present and all active checks pass,
     "url": "https://api.example.com/users"
   },
   "assertions": [
-    { "source": "collection", "index": 0, "outcome": "passed" },
-    { "source": "cli", "index": 0, "outcome": "passed" }
+    { "source": "collection", "index": 0, "outcome": "passed", "actual": "200", "actualTruncated": false },
+    { "source": "cli", "index": 0, "outcome": "passed", "actual": "0", "actualTruncated": false }
   ]
 }
 ```
@@ -817,7 +817,16 @@ An error outcome adds `"error": {"category": "body_unavailable"}` or another
 value-free evaluator category: `unsupported_expression`, `unsupported_operator`,
 `missing_expected_value`, `variable_resolution`, `invalid_expected_value`,
 `invalid_json_body`, `missing_property`, or `incompatible_operands`.
-No raw expression, actual value, or expected value is included.
+Passed and failed checks add `actual` (redacted display text) and
+`actualTruncated` (boolean). Errors and disabled checks omit both fields. Actuals
+use the same unified secret redactor as response presentation, including secrets
+resolved by later assertions. Strings are decoded before redaction; numbers use
+JSON spelling. Structured values are JSON display text and may be fully redacted.
+After redaction, values longer than 512 Unicode characters end with
+`… [truncated]` and set `actualTruncated: true`. Human and quiet failure diagnostics
+include `got <actual>` with JSON escaping for control characters. Exit codes,
+flags, existing outcome names, and error categories are unchanged. Expressions,
+descriptions, and expected values remain absent from CLI result diagnostics.
 
 Structured errors use:
 

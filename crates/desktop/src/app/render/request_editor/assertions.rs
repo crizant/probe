@@ -24,6 +24,21 @@ impl ProbeApp {
                 operators.insert(0, (assertion.operator.clone(), assertion.operator.clone()));
             }
             let enabled = assertion.disabled != Some(true);
+            let description =
+                documentation_text(assertion.description.as_ref()).unwrap_or_default();
+            let show_description =
+                !description.is_empty() || self.request_editor.description_is_open(key, index);
+            let description_view = cx.weak_entity();
+            let latest = match self.execution.response(key) {
+                Some(ResponseState::Complete {
+                    assertions,
+                    assertion_declarations,
+                    ..
+                }) if assertion_declarations.get(index) == Some(assertion) => {
+                    assertions.iter().find(|result| result.index == index)
+                }
+                _ => None,
+            };
             let controls = components::editor_key_value_row(theme)
                 .child(
                     div()
@@ -86,6 +101,40 @@ impl ProbeApp {
                             cx,
                         )),
                 )
+                .when_some(latest, |row, result| {
+                    let color = match result.outcome {
+                        probe_application::AssertionOutcome::Passed => theme.colors.status.success,
+                        probe_application::AssertionOutcome::Failed => theme.colors.status.error,
+                        probe_application::AssertionOutcome::Error(_) => {
+                            theme.colors.status.warning
+                        }
+                        probe_application::AssertionOutcome::Disabled => theme.colors.text.muted,
+                    };
+                    row.child(
+                        components::assertion_status_icon(theme, &result.outcome)
+                            .id(("assertion-latest", index))
+                            .debug_selector(move || format!("assertion-latest-{index}"))
+                            .text_color(color),
+                    )
+                })
+                .when(!show_description, |row| {
+                    row.child(
+                        components::editor_action_button(
+                            theme,
+                            ("assertion-add-description", index),
+                            "…",
+                            false,
+                            move |_, _, cx| {
+                                let _ = description_view.update(cx, |view, cx| {
+                                    view.request_editor.show_assertion_description(key, index);
+                                    cx.notify();
+                                });
+                            },
+                        )
+                        .accessibility_label("Add Description")
+                        .debug_selector(move || format!("assertion-add-description-{index}")),
+                    )
+                })
                 .child(
                     div()
                         .id(("assertion-enabled-control", index))
@@ -121,6 +170,7 @@ impl ProbeApp {
                                     |request| AssertionEdit::Remove(index).apply(request),
                                     cx,
                                 );
+                                view.request_editor.assertion_removed(key, index);
                                 view.focus_handle.focus(window, cx);
                             });
                         },
@@ -135,23 +185,25 @@ impl ProbeApp {
                     .flex_col()
                     .gap(px(theme.metrics.spacing_2))
                     .child(controls)
-                    .child(
-                        components::editor_key_value_row(theme).child(
-                            div().flex_1().min_w(px(0.0)).child(
-                                self.assertion_text_field(
-                                    key,
-                                    index,
-                                    AssertionField::Description,
-                                    documentation_text(assertion.description.as_ref())
-                                        .unwrap_or_default(),
-                                    "Description",
-                                    theme,
-                                    list_scroll,
-                                    cx,
-                                ),
-                            ),
-                        ),
-                    );
+                    .when(show_description, |row| {
+                        row.child(
+                            components::editor_key_value_row(theme)
+                                .pl(px(theme.metrics.spacing_2))
+                                .text_color(theme.colors.text.muted)
+                                .child(div().flex_1().min_w(px(0.0)).child(
+                                    self.assertion_text_field(
+                                        key,
+                                        index,
+                                        AssertionField::Description,
+                                        description,
+                                        "Description",
+                                        theme,
+                                        list_scroll,
+                                        cx,
+                                    ),
+                                )),
+                        )
+                    });
             rows = rows.child(row);
         }
         let view = cx.weak_entity();
@@ -181,6 +233,16 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let view = cx.weak_entity();
+        let focus = matches!(field, AssertionField::Expression)
+            && self.request_editor.take_assertion_focus(key, index);
+        let unary = matches!(field, AssertionField::Value)
+            && self
+                .loaded_workspace
+                .as_ref()
+                .and_then(|loaded| loaded.workspace().request(key))
+                .and_then(|request| request.runtime.assertions.as_ref())
+                .and_then(|rows| rows.get(index))
+                .is_some_and(|row| matches!(row.operator.as_str(), "isNull" | "isNotNull"));
         div()
             .id((field.id(), index))
             .debug_selector(move || format!("{}-{index}", field.id()))
@@ -204,7 +266,10 @@ impl ProbeApp {
                         });
                     },
                 )
-                .list_scroll(list_scroll),
+                .list_scroll(list_scroll)
+                .muted(matches!(field, AssertionField::Description))
+                .disabled(unary)
+                .focus_on_render(focus),
             )
             .into_any_element()
     }

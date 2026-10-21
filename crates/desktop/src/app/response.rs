@@ -194,11 +194,6 @@ impl ProbeApp {
             self.response_viewer.remove(key);
             return;
         };
-        if matches!(self.execution.response(key), Some(ResponseState::Complete { assertions, .. }) if assertions.is_empty())
-            && self.response_viewer.tab(key) == ResponseViewerTab::Assertions
-        {
-            self.response_viewer.set_tab(key, ResponseViewerTab::Pretty);
-        }
         let generation = self.response_viewer.allocate_generation();
         let (mut document, pretty_pending, inspection_pending) =
             prepare_document(response, generation);
@@ -256,6 +251,65 @@ impl ProbeApp {
                 });
             })
             .detach();
+        }
+    }
+
+    pub(super) fn jump_to_assertion(
+        &mut self,
+        key: RequestKey,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let declaration = match self.execution.response(key) {
+            Some(ResponseState::Complete {
+                assertion_declarations,
+                ..
+            }) => assertion_declarations.get(index),
+            _ => None,
+        };
+        let target = self
+            .loaded_workspace
+            .as_ref()
+            .and_then(|loaded| loaded.workspace().request(key))
+            .and_then(|request| request.runtime.assertions.as_ref())
+            .and_then(|rows| {
+                declaration.and_then(|declaration| {
+                    if rows.get(index) == Some(declaration) {
+                        Some(index)
+                    } else {
+                        rows.iter().position(|row| row == declaration)
+                    }
+                })
+            });
+        if let Some(target) = target {
+            self.request_editor.focus_assertion(key, target);
+        } else {
+            self.show_toast(
+                ToastIntent::Info,
+                "This assertion has changed since the response was sent.",
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    pub(super) fn copy_assertion_result(
+        &self,
+        key: RequestKey,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ResponseState::Complete {
+            assertions,
+            assertion_declarations,
+            ..
+        }) = self.execution.response(key)
+            && let Some(result) = assertions.iter().find(|result| result.index == index)
+            && let Some(declaration) = assertion_declarations.get(index)
+        {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                crate::response_viewer::assertions::copy_row(declaration, result),
+            ));
         }
     }
 

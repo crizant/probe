@@ -830,6 +830,18 @@ pub(crate) fn dialog_text_input(
 }
 
 impl ProbeTextInput {
+    pub(crate) fn muted(mut self, muted: bool) -> Self {
+        if muted {
+            self.theme.colors.text.primary = self.theme.colors.text.muted;
+        }
+        self
+    }
+
+    pub(crate) fn focus_on_render(mut self, focus: bool) -> Self {
+        self.focus_on_render = focus;
+        self
+    }
+
     /// Defer this field's vertical wheel events to `scroll`.
     pub(crate) fn list_scroll(mut self, scroll: Option<&ListScroll>) -> Self {
         self.list_scroll = scroll.cloned();

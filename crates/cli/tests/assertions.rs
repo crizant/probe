@@ -125,12 +125,12 @@ fn collection_and_cli_assertions_cover_both_layouts_and_protocols_without_writes
             assert_eq!(results.len(), 7);
             assert_eq!(
                 results[0],
-                serde_json::json!({"source":"collection","index":0,"outcome":"passed"})
+                serde_json::json!({"source":"collection","index":0,"outcome":"passed","actual":"200","actualTruncated":false})
             );
             assert_eq!(results[2]["outcome"], "disabled");
             assert_eq!(
                 results[3],
-                serde_json::json!({"source":"cli","index":0,"outcome":"passed"})
+                serde_json::json!({"source":"cli","index":0,"outcome":"passed","actual":"1","actualTruncated":false})
             );
             assert_eq!(results[6]["index"], 3);
             assert!(output.stderr.is_empty());
@@ -175,7 +175,6 @@ fn mixed_failures_report_all_safe_outcomes_and_skip_only_collection_when_request
             let text = String::from_utf8_lossy(&output.stdout);
             for sensitive in [
                 "SECRET_EXPECTED",
-                "John Doe",
                 "response.body.name",
                 SECRET,
                 "sensitive-disabled-expression",
@@ -211,7 +210,7 @@ fn human_and_quiet_summaries_keep_failures_and_exit_codes() {
                 assert!(output.stdout.is_empty());
                 assert_eq!(
                     String::from_utf8(output.stderr).unwrap(),
-                    "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n"
+                    "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\ncli assertion 1: got \"200\"\n"
                 );
             } else if quiet {
                 assert!(output.stdout.is_empty());
@@ -249,7 +248,7 @@ fn human_and_quiet_mixed_summaries_count_disabled_assertions_and_errors() {
         assert!(output.stdout.is_empty());
         assert_eq!(
             String::from_utf8(output.stderr).unwrap(),
-            "error[assertion_failed]: Assertions: 2 passed, 1 failed, 2 errors, 2 disabled\n"
+            "error[assertion_failed]: Assertions: 2 passed, 1 failed, 2 errors, 2 disabled\ncli assertion 1: got \"200\"\n"
         );
         server.join().unwrap();
         cleanup(path);
@@ -697,4 +696,30 @@ fn overlapping_assertion_and_request_secrets_never_leave_echoed_fragments_in_out
             }
         }
     }
+}
+
+#[test]
+fn json_failure_actual_is_bounded_and_marks_truncation() {
+    let (url, server) = serve_once(
+        serde_json::to_vec(&"é".repeat(600)).unwrap(),
+        "application/json",
+    );
+    let path = workspace(&url, "http", "", true);
+    let output = run(
+        &path,
+        true,
+        &["--json", "--assert", "response.body equals short"],
+    );
+    assert_eq!(output.status.code(), Some(9));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let result = &value["error"]["details"]["assertions"][0];
+    assert_eq!(result["outcome"], "failed");
+    assert_eq!(
+        result["actual"],
+        format!("{}… [truncated]", "é".repeat(512))
+    );
+    assert_eq!(result["actualTruncated"], true);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&"é".repeat(513)));
+    server.join().unwrap();
+    cleanup(path);
 }

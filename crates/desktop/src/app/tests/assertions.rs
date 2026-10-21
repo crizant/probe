@@ -10,6 +10,27 @@ fn click(visual: &mut VisualTestContext, selector: &'static str) {
     visual.run_until_parked();
 }
 
+fn double_click(visual: &mut VisualTestContext, selector: &'static str) {
+    let position = visual
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("missing {selector}"))
+        .center();
+    visual.simulate_event(gpui_kit::MouseDownEvent {
+        button: MouseButton::Left,
+        position,
+        modifiers: Modifiers::default(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    visual.simulate_event(gpui_kit::MouseUpEvent {
+        button: MouseButton::Left,
+        position,
+        modifiers: Modifiers::default(),
+        click_count: 2,
+    });
+    visual.run_until_parked();
+}
+
 #[gpui_kit::test]
 fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
     cx: &mut TestAppContext,
@@ -117,18 +138,26 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
                     response,
                     vec![
                         AssertionResult {
+                            actual: None,
+                            actual_truncated: false,
                             index: 0,
                             outcome: AssertionOutcome::Passed,
                         },
                         AssertionResult {
+                            actual: Some("401".into()),
+                            actual_truncated: false,
                             index: 1,
                             outcome: AssertionOutcome::Failed,
                         },
                         AssertionResult {
+                            actual: None,
+                            actual_truncated: false,
                             index: 2,
                             outcome: AssertionOutcome::Error(AssertionError::BodyUnavailable),
                         },
                         AssertionResult {
+                            actual: None,
+                            actual_truncated: false,
                             index: 3,
                             outcome: AssertionOutcome::Disabled,
                         },
@@ -137,18 +166,12 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
                 None,
                 cx,
             );
-            view.edit_request(http, |r| AssertionEdit::Remove(0).apply(r), cx);
         })
         .unwrap();
     visual.run_until_parked();
     click(&mut visual, "response-tab-assertions");
     for selector in [
-        "assertion-result-columns",
         "assertion-summary",
-        "assertion-summary-1-passed",
-        "assertion-summary-1-failed",
-        "assertion-summary-1-error",
-        "assertion-summary-1-disabled",
         "assertion-result-0",
         "assertion-result-1",
         "assertion-result-2",
@@ -156,6 +179,84 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
     ] {
         assert!(visual.debug_bounds(selector).is_some());
     }
+    assert!(visual.debug_bounds("assertion-failure-count-1").is_some());
+    assert!(visual.debug_bounds("assertion-actual-1").is_some());
+    assert!(visual.debug_bounds("assertion-latest-3").is_some());
+    double_click(&mut visual, "assertion-result-3");
+    cx.simulate_keystrokes(
+        window.into(),
+        if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        },
+    );
+    cx.simulate_input(window.into(), "response.body.doubleClicked");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.active_request()
+                    .unwrap()
+                    .runtime
+                    .assertions
+                    .as_ref()
+                    .unwrap()[3]
+                    .expression,
+                "response.body.doubleClicked"
+            )
+        })
+        .unwrap();
+    assert!(visual.debug_bounds("assertion-latest-3").is_none());
+    click(&mut visual, "assertion-result-1");
+    cx.simulate_keystrokes(
+        window.into(),
+        if cfg!(target_os = "macos") {
+            "cmd-c"
+        } else {
+            "ctrl-c"
+        },
+    );
+    visual.run_until_parked();
+    assert!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .unwrap()
+            .contains("got 401")
+    );
+    cx.simulate_keystrokes(window.into(), "down");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.response_viewer.assertion_selection(http), Some(2))
+        })
+        .unwrap();
+    cx.simulate_keystrokes(window.into(), "up enter");
+    visual.run_until_parked();
+    cx.simulate_keystrokes(
+        window.into(),
+        if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        },
+    );
+    cx.simulate_input(window.into(), "response.body.afterJump");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.request_editor.section(http), EditorSection::Assertions);
+            assert_eq!(
+                view.active_request()
+                    .unwrap()
+                    .runtime
+                    .assertions
+                    .as_ref()
+                    .unwrap()[1]
+                    .expression,
+                "response.body.afterJump"
+            );
+            view.edit_request(http, |r| AssertionEdit::Remove(0).apply(r), cx);
+        })
+        .unwrap();
     window
         .update(cx, |view, _, _| {
             let Some(crate::execution::ResponseState::Complete {
@@ -372,4 +473,114 @@ fn assertion_add_delete_restores_original_list_presence_and_keyboard_save(cx: &m
         );
         fs::remove_file(path).unwrap();
     }
+}
+
+#[gpui_kit::test]
+fn assertion_empty_skipped_and_failed_request_states_keep_editor_access(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1500.0), px(1000.0)), ProbeApp::new);
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/opencollection/assertions-bundled.yml");
+    let loaded = probe_opencollection::load_workspace(&path).unwrap();
+    let key = loaded.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(path, loaded);
+            view.select_request(key, cx);
+            view.edit_request(key, |r| r.runtime.assertions = None, cx);
+            let (tx, _) = oneshot::channel();
+            let generation = view.execution.begin(key, tx);
+            view.complete_execution(
+                key,
+                generation,
+                Ok((super::workspace::tab_response(), Vec::new())),
+                None,
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    click(&mut visual, "response-tab-assertions");
+    click(&mut visual, "open-request-assertions");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(view.request_editor.section(key), EditorSection::Assertions)
+        })
+        .unwrap();
+    click(&mut visual, "add-assertion");
+    assert!(visual.debug_bounds("assertion-description-0").is_none());
+    click(&mut visual, "assertion-add-description-0");
+    assert!(visual.debug_bounds("assertion-description-0").is_some());
+    window
+        .update(cx, |view, _, cx| {
+            view.edit_request(
+                key,
+                |r| {
+                    AssertionEdit::Text(0, AssertionField::Operator, "isNull".into()).apply(r);
+                    AssertionEdit::Enabled(0, false).apply(r);
+                },
+                cx,
+            );
+        })
+        .unwrap();
+    visual.run_until_parked();
+    click(&mut visual, "assertion-value-0");
+    cx.simulate_input(window.into(), "must-not-edit-unary-value");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let declarations = view
+                .active_request()
+                .unwrap()
+                .runtime
+                .assertions
+                .clone()
+                .unwrap();
+            assert_eq!(declarations[0].value.as_deref(), Some("200"));
+            let (tx, _) = oneshot::channel();
+            let generation = view.execution.begin_with_assertions(key, tx, declarations);
+            view.complete_execution(
+                key,
+                generation,
+                Ok((
+                    super::workspace::tab_response(),
+                    vec![AssertionResult {
+                        index: 0,
+                        outcome: AssertionOutcome::Disabled,
+                        actual: None,
+                        actual_truncated: false,
+                    }],
+                )),
+                None,
+                cx,
+            );
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("assertions-all-disabled").is_some());
+    assert!(visual.debug_bounds("assertion-result-0").is_some());
+    assert!(visual.debug_bounds("assertion-failure-count-1").is_none());
+    window
+        .update(cx, |view, _, cx| {
+            let (tx, _) = oneshot::channel();
+            let generation = view.execution.begin(key, tx);
+            view.complete_execution(
+                key,
+                generation,
+                Err(probe_http::HttpError::Timeout),
+                None,
+                cx,
+            );
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("assertions-not-evaluated").is_some());
+    assert!(visual.debug_bounds("assertion-result-0").is_none());
+    click(&mut visual, "failed-response-tab-0");
+    assert!(visual.debug_bounds("assertions-not-evaluated").is_none());
+    click(&mut visual, "failed-response-tab-1");
+    assert!(visual.debug_bounds("assertions-not-evaluated").is_some());
 }

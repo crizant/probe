@@ -362,3 +362,21 @@ fn redaction_combines_overlapping_values_without_rescanning_replacement_markers(
     assert!(!format!("{redactor:?}").contains("abcdef"));
     assert!(provider.calls.borrow().is_empty());
 }
+
+#[test]
+fn unified_redaction_includes_fetched_values_and_decoded_literals_without_debug_disclosure() {
+    use probe_core::{SecretRedactor, SecretValue};
+    let values =
+        ["abc", "abcdef", r#""quoted\nsecret""#, "1e3"].map(|value| SecretValue::new(value.into()));
+    let empty = SecretRedactor::from_environments([]);
+    assert!(empty.is_empty());
+    let redactor = empty.with_values(&values).with_json_literals();
+    assert!(!redactor.is_empty());
+    assert_eq!(
+        redactor.redact("abcdef abc quoted\nsecret 1000"),
+        "[REDACTED] [REDACTED] [REDACTED] [REDACTED]"
+    );
+    for sensitive in ["abcdef", "quoted", "1000", "1e3"] {
+        assert!(!format!("{redactor:?}").contains(sensitive));
+    }
+}
