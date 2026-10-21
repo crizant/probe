@@ -766,6 +766,44 @@ fn failure_actual_is_bounded_and_marks_truncation_in_human_and_json() {
 }
 
 #[test]
+fn human_failure_actual_escapes_terminal_controls_and_preserves_unicode() {
+    let actual = "Jane\nforged line\roverwrite\u{1b}[31mé界🙂\u{1b}[0m";
+    for json in [false, true] {
+        let (url, server) = serve_once(serde_json::to_vec(actual).unwrap(), "application/json");
+        let path = workspace(&url, "http", "", true);
+        let mut flags = vec!["--assert", "response.body equals short"];
+        if json {
+            flags.push("--json");
+        }
+        let output = run(&path, true, &flags);
+        assert_eq!(output.status.code(), Some(9));
+        if json {
+            assert!(output.stderr.is_empty());
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                value["error"]["details"]["assertions"][0],
+                serde_json::json!({
+                    "source": "cli", "index": 0, "outcome": "failed",
+                    "actual": actual, "actualTruncated": false,
+                })
+            );
+        } else {
+            assert!(output.stdout.is_empty());
+            assert_eq!(
+                String::from_utf8(output.stderr).unwrap(),
+                concat!(
+                    "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n",
+                    "\n  ✗ CLI assertion #1 — Failed\n",
+                    "    Got: Jane\\nforged line\\roverwrite\\u{1b}[31mé界🙂\\u{1b}[0m\n",
+                )
+            );
+        }
+        server.join().unwrap();
+        cleanup(path);
+    }
+}
+
+#[test]
 fn human_summary_has_one_blank_line_after_response_body() {
     for body in ["body", "body\n", "body\r\n", "body\n\n", "body  \n"] {
         let (url, server) = serve_once(body.as_bytes().to_vec(), "text/plain");

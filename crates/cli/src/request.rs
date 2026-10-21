@@ -540,7 +540,8 @@ fn append_assertion_failures(human: &mut String, results: &[RunAssertionResult])
         match result.outcome {
             AssertionOutcome::Failed => {
                 if let Some(actual) = &result.actual {
-                    write!(human, "\n    Got: {actual}").expect("writing to a String cannot fail");
+                    write!(human, "\n    Got: {}", actual.escape_debug())
+                        .expect("writing to a String cannot fail");
                 }
             }
             AssertionOutcome::Error(error) => {
