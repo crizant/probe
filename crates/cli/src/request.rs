@@ -1,4 +1,4 @@
-use std::{borrow::Cow, io::Read, path::PathBuf};
+use std::{borrow::Cow, fmt::Write, io::Read, path::PathBuf};
 
 use probe_application::{
     AssertionError, AssertionOutcome, NoSecrets, RequestResolution, prepare_request,
@@ -386,7 +386,11 @@ pub(crate) fn run(
             AssertionOutcome::Failed | AssertionOutcome::Error(_)
         )
     }) {
-        return Err(CliError::assertion_failed(&outcomes));
+        let mut error = CliError::assertion_failed(&outcomes);
+        if options.mode == crate::streaming::OutputMode::Human {
+            append_assertion_failures(&mut error.message, &outcomes);
+        }
+        return Err(error);
     }
     response_output(
         || {
@@ -515,6 +519,38 @@ pub(crate) fn assertion_summary(results: &[RunAssertionResult]) -> String {
     format!("Assertions: {passed} passed, {failed} failed, {errors} errors, {disabled} disabled")
 }
 
+fn append_assertion_failures(human: &mut String, results: &[RunAssertionResult]) {
+    for result in results {
+        let (marker, label) = match result.outcome {
+            AssertionOutcome::Failed => ("✗", "Failed"),
+            AssertionOutcome::Error(_) => ("!", "Error"),
+            AssertionOutcome::Passed | AssertionOutcome::Disabled => continue,
+        };
+        let source = if result.source == "collection" {
+            "Collection"
+        } else {
+            "CLI"
+        };
+        write!(
+            human,
+            "\n\n  {marker} {source} assertion #{} — {label}",
+            result.index + 1
+        )
+        .expect("writing to a String cannot fail");
+        match result.outcome {
+            AssertionOutcome::Failed => {
+                if let Some(actual) = &result.actual {
+                    write!(human, "\n    Got: {actual}").expect("writing to a String cannot fail");
+                }
+            }
+            AssertionOutcome::Error(error) => {
+                write!(human, "\n    Reason: {error}").expect("writing to a String cannot fail");
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 fn response_output(
     render_human: impl FnOnce() -> String,
     human_output: bool,
@@ -543,6 +579,8 @@ fn response_output(
         human: if human_output {
             let mut human = render_human();
             if !outcomes.is_empty() {
+                human.truncate(human.trim_end_matches(['\r', '\n']).len());
+                human.push_str("\n\n");
                 human.push_str(&assertion_summary(outcomes));
                 human.push('\n');
             }
