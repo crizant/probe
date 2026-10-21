@@ -1,19 +1,18 @@
 use std::{borrow::Cow, io::Read, path::PathBuf};
 
-use probe_application::{NoSecrets, RequestResolution, prepare_request};
+use probe_application::{
+    AssertionError, AssertionOutcome, NoSecrets, RequestResolution, prepare_request,
+};
 use probe_core::{
-    ExpectationOutcome, FieldPatch, Request, RequestUpdate, RequestVariableInfo, SecretContext,
-    SecretError, SecretProvider, SecretValue, StatusExpectation, VariableUsage,
-    discover_request_variables, evaluate_expectations, resolve_environment_with_overrides,
-    resolve_request, resolve_request_strict,
+    Assertion, FieldPatch, Request, RequestUpdate, RequestVariableInfo, SecretContext, SecretError,
+    SecretProvider, SecretValue, VariableUsage, discover_request_variables,
+    resolve_environment_with_overrides, resolve_request, resolve_request_strict,
 };
 use probe_http::{ExecutionOptions, HttpEngine, HttpResponse};
 use serde_json::json;
 
 use crate::{
-    CliError, CommandOutput, WorkspaceInput,
-    error::expectation_json,
-    load,
+    CliError, CommandOutput, WorkspaceInput, load,
     presentation::{
         dry_run_human, dry_run_json, request_human, request_json, response_human, response_json,
         run_request_json,
@@ -250,7 +249,8 @@ pub(crate) struct RunOptions<'a> {
     pub(crate) dry_run: bool,
     pub(crate) show_headers: bool,
     pub(crate) secret_provider_env: bool,
-    pub(crate) expectations: &'a [StatusExpectation],
+    pub(crate) assertions: &'a [Assertion],
+    pub(crate) no_assertions: bool,
     pub(crate) mode: crate::streaming::OutputMode,
     pub(crate) sends: &'a [probe_application::SessionData],
     pub(crate) stdin_format: Option<probe_application::WebSocketInputFormat>,
@@ -275,12 +275,10 @@ pub(crate) fn run(
         .expect("repository request key must resolve");
     if source.kind.is_websocket() {
         if !options.dry_run
-            && (options.output.is_some()
-                || options.show_headers
-                || !options.expectations.is_empty())
+            && (options.output.is_some() || options.show_headers || !options.assertions.is_empty())
         {
             return Err(CliError::invalid_arguments(
-                "--output, --show-headers and --expect are HTTP/GraphQL-only",
+                "--output, --show-headers and --assert are HTTP/GraphQL-only",
             ));
         }
     } else if !options.sends.is_empty()
@@ -301,19 +299,16 @@ pub(crate) fn run(
         WorkspaceInput::Path(path) => path.to_str(),
         WorkspaceInput::Stdin => Some("-"),
     };
-    let prepared = prepare_request(
-        source,
-        &RequestResolution {
-            environments: loaded.workspace().environments(),
-            client_certificates: loaded.workspace().client_certificates(),
-            environment: options.environment,
-            overrides: options.variables,
-            strict_variables: options.strict_variables,
-            workspace_identity,
-        },
-        provider,
-    )
-    .map_err(CliError::configuration)?;
+    let resolution = RequestResolution {
+        environments: loaded.workspace().environments(),
+        client_certificates: loaded.workspace().client_certificates(),
+        environment: options.environment,
+        overrides: options.variables,
+        strict_variables: options.strict_variables,
+        workspace_identity,
+    };
+    let prepared =
+        prepare_request(source, &resolution, provider).map_err(CliError::configuration)?;
     let display = prepared.presentation();
     if options.dry_run {
         return Ok(CommandOutput {
@@ -334,7 +329,16 @@ pub(crate) fn run(
         .clone()
         .unwrap_or_else(|| "<unset>".to_owned());
     let request_json = run_request_json(display).map_err(CliError::request_protocol)?;
-    let execution = prepared.into_http().map_err(CliError::request_protocol)?;
+    let collection = if options.no_assertions {
+        &[][..]
+    } else {
+        source.runtime.assertions.as_deref().unwrap_or_default()
+    };
+    let assertions: Vec<_> = collection
+        .iter()
+        .chain(options.assertions)
+        .cloned()
+        .collect();
     let execution_options = ExecutionOptions {
         base_directory: input.base_directory(),
         ..ExecutionOptions::default()
@@ -343,23 +347,44 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .map_err(|error| CliError::runtime(&error))?;
-    let response = runtime.block_on(async {
+    let (executed, results) = runtime.block_on(async {
         let engine = HttpEngine::new().map_err(CliError::http)?;
-        execution
-            .execute(
+        prepared
+            .execute_with_assertions(
                 &engine,
                 execution_options,
                 options.output.map(PathBuf::as_path),
                 tokio::signal::ctrl_c(),
                 |_| {},
+                &assertions,
             )
             .await
-            .map(|executed| executed.response)
-            .map_err(CliError::http)
+            .map_err(CliError::http_execution)
     })?;
-    let outcomes = evaluate_expectations(options.expectations, response.status);
-    if outcomes.iter().any(|outcome| !outcome.ok) {
-        return Err(CliError::expectation_failed(&outcomes));
+    let response = executed.response;
+    let outcomes: Vec<_> = results
+        .into_iter()
+        .map(|result| RunAssertionResult {
+            source: if result.index < collection.len() {
+                "collection"
+            } else {
+                "cli"
+            },
+            index: if result.index < collection.len() {
+                result.index
+            } else {
+                result.index - collection.len()
+            },
+            outcome: result.outcome,
+        })
+        .collect();
+    if outcomes.iter().any(|result| {
+        matches!(
+            result.outcome,
+            AssertionOutcome::Failed | AssertionOutcome::Error(_)
+        )
+    }) {
+        return Err(CliError::assertion_failed(&outcomes));
     }
     response_output(
         || {
@@ -435,13 +460,60 @@ fn selected_request<'a>(
     }
 }
 
+pub(crate) struct RunAssertionResult {
+    pub(crate) source: &'static str,
+    pub(crate) index: usize,
+    pub(crate) outcome: AssertionOutcome,
+}
+
+pub(crate) fn assertion_json(result: &RunAssertionResult) -> serde_json::Value {
+    let outcome = match result.outcome {
+        AssertionOutcome::Passed => "passed",
+        AssertionOutcome::Failed => "failed",
+        AssertionOutcome::Disabled => "disabled",
+        AssertionOutcome::Error(_) => "error",
+    };
+    let mut json = json!({ "source": result.source, "index": result.index, "outcome": outcome });
+    if let AssertionOutcome::Error(error) = result.outcome {
+        let category = match error {
+            AssertionError::UnsupportedExpression => "unsupported_expression",
+            AssertionError::UnsupportedOperator => "unsupported_operator",
+            AssertionError::MissingExpectedValue => "missing_expected_value",
+            AssertionError::VariableResolution => "variable_resolution",
+            AssertionError::InvalidExpectedValue => "invalid_expected_value",
+            AssertionError::BodyUnavailable => "body_unavailable",
+            AssertionError::InvalidJsonBody => "invalid_json_body",
+            AssertionError::MissingProperty => "missing_property",
+            AssertionError::IncompatibleOperands => "incompatible_operands",
+        };
+        json["error"] = json!({ "category": category });
+    }
+    json
+}
+
+pub(crate) fn assertion_summary(results: &[RunAssertionResult]) -> String {
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut disabled = 0;
+    let mut errors = 0;
+    for result in results {
+        match result.outcome {
+            AssertionOutcome::Passed => passed += 1,
+            AssertionOutcome::Failed => failed += 1,
+            AssertionOutcome::Disabled => disabled += 1,
+            AssertionOutcome::Error(_) => errors += 1,
+        }
+    }
+    format!("Assertions: {passed} passed, {failed} failed, {errors} errors, {disabled} disabled")
+}
+
 fn response_output(
     render_human: impl FnOnce() -> String,
     human_output: bool,
     request_json: serde_json::Value,
     response: &HttpResponse,
     output: Option<&PathBuf>,
-    outcomes: &[ExpectationOutcome],
+    outcomes: &[RunAssertionResult],
 ) -> Result<CommandOutput, CliError> {
     let output = output.map(PathBuf::as_path);
     let mut json = response_json(request_json, response, output);
@@ -455,13 +527,18 @@ fn response_output(
             });
         };
         object.insert(
-            "expectations".to_owned(),
-            json!(outcomes.iter().map(expectation_json).collect::<Vec<_>>()),
+            "assertions".to_owned(),
+            json!(outcomes.iter().map(assertion_json).collect::<Vec<_>>()),
         );
     }
     Ok(CommandOutput {
         human: if human_output {
-            render_human()
+            let mut human = render_human();
+            if !outcomes.is_empty() {
+                human.push_str(&assertion_summary(outcomes));
+                human.push('\n');
+            }
+            human
         } else {
             String::new()
         },

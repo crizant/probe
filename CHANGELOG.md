@@ -6,6 +6,24 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Breaking changes from Probe v1.1.1
+
+- Live CLI HTTP/GraphQL runs now evaluate persisted OpenCollection assertions.
+  Disabled checks do not affect success; `--no-assertions` skips collection checks.
+  Failed or errored assertions exit 9 with `assertion_failed`.
+- Removing `--expect` (including its status OR shorthand), renaming the JSON
+  field `expectations` to `assertions`, and renaming the error category
+  `expectation_failed` to `assertion_failed` are breaking changes from v1.1.1.
+  The next release requires a major version bump under semver. Use repeatable
+  `--assert 'response.status equals 200'` or body checks with the shared eight
+  operators; all active checks must pass.
+
+### Added
+
+- CLI assertion checks run against original responses before secret redaction,
+  using the request's environment, overrides, and cached secret provider. JSON,
+  human, and quiet output keep assertion diagnostics free of sensitive values.
+
 ## [1.1.1] - 2026-10-20
 
 ### Fixed

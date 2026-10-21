@@ -408,7 +408,7 @@ fn options_are_rejected_without_network_io_and_dry_run_is_a_document() {
     for extra in [
         vec!["--output", "response.txt"],
         vec!["--show-headers"],
-        vec!["--expect", "status=200"],
+        vec!["--assert", "response.status equals 200"],
     ] {
         let mut args = vec![
             "request",
@@ -462,7 +462,7 @@ fn options_are_rejected_without_network_io_and_dry_run_is_a_document() {
         vec!["--timeout", "1"],
         vec!["--max-messages", "1"],
         vec!["--output", "response.txt"],
-        vec!["--expect", "status=200"],
+        vec!["--assert", "response.status equals 200"],
     ] {
         let mut args = vec![
             "request",
@@ -1512,4 +1512,27 @@ fn stdin_format_is_rejected_before_consuming_a_workspace_from_stdin() {
         );
         assert_eq!(stdin.position(), 0);
     }
+}
+
+#[test]
+fn no_assertions_alone_keeps_live_websocket_output() {
+    let (url, server) = server(|mut socket| async move {
+        socket.send(Message::Text("reply".into())).await.unwrap();
+        close(&mut socket).await;
+    });
+    let path = workspace(&url, None);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&path)
+        .arg("items/0")
+        .arg("--no-assertions")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let human = String::from_utf8(output.stdout).unwrap();
+    assert!(human.contains("reply"));
+    assert!(!human.contains("Assertions:"));
+    server.join().unwrap();
+    fs::remove_file(path).unwrap();
 }

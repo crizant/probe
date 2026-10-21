@@ -19,7 +19,7 @@ When modifying an existing request:
 4. Run `probe collection validate <path> --json`.
 5. When runtime resolution matters, run the request with `--dry-run --json`.
 6. Execute the request only when execution is appropriate.
-7. Use `--expect` for HTTP/GraphQL response status assertions. For WebSocket sessions, bound execution with `--max-messages` and/or `--timeout`.
+7. Consult the [CLI reference](references/cli.md) for response assertions and bounded WebSocket execution.
 
 Do not manually edit OpenCollection YAML unless Probe cannot perform the required operation.
 
@@ -181,15 +181,9 @@ Execute with:
 probe request run <path> <selector> --json
 ```
 
-When verifying expected HTTP status:
-
-```bash
-probe request run <path> <selector> \
-  --expect status=200 \
-  --json
-```
-
-Multiple `--expect` flags may be used when supported by the requested verification.
+For response assertions, protocol restrictions, output contracts, exit codes, and
+migration guidance, consult the [CLI reference](references/cli.md). `docs/CLI.md`
+is its canonical source.
 
 Do not execute requests unnecessarily when inspection, validation, or a dry run is sufficient.
 
@@ -294,7 +288,7 @@ request list
 → request set / unset
 → collection validate
 → request run --dry-run
-→ request run --expect
+→ request run --assert
 ```
 
 Skip unnecessary steps when the task does not require them.
@@ -302,13 +296,5 @@ Skip unnecessary steps when the task does not require them.
 The goal is to use Probe as the authoritative interface for OpenCollection operations, while keeping changes deterministic, inspectable, and safe.
 ## WebSocket execution
 
-Use `probe request run <path> <selector>` for native WebSocket requests. Human
-output streams interactively (`>` actual outbound messages, `<` inbound messages).
-For agent execution, prefer `--max-messages 1 --timeout 10 --json`: live WebSocket
-`--json` is NDJSON, one versioned SessionEvent per line, and terminal errors retain
-nonzero exit status. HTTP/GraphQL and dry-run JSON remain single objects.
-See [docs/CLI.md](../../../docs/CLI.md) for runtime message input and error rules.
-`--max-messages` counts inbound data only. `--timeout` is the CLI live-run bound,
-separate from persisted connection timeout. `--expect`, `--output`, and
-`--show-headers` are HTTP/GraphQL-only. Configured binary messages lack an encoding
-contract and cannot execute; received binary frames are supported as base64.
+Consult the [CLI reference](references/cli.md) for bounded WebSocket execution,
+message formats, streaming output, and supported options.

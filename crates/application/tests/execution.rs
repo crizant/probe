@@ -836,6 +836,69 @@ async fn only_secret_bearing_large_responses_bypass_the_spool_cache() {
 }
 
 #[tokio::test]
+async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present() {
+    use probe_application::AssertionOutcome;
+    use probe_core::Assertion;
+
+    let mut body = SECRET.as_bytes().to_vec();
+    body.resize(probe_http::MAX_IN_MEMORY_RESPONSE_BYTES + 1024, b'x');
+    let engine = HttpEngine::new().unwrap();
+    for has_assertions in [false, true] {
+        let cache_path = temporary_path("assertion-cache");
+        let (base, server) = serve_once(http_response("", &body));
+        let environments = environments();
+        let provider = RecordingProvider::default();
+        let prepared = prepare_request(&get(&base), &local(&environments), &provider).unwrap();
+        assert!(!prepared.uses_secrets());
+        assert!(provider.lookups.borrow().is_empty());
+        let assertions = if has_assertions {
+            vec![Assertion {
+                expression: "response.status".into(),
+                operator: "notEquals".into(),
+                value: Some("{{token}}".into()),
+                disabled: None,
+                description: None,
+            }]
+        } else {
+            Vec::new()
+        };
+        let (executed, outcomes) = prepared
+            .execute_with_assertions(
+                &engine,
+                ExecutionOptions {
+                    response_cache: Some(ResponseCache::new(cache_path.clone(), 64 * 1024 * 1024)),
+                    ..ExecutionOptions::default()
+                },
+                None,
+                std::future::pending::<()>(),
+                |_| {},
+                &assertions,
+            )
+            .await
+            .unwrap();
+        server.join().unwrap();
+        assert!(!executed.response.body_complete);
+        if has_assertions {
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(outcomes[0].outcome, AssertionOutcome::Passed);
+            assert_eq!(*provider.lookups.borrow(), ["token"]);
+            assert!(executed.response.body.starts_with(b"[REDACTED]"));
+            assert!(executed.response.body_file.is_none());
+            assert!(!cache_path.exists());
+        } else {
+            assert!(outcomes.is_empty());
+            assert!(provider.lookups.borrow().is_empty());
+            assert!(executed.response.body.starts_with(SECRET.as_bytes()));
+            assert!(executed.response.body_file.is_some());
+            assert!(cache_path.is_dir());
+            drop(executed);
+            // Background body cleanup can recreate quota.lock during removal.
+            let _ = std::fs::remove_dir_all(cache_path);
+        }
+    }
+}
+
+#[tokio::test]
 async fn file_output_keeps_original_bytes_and_returns_their_digest() {
     let (base, server) = serve_once(http_response("", SECRET.as_bytes()));
     let output = temporary_path("output");
@@ -1211,4 +1274,181 @@ fn graphql_curl_export_preserves_selected_operation_resolution_and_http_semantic
         probe_application::copy_as_curl(&request, &RequestResolution::default(), &engine, &options)
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn assertion_execution_uses_original_bytes_and_one_cached_secret_for_the_whole_batch() {
+    use probe_application::AssertionOutcome;
+    use probe_core::Assertion;
+    for request_uses_secret in [false, true] {
+        let body = format!("{{\"token\":\"{SECRET}\"}}");
+        let (base, server) = serve_once(http_response(
+            &format!("X-Echo: {SECRET}\r\n"),
+            body.as_bytes(),
+        ));
+        let mut request = get(&base);
+        if request_uses_secret {
+            request.headers.push(Header {
+                name: "X-Token".into(),
+                value: "{{token}}".into(),
+                disabled: false,
+            });
+        }
+        let environments = environments();
+        let provider = RecordingProvider::default();
+        let assertions: Vec<_> = ["{{token}}", "{{token}}"]
+            .into_iter()
+            .map(|value| Assertion {
+                expression: "response.body.token".into(),
+                operator: "equals".into(),
+                value: Some(value.into()),
+                disabled: None,
+                description: None,
+            })
+            .chain(std::iter::once(Assertion {
+                expression: SECRET.into(),
+                operator: SECRET.into(),
+                value: Some("{{unused}}".into()),
+                disabled: Some(true),
+                description: None,
+            }))
+            .collect();
+        let (executed, outcomes) = prepare_request(&request, &local(&environments), &provider)
+            .unwrap()
+            .execute_with_assertions(
+                &HttpEngine::new().unwrap(),
+                ExecutionOptions::default(),
+                None,
+                std::future::pending::<()>(),
+                |_| {},
+                &assertions,
+            )
+            .await
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(*provider.lookups.borrow(), ["token"]);
+        assert_eq!(
+            outcomes.iter().map(|r| &r.outcome).collect::<Vec<_>>(),
+            [
+                &AssertionOutcome::Passed,
+                &AssertionOutcome::Passed,
+                &AssertionOutcome::Disabled
+            ]
+        );
+        assert!(!format!("{executed:?} {outcomes:?}").contains(SECRET));
+        assert_eq!(executed.response.body, br#"{"token":"[REDACTED]"}"#);
+        assert!(
+            executed
+                .response
+                .headers
+                .iter()
+                .any(|h| h.name == "x-echo" && h.value == "[REDACTED]")
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_exchange_never_resolves_assertion_secrets() {
+    use probe_application::HttpExecutionError;
+    use probe_core::Assertion;
+    let (base, server) = serve_once(b"not an HTTP response".to_vec());
+    let environments = environments();
+    let provider = RecordingProvider::default();
+    let result = prepare_request(&get(&base), &local(&environments), &provider)
+        .unwrap()
+        .execute_with_assertions(
+            &HttpEngine::new().unwrap(),
+            ExecutionOptions::default(),
+            None,
+            std::future::pending::<()>(),
+            |_| {},
+            &[Assertion {
+                expression: "response.status".into(),
+                operator: "equals".into(),
+                value: Some("{{token}}".into()),
+                disabled: None,
+                description: None,
+            }],
+        )
+        .await;
+    server.join().unwrap();
+    let error = result.unwrap_err();
+    let HttpExecutionError::Http(http) = &error else {
+        panic!("expected a typed HTTP execution error");
+    };
+    assert_eq!(error.to_string(), http.to_string());
+    assert_eq!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<HttpError>(),
+        Some(http)
+    );
+    assert!(provider.lookups.borrow().is_empty());
+}
+
+#[test]
+fn desktop_http_execution_future_remains_send() {
+    fn require_send(_: impl Send) {}
+    let engine = HttpEngine::new().unwrap();
+    let execution = prepare_request(
+        &get("http://example.com"),
+        &RequestResolution::default(),
+        &NoSecrets,
+    )
+    .unwrap()
+    .into_http()
+    .unwrap();
+    require_send(execution.execute(
+        &engine,
+        ExecutionOptions::default(),
+        None,
+        std::future::pending::<()>(),
+        |_| {},
+    ));
+}
+
+#[tokio::test]
+async fn assertion_execution_preserves_typed_protocol_preparation_errors() {
+    use probe_application::HttpExecutionError;
+    use probe_core::{GraphqlBody, RequestKind, RequestProtocol, RequestProtocolError};
+    let engine = HttpEngine::new().unwrap();
+    for (kind, expected) in [
+        (
+            RequestKind::WebSocket { message: None },
+            RequestProtocolError::UnsupportedExecution(RequestProtocol::WebSocket),
+        ),
+        (
+            RequestKind::Graphql {
+                body: Some(GraphqlBody::Variants(vec![])),
+            },
+            RequestProtocolError::InvalidBodySelection(
+                "GraphQL body variants have no selected value".into(),
+            ),
+        ),
+    ] {
+        let request = Request {
+            kind,
+            ..get("https://example.test")
+        };
+        let error = prepare_request(&request, &RequestResolution::default(), &NoSecrets)
+            .unwrap()
+            .execute_with_assertions(
+                &engine,
+                ExecutionOptions::default(),
+                None,
+                std::future::pending::<()>(),
+                |_| {},
+                &[],
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), expected.to_string());
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<RequestProtocolError>(),
+            Some(&expected)
+        );
+        assert_eq!(error, HttpExecutionError::Protocol(expected));
+    }
 }

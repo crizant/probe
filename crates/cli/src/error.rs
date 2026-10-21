@@ -1,7 +1,4 @@
-use probe_core::{
-    EnvironmentResolutionError, ExpectationOutcome, ExpectationParseError, ImportDiagnostic,
-    RequestProtocolError,
-};
+use probe_core::{EnvironmentResolutionError, ImportDiagnostic, RequestProtocolError};
 use probe_http::HttpError;
 use probe_opencollection::{CreateError, SaveError, StructureError};
 use probe_postman::PostmanImportError;
@@ -9,7 +6,7 @@ use probe_yaak::YaakImportError;
 use serde_json::{Value, json};
 
 use crate::{
-    CONFIGURATION_EXIT_CODE, EXECUTION_EXIT_CODE, EXPECTATION_EXIT_CODE, IMPORT_EXIT_CODE,
+    ASSERTION_EXIT_CODE, CONFIGURATION_EXIT_CODE, EXECUTION_EXIT_CODE, IMPORT_EXIT_CODE,
     INVALID_ARGUMENTS_EXIT_CODE, INVALID_WORKSPACE_EXIT_CODE, PERSISTENCE_EXIT_CODE,
     REQUEST_NOT_FOUND_EXIT_CODE,
 };
@@ -32,23 +29,14 @@ impl CliError {
         }
     }
 
-    pub(crate) fn expectation(error: ExpectationParseError) -> Self {
-        Self::invalid_arguments(error.to_string())
-    }
-
-    pub(crate) fn expectation_failed(outcomes: &[ExpectationOutcome]) -> Self {
-        let failed = outcomes
-            .iter()
-            .filter(|outcome| !outcome.ok)
-            .map(|outcome| format!("{} (actual {})", outcome.expr, outcome.actual))
-            .collect::<Vec<_>>();
+    pub(crate) fn assertion_failed(outcomes: &[crate::request::RunAssertionResult]) -> Self {
         Self {
-            category: "expectation_failed",
-            message: format!("expectation failed: {}", failed.join("; ")),
-            exit_code: EXPECTATION_EXIT_CODE,
-            details: Some(json!({
-                "expectations": outcomes.iter().map(expectation_json).collect::<Vec<_>>(),
-            })),
+            category: "assertion_failed",
+            message: crate::request::assertion_summary(outcomes),
+            exit_code: ASSERTION_EXIT_CODE,
+            details: Some(
+                json!({ "assertions": outcomes.iter().map(crate::request::assertion_json).collect::<Vec<_>>() }),
+            ),
         }
     }
 
@@ -101,6 +89,13 @@ impl CliError {
             message: error.to_string(),
             exit_code: CONFIGURATION_EXIT_CODE,
             details: None,
+        }
+    }
+
+    pub(crate) fn http_execution(error: probe_application::HttpExecutionError) -> Self {
+        match error {
+            probe_application::HttpExecutionError::Protocol(error) => Self::request_protocol(error),
+            probe_application::HttpExecutionError::Http(error) => Self::http(error),
         }
     }
 
@@ -309,14 +304,6 @@ impl CliError {
     }
 }
 
-pub(crate) fn expectation_json(outcome: &ExpectationOutcome) -> Value {
-    json!({
-        "expr": outcome.expr,
-        "ok": outcome.ok,
-        "actual": outcome.actual,
-    })
-}
-
 fn invalid_import(message: String) -> CliError {
     CliError {
         category: "invalid_import",
@@ -415,5 +402,41 @@ mod session_errors {
                 assert!(mapped.details.is_none());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod http_execution_errors {
+    use super::*;
+    use probe_application::HttpExecutionError;
+
+    #[test]
+    fn protocol_and_transport_diagnostics_keep_their_specific_mappings() {
+        let invalid =
+            CliError::http_execution(HttpExecutionError::Protocol(RequestProtocolError::NotHttp));
+        assert_eq!(
+            (invalid.category, invalid.exit_code),
+            ("invalid_arguments", 2)
+        );
+        assert_eq!(invalid.message, RequestProtocolError::NotHttp.to_string());
+        let selection = CliError::http_execution(HttpExecutionError::Protocol(
+            RequestProtocolError::InvalidBodySelection(
+                "GraphQL body variants have no selected value".into(),
+            ),
+        ));
+        assert_eq!(
+            (selection.category, selection.exit_code),
+            ("request_configuration", 5)
+        );
+        assert_eq!(
+            selection.message,
+            HttpError::InvalidBodySelection("GraphQL body variants have no selected value".into())
+                .to_string()
+        );
+        let timeout = CliError::http_execution(HttpExecutionError::Http(HttpError::Timeout));
+        assert_eq!(
+            (timeout.category, timeout.exit_code),
+            ("request_timeout", 6)
+        );
     }
 }

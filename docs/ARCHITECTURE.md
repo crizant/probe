@@ -252,8 +252,12 @@ and collection writer preserve these declarations. Assertions are not evaluated 
 interpolated during request preparation. The standalone application-layer
 [`evaluate_assertions`](ASSERTIONS.md) operation accepts declarations, an HTTP or
 GraphQL response, and the existing variable-resolution inputs. It returns ordered,
-value-free outcomes without execution integration. Other runtime fields remain in
-source YAML.
+value-free outcomes. Live CLI execution uses `PreparedRequest::execute_with_assertions`
+to evaluate the original HTTP/GraphQL response before redaction, reusing the same
+engine and preparation's `CachedSecrets`. Assertion-only secrets also participate
+in redaction; the adapter receives only safe outcomes and redacted response data.
+The desktop continues to use `HttpExecution::execute` without assertion evaluation.
+Other runtime fields remain in source YAML.
 
 A WebSocket request reuses the common URL, headers, authentication, docs, metadata, and
 settings fields. OpenCollection WebSocket details define no method, parameters, or HTTP
@@ -391,13 +395,13 @@ native Request + Environment
      ↓
 probe_application::prepare_request   (--dry-run stops here)
      ↓
-PreparedRequest::into_http()
+PreparedRequest::execute_with_assertions → probe-http engine → network (reqwest)
      ↓
-HttpExecution::execute → probe-http engine → network (reqwest)
+shared assertion evaluator (original response; successful exchanges only)
      ↓
-redacted ExecutedResponse
+redacted ExecutedResponse + value-free assertion outcomes
      ↓
-CLI expectations and formatter
+CLI source/index mapping and formatter
      ↓
 human text / JSON
 

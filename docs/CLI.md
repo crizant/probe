@@ -41,7 +41,7 @@ probe collection unset <path> [--summary] [--docs] [--json]
 probe request list <path> [--json]
 probe request get <path> <selector> [--environment <name>] [--strict-variables] [--json]
 probe request variables <path> <selector> [--environment <name>] [--json]
-probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--expect <expr>]... [--send <text>]... [--max-messages <n>] [--timeout <seconds>] [--json]
+probe request run <path> <selector> [--environment <name>] [--strict-variables] [--var <name=value>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--assert <expr>]... [--no-assertions] [--send <text>]... [--max-messages <n>] [--timeout <seconds>] [--json]
 probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request unset <path> <selector> [--description] [--docs] [--json]
 probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
@@ -229,7 +229,7 @@ is separate from persisted WebSocket `settings.timeout`, the connection/handshak
 limit. Shutdown itself is bounded by the application session close handshake.
 `--send`, `--send-binary`, `--stdin-format`, `--max-messages`, and `--timeout` require
 live WebSocket execution and are rejected for HTTP/GraphQL or `--dry-run`.
-`--expect`, `--output`, and `--show-headers` are HTTP/GraphQL response options and are
+`--assert`, `--output`, and `--show-headers` are HTTP/GraphQL response options and are
 rejected for live WebSocket execution.
 
 Live WebSocket `--json` emits NDJSON: one compact versioned object per SessionEvent,
@@ -275,17 +275,67 @@ opening a network connection. Text output is the resolved method and URL only; i
 not print headers, bodies, or secret values. `--json` returns the same resolved
 `request` object as a live run, plus `"dryRun": true`, and omits `response`.
 Unavailable secret variables still fail closed with `secret_variable_unavailable`.
-`--dry-run` cannot be combined with `--output` or `--expect`.
+`--dry-run` cannot be combined with `--output` or `--assert`.
 
-`--expect <expr>` asserts a completed live response. v1 accepts `status=<code>` or
-one or more HTTP statuses separated by `|` (100–599; `|` is OR). The flag may be
-repeated; every expression must pass. Assertions run only after a successful
-transport, so timeouts, cancellation, and connection failures keep their existing
-execution categories and exit code 6. A missed status uses category
-`expectation_failed` and exit code 9. `--json` includes
-`expectations: [{expr, ok, actual}]` on success and the same array under
-`error.details.expectations` on failure, with no top-level `response`. `--expect`
-cannot be combined with `--dry-run`.
+Live HTTP/GraphQL runs automatically evaluate the selected request's persisted
+`runtime.assertions`. Disabled declarations remain in results but do not affect
+success. `--no-assertions` skips only collection assertions. Dry runs never evaluate
+them. No collection files are changed.
+
+Add repeatable `--assert 'EXPRESSION OPERATOR [VALUE]'` checks:
+
+```bash
+probe request run . users --assert 'response.status equals 200'
+probe request run . users --assert 'response.body.name equals "John Doe"'
+probe request run . users --assert 'response.body.items.length greaterThan 0'
+probe request run . users --assert 'response.body.deleted isNull'
+probe request run . users --assert 'response.status equals {{expectedStatus}}' --var expectedStatus=200
+```
+
+The eight operators are `equals`, `notEquals`, `contains`, `notContains`,
+`greaterThan`, `lessThan`, `isNull`, and `isNotNull`. The first two whitespace-separated
+tokens are the expression and operator. One whitespace character separates the
+operator from its value; every subsequent byte is retained, including whitespace,
+quotes, and templates. Binary operators require a value separator; the remaining text may be empty or
+whitespace-only, retaining string semantics (or use `""` for an empty string).
+Unary operators need no value and ignore a supplied value.
+[Assertion semantics](ASSERTIONS.md) defines supported paths and typed literals.
+Malformed flag syntax returns `invalid_arguments` (exit 2) without echoing inputs.
+Unsupported persisted expressions/operators or evaluation errors are assertion errors.
+
+All active collection and CLI assertions must pass (AND). Evaluation runs after a
+successful transport and before response redaction, using the request's environment,
+`--var` overrides, workspace identity, and secret provider. Secret lookups, including
+failures, are cached for the batch and shared with request/certificate resolution.
+Transport and configuration errors retain their existing precedence and categories;
+a failed exchange never evaluates assertions. Incomplete bodies error for JSON-body
+checks, including when `--output` streams a large response. Status checks still work.
+`--output` keeps its existing behavior and writes original bytes even if assertions
+fail. Assertion checks do not read output files or retained body previews as complete JSON.
+
+Failed or errored assertions use `assertion_failed` and exit 9. Success JSON adds
+`assertions: [{source, index, outcome, error?}]`; failure uses the existing error
+envelope with `error.details.assertions` and no top-level response. `source` is
+`collection` or `cli`; `index` is the zero-based declaration position within that
+source, including disabled collection declarations. Outcomes are `passed`, `failed`,
+`disabled`, or `error`; errors include only a safe `category`. No assertion output
+contains expressions, descriptions, operands, response content, or secret values.
+Human output shows counts of passed, failed, errored, and disabled assertions.
+`--quiet` suppresses successful output while retaining failure diagnostics and exit
+codes. Runs with no assertions retain their existing output and exit behavior.
+`--assert` is rejected for WebSocket and `--dry-run`.
+
+### Breaking change from Probe v1.1.1
+
+`--expect` has been removed. Replace `--expect status=200` with
+`--assert 'response.status equals 200'`. The old `status=200|201` OR shorthand has
+no direct replacement; repeated `--assert` flags mean AND. The `expectations` JSON
+field and `expectation_failed` category are removed; use `assertions` and
+`assertion_failed`. Exit code 9 is retained. Passing `--expect` produces a migration
+error without echoing its value. Automatic collection assertion evaluation can also
+change a previously successful run into exit 9; use `--no-assertions` to skip those
+checks. This is a breaking change from v1.1.1, not a backward-compatible 1.x change.
+The next release requires a major version bump under semver.
 
 Probe supports OpenCollection-native GraphQL items (`info.type: graphql` with a `graphql` section).
 Their protocol identity and body stay native when saved. At execution time Probe resolves the same
@@ -727,8 +777,8 @@ output file is used, `outputPath` identifies it and `content` remains `null`.
 The `request` object matches a live `request run --json` document. There is no
 `response` field because no HTTP request is sent.
 
-When `--expect` is present and every assertion passes, `request run --json` also
-includes an `expectations` array:
+When collection or CLI assertions are present and all active checks pass,
+`request run --json` also includes an `assertions` array:
 
 ```json
 {
@@ -756,14 +806,18 @@ includes an `expectations` array:
     "status": 200,
     "url": "https://api.example.com/users"
   },
-  "expectations": [
-    { "expr": "status=200", "ok": true, "actual": 200 }
+  "assertions": [
+    { "source": "collection", "index": 0, "outcome": "passed" },
+    { "source": "cli", "index": 0, "outcome": "passed" }
   ]
 }
 ```
 
-`expr` is the supplied argument. `actual` is the HTTP status from the completed
-exchange. Body, header, and JMESPath assertions are out of scope for this version.
+An error outcome adds `"error": {"category": "body_unavailable"}` or another
+value-free evaluator category: `unsupported_expression`, `unsupported_operator`,
+`missing_expected_value`, `variable_resolution`, `invalid_expected_value`,
+`invalid_json_body`, `missing_property`, or `incompatible_operands`.
+No raw expression, actual value, or expected value is included.
 
 Structured errors use:
 
@@ -818,9 +872,10 @@ exit code 3; a missing or ambiguous Yaak workspace selection, invalid provider-s
 arguments, and an existing destination use exit code 2. Other destination write
 failures use the existing persistence categories and exit code 7.
 
-A completed `request run` that misses `--expect` uses exit code 9 and category
-`expectation_failed`. Invalid `--expect` expressions and combining `--expect` with
-`--dry-run` use `invalid_arguments` and exit code 2.
+A completed `request run` with a failed or errored assertion uses exit code 9 and
+category `assertion_failed`. Malformed `--assert` syntax, `--expect` migration errors,
+and combining `--assert` with `--dry-run` or WebSocket use `invalid_arguments` and
+exit code 2.
 
 `collection validate` requires the OpenCollection `1.0.0` marker, explicit collection
 metadata, and a `bundled` flag matching whether the source is a bundled file/stdin document or
@@ -838,4 +893,4 @@ an unbundled directory. Duplicate environments and invalid inheritance graphs ar
 | 6 | Network, cancellation, execution, or response-output error |
 | 7 | Persistence failure or external-modification conflict |
 | 8 | Import compatibility failure |
-| 9 | Expectation failure |
+| 9 | Assertion failure or evaluation error |

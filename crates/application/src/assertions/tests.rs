@@ -960,3 +960,36 @@ fn every_diagnostic_path_withholds_untrusted_inputs() {
         assert!(std::error::Error::source(&error).is_none());
     }
 }
+
+#[test]
+fn batch_caches_provider_success_missing_values_and_failures() {
+    let loaded = fixture();
+    let resolution = RequestResolution {
+        environments: loaded.workspace().environments(),
+        environment: Some("child"),
+        workspace_identity: Some("fixture"),
+        ..RequestResolution::default()
+    };
+    for value in [Ok(Some("secret")), Ok(None), Err(SecretError)] {
+        let provider = Provider {
+            value,
+            calls: Cell::new(0),
+        };
+        let results = evaluate_assertions(
+            &[
+                assertion("response.body", "equals", Some("{{token}}")),
+                assertion("response.body", "equals", Some("{{alias}}")),
+            ],
+            &response(br#""secret""#),
+            &resolution,
+            &provider,
+        );
+        assert_eq!(provider.calls.get(), 1);
+        let expected = if matches!(value, Ok(Some(_))) {
+            AssertionOutcome::Passed
+        } else {
+            AssertionOutcome::Error(AssertionError::VariableResolution)
+        };
+        assert!(results.iter().all(|r| r.outcome == expected));
+    }
+}
