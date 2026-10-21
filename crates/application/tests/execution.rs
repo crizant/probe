@@ -1491,7 +1491,7 @@ async fn rejecting_secret_output_also_applies_after_plain_http_conversion() {
         .await;
     assert!(
         matches!(result, Err(probe_http::HttpError::InvalidBody(message))
-        if message.contains("unavailable for requests using secret variables"))
+        if message == "Saving a response directly to a file is unavailable when secret variables or unresolved assertion values are involved.")
     );
     assert!(!output.exists());
 }

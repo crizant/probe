@@ -17,6 +17,10 @@ Release dates use Australia/Brisbane time (UTC+10).
   saves consistently refuse requests that may use secrets. Adding then deleting
   an unsaved assertion restores the original absent or explicitly empty list.
 
+- CLI assertion checks run against original responses before secret redaction,
+  using the request's environment, overrides, and cached secret provider. JSON,
+  human, and quiet output keep assertion diagnostics free of sensitive values.
+
 ### Breaking changes from Probe v1.1.1
 
 - Live CLI HTTP/GraphQL runs now evaluate persisted OpenCollection assertions.
@@ -28,12 +32,6 @@ Release dates use Australia/Brisbane time (UTC+10).
   The next release requires a major version bump under semver. Use repeatable
   `--assert 'response.status equals 200'` or body checks with the shared eight
   operators; all active checks must pass.
-
-### Added
-
-- CLI assertion checks run against original responses before secret redaction,
-  using the request's environment, overrides, and cached secret provider. JSON,
-  human, and quiet output keep assertion diagnostics free of sensitive values.
 
 ## [1.1.1] - 2026-10-20
 

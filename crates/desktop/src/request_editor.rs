@@ -1077,6 +1077,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn blank_assertion_descriptions_preserve_absence_until_text_is_entered() {
+        use super::{AssertionEdit as Edit, AssertionField as Field};
+        use probe_core::Documentation;
+
+        for original in [None, Some(Documentation::Null)] {
+            let mut request = Request::default();
+            Edit::Add.apply(&mut request);
+            request.runtime.assertions.as_mut().unwrap()[0].description = original.clone();
+            Edit::Text(0, Field::Description, String::new()).apply(&mut request);
+            assert_eq!(
+                request.runtime.assertions.as_ref().unwrap()[0].description,
+                original
+            );
+            Edit::Text(0, Field::Description, "New description".into()).apply(&mut request);
+            assert_eq!(
+                request.runtime.assertions.as_ref().unwrap()[0].description,
+                Some(Documentation::Text("New description".into()))
+            );
+        }
+    }
+
+    #[test]
+    fn assertions_section_is_named_and_selectable_for_http_and_graphql() {
+        let key = request_key();
+        let mut editor = RequestEditorState::default();
+        for protocol in [
+            probe_core::RequestProtocol::Http,
+            probe_core::RequestProtocol::Graphql,
+        ] {
+            editor.set_section(key, EditorSection::Assertions);
+            editor.ensure_available_section(key, protocol);
+            assert_eq!(editor.section(key), EditorSection::Assertions);
+            assert_eq!(editor.section(key).label(), "Assertions");
+        }
+    }
+
     fn request_key() -> probe_core::RequestKey {
         let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
             items: vec![probe_core::CollectionItem::Request(Request::default())],

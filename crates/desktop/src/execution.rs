@@ -1731,7 +1731,7 @@ mod tests {
                     .block_on(receiver)
                     .unwrap();
                 assert!(
-                    matches!(result, Err(HttpError::InvalidBody(message)) if message.contains("unavailable for requests using secret variables")),
+                    matches!(result, Err(HttpError::InvalidBody(message)) if message == "Saving a response directly to a file is unavailable when secret variables or unresolved assertion values are involved."),
                     "source: {source}, assertions: {with_assertions}"
                 );
                 assert!(!output.exists());

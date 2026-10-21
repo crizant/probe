@@ -354,7 +354,7 @@ impl HttpExecution {
             && (self.uses_secrets() || assertion_secrets)
         {
             return Err(HttpError::InvalidBody(
-                "saving a response directly to a file is unavailable for requests using secret variables".into(),
+                "Saving a response directly to a file is unavailable when secret variables or unresolved assertion values are involved.".into(),
             ));
         }
         Ok(())
