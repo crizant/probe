@@ -11,7 +11,6 @@ mod collection;
 mod environment;
 mod environment_edit;
 mod environment_model;
-mod expect;
 mod path_parameters;
 mod request;
 mod request_resolution;
@@ -39,9 +38,6 @@ pub use environment_edit::{
 pub use environment_model::{
     Environment, EnvironmentVariable, SecretVariable, Variable, VariableValue, VariableValueSet,
     VariableValueType, VariableValueVariant,
-};
-pub use expect::{
-    ExpectationOutcome, ExpectationParseError, StatusExpectation, evaluate_expectations,
 };
 pub use path_parameters::{
     PathVariableSpan, add_path_parameter, apply_path_parameters, ensure_path_parameters_from_url,

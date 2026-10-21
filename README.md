@@ -50,7 +50,7 @@ Both interfaces use the same Rust application and domain layers.
 | Basic, Bearer, and API Key authentication | Yes | Yes |
 | Postman and Yaak imports | Yes | Yes |
 | Request and folder organization | Yes | Yes |
-| Dry runs, status assertions, and versioned JSON | — | `--dry-run`, `--expect`, `--json` |
+| Dry runs, response assertions, and versioned JSON | — | `--dry-run`, `--assert`, `--json` |
 
 OAuth and AWS Signature authentication can be retained in YAML but are not executed.
 See [the CLI reference](docs/CLI.md) for command details and import limitations.

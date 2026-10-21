@@ -36,8 +36,8 @@ pub const EXECUTION_EXIT_CODE: u8 = 6;
 pub const PERSISTENCE_EXIT_CODE: u8 = 7;
 /// Exit code used when a source requires an explicitly lossy import.
 pub const IMPORT_EXIT_CODE: u8 = 8;
-/// Exit code used when a completed response misses a `--expect` assertion.
-pub const EXPECTATION_EXIT_CODE: u8 = 9;
+/// Exit code used when a completed response fails a collection or CLI assertion.
+pub const ASSERTION_EXIT_CODE: u8 = 9;
 /// Version of the documented machine-readable JSON contracts.
 pub const JSON_SCHEMA_VERSION: u64 = 1;
 
@@ -158,7 +158,8 @@ pub const fn help() -> &'static str {
         "      --secret-provider env  Resolve declared secrets from process environment\n",
         "      --strict-variables      Reject request variables without an available value\n",
         "      --dry-run               Resolve a request without sending it\n",
-        "      --expect <expr>         Assert HTTP/GraphQL status; may be repeated\n",
+        "      --assert <expr>         Assert HTTP/GraphQL response; may be repeated\n",
+        "      --no-assertions         Skip collection assertions; keep explicit --assert checks\n",
         "      --name <name>          Set a request, folder, collection, environment, or variable name\n",
         "      --summary <text>       Set a collection summary\n",
         "      --description <text>   Edit description content; preserve existing type\n",
@@ -232,7 +233,7 @@ const REQUEST_HELP: &str = concat!(
     "  list <path|->                 List requests and repository selectors\n",
     "  get <path|-> <selector> [--environment <name>] [--strict-variables]  Inspect one request\n",
     "  variables <path|-> <selector> [--environment <name>]  Discover referenced variables\n",
-    "  run <path|-> <selector> [--environment <name>] [--strict-variables] [--var <NAME=VALUE>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--expect <expr>]... [--send <text>]... [--send-binary <BASE64>]... [--stdin-format <text|binary>] [--max-messages <n>] [--timeout <seconds>]\n",
+    "  run <path|-> <selector> [--environment <name>] [--strict-variables] [--var <NAME=VALUE>]... [--secret-provider env] [--output <file>] [--show-headers] [--dry-run] [--assert <expr>]... [--no-assertions] [--send <text>]... [--send-binary <BASE64>]... [--stdin-format <text|binary>] [--max-messages <n>] [--timeout <seconds>]\n",
     "  set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
     "  unset <path> <selector> [--description] [--docs]  Remove description and/or docs from the file\n",
     "  create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
@@ -246,7 +247,8 @@ const REQUEST_HELP: &str = concat!(
     "      --secret-provider env  Resolve declared secrets from process environment.\n",
     "      --strict-variables   Reject request variables without an available value.\n",
     "      --dry-run            Resolve the request without opening a connection.\n",
-    "      --expect <expr>      HTTP/GraphQL only: assert status=<code> or status=<code|code>.\n",
+    "      --assert <expr>      HTTP/GraphQL only: EXPRESSION OPERATOR [VALUE]; repeat for AND checks.\n",
+    "      --no-assertions      Skip persisted collection assertions; keep --assert checks.\n",
     "      --send <text>        WebSocket only: send literal text; repeatable.\n",
     "      --send-binary <BASE64>  WebSocket only: standard Base64 -> binary;\n",
     "                            repeatable, in argument order.\n",
@@ -256,7 +258,11 @@ const REQUEST_HELP: &str = concat!(
     "      --timeout <seconds>  WebSocket only: CLI live-run bound, not connection timeout.\n",
     "\n",
     "WebSocket runs stream interactively: > outbound, < inbound. --json emits NDJSON.\n",
-    "--output, --show-headers and --expect apply only to HTTP/GraphQL runs.\n",
+    "--output, --show-headers and --assert apply only to HTTP/GraphQL runs.\n",
+    "Live HTTP/GraphQL runs evaluate collection assertions automatically.\n",
+    "Operators: equals, notEquals, contains, notContains, greaterThan, lessThan, isNull, isNotNull.\n",
+    "--assert is incompatible with --dry-run. Assertion failures/errors exit 9.\n",
+    "Breaking change from v1.1.1: --expect removed; use --assert 'response.status equals 200'.\n",
 );
 
 const FOLDER_HELP: &str = concat!(
@@ -548,7 +554,8 @@ fn execute(
             dry_run,
             show_headers,
             secret_provider_env,
-            expectations,
+            assertions,
+            no_assertions,
             sends,
             stdin_format,
             timeout,
@@ -564,7 +571,8 @@ fn execute(
                 dry_run,
                 show_headers,
                 secret_provider_env,
-                expectations: &expectations,
+                assertions: &assertions,
+                no_assertions,
                 mode: live.mode,
                 sends: &sends,
                 stdin_format,

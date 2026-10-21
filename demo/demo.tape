@@ -35,7 +35,7 @@ Type "probe request run examples/dummyjson.yml items/7/items/1 \"
 Enter
 Type "--environment Development \"
 Enter
-Type "--var todoId=3 --expect status=200"
+Type "--var todoId=3 --assert 'response.status equals 200'"
 
 Sleep 400ms
 Enter

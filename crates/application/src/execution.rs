@@ -70,7 +70,10 @@ pub fn prepare_request<'a>(
         return Ok(PreparedRequest {
             execution: request.clone(),
             presentation: request.clone(),
-            disclosure: SecretDisclosure::default(),
+            disclosure: SecretDisclosure {
+                presentation_url: request.url.clone().unwrap_or_default(),
+                ..SecretDisclosure::default()
+            },
             resolution: *resolution,
             provider: secrets,
         });
@@ -102,13 +105,13 @@ pub fn prepare_request<'a>(
 
 /// Each reachable provider value (or failure) is read at most once per preparation,
 /// including when request and certificate fields share nested variable references.
-struct CachedSecrets<'a> {
+pub(crate) struct CachedSecrets<'a> {
     provider: &'a dyn SecretProvider,
     values: RefCell<BTreeMap<String, Result<Option<SecretValue>, SecretError>>>,
 }
 
 impl<'a> CachedSecrets<'a> {
-    fn new(provider: &'a dyn SecretProvider) -> Self {
+    pub(crate) fn new(provider: &'a dyn SecretProvider) -> Self {
         Self {
             provider,
             values: RefCell::new(BTreeMap::new()),
@@ -138,7 +141,7 @@ pub struct PreparedRequest<'a> {
     disclosure: SecretDisclosure,
 }
 
-impl PreparedRequest<'_> {
+impl<'a> PreparedRequest<'a> {
     /// The request with secret references retained, safe for dry runs and summaries.
     #[must_use]
     pub const fn presentation(&self) -> &Request {
@@ -155,7 +158,69 @@ impl PreparedRequest<'_> {
     ///
     /// Resolves reachable certificate variables, including secrets, without reading
     /// identity files. The provider may block; call this away from the UI thread.
-    pub fn into_http(mut self) -> Result<HttpExecution, RequestProtocolError> {
+    pub fn into_http(self) -> Result<HttpExecution, RequestProtocolError> {
+        self.into_http_parts().map(|(execution, _, _)| execution)
+    }
+
+    /// Executes HTTP/GraphQL assertions against original response bytes, returning
+    /// only value-free results and the redacted response. Uses the preparation's
+    /// cached provider for the entire batch, including request/certificate secrets.
+    pub async fn execute_with_assertions<C, P>(
+        self,
+        engine: &HttpEngine,
+        options: ExecutionOptions,
+        output: Option<&Path>,
+        cancellation: C,
+        progress: P,
+        assertions: &[probe_core::Assertion],
+    ) -> Result<(ExecutedResponse, Vec<crate::AssertionResult>), HttpError>
+    where
+        C: Future + Send,
+        P: FnMut(HttpProgress) + Send,
+    {
+        let (execution, resolution, provider) = self
+            .into_http_parts()
+            .map_err(|error| HttpError::InvalidRequest(error.to_string()))?;
+        let mut options = options;
+        if !assertions.is_empty() {
+            // Assertion-only secrets are resolved after the exchange; prevent raw
+            // bytes from reaching the response spool cache in the meantime.
+            options.response_cache = None;
+        }
+        let (mut executed, disclosure) = execution
+            .execute_raw(engine, options, output, cancellation, progress)
+            .await?;
+        let mut environments = Vec::new();
+        let outcomes = crate::assertions::evaluate_with_disclosure(
+            assertions,
+            &executed.response,
+            &resolution,
+            &provider,
+            |environment| environments.push(environment),
+        );
+        if environments
+            .iter()
+            .any(ResolvedEnvironment::has_resolved_secrets)
+        {
+            executed
+                .response
+                .url
+                .clone_from(&disclosure.presentation_url);
+            executed.response.url_changed = false;
+        }
+        executed.response = disclosure.redact_response(executed.response);
+        for environment in environments {
+            let url = environment.redact_secrets(&executed.response.url);
+            executed.response =
+                SecretDisclosure::new(environment, Some(&url)).redact_response(executed.response);
+        }
+        Ok((executed, outcomes))
+    }
+
+    fn into_http_parts(
+        mut self,
+    ) -> Result<(HttpExecution, RequestResolution<'a>, CachedSecrets<'a>), RequestProtocolError>
+    {
         let mut templates = Vec::new();
         if self.resolution.resolves_variables() {
             // Seed reachability from the presentation request's retained references,
@@ -198,11 +263,15 @@ impl PreparedRequest<'_> {
             self.disclosure.initial_url_uses_secrets =
                 initial_url_depends_on_secret(self.presentation, request.request(), environment)?;
         }
-        Ok(HttpExecution {
-            client_identity,
-            request,
-            disclosure: self.disclosure,
-        })
+        Ok((
+            HttpExecution {
+                client_identity,
+                request,
+                disclosure: self.disclosure,
+            },
+            self.resolution,
+            self.provider,
+        ))
     }
 }
 
@@ -282,11 +351,33 @@ impl HttpExecution {
     pub async fn execute<C, P>(
         self,
         engine: &HttpEngine,
-        mut options: ExecutionOptions,
+        options: ExecutionOptions,
         output: Option<&Path>,
         cancellation: C,
         progress: P,
     ) -> Result<ExecutedResponse, HttpError>
+    where
+        C: Future + Send,
+        P: FnMut(HttpProgress) + Send,
+    {
+        let (mut executed, disclosure) = self
+            .execute_raw(engine, options, output, cancellation, progress)
+            .await?;
+        executed.response = disclosure.redact_response(executed.response);
+        Ok(executed)
+    }
+
+    // Only application code can observe the original response or its disclosure
+    // context. Keeping assertion inputs out of this future preserves the desktop's
+    // Send execution contract with providers that are deliberately not Sync.
+    async fn execute_raw<C, P>(
+        self,
+        engine: &HttpEngine,
+        mut options: ExecutionOptions,
+        output: Option<&Path>,
+        cancellation: C,
+        progress: P,
+    ) -> Result<(ExecutedResponse, SecretDisclosure), HttpError>
     where
         C: Future + Send,
         P: FnMut(HttpProgress) + Send,
@@ -322,10 +413,7 @@ impl HttpExecution {
                 }),
         };
         match result {
-            Ok(executed) => Ok(ExecutedResponse {
-                response: self.disclosure.redact_response(executed.response),
-                body_sha256: executed.body_sha256,
-            }),
+            Ok(executed) => Ok((executed, self.disclosure)),
             Err(error) => Err(self.disclosure.redact_error(error)),
         }
     }
@@ -359,11 +447,9 @@ struct SecretDisclosure {
 
 impl SecretDisclosure {
     fn new(environment: ResolvedEnvironment, presentation_url: Option<&str>) -> Self {
-        if !environment.has_resolved_secrets() {
-            return Self::default();
-        }
+        let has_secrets = environment.has_resolved_secrets();
         Self {
-            secrets: Some(environment),
+            secrets: has_secrets.then_some(environment),
             initial_url_uses_secrets: false,
             presentation_url: presentation_url.unwrap_or_default().to_owned(),
         }
@@ -381,6 +467,8 @@ impl SecretDisclosure {
         // reference-preserving URL is safe to present.
         if self.initial_url_uses_secrets {
             response.initial_url.clone_from(&self.presentation_url);
+        } else {
+            response.initial_url = secrets.redact_secrets(&response.initial_url);
         }
         response.url.clone_from(&self.presentation_url);
         response.url_changed = false;

@@ -1,4 +1,4 @@
-//! Standalone response assertions; never called by request preparation or execution.
+//! Shared response assertion evaluation.
 //!
 //! See `docs/ASSERTIONS.md` for the deliberately restricted evaluation language.
 
@@ -79,6 +79,17 @@ pub fn evaluate_assertions(
     resolution: &RequestResolution<'_>,
     secrets: &dyn SecretProvider,
 ) -> Vec<AssertionResult> {
+    let secrets = crate::execution::CachedSecrets::new(secrets);
+    evaluate_with_disclosure(assertions, response, resolution, &secrets, |_| {})
+}
+
+pub(crate) fn evaluate_with_disclosure(
+    assertions: &[Assertion],
+    response: &HttpResponse,
+    resolution: &RequestResolution<'_>,
+    secrets: &dyn SecretProvider,
+    mut disclose: impl FnMut(probe_core::ResolvedEnvironment),
+) -> Vec<AssertionResult> {
     // Parse only on demand, once, and never use an incomplete preview as JSON.
     let mut body = None;
     assertions
@@ -89,7 +100,14 @@ pub fn evaluate_assertions(
             outcome: if assertion.disabled == Some(true) {
                 AssertionOutcome::Disabled
             } else {
-                match evaluate_one(assertion, response, resolution, secrets, &mut body) {
+                match evaluate_one(
+                    assertion,
+                    response,
+                    resolution,
+                    secrets,
+                    &mut body,
+                    &mut disclose,
+                ) {
                     Ok(true) => AssertionOutcome::Passed,
                     Ok(false) => AssertionOutcome::Failed,
                     Err(error) => AssertionOutcome::Error(error),
@@ -133,6 +151,7 @@ fn evaluate_one(
     resolution: &RequestResolution<'_>,
     secrets: &dyn SecretProvider,
     body: &mut Option<Result<Value, AssertionError>>,
+    disclose: &mut impl FnMut(probe_core::ResolvedEnvironment),
 ) -> Result<bool, AssertionError> {
     let operator = Operator::parse(&assertion.operator)?;
     let path = parse_expression(&assertion.expression)?;
@@ -152,7 +171,7 @@ fn evaluate_one(
         .value
         .as_deref()
         .ok_or(AssertionError::MissingExpectedValue)?;
-    let resolved = resolve_expected(template, resolution, secrets)?;
+    let resolved = resolve_expected(template, resolution, secrets, disclose)?;
     if matches!(operator, Operator::Contains | Operator::NotContains) {
         let Value::String(actual) = actual.as_ref() else {
             return Err(AssertionError::IncompatibleOperands);
@@ -188,6 +207,7 @@ fn resolve_expected<'a>(
     template: &'a str,
     resolution: &RequestResolution<'_>,
     secrets: &dyn SecretProvider,
+    disclose: &mut impl FnMut(probe_core::ResolvedEnvironment),
 ) -> Result<Cow<'a, str>, AssertionError> {
     if !template.contains("{{") {
         return Ok(Cow::Borrowed(template));
@@ -201,10 +221,12 @@ fn resolve_expected<'a>(
         resolution.workspace_identity,
     )
     .map_err(|_| AssertionError::VariableResolution)?;
-    environment
+    let result = environment
         .interpolate_strict(template)
         .map(Cow::Owned)
-        .map_err(|_| AssertionError::VariableResolution)
+        .map_err(|_| AssertionError::VariableResolution);
+    disclose(environment);
+    result
 }
 
 enum Segment<'a> {

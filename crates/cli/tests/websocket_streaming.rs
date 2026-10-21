@@ -408,7 +408,7 @@ fn options_are_rejected_without_network_io_and_dry_run_is_a_document() {
     for extra in [
         vec!["--output", "response.txt"],
         vec!["--show-headers"],
-        vec!["--expect", "status=200"],
+        vec!["--assert", "response.status equals 200"],
     ] {
         let mut args = vec![
             "request",
@@ -462,7 +462,7 @@ fn options_are_rejected_without_network_io_and_dry_run_is_a_document() {
         vec!["--timeout", "1"],
         vec!["--max-messages", "1"],
         vec!["--output", "response.txt"],
-        vec!["--expect", "status=200"],
+        vec!["--assert", "response.status equals 200"],
     ] {
         let mut args = vec![
             "request",

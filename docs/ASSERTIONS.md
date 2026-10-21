@@ -3,9 +3,12 @@
 `probe_application::evaluate_assertions(&[probe_core::Assertion], &HttpResponse,
 &RequestResolution, &dyn SecretProvider) -> Vec<AssertionResult>` is a standalone
 operation. HTTP and GraphQL use the same completed transport response; GraphQL's
-`data` and `errors` remain ordinary JSON properties. Request execution, CLI flags,
-exit codes, desktop presentation, and collection persistence do not invoke or
-change this operation.
+`data` and `errors` remain ordinary JSON properties. Live CLI runs invoke the shared
+evaluator through the application execution boundary before response redaction.
+Desktop execution remains unchanged; desktop assertion UI is outside this work.
+Collection persistence and the YAML format are unchanged. See [CLI](CLI.md) for
+`--assert`, `--no-assertions`, structured results, exit codes, and the breaking
+migration from Probe v1.1.1's removed `--expect` flag.
 
 Each input declaration produces one result in source order, with its zero-based
 index and `Passed`, `Failed`, `Disabled`, or `Error(AssertionError)` outcome.
@@ -53,7 +56,8 @@ value, not an absent property. Traversing incompatible types returns
 
 Expected values that contain `{{` are interpolated before literal parsing.
 Values with no interpolation are used as written and do not resolve an
-environment or request secrets. Each assertion still resolves independently.
+environment or request secrets. Each assertion resolves its own reachable references; provider lookups are cached
+for the evaluation batch.
 
 - JSON numeric literals become numbers; `true`, `false`, and `null` become their
   respective JSON types. Surrounding whitespace on these literals is ignored.
@@ -90,7 +94,10 @@ An empty or invalid body returns `InvalidJsonBody`; an incomplete preview return
 does not read spool files or perform filesystem I/O. Status-only assertions work
 regardless of body availability. Future adapters must supply an unredacted
 completed response for secret comparisons; evaluating an already redacted response
-cannot recover its original values. Request execution is intentionally unchanged.
+cannot recover its original values. `PreparedRequest::execute_with_assertions`
+evaluates original bytes internally and returns only safe outcomes and redacted
+response data. HTTP failures do not evaluate assertions. Explicit output files
+retain the existing original-byte behavior.
 
 ## Variables and disclosure
 
@@ -101,8 +108,13 @@ invocation overrides, workspace identity, and provider context used for requests
 Disabled declarations shadow inherited values according to the existing resolver.
 Only secrets reachable from an active binary assertion value that contains
 interpolation are requested, including transitive references.
-Each assertion resolves independently; provider values are not cached across
-assertions, so callers should provide stable values for an evaluation batch.
+The standalone evaluator caches provider values and failures across its batch.
+Integrated execution reuses the existing preparation `CachedSecrets`, sharing lookups
+with request and certificate resolution. Assertion-only secrets join response
+redaction after evaluation; raw response data and resolved values never cross the
+application boundary. Runs with assertions bypass response spool caching so those
+files cannot retain assertion-only secrets. Disabled and unary declarations never
+resolve ignored values.
 
 Missing, disabled, malformed, unavailable, or provider-failed references return
 `VariableResolution`. Assertions always require available values, including when

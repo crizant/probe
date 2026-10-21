@@ -1212,3 +1212,123 @@ fn graphql_curl_export_preserves_selected_operation_resolution_and_http_semantic
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn assertion_execution_uses_original_bytes_and_one_cached_secret_for_the_whole_batch() {
+    use probe_application::AssertionOutcome;
+    use probe_core::Assertion;
+    for request_uses_secret in [false, true] {
+        let body = format!("{{\"token\":\"{SECRET}\"}}");
+        let (base, server) = serve_once(http_response(
+            &format!("X-Echo: {SECRET}\r\n"),
+            body.as_bytes(),
+        ));
+        let mut request = get(&base);
+        if request_uses_secret {
+            request.headers.push(Header {
+                name: "X-Token".into(),
+                value: "{{token}}".into(),
+                disabled: false,
+            });
+        }
+        let environments = environments();
+        let provider = RecordingProvider::default();
+        let assertions: Vec<_> = ["{{token}}", "{{token}}"]
+            .into_iter()
+            .map(|value| Assertion {
+                expression: "response.body.token".into(),
+                operator: "equals".into(),
+                value: Some(value.into()),
+                disabled: None,
+                description: None,
+            })
+            .chain(std::iter::once(Assertion {
+                expression: SECRET.into(),
+                operator: SECRET.into(),
+                value: Some("{{unused}}".into()),
+                disabled: Some(true),
+                description: None,
+            }))
+            .collect();
+        let (executed, outcomes) = prepare_request(&request, &local(&environments), &provider)
+            .unwrap()
+            .execute_with_assertions(
+                &HttpEngine::new().unwrap(),
+                ExecutionOptions::default(),
+                None,
+                std::future::pending::<()>(),
+                |_| {},
+                &assertions,
+            )
+            .await
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(*provider.lookups.borrow(), ["token"]);
+        assert_eq!(
+            outcomes.iter().map(|r| &r.outcome).collect::<Vec<_>>(),
+            [
+                &AssertionOutcome::Passed,
+                &AssertionOutcome::Passed,
+                &AssertionOutcome::Disabled
+            ]
+        );
+        assert!(!format!("{executed:?} {outcomes:?}").contains(SECRET));
+        assert_eq!(executed.response.body, br#"{"token":"[REDACTED]"}"#);
+        assert!(
+            executed
+                .response
+                .headers
+                .iter()
+                .any(|h| h.name == "x-echo" && h.value == "[REDACTED]")
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_exchange_never_resolves_assertion_secrets() {
+    use probe_core::Assertion;
+    let (base, server) = serve_once(b"not an HTTP response".to_vec());
+    let environments = environments();
+    let provider = RecordingProvider::default();
+    let result = prepare_request(&get(&base), &local(&environments), &provider)
+        .unwrap()
+        .execute_with_assertions(
+            &HttpEngine::new().unwrap(),
+            ExecutionOptions::default(),
+            None,
+            std::future::pending::<()>(),
+            |_| {},
+            &[Assertion {
+                expression: "response.status".into(),
+                operator: "equals".into(),
+                value: Some("{{token}}".into()),
+                disabled: None,
+                description: None,
+            }],
+        )
+        .await;
+    server.join().unwrap();
+    assert!(result.is_err());
+    assert!(provider.lookups.borrow().is_empty());
+}
+
+#[test]
+fn desktop_http_execution_future_remains_send() {
+    fn require_send(_: impl Send) {}
+    let engine = HttpEngine::new().unwrap();
+    let execution = prepare_request(
+        &get("http://example.com"),
+        &RequestResolution::default(),
+        &NoSecrets,
+    )
+    .unwrap()
+    .into_http()
+    .unwrap();
+    require_send(execution.execute(
+        &engine,
+        ExecutionOptions::default(),
+        None,
+        std::future::pending::<()>(),
+        |_| {},
+    ));
+}

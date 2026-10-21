@@ -2,8 +2,8 @@ use std::{iter::Peekable, path::PathBuf, vec::IntoIter};
 
 use probe_application::{SessionData, WebSocketInputFormat};
 use probe_core::{
-    CollectionUpdate, Documentation, FieldPatch, FolderUpdate, GraphqlUpdate, ItemKind,
-    RequestProtocol, RequestUpdate, StatusExpectation,
+    Assertion, CollectionUpdate, Documentation, FieldPatch, FolderUpdate, GraphqlUpdate, ItemKind,
+    RequestProtocol, RequestUpdate,
 };
 use probe_opencollection::{ItemLocator, StructureOperation};
 use serde_json::{Map, Value};
@@ -100,7 +100,8 @@ pub(crate) enum Command {
         dry_run: bool,
         show_headers: bool,
         secret_provider_env: bool,
-        expectations: Vec<StatusExpectation>,
+        assertions: Vec<Assertion>,
+        no_assertions: bool,
         sends: Vec<SessionData>,
         stdin_format: Option<WebSocketInputFormat>,
         timeout: Option<u64>,
@@ -352,7 +353,8 @@ struct RunOptions {
     dry_run: bool,
     show_headers: bool,
     secret_provider_env: bool,
-    expectations: Vec<StatusExpectation>,
+    assertions: Vec<Assertion>,
+    no_assertions: bool,
     sends: Vec<SessionData>,
     stdin_format: Option<WebSocketInputFormat>,
     timeout: Option<u64>,
@@ -370,7 +372,8 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         dry_run: false,
         show_headers: false,
         secret_provider_env: false,
-        expectations: Vec::new(),
+        assertions: Vec::new(),
+        no_assertions: false,
         sends: Vec::new(),
         stdin_format: None,
         timeout: None,
@@ -395,7 +398,11 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
                 }
                 options.secret_provider_env = true;
             }
-            "--expect" => options.expectations.push(parser.expectation()?),
+            "--assert" => options.assertions.push(parser.assertion()?),
+            "--no-assertions" => parser.flag(&mut options.no_assertions, "--no-assertions")?,
+            other if other == "--expect" || other.starts_with("--expect=") => {
+                return Err(legacy_expect());
+            }
             "--send" => options.sends.push(SessionData::Text(
                 parser
                     .bump()
@@ -445,9 +452,9 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
             "--dry-run cannot be combined with --output",
         ));
     }
-    if options.dry_run && !options.expectations.is_empty() {
+    if options.dry_run && !options.assertions.is_empty() {
         return Err(CliError::invalid_arguments(
-            "--expect cannot be combined with --dry-run",
+            "--assert cannot be combined with --dry-run",
         ));
     }
     if options.dry_run
@@ -476,7 +483,8 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
         dry_run: options.dry_run,
         show_headers: options.show_headers,
         secret_provider_env: options.secret_provider_env,
-        expectations: options.expectations,
+        assertions: options.assertions,
+        no_assertions: options.no_assertions,
         sends: options.sends,
         stdin_format: options.stdin_format,
         timeout: options.timeout,
@@ -1289,9 +1297,9 @@ impl Parser {
         Ok((name.to_owned(), value.to_owned()))
     }
 
-    fn expectation(&mut self) -> Result<StatusExpectation, CliError> {
-        let argument = self.value("--expect").map_err(|_| invalid_expectation())?;
-        StatusExpectation::parse(&argument).map_err(CliError::expectation)
+    fn assertion(&mut self) -> Result<Assertion, CliError> {
+        let argument = self.value("--assert").map_err(|_| invalid_assertion())?;
+        parse_assertion(&argument)
     }
 
     fn once(&mut self, slot: &mut Option<String>, option: &str) -> Result<(), CliError> {
@@ -1404,6 +1412,8 @@ fn is_known_option(argument: &str) -> bool {
             | "--type"
             | "--dry-run"
             | "--expect"
+            | "--assert"
+            | "--no-assertions"
             | "--send"
             | "--send-binary"
             | "--stdin-format"
@@ -1426,6 +1436,7 @@ fn is_known_option(argument: &str) -> bool {
 
 fn unexpected_option(option: &str) -> CliError {
     match option {
+        "--expect" => legacy_expect(),
         "--extends" => {
             CliError::invalid_arguments("--extends is only valid for environment create")
         }
@@ -1458,8 +1469,54 @@ fn missing_value(option: &str) -> CliError {
     CliError::invalid_arguments(format!("{option} requires a non-empty value"))
 }
 
-fn invalid_expectation() -> CliError {
-    CliError::invalid_arguments("--expect requires status=<code> or status=<code|code>")
+fn legacy_expect() -> CliError {
+    CliError::invalid_arguments(
+        "--expect was removed after Probe v1.1.1; migrate to --assert 'response.status equals 200' (repeat --assert for AND checks)",
+    )
+}
+
+fn invalid_assertion() -> CliError {
+    CliError::invalid_arguments(
+        "--assert requires EXPRESSION OPERATOR [VALUE]; use a supported operator and provide a value for binary operators",
+    )
+}
+
+fn parse_assertion(input: &str) -> Result<Assertion, CliError> {
+    // Consume just the expression, operator, and one value separator. Everything
+    // after that separator is literal value text, including additional whitespace.
+    let expression_end = input
+        .find(char::is_whitespace)
+        .ok_or_else(invalid_assertion)?;
+    let expression = &input[..expression_end];
+    if expression.is_empty() {
+        return Err(invalid_assertion());
+    }
+    let rest = input[expression_end..].trim_start_matches(char::is_whitespace);
+    let operator_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let operator = &rest[..operator_end];
+    let unary = matches!(operator, "isNull" | "isNotNull");
+    if !unary
+        && !matches!(
+            operator,
+            "equals" | "notEquals" | "contains" | "notContains" | "greaterThan" | "lessThan"
+        )
+    {
+        return Err(invalid_assertion());
+    }
+    let value = rest[operator_end..]
+        .chars()
+        .next()
+        .map(|separator| rest[operator_end + separator.len_utf8()..].to_owned());
+    if !unary && value.is_none() {
+        return Err(invalid_assertion());
+    }
+    Ok(Assertion {
+        expression: expression.into(),
+        operator: operator.into(),
+        value,
+        disabled: None,
+        description: None,
+    })
 }
 
 fn invalid_variable() -> CliError {
@@ -1523,5 +1580,42 @@ mod tests {
         ])
         .expect_err("duplicate --index should be rejected");
         assert_eq!(error.message, "--index may only be specified once");
+    }
+}
+
+#[cfg(test)]
+mod assertion_flags {
+    use super::parse_assertion;
+
+    #[test]
+    fn separates_tokens_and_preserves_every_value_byte_after_one_separator() {
+        for (input, expected) in [
+            ("response.body.name equals ", ""),
+            ("response.body.name equals   ", "  "),
+            ("response.body.name equals \"John Doe\"", "\"John Doe\""),
+            (
+                "response.body.name equals   spaced text  ",
+                "  spaced text  ",
+            ),
+            (
+                "response.status\tequals\t{{expectedStatus}}",
+                "{{expectedStatus}}",
+            ),
+            (
+                "response.body.name equals\u{2003}\"quoted\"  ",
+                "\"quoted\"  ",
+            ),
+        ] {
+            let parsed = parse_assertion(input).unwrap();
+            assert_eq!(parsed.value.as_deref(), Some(expected));
+        }
+        assert_eq!(parse_assertion("response.body isNull").unwrap().value, None);
+        assert_eq!(
+            parse_assertion("response.body isNull {{ignored}}")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("{{ignored}}")
+        );
     }
 }
