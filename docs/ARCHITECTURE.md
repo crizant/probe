@@ -669,13 +669,16 @@ certificate scopes, cancellation future, and progress channel are shared with
 normal desktop execution. Presence reconciliation includes assertion-only secrets.
 WebSocket execution keeps its existing boundary.
 
-`ExecutionState::Complete` owns safe assertion results beside the redacted response.
+`ResponseState::Complete` owns safe assertion results and the original, unresolved
+assertion declarations captured when the send begins, beside the redacted response.
 The existing generation and key-alias checks accept or reject the whole completion;
 there is no separate results store. Response document preparation and highlighting
 continue to consume only redacted bytes. A new send clears the old document and
-replaces the response state. Results never retain declarations, operands, resolved
-secrets, or original response bodies. The shared boundary disables spooling only
-when request/certificate resolution uses secrets or active assertion values may
+replaces the response state. The response Assertions tab displays declaration columns
+from that snapshot, so subsequent draft edits cannot relabel earlier results.
+Diagnostics never retain resolved operands, secrets, or original response bodies.
+The shared boundary disables spooling only when request/certificate resolution
+uses secrets or active assertion values may
 reach secrets (including uncertain resolution). Its metadata preflight never
 consults the native provider. Plain assertions retain normal paging and streamed
 file output. Desktop opts into `PreparedRequest::reject_secret_output()`, enforcing

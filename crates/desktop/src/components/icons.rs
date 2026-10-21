@@ -374,6 +374,21 @@ pub(crate) fn close_icon(theme: Theme) -> gpui_kit::Div {
         .text_color(theme.colors.text.secondary)
 }
 
+/// Uses the same Lucide status marks as the connection status surfaces.
+pub(crate) fn assertion_status_icon(
+    theme: Theme,
+    outcome: &probe_application::AssertionOutcome,
+) -> gpui_kit::Div {
+    use probe_application::AssertionOutcome;
+    let (name, svg) = match outcome {
+        AssertionOutcome::Passed => ("assertion-passed", &CHECK_SVG),
+        AssertionOutcome::Failed => ("assertion-failed", &CLOSE_SVG),
+        AssertionOutcome::Error(_) => ("assertion-error", &SEVERITY_TRIANGLE_SVG),
+        AssertionOutcome::Disabled => ("assertion-disabled", &SEVERITY_MINUS_SVG),
+    };
+    library_icon(name, svg, theme.metrics.icon_small)
+}
+
 pub(crate) fn disconnect_severity_mark(
     theme: Theme,
     severity: DisconnectSeverity,

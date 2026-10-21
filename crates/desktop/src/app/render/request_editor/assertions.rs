@@ -1,6 +1,5 @@
 use super::*;
 use crate::request_editor::{ASSERTION_OPERATORS, AssertionEdit, AssertionField};
-use gpui_kit::base::{Checkbox, CheckboxState};
 
 impl ProbeApp {
     pub(super) fn render_assertions_editor(
@@ -13,13 +12,6 @@ impl ProbeApp {
     ) -> gpui_kit::AnyElement {
         let assertions = request.runtime.assertions.as_deref().unwrap_or_default();
         let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
-        if assertions.is_empty() {
-            rows = rows.child(
-                div()
-                    .text_color(theme.colors.text.muted)
-                    .child("Add assertions to check the response when this request is sent."),
-            );
-        }
         for (index, assertion) in assertions.iter().enumerate() {
             let enabled_view = cx.weak_entity();
             let operator_view = cx.weak_entity();
@@ -32,52 +24,7 @@ impl ProbeApp {
                 operators.insert(0, (assertion.operator.clone(), assertion.operator.clone()));
             }
             let enabled = assertion.disabled != Some(true);
-            let mut row = div()
-                .id(("assertion-row", index))
-                .debug_selector(move || format!("assertion-row-{index}"))
-                .flex()
-                .flex_col()
-                .gap(px(theme.metrics.spacing_1))
-                .p(px(theme.metrics.spacing_2))
-                .border_1()
-                .border_color(theme.colors.borders.subtle)
-                .rounded(px(theme.metrics.radius_small));
             let controls = components::editor_key_value_row(theme)
-                .child(
-                    Checkbox::new("assertion-enabled")
-                        .debug_selector(move || format!("assertion-enabled-{index}"))
-                        .accessibility_label(format!("Enable assertion {}", index + 1))
-                        .checked(enabled)
-                        .size(px(20.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .border_1()
-                        .border_color(theme.colors.borders.standard)
-                        .rounded(px(theme.metrics.radius_small))
-                        .cursor_pointer()
-                        .text_color(theme.colors.text.primary)
-                        .bg(theme.colors.surfaces.raised)
-                        .focus_visible(move |control| {
-                            control.border_color(theme.colors.borders.focused)
-                        })
-                        .child(if enabled { "✓" } else { "" })
-                        .on_change(move |state, _, _, cx| {
-                            let _ = enabled_view.update(cx, |view, cx| {
-                                view.edit_request(
-                                    key,
-                                    |request| {
-                                        AssertionEdit::Enabled(
-                                            index,
-                                            state == CheckboxState::Checked,
-                                        )
-                                        .apply(request)
-                                    },
-                                    cx,
-                                );
-                            });
-                        }),
-                )
                 .child(
                     div()
                         .flex_1()
@@ -96,7 +43,7 @@ impl ProbeApp {
                 .child(components::dropdown(
                     theme,
                     "assertion-operator",
-                    "Assertion operator",
+                    "Assertion Operator",
                     Some(assertion.operator.clone()),
                     operators,
                     145.0,
@@ -119,74 +66,77 @@ impl ProbeApp {
                         }
                     },
                 ));
-            let mut actions = components::editor_key_value_row(theme);
-            for (label, delta, disabled) in [
-                ("Move Up", -1, index == 0),
-                ("Move Down", 1, index + 1 == assertions.len()),
-            ] {
-                let view = cx.weak_entity();
-                actions = actions.child(
-                    components::editor_action_button(
+            let controls = controls
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(self.assertion_text_field(
+                            key,
+                            index,
+                            AssertionField::Value,
+                            assertion.value.as_deref().unwrap_or_default(),
+                            if matches!(assertion.operator.as_str(), "isNull" | "isNotNull") {
+                                "Not Used"
+                            } else {
+                                "Expected Value"
+                            },
+                            theme,
+                            list_scroll,
+                            cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .id(("assertion-enabled-control", index))
+                        .debug_selector(move || format!("assertion-enabled-{index}"))
+                        .child(components::switch(
+                            theme,
+                            ("assertion-enabled", index),
+                            "Enable Assertion",
+                            enabled,
+                            false,
+                            move |enabled, _, cx| {
+                                let _ = enabled_view.update(cx, |view, cx| {
+                                    view.edit_request(
+                                        key,
+                                        |request| {
+                                            AssertionEdit::Enabled(index, enabled).apply(request)
+                                        },
+                                        cx,
+                                    );
+                                });
+                            },
+                        )),
+                )
+                .child(
+                    components::remove_row_button(
                         theme,
-                        (label, index),
-                        label,
-                        disabled,
+                        ("assertion-delete", index),
+                        "Remove Assertion",
                         move |_, window, cx| {
-                            let _ = view.update(cx, |view, cx| {
+                            let _ = remove_view.update(cx, |view, cx| {
                                 view.edit_request(
                                     key,
-                                    |request| AssertionEdit::Move(index, delta).apply(request),
+                                    |request| AssertionEdit::Remove(index).apply(request),
                                     cx,
                                 );
                                 view.focus_handle.focus(window, cx);
                             });
                         },
                     )
-                    .debug_selector(move || {
-                        format!(
-                            "assertion-{}-{index}",
-                            if delta < 0 { "up" } else { "down" }
-                        )
-                    }),
+                    .debug_selector(move || format!("assertion-delete-{index}")),
                 );
-            }
-            actions = actions.child(
-                components::remove_row_button(
-                    theme,
-                    ("assertion-delete", index),
-                    "Delete Assertion",
-                    move |_, window, cx| {
-                        let _ = remove_view.update(cx, |view, cx| {
-                            view.edit_request(
-                                key,
-                                |request| AssertionEdit::Remove(index).apply(request),
-                                cx,
-                            );
-                            view.focus_handle.focus(window, cx);
-                        });
-                    },
-                )
-                .debug_selector(move || format!("assertion-delete-{index}")),
-            );
-            row = row
-                .child(controls)
-                .child(self.assertion_text_field(
-                    key,
-                    index,
-                    AssertionField::Value,
-                    assertion.value.as_deref().unwrap_or_default(),
-                    if matches!(assertion.operator.as_str(), "isNull" | "isNotNull") {
-                        "Expected Value (Unused for This Operator)"
-                    } else {
-                        "Expected Value"
-                    },
-                    theme,
-                    list_scroll,
-                    cx,
-                ))
-                .child(
-                    components::editor_key_value_row(theme)
-                        .child(
+            let row =
+                div()
+                    .id(("assertion-row", index))
+                    .debug_selector(move || format!("assertion-row-{index}"))
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme.metrics.spacing_2))
+                    .child(controls)
+                    .child(
+                        components::editor_key_value_row(theme).child(
                             div().flex_1().min_w(px(0.0)).child(
                                 self.assertion_text_field(
                                     key,
@@ -194,15 +144,14 @@ impl ProbeApp {
                                     AssertionField::Description,
                                     documentation_text(assertion.description.as_ref())
                                         .unwrap_or_default(),
-                                    "Description (Optional)",
+                                    "Description",
                                     theme,
                                     list_scroll,
                                     cx,
                                 ),
                             ),
-                        )
-                        .child(actions),
-                );
+                        ),
+                    );
             rows = rows.child(row);
         }
         let view = cx.weak_entity();
@@ -236,12 +185,12 @@ impl ProbeApp {
             .id((field.id(), index))
             .debug_selector(move || format!("{}-{index}", field.id()))
             .child(
-                components::dialog_text_input(
+                components::variable_text_input(
                     theme,
                     (field.id(), index),
                     value.to_owned(),
                     placeholder,
-                    false,
+                    self.variable_context(cx),
                     move |value, _, cx| {
                         let _ = view.update(cx, |view, cx| {
                             view.edit_request(
@@ -254,7 +203,6 @@ impl ProbeApp {
                             )
                         });
                     },
-                    |_, _, _| {},
                 )
                 .list_scroll(list_scroll),
             )

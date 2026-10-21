@@ -38,7 +38,6 @@ impl AssertionField {
 pub(crate) enum AssertionEdit {
     Add,
     Remove(usize),
-    Move(usize, isize),
     Enabled(usize, bool),
     Text(usize, AssertionField, String),
 }
@@ -70,14 +69,6 @@ impl AssertionEdit {
             Self::Remove(index) => {
                 if index < rows.len() {
                     rows.remove(index);
-                }
-            }
-            Self::Move(index, delta) => {
-                if let Some(target) = index.checked_add_signed(delta)
-                    && index < rows.len()
-                    && target < rows.len()
-                {
-                    rows.swap(index, target);
                 }
             }
             Self::Enabled(index, enabled) => {
@@ -988,9 +979,8 @@ mod tests {
         Edit::Remove(0).apply(&mut request);
         assert_eq!(request.runtime.assertions, None);
         request.runtime.assertions = Some(Vec::new());
-        let empty = request.clone();
-        Edit::Move(0, 1).apply(&mut request);
-        assert_eq!(request, empty);
+        Edit::Remove(0).apply(&mut request);
+        assert_eq!(request.runtime.assertions, Some(Vec::new()));
         let description = Documentation::Content {
             content: "original".into(),
             media_type: "text/markdown".into(),
@@ -1029,36 +1019,25 @@ mod tests {
     }
 
     #[test]
-    fn assertion_remove_and_move_respect_both_index_bounds() {
+    fn assertion_remove_respects_index_bounds_and_retains_order() {
         use super::{AssertionEdit as Edit, AssertionField as Field};
         let mut request = Request::default();
         Edit::Add.apply(&mut request);
         Edit::Text(0, Field::Expression, "first".into()).apply(&mut request);
         Edit::Add.apply(&mut request);
         Edit::Text(1, Field::Expression, "second".into()).apply(&mut request);
+        Edit::Add.apply(&mut request);
+        Edit::Text(2, Field::Expression, "third".into()).apply(&mut request);
         let original = request.clone();
-        for edit in [
-            Edit::Remove(2),
-            Edit::Remove(usize::MAX),
-            Edit::Move(2, -1),
-            Edit::Move(1, 1),
-            Edit::Move(0, -1),
-            Edit::Move(usize::MAX, 1),
-        ] {
+        for edit in [Edit::Remove(3), Edit::Remove(usize::MAX)] {
             edit.apply(&mut request);
             assert_eq!(request, original);
         }
-        Edit::Move(0, 1).apply(&mut request);
-        assert_eq!(
-            request.runtime.assertions.as_ref().unwrap()[0].expression,
-            "second"
-        );
-        Edit::Move(1, -1).apply(&mut request);
-        assert_eq!(request, original);
         Edit::Remove(1).apply(&mut request);
         let rows = request.runtime.assertions.as_ref().unwrap();
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].expression, "first");
+        assert_eq!(rows[1].expression, "third");
     }
 
     #[test]

@@ -336,62 +336,187 @@ impl ProbeApp {
 
     fn render_assertion_results(&self, key: RequestKey, theme: Theme) -> gpui_kit::AnyElement {
         use probe_application::AssertionOutcome;
-        let assertions = match self.execution.response(key) {
-            Some(ResponseState::Complete { assertions, .. }) => assertions.as_slice(),
-            _ => &[],
+        let (assertions, declarations) = match self.execution.response(key) {
+            Some(ResponseState::Complete {
+                assertions,
+                assertion_declarations,
+                ..
+            }) => (assertions.as_slice(), assertion_declarations.as_slice()),
+            _ => (&[][..], &[][..]),
         };
-        let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
+        let container = Self::response_tab_content_spacing(theme)
+            .id("response-assertions")
+            .debug_selector(|| "response-assertions".into())
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
+            .line_height(relative(1.25))
+            .text_color(theme.colors.text.primary);
+        if assertions.is_empty() {
+            return container
+                .child(placeholder_message(theme, "No Assertion Results"))
+                .into_any_element();
+        }
+        let counts = assertion_counts(assertions);
+        let (overall, overall_color) = if counts[1] > 0 {
+            (format!("{} Failed", counts[1]), theme.colors.status.error)
+        } else if counts[2] > 0 {
+            (format!("{} Error", counts[2]), theme.colors.status.warning)
+        } else if counts[0] > 0 {
+            ("All Passed".into(), theme.colors.status.success)
+        } else {
+            ("All Disabled".into(), theme.colors.text.muted)
+        };
+        let mut summary = div()
+            .id("assertion-summary")
+            .debug_selector(|| "assertion-summary".into())
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_2))
+            .line_height(relative(1.25))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(div().text_color(overall_color).child(overall));
+        for (index, count) in assertion_summary(assertions).split(" · ").enumerate() {
+            if index > 0 {
+                summary = summary.child(div().text_color(theme.colors.text.muted).child("·"));
+            }
+            let color = if count.ends_with("Passed") {
+                theme.colors.status.success
+            } else if count.ends_with("Failed") {
+                theme.colors.status.error
+            } else if count.ends_with("Error") {
+                theme.colors.status.warning
+            } else {
+                theme.colors.text.muted
+            };
+            let selector = format!(
+                "assertion-summary-{}",
+                count.to_ascii_lowercase().replace(' ', "-")
+            );
+            summary = summary.child(
+                div()
+                    .id(("assertion-summary-count", index))
+                    .debug_selector(move || selector.clone())
+                    .text_color(color)
+                    .child(count.to_owned()),
+            );
+        }
+        let column = |text: String| {
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(text)
+        };
+        let line = || {
+            div()
+                .min_h(px(theme.metrics.tree_row_height))
+                .px(px(theme.metrics.spacing_1))
+                .flex()
+                .items_center()
+                .gap(px(theme.metrics.spacing_2))
+                .line_height(relative(1.25))
+        };
+        let headings = line()
+            .id("assertion-result-columns")
+            .debug_selector(|| "assertion-result-columns".into())
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(theme.colors.text.secondary)
+            .child(div().w(px(theme.metrics.icon_small)).flex_none())
+            .child(
+                div()
+                    .w(px(theme.metrics.tree_row_height))
+                    .flex_none()
+                    .child("#"),
+            )
+            .child(column("Expression".into()))
+            .child(column("Operator".into()))
+            .child(column("Expected".into()))
+            .child(column("Result".into()));
+        let mut rows = div()
+            .flex()
+            .flex_col()
+            .gap(px(theme.metrics.spacing_2))
+            .child(headings);
         for result in assertions {
-            let (label, icon, color, diagnostic) = match &result.outcome {
-                AssertionOutcome::Passed => ("Passed", "✓", theme.colors.status.success, None),
-                AssertionOutcome::Failed => ("Failed", "×", theme.colors.status.error, None),
+            let (label, color, diagnostic) = match &result.outcome {
+                AssertionOutcome::Passed => ("Passed", theme.colors.status.success, None),
+                AssertionOutcome::Failed => ("Failed", theme.colors.status.error, None),
                 AssertionOutcome::Error(error) => (
                     "Error",
-                    "!",
                     theme.colors.status.warning,
-                    Some(error.to_string()),
+                    Some(
+                        if *error == probe_application::AssertionError::BodyUnavailable {
+                            "The complete response body is unavailable for this assertion.".into()
+                        } else {
+                            error.to_string()
+                        },
+                    ),
                 ),
-                AssertionOutcome::Disabled => ("Disabled", "−", theme.colors.text.muted, None),
+                AssertionOutcome::Disabled => ("Disabled", theme.colors.text.muted, None),
             };
             let index = result.index;
+            let declaration = declarations.get(index);
+            // TODO: Show actual values only if the shared boundary supplies a safe representation.
+            let primary = line()
+                .text_color(if matches!(result.outcome, AssertionOutcome::Disabled) {
+                    theme.colors.text.muted
+                } else {
+                    theme.colors.text.primary
+                })
+                .child(components::assertion_status_icon(theme, &result.outcome).text_color(color))
+                .child(
+                    div()
+                        .w(px(theme.metrics.tree_row_height))
+                        .flex_none()
+                        .text_color(theme.colors.text.muted)
+                        .child(format!("#{}", index + 1)),
+                )
+                .child(column(
+                    declaration
+                        .map(|row| row.expression.clone())
+                        .unwrap_or_default(),
+                ))
+                .child(column(
+                    declaration
+                        .map(|row| row.operator.clone())
+                        .unwrap_or_default(),
+                ))
+                .child(column(
+                    declaration
+                        .and_then(|row| row.value.clone())
+                        .unwrap_or_default(),
+                ))
+                .child(column(label.into()).text_color(color));
             rows = rows.child(
                 div()
                     .id(("assertion-result", index))
                     .debug_selector(move || format!("assertion-result-{index}"))
                     .flex()
                     .flex_col()
-                    .gap(px(theme.metrics.spacing_1))
-                    .child(
-                        div()
-                            .text_color(color)
-                            .child(format!("{icon} Assertion {} · {label}", result.index + 1)),
-                    )
+                    .line_height(relative(1.25))
+                    .child(primary)
                     .when_some(diagnostic, |row, diagnostic| {
                         row.child(
                             div()
+                                .pl(px(theme.metrics.spacing_3))
                                 .text_color(theme.colors.text.secondary)
+                                .line_height(relative(1.25))
                                 .child(diagnostic),
                         )
                     }),
             );
         }
-        let summary = assertion_summary(assertions);
-        div()
-            .id("response-assertions")
-            .debug_selector(|| "response-assertions".into())
-            .flex_1()
-            .min_h(px(0.0))
-            .p(px(theme.metrics.spacing_3))
-            .overflow_y_scroll()
-            .line_height(relative(1.25))
-            .text_color(theme.colors.text.primary)
+        container
             .child(
                 div()
-                    .mb(px(theme.metrics.spacing_2))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(summary),
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme.metrics.spacing_2))
+                    .child(summary)
+                    .child(rows),
             )
-            .child(rows)
             .into_any_element()
     }
 
@@ -1249,11 +1374,8 @@ impl ProbeApp {
     }
 }
 
-fn assertion_summary(assertions: &[probe_application::AssertionResult]) -> String {
+fn assertion_counts(assertions: &[probe_application::AssertionResult]) -> [usize; 4] {
     use probe_application::AssertionOutcome;
-    if assertions.is_empty() {
-        return "No assertion results for this execution.".into();
-    }
     let mut counts = [0_usize; 4];
     for result in assertions {
         let category = match result.outcome {
@@ -1264,9 +1386,16 @@ fn assertion_summary(assertions: &[probe_application::AssertionResult]) -> Strin
         };
         counts[category] += 1;
     }
-    ["passed", "failed", "error", "disabled"]
+    counts
+}
+
+fn assertion_summary(assertions: &[probe_application::AssertionResult]) -> String {
+    if assertions.is_empty() {
+        return "No Assertion Results".into();
+    }
+    ["Passed", "Failed", "Error", "Disabled"]
         .iter()
-        .zip(counts)
+        .zip(assertion_counts(assertions))
         .filter(|(_, count)| *count > 0)
         .map(|(label, count)| format!("{count} {label}"))
         .collect::<Vec<_>>()
@@ -1298,13 +1427,10 @@ mod assertion_summary_tests {
         .collect::<Vec<_>>();
         assert_eq!(
             assertion_summary(&results),
-            "3 passed · 1 failed · 2 error · 4 disabled"
+            "3 Passed · 1 Failed · 2 Error · 4 Disabled"
         );
-        assert_eq!(assertion_summary(&results[..2]), "1 passed · 1 failed");
-        assert_eq!(assertion_summary(&results[2..3]), "1 disabled");
-        assert_eq!(
-            assertion_summary(&[]),
-            "No assertion results for this execution."
-        );
+        assert_eq!(assertion_summary(&results[..2]), "1 Passed · 1 Failed");
+        assert_eq!(assertion_summary(&results[2..3]), "1 Disabled");
+        assert_eq!(assertion_summary(&[]), "No Assertion Results");
     }
 }

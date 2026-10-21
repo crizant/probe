@@ -8,11 +8,12 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
-- Desktop HTTP and GraphQL requests now have an Assertions editor with enable,
-  expression, operator, expected value, description, and reorder controls using
-  the normal Save workflow. Every send evaluates its declarations and shows
+- Desktop HTTP and GraphQL requests now have an Assertions editor with an enable
+  switch, expression, operator, expected value, and description fields using the
+  normal Save workflow. Every send evaluates its declarations and shows
   numbered Passed, Failed, Error, and Disabled results in a response Assertions
-  tab, including for truncated responses. Failed checks keep the response visible.
+  tab with coloured summary counts and declaration columns, including for truncated
+  responses. Failed checks keep the response visible.
   Plain assertions retain full response paging and streamed file saves; direct
   saves consistently refuse requests that may use secrets. Adding then deleting
   an unsaved assertion restores the original absent or explicitly empty list.

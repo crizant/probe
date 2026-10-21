@@ -49,24 +49,65 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
     cx.simulate_keystrokes(window.into(), "down enter");
     visual.run_until_parked();
     click(&mut visual, "assertion-enabled-0");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.active_request()
+                    .unwrap()
+                    .runtime
+                    .assertions
+                    .as_ref()
+                    .unwrap()[0]
+                    .disabled,
+                Some(true)
+            );
+        })
+        .unwrap();
+    click(&mut visual, "assertion-enabled-0");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.active_request()
+                    .unwrap()
+                    .runtime
+                    .assertions
+                    .as_ref()
+                    .unwrap()[0]
+                    .disabled,
+                Some(false)
+            );
+        })
+        .unwrap();
+    click(&mut visual, "assertion-enabled-0");
     click(&mut visual, "add-assertion");
-    click(&mut visual, "assertion-up-1");
     window
         .update(cx, |view, _, _| {
             let request = view.active_request().unwrap();
             let rows = request.runtime.assertions.as_ref().unwrap();
             assert_eq!(rows.len(), 2);
-            assert_eq!(rows[1].expression, "response.body.{{editable}}");
-            assert_eq!(rows[1].disabled, Some(true));
-            assert_eq!(rows[1].operator, "notEquals");
+            assert_eq!(rows[0].expression, "response.body.{{editable}}");
+            assert_eq!(rows[0].disabled, Some(true));
+            assert_eq!(rows[0].operator, "notEquals");
             assert!(view.persistence.is_dirty(http, request));
         })
         .unwrap();
-    click(&mut visual, "assertion-delete-0");
+    click(&mut visual, "assertion-delete-1");
     window
         .update(cx, |view, _, cx| {
             let (cancel, _) = oneshot::channel();
-            let generation = view.execution.begin(http, cancel);
+            for _ in 0..3 {
+                view.edit_request(http, |r| AssertionEdit::Add.apply(r), cx);
+            }
+            let declarations = view
+                .active_request()
+                .unwrap()
+                .runtime
+                .assertions
+                .clone()
+                .unwrap();
+            let generation = view
+                .execution
+                .begin_with_assertions(http, cancel, declarations);
             let mut response = super::workspace::tab_response();
             response.body_complete = false;
             view.complete_execution(
@@ -85,7 +126,7 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
                         },
                         AssertionResult {
                             index: 2,
-                            outcome: AssertionOutcome::Error(AssertionError::VariableResolution),
+                            outcome: AssertionOutcome::Error(AssertionError::BodyUnavailable),
                         },
                         AssertionResult {
                             index: 3,
@@ -102,6 +143,12 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
     visual.run_until_parked();
     click(&mut visual, "response-tab-assertions");
     for selector in [
+        "assertion-result-columns",
+        "assertion-summary",
+        "assertion-summary-1-passed",
+        "assertion-summary-1-failed",
+        "assertion-summary-1-error",
+        "assertion-summary-1-disabled",
         "assertion-result-0",
         "assertion-result-1",
         "assertion-result-2",
@@ -109,6 +156,35 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
     ] {
         assert!(visual.debug_bounds(selector).is_some());
     }
+    window
+        .update(cx, |view, _, _| {
+            let Some(crate::execution::ResponseState::Complete {
+                assertions,
+                assertion_declarations,
+                ..
+            }) = view.execution.response(http)
+            else {
+                panic!("expected completed assertion snapshot");
+            };
+            assert_eq!(assertions.len(), 4);
+            assert_eq!(assertion_declarations.len(), 4);
+            assert_eq!(
+                assertion_declarations[0].expression,
+                "response.body.{{editable}}"
+            );
+            assert_eq!(assertion_declarations[0].disabled, Some(true));
+            assert_eq!(
+                view.active_request()
+                    .unwrap()
+                    .runtime
+                    .assertions
+                    .as_ref()
+                    .unwrap()
+                    .len(),
+                3
+            );
+        })
+        .unwrap();
     // Existing response remains usable despite failed/error outcomes and truncation.
     for theme in [
         crate::user_config::ThemeMode::Light,
@@ -189,7 +265,6 @@ fn desktop_assertion_edits_round_trip_bundled_and_unbundled_declarations() {
                 .apply(&mut edited);
             AssertionEdit::Enabled(0, false).apply(&mut edited);
             AssertionEdit::Add.apply(&mut edited);
-            AssertionEdit::Move(0, 1).apply(&mut edited);
             if original.kind.protocol() == probe_core::RequestProtocol::Http {
                 let rows = edited.runtime.assertions.as_ref().unwrap();
                 assert_eq!(

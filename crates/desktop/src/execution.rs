@@ -44,6 +44,7 @@ pub(crate) enum ResponseState {
         response: HttpResponse,
         saved_to: Option<SavedResponseBody>,
         assertions: Vec<AssertionResult>,
+        assertion_declarations: Arc<Vec<probe_core::Assertion>>,
     },
     Failed(String),
     Cancelled,
@@ -74,6 +75,7 @@ impl ResponseState {
 pub(crate) struct ActiveRequest {
     pub(crate) generation: u64,
     pub(crate) cancellation: oneshot::Sender<()>,
+    assertion_declarations: Vec<probe_core::Assertion>,
 }
 
 #[derive(Default)]
@@ -85,7 +87,17 @@ pub(crate) struct ExecutionState {
 }
 
 impl ExecutionState {
+    #[cfg(test)]
     pub(crate) fn begin(&mut self, key: RequestKey, cancellation: oneshot::Sender<()>) -> u64 {
+        self.begin_with_assertions(key, cancellation, Vec::new())
+    }
+
+    pub(crate) fn begin_with_assertions(
+        &mut self,
+        key: RequestKey,
+        cancellation: oneshot::Sender<()>,
+        assertion_declarations: Vec<probe_core::Assertion>,
+    ) -> u64 {
         self.cancel(key);
         self.next_generation = self.next_generation.wrapping_add(1);
         let generation = self.next_generation;
@@ -94,6 +106,7 @@ impl ExecutionState {
             ActiveRequest {
                 generation,
                 cancellation,
+                assertion_declarations,
             },
         );
         self.responses.insert(
@@ -124,13 +137,14 @@ impl ExecutionState {
         {
             return None;
         }
-        self.active.remove(&key);
+        let active = self.active.remove(&key).expect("generation was checked");
         self.key_aliases.retain(|_, target| *target != key);
         let response = match result {
             Ok((response, assertions)) => ResponseState::Complete {
                 response,
                 saved_to,
                 assertions,
+                assertion_declarations: Arc::new(active.assertion_declarations),
             },
             Err(HttpError::Cancelled) => ResponseState::Cancelled,
             Err(error) => ResponseState::Failed(error.to_string()),
@@ -920,7 +934,14 @@ mod tests {
         let first = state.begin(a, tx);
         state.finish(a, first, Ok((response(200), outcomes(Passed))), None);
         let (tx, _) = oneshot::channel();
-        let second = state.begin(a, tx);
+        let declaration = probe_core::Assertion {
+            expression: "response.status".into(),
+            operator: "equals".into(),
+            value: Some("{{original}}".into()),
+            disabled: None,
+            description: None,
+        };
+        let second = state.begin_with_assertions(a, tx, vec![declaration.clone()]);
         assert!(matches!(
             state.response(a),
             Some(ResponseState::Running { .. })
@@ -935,7 +956,7 @@ mod tests {
         state.remap_requests(&BTreeMap::from([(a, new_a), (b, new_b)]));
         state.finish(a, second, Ok((response(202), outcomes(Failed))), None);
         assert!(
-            matches!(state.response(new_a), Some(ResponseState::Complete { response, assertions, .. }) if response.status == 202 && assertions == &outcomes(Failed))
+            matches!(state.response(new_a), Some(ResponseState::Complete { response, assertions, assertion_declarations, .. }) if response.status == 202 && assertions == &outcomes(Failed) && assertion_declarations.as_slice() == [declaration])
         );
         assert!(
             matches!(state.response(new_b), Some(ResponseState::Complete { response, assertions, .. }) if response.status == 201 && assertions == &outcomes(Passed))

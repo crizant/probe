@@ -111,7 +111,12 @@ impl ProbeApp {
             }
         }
         let (cancellation_sender, cancellation_receiver) = tokio::sync::oneshot::channel();
-        let generation = self.execution.begin(key, cancellation_sender);
+        // Keep only the original declarations, never interpolated values, with this send.
+        let generation = self.execution.begin_with_assertions(
+            key,
+            cancellation_sender,
+            input.request.runtime.assertions.clone().unwrap_or_default(),
+        );
         self.response_viewer.remove(key);
         let (result_receiver, mut progress_receiver, presence_receiver) = self
             .execution_service
