@@ -146,7 +146,9 @@ impl ProbeApp {
                     .child(error.clone())
                     .into_any_element(),
             ),
-            Some(ResponseState::Complete { response, saved_to }) => {
+            Some(ResponseState::Complete {
+                response, saved_to, ..
+            }) => {
                 let status = format!("{} {}", response.status, response.reason);
                 let metadata = format!(
                     "• {} • {}",
@@ -280,14 +282,21 @@ impl ProbeApp {
             .active_tab()
             .expect("response tabs require an active request");
         let mut tabs = Tabs::new("response-view-tabs")
+            .w_full()
+            .min_w(px(0.0))
+            .overflow_x_scroll()
             .flex()
             .items_center()
             .gap(px(theme.metrics.spacing_1));
-        let available_tabs = if document.truncated {
-            &ResponseViewerTab::TRUNCATED[..]
+        let mut available_tabs = if document.truncated {
+            ResponseViewerTab::TRUNCATED.to_vec()
         } else {
-            &ResponseViewerTab::ALL[..]
+            ResponseViewerTab::ALL.to_vec()
         };
+        if matches!(self.execution.response(key), Some(ResponseState::Complete { assertions, .. }) if !assertions.is_empty())
+        {
+            available_tabs.push(ResponseViewerTab::Assertions);
+        }
         for (index, tab) in available_tabs.iter().copied().enumerate() {
             let tab_view = cx.weak_entity();
             let selected = self.response_viewer.tab(key) == tab;
@@ -318,10 +327,85 @@ impl ProbeApp {
                         });
                     },
                 )
+                .flex_none()
                 .debug_selector(move || format!("response-tab-{debug_label}")),
             );
         }
         tabs.into_any_element()
+    }
+
+    fn render_assertion_results(&self, key: RequestKey, theme: Theme) -> gpui_kit::AnyElement {
+        use probe_application::AssertionOutcome;
+        let assertions = match self.execution.response(key) {
+            Some(ResponseState::Complete { assertions, .. }) => assertions.as_slice(),
+            _ => &[],
+        };
+        let mut counts = [0_usize; 4];
+        let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
+        for result in assertions {
+            let (label, icon, color, category, diagnostic) = match &result.outcome {
+                AssertionOutcome::Passed => ("Passed", "✓", theme.colors.status.success, 0, None),
+                AssertionOutcome::Failed => ("Failed", "×", theme.colors.status.error, 1, None),
+                AssertionOutcome::Error(error) => (
+                    "Error",
+                    "!",
+                    theme.colors.status.warning,
+                    2,
+                    Some(error.to_string()),
+                ),
+                AssertionOutcome::Disabled => ("Disabled", "−", theme.colors.text.muted, 3, None),
+            };
+            counts[category] += 1;
+            let index = result.index;
+            rows = rows.child(
+                div()
+                    .id(("assertion-result", index))
+                    .debug_selector(move || format!("assertion-result-{index}"))
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme.metrics.spacing_1))
+                    .child(
+                        div()
+                            .text_color(color)
+                            .child(format!("{icon} Assertion {} · {label}", result.index + 1)),
+                    )
+                    .when_some(diagnostic, |row, diagnostic| {
+                        row.child(
+                            div()
+                                .text_color(theme.colors.text.secondary)
+                                .child(diagnostic),
+                        )
+                    }),
+            );
+        }
+        let summary = if assertions.is_empty() {
+            "No assertion results for this execution.".to_owned()
+        } else {
+            ["passed", "failed", "error", "disabled"]
+                .iter()
+                .zip(counts)
+                .filter(|(_, count)| *count > 0)
+                .map(|(label, count)| format!("{count} {label}"))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
+        div()
+            .id("response-assertions")
+            .debug_selector(|| "response-assertions".into())
+            .flex_1()
+            .min_h(px(0.0))
+            .p(px(theme.metrics.spacing_3))
+            .overflow_y_scroll()
+            .line_height(relative(1.25))
+            .text_color(theme.colors.text.primary)
+            .child(
+                div()
+                    .mb(px(theme.metrics.spacing_2))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(summary),
+            )
+            .child(rows)
+            .into_any_element()
     }
 
     pub(super) fn render_raw_response_tabs(
@@ -371,6 +455,9 @@ impl ProbeApp {
         let Some(key) = self.shell.active_tab() else {
             return div().into_any_element();
         };
+        if self.response_viewer.tab(key) == ResponseViewerTab::Assertions {
+            return self.render_assertion_results(key, theme);
+        }
         let Some(document) = document else {
             return div()
                 .flex_1()
@@ -468,7 +555,9 @@ impl ProbeApp {
         if let Some(notice) = &document.pretty_notice
             && !matches!(
                 self.response_viewer.tab(key),
-                ResponseViewerTab::Headers | ResponseViewerTab::Inspect
+                ResponseViewerTab::Headers
+                    | ResponseViewerTab::Inspect
+                    | ResponseViewerTab::Assertions
             )
         {
             has_banner = true;
@@ -481,6 +570,7 @@ impl ProbeApp {
         }
 
         let list = match self.response_viewer.tab(key) {
+            ResponseViewerTab::Assertions => self.render_assertion_results(key, theme),
             ResponseViewerTab::Headers => self.render_response_headers(theme, document, cx),
             ResponseViewerTab::Inspect => self.render_response_inspector(theme, key, document, cx),
             ResponseViewerTab::Pretty if document.is_image() => {

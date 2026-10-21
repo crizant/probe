@@ -245,3 +245,15 @@ Review appearance visually in light and dark. Do not add automated tests for UI
 spacing, padding, radii, typography sizes, palette values, or contrast ratios.
 Automated tests should cover behavior, domain, and integration — not visual design
 tokens.
+
+
+### Assertion surfaces
+
+HTTP and GraphQL Request Editors expose a scrollable Assertions list with keyboard
+accessible checkboxes, ordinary text fields, an operator menu, and Title Case add,
+delete, and reorder actions. Optional descriptions remain editable without flattening
+their structured representation. The response Assertions tab uses semantic status
+colors plus distinct glyphs and written status labels. It identifies each result by
+its declaration index and shows value-free shared diagnostics, preserving response
+access after failures. Both surfaces use the existing theme tokens and controls;
+text buttons and tabs retain an explicit `line_height(relative(1.25))`.

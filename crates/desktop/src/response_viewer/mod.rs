@@ -41,6 +41,7 @@ pub(crate) enum ResponseViewerTab {
     Raw,
     Headers,
     Inspect,
+    Assertions,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -71,6 +72,7 @@ impl ResponseViewerTab {
             Self::Raw => "Raw",
             Self::Headers => "Headers",
             Self::Inspect => "Inspect",
+            Self::Assertions => "Assertions",
         }
     }
 }
@@ -571,7 +573,9 @@ impl ResponseViewerState {
                 RawBodyView::Base64 => SharedString::from(document.base64_text.as_str()),
                 RawBodyView::Hex => SharedString::from(document.hex_text.as_str()),
             },
-            ResponseViewerTab::Headers | ResponseViewerTab::Inspect => SharedString::default(),
+            ResponseViewerTab::Headers
+            | ResponseViewerTab::Inspect
+            | ResponseViewerTab::Assertions => SharedString::default(),
         }
     }
 

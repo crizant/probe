@@ -1367,6 +1367,7 @@ fn writable_structure_fixture(suffix: &str) -> PathBuf {
     writable_fixture(nested_fixture(), "probe-desktop-structure", suffix)
 }
 
+mod assertions;
 mod environments;
 mod graphql;
 mod interactions;

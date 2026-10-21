@@ -252,12 +252,12 @@ and collection writer preserve these declarations. Assertions are not evaluated 
 interpolated during request preparation. The standalone application-layer
 [`evaluate_assertions`](ASSERTIONS.md) operation accepts declarations, an HTTP or
 GraphQL response, and the existing variable-resolution inputs. It returns ordered,
-value-free outcomes. Live CLI execution uses `PreparedRequest::execute_with_assertions`
+value-free outcomes. CLI and desktop execution use `PreparedRequest::execute_with_assertions`
 to evaluate the original HTTP/GraphQL response before redaction, reusing the same
 engine and preparation's `CachedSecrets`. Assertion-only secrets also participate
 in redaction; the adapter receives only safe outcomes and redacted response data.
-The desktop continues to use `HttpExecution::execute` without assertion evaluation.
-Other runtime fields remain in source YAML.
+Desktop declarations use the normal request draft and Save workflow; safe results
+live beside their completed response. Other runtime fields remain in source YAML.
 
 A WebSocket request reuses the common URL, headers, authentication, docs, metadata, and
 settings fields. OpenCollection WebSocket details define no method, parameters, or HTTP
@@ -651,12 +651,39 @@ Credentials created or deleted outside Probe are not discovered until one of tho
 operations observes them. This avoids an operating-system credential query every time
 a placeholder is painted.
 
+
+### Desktop assertion execution
+
+The request editor edits `RequestRuntime.assertions` through the same in-memory
+request draft as other fields. Runtime patches, save baselines, and reconciliation
+therefore own assertion persistence; the UI has no parallel declaration model.
+
+`ExecutionService` runs preparation and `PreparedRequest::execute_with_assertions`
+on one Tokio blocking worker, using the existing runtime handle to drive async
+HTTP I/O. The borrowed native secret provider and non-Send cached provider stay
+on that worker throughout preparation and evaluation. Neither the GPUI thread nor
+Tokio's async workers perform blocking native credential lookups. The environment,
+certificate scopes, cancellation future, and progress channel are shared with
+normal desktop execution. Presence reconciliation includes assertion-only secrets.
+WebSocket execution keeps its existing boundary.
+
+`ExecutionState::Complete` owns safe assertion results beside the redacted response.
+The existing generation and key-alias checks accept or reject the whole completion;
+there is no separate results store. Response document preparation and highlighting
+continue to consume only redacted bytes. A new send clears the old document and
+replaces the response state. Results never retain declarations, operands, resolved
+secrets, or original response bodies. Assertion-bearing requests use the shared
+boundary's no-spooling policy, since assertion-only secrets may be discovered after
+the exchange. Desktop direct file saving is deferred until after redaction for
+these requests, and a save failure leaves successful transport and results visible.
+
+
 ### Execution and Reconciliation
 
 The native credential store is the source of truth when a request runs. Desktop
 execution reads reachable secrets through `NativeSecretProvider` on a Tokio blocking
-worker and reconciles presence when secret resolution finishes, not when the HTTP
-response arrives. Every Set or Delete advances a session-only presence revision. A
+worker. HTTP sends reconcile presence after assertion evaluation, including secrets
+reached only by assertion values; WebSocket connections reconcile after preparation. Every Set or Delete advances a session-only presence revision. A
 send captures that revision when it starts, and a reconciliation from an older
 revision is discarded, so an execution that read the store before a newer Set or
 Delete cannot overwrite that newer state.

@@ -5,6 +5,114 @@ use probe_core::{
     RawBodyKind, Request, RequestBody, RequestKey, RequestKind, synchronize_path_parameters,
 };
 
+pub(crate) const ASSERTION_OPERATORS: [&str; 8] = [
+    "equals",
+    "notEquals",
+    "contains",
+    "notContains",
+    "greaterThan",
+    "lessThan",
+    "isNull",
+    "isNotNull",
+];
+
+#[derive(Clone, Copy)]
+pub(crate) enum AssertionField {
+    Expression,
+    Operator,
+    Value,
+    Description,
+}
+
+impl AssertionField {
+    pub(crate) const fn id(self) -> &'static str {
+        match self {
+            Self::Expression => "assertion-expression",
+            Self::Operator => "assertion-operator-value",
+            Self::Value => "assertion-value",
+            Self::Description => "assertion-description",
+        }
+    }
+}
+
+pub(crate) enum AssertionEdit {
+    Add,
+    Remove(usize),
+    Move(usize, isize),
+    Enabled(usize, bool),
+    Text(usize, AssertionField, String),
+}
+
+impl AssertionEdit {
+    pub(crate) fn apply(self, request: &mut Request) {
+        if request.kind.is_websocket() {
+            return;
+        }
+        if matches!(self, Self::Add) {
+            request
+                .runtime
+                .assertions
+                .get_or_insert_default()
+                .push(probe_core::Assertion {
+                    expression: "response.status".into(),
+                    operator: "equals".into(),
+                    value: Some("200".into()),
+                    disabled: None,
+                    description: None,
+                });
+            return;
+        }
+        let Some(rows) = request.runtime.assertions.as_mut() else {
+            return;
+        };
+        match self {
+            Self::Add => unreachable!(),
+            Self::Remove(index) => {
+                if index < rows.len() {
+                    rows.remove(index);
+                }
+            }
+            Self::Move(index, delta) => {
+                if let Some(target) = index.checked_add_signed(delta)
+                    && index < rows.len()
+                    && target < rows.len()
+                {
+                    rows.swap(index, target);
+                }
+            }
+            Self::Enabled(index, enabled) => {
+                if let Some(row) = rows.get_mut(index)
+                    && (row.disabled != Some(true)) != enabled
+                {
+                    row.disabled = Some(!enabled);
+                }
+            }
+            Self::Text(index, field, text) => {
+                let Some(row) = rows.get_mut(index) else {
+                    return;
+                };
+                match field {
+                    AssertionField::Expression => row.expression = text,
+                    AssertionField::Operator => row.operator = text,
+                    AssertionField::Value => {
+                        if row.value.as_deref().unwrap_or_default() != text {
+                            row.value = Some(text);
+                        }
+                    }
+                    AssertionField::Description => match &mut row.description {
+                        Some(probe_core::Documentation::Content { content, .. }) => *content = text,
+                        Some(probe_core::Documentation::Text(value)) => *value = text,
+                        _ if !text.is_empty() => {
+                            row.description = Some(probe_core::Documentation::Text(text))
+                        }
+                        _ => {}
+                    },
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum EditorSection {
     #[default]
@@ -14,6 +122,7 @@ pub(crate) enum EditorSection {
     Body,
     Authentication,
     Docs,
+    Assertions,
     GraphqlQuery,
     GraphqlVariables,
     GraphqlOperationName,
@@ -22,16 +131,17 @@ pub(crate) enum EditorSection {
 }
 
 impl EditorSection {
-    pub(crate) const ALL_HTTP: [Self; 6] = [
+    pub(crate) const ALL_HTTP: [Self; 7] = [
         Self::Path,
         Self::Query,
         Self::Headers,
         Self::Body,
         Self::Authentication,
         Self::Docs,
+        Self::Assertions,
     ];
 
-    pub(crate) const ALL_GRAPHQL: [Self; 9] = [
+    pub(crate) const ALL_GRAPHQL: [Self; 10] = [
         Self::Path,
         Self::Query,
         Self::Headers,
@@ -41,6 +151,7 @@ impl EditorSection {
         Self::GraphqlExtensions,
         Self::Authentication,
         Self::Docs,
+        Self::Assertions,
     ];
 
     pub(crate) const ALL_WEBSOCKET: [Self; 4] = [
@@ -58,6 +169,7 @@ impl EditorSection {
             Self::Body => "Body",
             Self::Authentication => "Authentication",
             Self::Docs => "Documentation",
+            Self::Assertions => "Assertions",
             Self::GraphqlQuery => "Document",
             Self::GraphqlVariables => "Variables",
             Self::GraphqlOperationName => "Operation name",
@@ -865,6 +977,55 @@ mod tests {
         assert!(yaml.contains("title: Future"));
         assert!(yaml.contains("type: cbor"));
         assert!(yaml.contains("x-vendor: retained"));
+    }
+
+    #[test]
+    fn assertion_edits_preserve_absence_optional_values_and_description_structure() {
+        use super::{AssertionEdit as Edit, AssertionField as Field};
+        use probe_core::{Assertion, Documentation};
+        let mut request = Request::default();
+        Edit::Text(0, Field::Value, String::new()).apply(&mut request);
+        Edit::Remove(0).apply(&mut request);
+        assert_eq!(request.runtime.assertions, None);
+        request.runtime.assertions = Some(Vec::new());
+        let empty = request.clone();
+        Edit::Move(0, 1).apply(&mut request);
+        assert_eq!(request, empty);
+        let description = Documentation::Content {
+            content: "original".into(),
+            media_type: "text/markdown".into(),
+        };
+        request.runtime.assertions = Some(vec![Assertion {
+            expression: "response.status".into(),
+            operator: "futureOperator".into(),
+            value: None,
+            disabled: None,
+            description: Some(description.clone()),
+        }]);
+        let original = request.clone();
+        Edit::Enabled(0, true).apply(&mut request);
+        Edit::Text(0, Field::Value, String::new()).apply(&mut request);
+        assert_eq!(request, original);
+        Edit::Text(0, Field::Expression, "response.body.value".into()).apply(&mut request);
+        let row = &request.runtime.assertions.as_ref().unwrap()[0];
+        assert_eq!(row.operator, "futureOperator");
+        assert_eq!(row.description, Some(description));
+        Edit::Text(0, Field::Value, "{{retained}}".into()).apply(&mut request);
+        Edit::Text(0, Field::Operator, "isNull".into()).apply(&mut request);
+        Edit::Text(0, Field::Description, "changed".into()).apply(&mut request);
+        let row = &request.runtime.assertions.as_ref().unwrap()[0];
+        assert_eq!(row.value.as_deref(), Some("{{retained}}"));
+        assert!(
+            matches!(&row.description, Some(Documentation::Content { content, media_type }) if content == "changed" && media_type == "text/markdown")
+        );
+        request.kind = probe_core::RequestKind::WebSocket { message: None };
+        let websocket = request.clone();
+        Edit::Add.apply(&mut request);
+        Edit::Remove(0).apply(&mut request);
+        assert_eq!(request, websocket);
+        assert!(
+            !super::EditorSection::Assertions.available_for(probe_core::RequestProtocol::WebSocket)
+        );
     }
 
     fn request_key() -> probe_core::RequestKey {

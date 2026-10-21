@@ -837,7 +837,7 @@ async fn only_secret_bearing_large_responses_bypass_the_spool_cache() {
 
 #[tokio::test]
 async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present() {
-    use probe_application::AssertionOutcome;
+    use probe_application::{AssertionError, AssertionOutcome};
     use probe_core::Assertion;
 
     let mut body = SECRET.as_bytes().to_vec();
@@ -852,13 +852,22 @@ async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present(
         assert!(!prepared.uses_secrets());
         assert!(provider.lookups.borrow().is_empty());
         let assertions = if has_assertions {
-            vec![Assertion {
-                expression: "response.status".into(),
-                operator: "notEquals".into(),
-                value: Some("{{token}}".into()),
-                disabled: None,
-                description: None,
-            }]
+            vec![
+                Assertion {
+                    expression: "response.status".into(),
+                    operator: "notEquals".into(),
+                    value: Some("{{token}}".into()),
+                    disabled: None,
+                    description: None,
+                },
+                Assertion {
+                    expression: "response.body.token".into(),
+                    operator: "isNotNull".into(),
+                    value: None,
+                    disabled: None,
+                    description: None,
+                },
+            ]
         } else {
             Vec::new()
         };
@@ -879,7 +888,11 @@ async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present(
         server.join().unwrap();
         assert!(!executed.response.body_complete);
         if has_assertions {
-            assert_eq!(outcomes.len(), 1);
+            assert_eq!(outcomes.len(), 2);
+            assert_eq!(
+                outcomes[1].outcome,
+                AssertionOutcome::Error(AssertionError::BodyUnavailable)
+            );
             assert_eq!(outcomes[0].outcome, AssertionOutcome::Passed);
             assert_eq!(*provider.lookups.borrow(), ["token"]);
             assert!(executed.response.body.starts_with(b"[REDACTED]"));

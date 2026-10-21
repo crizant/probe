@@ -3,9 +3,8 @@
 `probe_application::evaluate_assertions(&[probe_core::Assertion], &HttpResponse,
 &RequestResolution, &dyn SecretProvider) -> Vec<AssertionResult>` is a standalone
 operation. HTTP and GraphQL use the same completed transport response; GraphQL's
-`data` and `errors` remain ordinary JSON properties. Live CLI runs invoke the shared
+`data` and `errors` remain ordinary JSON properties. CLI and desktop sends invoke the shared
 evaluator through the application execution boundary before response redaction.
-Desktop execution remains unchanged; desktop assertion UI is outside this work.
 Collection persistence and the YAML format are unchanged. See [CLI](CLI.md) for
 `--assert`, `--no-assertions`, structured results, exit codes, and the breaking
 migration from Probe v1.1.1's removed `--expect` flag.
@@ -96,8 +95,10 @@ regardless of body availability. Future adapters must supply an unredacted
 completed response for secret comparisons; evaluating an already redacted response
 cannot recover its original values. `PreparedRequest::execute_with_assertions`
 evaluates original bytes internally and returns only safe outcomes and redacted
-response data. HTTP failures do not evaluate assertions. Explicit output files
-retain the existing original-byte behavior.
+response data. HTTP failures do not evaluate assertions. CLI explicit output files
+retain the existing original-byte behavior. Desktop sends with assertions defer
+file saving until after evaluation and redaction. If the complete body is unavailable,
+the desktop keeps the response and results visible and reports the save failure.
 
 ## Variables and disclosure
 
@@ -129,3 +130,27 @@ secrets that a server echoes or transforms. Interfaces can associate results wit
 declarations by index; any future display of declarations needs its own disclosure
 review. Providers may block, and JSON parsing can be expensive; desktop callers
 must run the evaluator away from the UI thread.
+
+## Desktop
+
+HTTP and GraphQL requests have an **Assertions** editor tab. Add, enable or disable,
+edit, delete, and move declarations up or down. The operator menu offers the eight
+supported operators and retains an existing unknown operator until explicitly changed.
+Descriptions are optional; editing other properties preserves structured descriptions,
+explicit nulls, and omitted fields. Unary operators keep any unused expected value.
+`{{variables}}` remain ordinary text in the editor. Changes use the normal draft,
+dirty indicator, Save, reload, and reconciliation workflows. WebSocket requests do
+not offer this editor.
+
+Every HTTP/GraphQL send evaluates the request's current declaration snapshot. The
+response **Assertions** tab appears when there are results, even for a truncated
+body. It shows a summary and numbered Passed, Failed, Error, or Disabled outcomes.
+Errors use shared value-free diagnostics. Expressions, descriptions, and expected
+or actual values are never copied into result diagnostics; inspect declarations in
+the Request Editor. Failures and assertion errors keep all response tabs available.
+Status assertions work on truncated responses; body assertions report body unavailable.
+
+Results belong to the completed execution, so later edits do not change them. A new
+send replaces them; cancellation, closing or deleting the request, and workspace
+replacement discard them. Reloads preserve valid response/result pairs through the
+existing request-key remapping and execution-generation checks.

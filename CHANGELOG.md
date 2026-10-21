@@ -6,6 +6,14 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Desktop HTTP and GraphQL requests now have an Assertions editor with enable,
+  expression, operator, expected value, description, and reorder controls using
+  the normal Save workflow. Every send evaluates its declarations and shows
+  numbered Passed, Failed, Error, and Disabled results in a response Assertions
+  tab, including for truncated responses. Failed checks keep the response visible.
+
 ### Breaking changes from Probe v1.1.1
 
 - Live CLI HTTP/GraphQL runs now evaluate persisted OpenCollection assertions.

@@ -112,6 +112,7 @@ impl ProbeApp {
         }
         let (cancellation_sender, cancellation_receiver) = tokio::sync::oneshot::channel();
         let generation = self.execution.begin(key, cancellation_sender);
+        self.response_viewer.remove(key);
         let (result_receiver, mut progress_receiver, presence_receiver) = self
             .execution_service
             .as_ref()
@@ -136,18 +137,29 @@ impl ProbeApp {
                     cx.notify();
                 });
             }
-            let (result, saved_to) = match result_receiver.await {
-                Ok(Ok((response, saved_to))) => (Ok(response), saved_to),
-                Ok(Err(error)) => (Err(error), None),
+            let (result, saved_to, save_error) = match result_receiver.await {
+                Ok(Ok((response, saved_to, assertions, save_error))) => {
+                    (Ok((response, assertions)), saved_to, save_error)
+                }
+                Ok(Err(error)) => (Err(error), None, None),
                 Err(_) => (
                     Err(HttpError::Transport(
                         "HTTP execution ended without a result".to_owned(),
                     )),
                     None,
+                    None,
                 ),
             };
             let _ = view.update(cx, |view, cx| {
-                view.complete_execution(key, generation, result, saved_to, cx);
+                if view.complete_execution(key, generation, result, saved_to, cx)
+                    && let Some(error) = save_error
+                {
+                    view.show_toast(
+                        ToastIntent::Warning,
+                        format!("Response received, but could not save the body: {error}"),
+                        cx,
+                    );
+                }
                 cx.notify();
             });
         })
@@ -159,17 +171,18 @@ impl ProbeApp {
         &mut self,
         key: RequestKey,
         generation: u64,
-        result: Result<HttpResponse, HttpError>,
+        result: Result<(HttpResponse, Vec<probe_application::AssertionResult>), HttpError>,
         saved_to: Option<SavedResponseBody>,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let completed = result.is_ok();
-        if let Some(key) = self
+        let Some(key) = self
             .execution
             .finish(key, generation, result, saved_to.clone())
-        {
-            self.refresh_response_document(key, cx);
-        }
+        else {
+            return false;
+        };
+        self.refresh_response_document(key, cx);
         if completed && let Some(path) = saved_to {
             self.show_toast(
                 ToastIntent::Success,
@@ -177,14 +190,22 @@ impl ProbeApp {
                 cx,
             );
         }
+        true
     }
 
     pub(super) fn refresh_response_document(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let Some(ResponseState::Complete { response, saved_to }) = self.execution.response(key)
+        let Some(ResponseState::Complete {
+            response, saved_to, ..
+        }) = self.execution.response(key)
         else {
             self.response_viewer.remove(key);
             return;
         };
+        if matches!(self.execution.response(key), Some(ResponseState::Complete { assertions, .. }) if assertions.is_empty())
+            && self.response_viewer.tab(key) == ResponseViewerTab::Assertions
+        {
+            self.response_viewer.set_tab(key, ResponseViewerTab::Pretty);
+        }
         let generation = self.response_viewer.allocate_generation();
         let (mut document, pretty_pending, inspection_pending) =
             prepare_document(response, generation);
@@ -405,7 +426,9 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ResponseState::Complete { response, saved_to }) = self.execution.response(key)
+        let Some(ResponseState::Complete {
+            response, saved_to, ..
+        }) = self.execution.response(key)
         else {
             return;
         };
