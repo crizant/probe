@@ -41,7 +41,7 @@ pub(crate) enum ResponseState {
         progress: Option<ResponseProgress>,
     },
     Complete {
-        response: HttpResponse,
+        response: Box<HttpResponse>,
         saved_to: Option<SavedResponseBody>,
         assertions: Vec<AssertionResult>,
         assertion_declarations: Arc<Vec<probe_core::Assertion>>,
@@ -141,7 +141,7 @@ impl ExecutionState {
         self.key_aliases.retain(|_, target| *target != key);
         let response = match result {
             Ok((response, assertions)) => ResponseState::Complete {
-                response,
+                response: Box::new(response),
                 saved_to,
                 assertions,
                 assertion_declarations: Arc::new(active.assertion_declarations),
