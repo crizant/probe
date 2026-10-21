@@ -137,29 +137,18 @@ impl ProbeApp {
                     cx.notify();
                 });
             }
-            let (result, saved_to, save_error) = match result_receiver.await {
-                Ok(Ok((response, saved_to, assertions, save_error))) => {
-                    (Ok((response, assertions)), saved_to, save_error)
-                }
-                Ok(Err(error)) => (Err(error), None, None),
+            let (result, saved_to) = match result_receiver.await {
+                Ok(Ok((response, saved_to, assertions))) => (Ok((response, assertions)), saved_to),
+                Ok(Err(error)) => (Err(error), None),
                 Err(_) => (
                     Err(HttpError::Transport(
                         "HTTP execution ended without a result".to_owned(),
                     )),
                     None,
-                    None,
                 ),
             };
             let _ = view.update(cx, |view, cx| {
-                if view.complete_execution(key, generation, result, saved_to, cx)
-                    && let Some(error) = save_error
-                {
-                    view.show_toast(
-                        ToastIntent::Warning,
-                        format!("Response received, but could not save the body: {error}"),
-                        cx,
-                    );
-                }
+                view.complete_execution(key, generation, result, saved_to, cx);
                 cx.notify();
             });
         })
@@ -174,13 +163,13 @@ impl ProbeApp {
         result: Result<(HttpResponse, Vec<probe_application::AssertionResult>), HttpError>,
         saved_to: Option<SavedResponseBody>,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) {
         let completed = result.is_ok();
         let Some(key) = self
             .execution
             .finish(key, generation, result, saved_to.clone())
         else {
-            return false;
+            return;
         };
         self.refresh_response_document(key, cx);
         if completed && let Some(path) = saved_to {
@@ -190,7 +179,6 @@ impl ProbeApp {
                 cx,
             );
         }
-        true
     }
 
     pub(super) fn refresh_response_document(&mut self, key: RequestKey, cx: &mut Context<Self>) {

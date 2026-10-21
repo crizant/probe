@@ -836,7 +836,7 @@ async fn only_secret_bearing_large_responses_bypass_the_spool_cache() {
 }
 
 #[tokio::test]
-async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present() {
+async fn assertion_execution_bypasses_spooling_when_assertion_values_can_reach_secrets() {
     use probe_application::{AssertionError, AssertionOutcome};
     use probe_core::Assertion;
 
@@ -1464,4 +1464,34 @@ async fn assertion_execution_preserves_typed_protocol_preparation_errors() {
         );
         assert_eq!(error, HttpExecutionError::Protocol(expected));
     }
+}
+
+#[tokio::test]
+async fn rejecting_secret_output_also_applies_after_plain_http_conversion() {
+    let environments = environments();
+    let provider = RecordingProvider::default();
+    let output = temporary_path("refused-secret-output");
+    let execution = prepare_request(
+        &get("http://127.0.0.1:1/{{token}}"),
+        &local(&environments),
+        &provider,
+    )
+    .unwrap()
+    .reject_secret_output()
+    .into_http()
+    .unwrap();
+    let result = execution
+        .execute(
+            &HttpEngine::new().unwrap(),
+            ExecutionOptions::default(),
+            Some(&output),
+            std::future::pending::<()>(),
+            |_| {},
+        )
+        .await;
+    assert!(
+        matches!(result, Err(probe_http::HttpError::InvalidBody(message))
+        if message.contains("unavailable for requests using secret variables"))
+    );
+    assert!(!output.exists());
 }

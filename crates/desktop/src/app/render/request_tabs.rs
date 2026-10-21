@@ -386,6 +386,10 @@ impl ProbeApp {
         edit: impl FnOnce(&mut Request),
         cx: &mut Context<Self>,
     ) {
+        let assertions_were_absent = self
+            .persistence
+            .saved_request(key)
+            .is_none_or(|saved| saved.runtime.assertions.is_none());
         let Some(request) = self
             .loaded_workspace
             .as_mut()
@@ -394,6 +398,17 @@ impl ProbeApp {
             return;
         };
         edit(request);
+        // Add → Delete should undo the edit, without flattening an explicitly
+        // empty saved declaration into an absent one.
+        if assertions_were_absent
+            && request
+                .runtime
+                .assertions
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+        {
+            request.runtime.assertions = None;
+        }
         self.persistence.edited(key);
         cx.notify();
     }

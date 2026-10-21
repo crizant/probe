@@ -298,7 +298,6 @@ type ExecutionResult = Result<
         HttpResponse,
         Option<SavedResponseBody>,
         Vec<AssertionResult>,
-        Option<String>,
     ),
     HttpError,
 >;
@@ -494,7 +493,10 @@ impl ExecutionService {
             let provider: &dyn SecretProvider = match &input.credential_workspace {
                 Some(workspace) => {
                     native = ObservingSecretProvider {
-                        inner: NativeSecretProvider { store: credentials.as_ref(), workspace },
+                        inner: NativeSecretProvider {
+                            store: credentials.as_ref(),
+                            workspace,
+                        },
                         observer: &observer,
                     };
                     &native
@@ -510,40 +512,37 @@ impl ExecutionService {
             let result = handle.block_on(async {
                 let prepared = prepare_request(&input.request, &resolution, provider)
                     .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
-                let assertions = input.request.runtime.assertions.as_deref().unwrap_or_default();
-                // Assertion-only secrets may be discovered after the exchange. Direct
-                // output writes original bytes, so defer saving until after redaction.
-                let deferred_output = !assertions.is_empty() && output.is_some();
-                if prepared.uses_secrets() && output.is_some() && !deferred_output {
-                    return Err(HttpError::InvalidBody(
-                        "saving a response directly to a file is unavailable for requests using secret variables".into(),
-                    ));
-                }
-                let (executed, assertions) = prepared.execute_with_assertions(
-                    &engine,
-                    options,
-                    if deferred_output { None } else { output.as_deref() },
-                    async move { let _ = cancellation.await; },
-                    move |progress| { let _ = progress_sender.send(progress); },
-                    assertions,
-                ).await.map_err(|error| match error {
-                    HttpExecutionError::Http(error) => error,
-                    HttpExecutionError::Protocol(error) => HttpError::InvalidBody(error.to_string()),
-                })?;
-                let (saved_to, save_error) = if deferred_output {
-                    if let Some(path) = output {
-                        match save_response_body(&executed.response, None, &path) {
-                            Ok(()) => (Some(SavedResponseBody {
-                                path,
-                                sha256: Sha256::digest(&executed.response.body).into(),
-                            }), None),
-                            Err(error) => (None, Some(error)),
+                let assertions = input
+                    .request
+                    .runtime
+                    .assertions
+                    .as_deref()
+                    .unwrap_or_default();
+                let (executed, assertions) = prepared
+                    .reject_secret_output()
+                    .execute_with_assertions(
+                        &engine,
+                        options,
+                        output.as_deref(),
+                        async move {
+                            let _ = cancellation.await;
+                        },
+                        move |progress| {
+                            let _ = progress_sender.send(progress);
+                        },
+                        assertions,
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        HttpExecutionError::Http(error) => error,
+                        HttpExecutionError::Protocol(error) => {
+                            HttpError::InvalidBody(error.to_string())
                         }
-                    } else { (None, None) }
-                } else {
-                    (output.zip(executed.body_sha256).map(|(path, sha256)| SavedResponseBody { path, sha256 }), None)
-                };
-                Ok((executed.response, saved_to, assertions, save_error))
+                    })?;
+                let saved_to = output
+                    .zip(executed.body_sha256)
+                    .map(|(path, sha256)| SavedResponseBody { path, sha256 });
+                Ok((executed.response, saved_to, assertions))
             });
             // Includes secrets reached only by assertion values.
             let _ = presence_sender.send(observer.snapshot());
@@ -836,7 +835,7 @@ mod tests {
         VariableValue, VariableValueSet,
     };
     use probe_http::ExecutionOptions;
-    use probe_http::{HttpError, HttpProgress, HttpResponse, ResponseHeader};
+    use probe_http::{HttpError, HttpProgress, HttpResponse, ResponseCache, ResponseHeader};
     use sha2::{Digest, Sha256};
     use tokio::sync::oneshot;
 
@@ -1394,7 +1393,7 @@ mod tests {
             None,
             cancellation,
         );
-        let (response, _, _, _) = service
+        let (response, _, _) = service
             .runtime
             .as_ref()
             .unwrap()
@@ -1472,23 +1471,18 @@ mod tests {
             if graphql {
                 request.kind = RequestKind::Graphql { body: None };
             }
-            let directory = tempfile::TempDir::new().unwrap();
-            let output = directory.path().join("response.json");
             let (_cancel, cancellation) = oneshot::channel();
             let (receiver, _, presence) = service.execute(
                 native_input(request, workspace),
                 ExecutionOptions::default(),
-                Some(output.clone()),
+                None,
                 cancellation,
             );
             let runtime = service.runtime.as_ref().unwrap();
-            let (response, saved_to, results, save_error) =
-                runtime.block_on(receiver).unwrap().unwrap();
+            let (response, saved_to, results) = runtime.block_on(receiver).unwrap().unwrap();
             let observed = runtime.block_on(presence).unwrap();
             server.join().unwrap();
-            assert!(save_error.is_none());
-            assert_eq!(saved_to.unwrap().path(), output);
-            assert_eq!(fs::read(output).unwrap(), response.body);
+            assert!(saved_to.is_none());
             assert_eq!(
                 results
                     .iter()
@@ -1510,97 +1504,239 @@ mod tests {
     }
 
     #[test]
-    fn desktop_assertions_keep_truncated_response_when_complete_body_cannot_be_saved() {
-        use probe_application::{AssertionError, AssertionOutcome};
+    fn desktop_large_plain_assertion_responses_keep_paging_and_stream_complete_saves() {
+        use probe_application::AssertionOutcome;
         use probe_core::{Assertion, RequestRuntime};
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
+        for save in [false, true] {
+            let mut body = vec![b'x'; probe_http::MAX_IN_MEMORY_RESPONSE_BYTES];
+            body.extend(vec![b'y'; 1024]);
+            let expected = body.clone();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut buffer = [0; 4096];
+                assert!(stream.read(&mut buffer).unwrap() > 0);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
                 .unwrap();
-            let mut buffer = [0; 4096];
-            assert!(stream.read(&mut buffer).unwrap() > 0);
-            let body = vec![b'x'; probe_http::MAX_IN_MEMORY_RESPONSE_BYTES + 1024];
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .unwrap();
-            stream.write_all(&body).unwrap();
-        });
-        let directory = tempfile::TempDir::new().unwrap();
-        let output = directory.path().join("response.bin");
-        let cache = directory.path().join("cache");
-        let service =
-            ExecutionService::with_credentials(Arc::new(FakeCredentials::new(false))).unwrap();
-        let (_cancel, cancellation) = oneshot::channel();
-        let (receiver, mut progress, _) = service.execute(
-            ExecutionInput {
-                request: Request {
-                    url: Some(format!("http://{address}/")),
-                    method: Some("GET".into()),
-                    runtime: RequestRuntime {
-                        assertions: Some(vec![
-                            Assertion {
+                stream.write_all(&body).unwrap();
+            });
+            let directory = tempfile::TempDir::new().unwrap();
+            let output = directory.path().join("response.bin");
+            let service =
+                ExecutionService::with_credentials(Arc::new(FakeCredentials::new(false))).unwrap();
+            let (_cancel, cancellation) = oneshot::channel();
+            let (receiver, mut progress, _) = service.execute(
+                ExecutionInput {
+                    request: Request {
+                        url: Some(format!("http://{address}/")),
+                        method: Some("GET".into()),
+                        runtime: RequestRuntime {
+                            assertions: Some(vec![Assertion {
                                 expression: "response.status".into(),
                                 operator: "equals".into(),
                                 value: Some("200".into()),
                                 disabled: None,
                                 description: None,
-                            },
-                            Assertion {
-                                expression: "response.body".into(),
-                                operator: "isNotNull".into(),
-                                value: None,
-                                disabled: None,
-                                description: None,
-                            },
-                        ]),
+                            }]),
+                        },
+                        ..Request::default()
                     },
-                    ..Request::default()
+                    environments: Vec::new(),
+                    client_certificates: Vec::new(),
+                    environment: None,
+                    credential_workspace: None,
                 },
-                environments: Vec::new(),
-                client_certificates: Vec::new(),
-                environment: None,
-                credential_workspace: None,
-            },
-            ExecutionOptions {
-                response_cache: Some(probe_http::ResponseCache::new(
-                    cache.clone(),
-                    64 * 1024 * 1024,
-                )),
-                ..ExecutionOptions::default()
-            },
-            Some(output.clone()),
-            cancellation,
-        );
-        let (response, saved_to, results, save_error) = service
-            .runtime
-            .as_ref()
-            .unwrap()
-            .block_on(receiver)
-            .unwrap()
-            .unwrap();
-        server.join().unwrap();
-        assert_eq!(response.status, 200);
-        assert!(!response.body_complete);
-        assert!(response.body_file.is_none());
-        assert!(!cache.exists());
-        assert!(!output.exists());
-        assert!(saved_to.is_none());
-        assert!(save_error.is_some());
-        assert_eq!(results[0].outcome, AssertionOutcome::Passed);
-        assert_eq!(
-            results[1].outcome,
-            AssertionOutcome::Error(AssertionError::BodyUnavailable)
-        );
-        assert!(matches!(
-            progress.try_recv(),
-            Ok(HttpProgress::ResponseStarted { status: 200, .. })
-        ));
+                ExecutionOptions {
+                    response_cache: Some(ResponseCache::new(
+                        directory.path().join("cache"),
+                        64 * 1024 * 1024,
+                    )),
+                    ..ExecutionOptions::default()
+                },
+                save.then(|| output.clone()),
+                cancellation,
+            );
+            let (response, saved_to, results) = service
+                .runtime
+                .as_ref()
+                .unwrap()
+                .block_on(receiver)
+                .unwrap()
+                .unwrap();
+            server.join().unwrap();
+            assert_eq!(response.status, 200);
+            assert_eq!(results[0].outcome, AssertionOutcome::Passed);
+            assert!(!response.body_complete);
+            if save {
+                assert_eq!(fs::read(&output).unwrap(), expected);
+                assert_eq!(saved_to.as_ref().unwrap().path(), output);
+                let exported = directory.path().join("exported.bin");
+                save_response_body(&response, saved_to.as_ref(), &exported).unwrap();
+                assert_eq!(fs::read(exported).unwrap(), expected);
+            } else {
+                let file = response
+                    .body_file
+                    .as_ref()
+                    .expect("plain assertions must retain the complete paged body");
+                assert_eq!(fs::read(file.path()).unwrap(), expected);
+                let (document, _, _) = crate::response_viewer::prepare_document(&response, 1);
+                assert!(document.file_backed);
+                assert_eq!(document.total_size, expected.len());
+                assert_eq!(
+                    super::read_response_page(file, probe_http::MAX_IN_MEMORY_RESPONSE_BYTES, 1024)
+                        .unwrap(),
+                    vec![b'y'; 1024]
+                );
+            }
+            assert!(matches!(
+                progress.try_recv(),
+                Ok(HttpProgress::ResponseStarted { status: 200, .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn desktop_sends_resolve_collection_client_certificate_scope() {
+        for assertions in [
+            None,
+            Some(vec![probe_core::Assertion {
+                expression: "response.status".into(),
+                operator: "equals".into(),
+                value: Some("200".into()),
+                disabled: None,
+                description: None,
+            }]),
+        ] {
+            let directory = tempfile::TempDir::new().unwrap();
+            let service =
+                ExecutionService::with_credentials(Arc::new(FakeCredentials::new(false))).unwrap();
+            let (_cancel, cancellation) = oneshot::channel();
+            let (receiver, _, _) = service.execute(
+                ExecutionInput {
+                    request: Request {
+                        url: Some("https://127.0.0.1:1/".into()),
+                        method: Some("GET".into()),
+                        runtime: probe_core::RequestRuntime { assertions },
+                        ..Request::default()
+                    },
+                    environments: Vec::new(),
+                    environment: None,
+                    credential_workspace: None,
+                    client_certificates: vec![probe_core::ClientCertificate::Pem {
+                        domain: "127.0.0.1:1".into(),
+                        disabled: false,
+                        certificate_file_path: directory
+                            .path()
+                            .join("missing-cert.pem")
+                            .display()
+                            .to_string(),
+                        private_key_file_path: directory
+                            .path()
+                            .join("missing-key.pem")
+                            .display()
+                            .to_string(),
+                        passphrase: None,
+                    }],
+                },
+                ExecutionOptions::default(),
+                None,
+                cancellation,
+            );
+            let result = service
+                .runtime
+                .as_ref()
+                .unwrap()
+                .block_on(receiver)
+                .unwrap();
+            assert!(
+                matches!(result, Err(HttpError::ClientConfiguration(message)) if message == "cannot read client certificate file")
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_direct_save_refuses_request_assertion_and_certificate_secrets_consistently() {
+        use probe_core::{Assertion, ClientCertificate};
+        for source in ["request", "assertion", "certificate"] {
+            for with_assertions in [false, true] {
+                if source == "assertion" && !with_assertions {
+                    continue;
+                }
+                let directory = tempfile::TempDir::new().unwrap();
+                let store = Arc::new(FakeCredentials::new(false));
+                let id =
+                    CredentialId::for_workspace(directory.path(), "production", "token").unwrap();
+                store.set(&id, "runtime-secret").unwrap();
+                let service = ExecutionService::with_credentials(store).unwrap();
+                let mut input = native_input(
+                    Request {
+                        url: Some(
+                            if source == "request" {
+                                "https://127.0.0.1:1/{{token}}"
+                            } else {
+                                "https://127.0.0.1:1/"
+                            }
+                            .into(),
+                        ),
+                        method: Some("GET".into()),
+                        ..Request::default()
+                    },
+                    directory.path().to_owned(),
+                );
+                if with_assertions {
+                    input.request.runtime.assertions = Some(vec![Assertion {
+                        expression: "response.status".into(),
+                        operator: "equals".into(),
+                        value: Some(
+                            if source == "assertion" {
+                                "{{outer}}"
+                            } else {
+                                "200"
+                            }
+                            .into(),
+                        ),
+                        disabled: None,
+                        description: None,
+                    }]);
+                }
+                if source == "certificate" {
+                    input.client_certificates = vec![ClientCertificate::Pem {
+                        domain: "127.0.0.1:1".into(),
+                        disabled: false,
+                        certificate_file_path: "unused.pem".into(),
+                        private_key_file_path: "unused-key.pem".into(),
+                        passphrase: Some("{{token}}".into()),
+                    }];
+                }
+                let output = directory.path().join("response.bin");
+                let (_cancel, cancellation) = oneshot::channel();
+                let (receiver, _, _) = service.execute(
+                    input,
+                    ExecutionOptions::default(),
+                    Some(output.clone()),
+                    cancellation,
+                );
+                let result = service
+                    .runtime
+                    .as_ref()
+                    .unwrap()
+                    .block_on(receiver)
+                    .unwrap();
+                assert!(
+                    matches!(result, Err(HttpError::InvalidBody(message)) if message.contains("unavailable for requests using secret variables")),
+                    "source: {source}, assertions: {with_assertions}"
+                );
+                assert!(!output.exists());
+            }
+        }
     }
 
     #[test]

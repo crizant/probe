@@ -219,17 +219,82 @@ fn desktop_assertion_edits_round_trip_bundled_and_unbundled_declarations() {
 }
 
 #[gpui_kit::test]
-fn assertion_delete_restores_keyboard_save_and_persists_explicit_empty_list(
-    cx: &mut TestAppContext,
-) {
-    assert_save_shortcut_after_clicking_remove_row_persists_removal(
-        cx,
-        "assertion-delete-save",
-        EditorSection::Assertions,
-        "add-assertion",
-        "assertion-delete-0",
-        |request| {
-            assert_eq!(request.runtime.assertions, Some(Vec::new()));
-        },
-    );
+fn assertion_add_delete_restores_original_list_presence_and_keyboard_save(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    for explicit_empty in [false, true] {
+        let path = writable_bundled_fixture(if explicit_empty {
+            "assertions-original-empty"
+        } else {
+            "assertions-original-absent"
+        });
+        let mut loaded = probe_opencollection::load_workspace(&path).unwrap();
+        let key = loaded.requests()[0].key();
+        let selector = loaded.requests()[0].selector().to_owned();
+        let original = explicit_empty.then(Vec::new);
+        let saved = loaded.workspace().request(key).unwrap().clone();
+        let mut request = saved.clone();
+        request.runtime.assertions = original.clone();
+        let update = probe_core::RequestUpdate::between(Some(&saved), &request).unwrap();
+        if !update.is_empty() {
+            loaded.update_request(&selector, &update).unwrap();
+        }
+        let window = cx.open_window(size(px(1200.0), px(850.0)), ProbeApp::new);
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                view.set_workspace(path.clone(), loaded);
+                view.select_request(key, cx);
+                view.request_editor
+                    .set_section(key, EditorSection::Assertions);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        click(&mut visual, "add-assertion");
+        window
+            .update(cx, |view, _, _| {
+                assert!(
+                    view.persistence
+                        .is_dirty(key, view.active_request().unwrap())
+                );
+            })
+            .unwrap();
+        click(&mut visual, "assertion-delete-0");
+        window
+            .update(cx, |view, _, cx| {
+                let request = view.active_request().unwrap();
+                assert_eq!(request.runtime.assertions, original);
+                assert!(!view.persistence.is_dirty(key, request));
+                // An unrelated edit saves without adding an assertion declaration.
+                view.edit_request(
+                    key,
+                    |request| request.url = Some("https://changed.example/".into()),
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), save_shortcut());
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert!(
+                    !view
+                        .persistence
+                        .is_dirty(key, view.active_request().unwrap())
+                );
+            })
+            .unwrap();
+        let reloaded = probe_opencollection::load_workspace(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .workspace()
+                .request(reloaded.request_key(&selector).unwrap())
+                .unwrap()
+                .runtime
+                .assertions,
+            original
+        );
+        fs::remove_file(path).unwrap();
+    }
 }

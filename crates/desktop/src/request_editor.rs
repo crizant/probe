@@ -1028,6 +1028,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn assertion_remove_and_move_respect_both_index_bounds() {
+        use super::{AssertionEdit as Edit, AssertionField as Field};
+        let mut request = Request::default();
+        Edit::Add.apply(&mut request);
+        Edit::Text(0, Field::Expression, "first".into()).apply(&mut request);
+        Edit::Add.apply(&mut request);
+        Edit::Text(1, Field::Expression, "second".into()).apply(&mut request);
+        let original = request.clone();
+        for edit in [
+            Edit::Remove(2),
+            Edit::Remove(usize::MAX),
+            Edit::Move(2, -1),
+            Edit::Move(1, 1),
+            Edit::Move(0, -1),
+            Edit::Move(usize::MAX, 1),
+        ] {
+            edit.apply(&mut request);
+            assert_eq!(request, original);
+        }
+        Edit::Move(0, 1).apply(&mut request);
+        assert_eq!(
+            request.runtime.assertions.as_ref().unwrap()[0].expression,
+            "second"
+        );
+        Edit::Move(1, -1).apply(&mut request);
+        assert_eq!(request, original);
+        Edit::Remove(1).apply(&mut request);
+        let rows = request.runtime.assertions.as_ref().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].expression, "first");
+    }
+
+    #[test]
+    fn assertion_plain_text_descriptions_can_be_replaced_and_cleared() {
+        use super::{AssertionEdit as Edit, AssertionField as Field};
+        let mut request = Request::default();
+        Edit::Add.apply(&mut request);
+        request.runtime.assertions.as_mut().unwrap()[0].description =
+            Some(probe_core::Documentation::Text("original".into()));
+        for text in ["edited {{ordinaryText}}", ""] {
+            Edit::Text(0, Field::Description, text.into()).apply(&mut request);
+            assert_eq!(
+                request.runtime.assertions.as_ref().unwrap()[0].description,
+                Some(probe_core::Documentation::Text(text.into()))
+            );
+        }
+    }
+
     fn request_key() -> probe_core::RequestKey {
         let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
             items: vec![probe_core::CollectionItem::Request(Request::default())],

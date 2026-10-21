@@ -96,9 +96,10 @@ completed response for secret comparisons; evaluating an already redacted respon
 cannot recover its original values. `PreparedRequest::execute_with_assertions`
 evaluates original bytes internally and returns only safe outcomes and redacted
 response data. HTTP failures do not evaluate assertions. CLI explicit output files
-retain the existing original-byte behavior. Desktop sends with assertions defer
-file saving until after evaluation and redaction. If the complete body is unavailable,
-the desktop keeps the response and results visible and reports the save failure.
+retain the existing original-byte behavior. Desktop direct saves stream complete
+non-secret responses, with or without assertions. Desktop execution opts into
+`PreparedRequest::reject_secret_output()`, refusing direct saves before the exchange
+when request, selected certificate, or active assertion values may use secrets.
 
 ## Variables and disclosure
 
@@ -113,9 +114,12 @@ The standalone evaluator caches provider values and failures across its batch.
 Integrated execution reuses the existing preparation `CachedSecrets`, sharing lookups
 with request and certificate resolution. Request, certificate, and assertion secrets
 are combined and deduplicated before a single longest-first redaction of the original
-response; raw response data and resolved values never cross the application boundary. Runs with assertions bypass response spool caching so those
-files cannot retain assertion-only secrets. Disabled and unary declarations never
-resolve ignored values.
+response; raw response data and resolved values never cross the application boundary.
+A metadata-only preflight uses the same environment resolver without a native secret
+provider to decide whether active assertion values could reach secrets. Such runs
+bypass response spool caching; uncertain resolution also disables spooling. Plain
+assertions retain normal disk-backed paging. Disabled and unary declarations never
+resolve ignored values or restrict storage based on those values.
 
 Missing, disabled, malformed, unavailable, or provider-failed references return
 `VariableResolution`. Assertions always require available values, including when
@@ -139,7 +143,9 @@ supported operators and retains an existing unknown operator until explicitly ch
 Descriptions are optional; editing other properties preserves structured descriptions,
 explicit nulls, and omitted fields. Unary operators keep any unused expected value.
 `{{variables}}` remain ordinary text in the editor. Changes use the normal draft,
-dirty indicator, Save, reload, and reconciliation workflows. WebSocket requests do
+dirty indicator, Save, reload, and reconciliation workflows. Adding and deleting
+a new assertion restores an originally absent list; an explicitly empty baseline
+stays explicitly empty. WebSocket requests do
 not offer this editor.
 
 Every HTTP/GraphQL send evaluates the request's current declaration snapshot. The

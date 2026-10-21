@@ -83,6 +83,43 @@ pub fn evaluate_assertions(
     evaluate_with_disclosure(assertions, response, resolution, &secrets, |_| {})
 }
 
+/// A metadata-only storage preflight. Never consult the caller's secret provider.
+/// A failed resolution is treated conservatively: no original bytes may be spooled.
+/// Disabled declarations and unary values cannot resolve secrets during evaluation.
+pub(crate) fn may_resolve_secrets(
+    assertions: &[Assertion],
+    resolution: &RequestResolution<'_>,
+) -> bool {
+    assertions.iter().any(|assertion| {
+        if assertion.disabled == Some(true)
+            || matches!(assertion.operator.as_str(), "isNull" | "isNotNull")
+        {
+            return false;
+        }
+        let Some(template) = assertion
+            .value
+            .as_deref()
+            .filter(|value| value.contains("{{"))
+        else {
+            return false;
+        };
+        match resolve_environment_for_templates_with_provider(
+            [template],
+            resolution.environments,
+            resolution.environment,
+            resolution.overrides,
+            &crate::NoSecrets,
+            resolution.workspace_identity,
+        ) {
+            Ok(environment) => {
+                environment.has_resolved_secrets()
+                    || environment.interpolate_strict(template).is_err()
+            }
+            Err(_) => true,
+        }
+    })
+}
+
 pub(crate) fn evaluate_with_disclosure(
     assertions: &[Assertion],
     response: &HttpResponse,

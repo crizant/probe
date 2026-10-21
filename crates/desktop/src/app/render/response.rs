@@ -340,22 +340,19 @@ impl ProbeApp {
             Some(ResponseState::Complete { assertions, .. }) => assertions.as_slice(),
             _ => &[],
         };
-        let mut counts = [0_usize; 4];
         let mut rows = div().flex().flex_col().gap(px(theme.metrics.spacing_2));
         for result in assertions {
-            let (label, icon, color, category, diagnostic) = match &result.outcome {
-                AssertionOutcome::Passed => ("Passed", "✓", theme.colors.status.success, 0, None),
-                AssertionOutcome::Failed => ("Failed", "×", theme.colors.status.error, 1, None),
+            let (label, icon, color, diagnostic) = match &result.outcome {
+                AssertionOutcome::Passed => ("Passed", "✓", theme.colors.status.success, None),
+                AssertionOutcome::Failed => ("Failed", "×", theme.colors.status.error, None),
                 AssertionOutcome::Error(error) => (
                     "Error",
                     "!",
                     theme.colors.status.warning,
-                    2,
                     Some(error.to_string()),
                 ),
-                AssertionOutcome::Disabled => ("Disabled", "−", theme.colors.text.muted, 3, None),
+                AssertionOutcome::Disabled => ("Disabled", "−", theme.colors.text.muted, None),
             };
-            counts[category] += 1;
             let index = result.index;
             rows = rows.child(
                 div()
@@ -378,17 +375,7 @@ impl ProbeApp {
                     }),
             );
         }
-        let summary = if assertions.is_empty() {
-            "No assertion results for this execution.".to_owned()
-        } else {
-            ["passed", "failed", "error", "disabled"]
-                .iter()
-                .zip(counts)
-                .filter(|(_, count)| *count > 0)
-                .map(|(label, count)| format!("{count} {label}"))
-                .collect::<Vec<_>>()
-                .join(" · ")
-        };
+        let summary = assertion_summary(assertions);
         div()
             .id("response-assertions")
             .debug_selector(|| "response-assertions".into())
@@ -1259,5 +1246,65 @@ impl ProbeApp {
                 ..components::VariableContext::default()
             },
         }
+    }
+}
+
+fn assertion_summary(assertions: &[probe_application::AssertionResult]) -> String {
+    use probe_application::AssertionOutcome;
+    if assertions.is_empty() {
+        return "No assertion results for this execution.".into();
+    }
+    let mut counts = [0_usize; 4];
+    for result in assertions {
+        let category = match result.outcome {
+            AssertionOutcome::Passed => 0,
+            AssertionOutcome::Failed => 1,
+            AssertionOutcome::Error(_) => 2,
+            AssertionOutcome::Disabled => 3,
+        };
+        counts[category] += 1;
+    }
+    ["passed", "failed", "error", "disabled"]
+        .iter()
+        .zip(counts)
+        .filter(|(_, count)| *count > 0)
+        .map(|(label, count)| format!("{count} {label}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+#[cfg(test)]
+mod assertion_summary_tests {
+    use super::assertion_summary;
+    use probe_application::{AssertionError, AssertionOutcome as Outcome, AssertionResult};
+
+    #[test]
+    fn response_assertion_summary_counts_each_status_and_omits_zeroes() {
+        let results = [
+            Outcome::Passed,
+            Outcome::Failed,
+            Outcome::Disabled,
+            Outcome::Error(AssertionError::VariableResolution),
+            Outcome::Passed,
+            Outcome::Disabled,
+            Outcome::Error(AssertionError::UnsupportedOperator),
+            Outcome::Passed,
+            Outcome::Disabled,
+            Outcome::Disabled,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, outcome)| AssertionResult { index, outcome })
+        .collect::<Vec<_>>();
+        assert_eq!(
+            assertion_summary(&results),
+            "3 passed · 1 failed · 2 error · 4 disabled"
+        );
+        assert_eq!(assertion_summary(&results[..2]), "1 passed · 1 failed");
+        assert_eq!(assertion_summary(&results[2..3]), "1 disabled");
+        assert_eq!(
+            assertion_summary(&[]),
+            "No assertion results for this execution."
+        );
     }
 }

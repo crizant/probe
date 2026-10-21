@@ -993,3 +993,65 @@ fn batch_caches_provider_success_missing_values_and_failures() {
         assert!(results.iter().all(|r| r.outcome == expected));
     }
 }
+
+#[test]
+fn storage_preflight_distinguishes_plain_ignored_and_reachable_secret_values() {
+    let loaded = fixture();
+    let environments = loaded.workspace().environments();
+    let resolution = RequestResolution {
+        environments,
+        environment: Some("child"),
+        ..RequestResolution::default()
+    };
+    assert!(!may_resolve_secrets(&[], &resolution));
+    for value in ["200", "{{status}}", "{{embedded}}"] {
+        assert!(
+            !may_resolve_secrets(
+                &[assertion("response.status", "equals", Some(value))],
+                &resolution
+            ),
+            "plain value: {value}"
+        );
+    }
+    for value in ["{{token}}", "{{alias}}", "{{missing}}", "{{malformed"] {
+        assert!(
+            may_resolve_secrets(
+                &[assertion("response.status", "equals", Some(value))],
+                &resolution
+            ),
+            "secret or uncertain value: {value}"
+        );
+    }
+    let mut disabled = assertion("response.status", "equals", Some("{{token}}"));
+    disabled.disabled = Some(true);
+    assert!(!may_resolve_secrets(&[disabled], &resolution));
+    for operator in ["isNull", "isNotNull"] {
+        assert!(!may_resolve_secrets(
+            &[assertion("response.body", operator, Some("{{token}}"))],
+            &resolution
+        ));
+    }
+    let plain_override = [("alias".into(), "200".into())];
+    assert!(!may_resolve_secrets(
+        &[assertion("response.status", "equals", Some("{{alias}}"))],
+        &RequestResolution {
+            overrides: &plain_override,
+            ..resolution
+        }
+    ));
+    let secret_override = [("token".into(), "runtime-secret".into())];
+    assert!(may_resolve_secrets(
+        &[assertion("response.status", "equals", Some("{{token}}"))],
+        &RequestResolution {
+            overrides: &secret_override,
+            ..resolution
+        }
+    ));
+    assert!(may_resolve_secrets(
+        &[assertion("response.status", "equals", Some("{{status}}"))],
+        &RequestResolution {
+            environment: Some("missing-environment"),
+            ..resolution
+        }
+    ));
+}

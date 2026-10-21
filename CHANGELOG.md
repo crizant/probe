@@ -13,6 +13,9 @@ Release dates use Australia/Brisbane time (UTC+10).
   the normal Save workflow. Every send evaluates its declarations and shows
   numbered Passed, Failed, Error, and Disabled results in a response Assertions
   tab, including for truncated responses. Failed checks keep the response visible.
+  Plain assertions retain full response paging and streamed file saves; direct
+  saves consistently refuse requests that may use secrets. Adding then deleting
+  an unsaved assertion restores the original absent or explicitly empty list.
 
 ### Breaking changes from Probe v1.1.1
 

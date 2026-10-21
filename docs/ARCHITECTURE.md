@@ -657,6 +657,8 @@ a placeholder is painted.
 The request editor edits `RequestRuntime.assertions` through the same in-memory
 request draft as other fields. Runtime patches, save baselines, and reconciliation
 therefore own assertion persistence; the UI has no parallel declaration model.
+Empty draft lists are normalized against the saved baseline, restoring absence
+after Add → Delete while retaining an explicitly empty baseline.
 
 `ExecutionService` runs preparation and `PreparedRequest::execute_with_assertions`
 on one Tokio blocking worker, using the existing runtime handle to drive async
@@ -672,10 +674,13 @@ The existing generation and key-alias checks accept or reject the whole completi
 there is no separate results store. Response document preparation and highlighting
 continue to consume only redacted bytes. A new send clears the old document and
 replaces the response state. Results never retain declarations, operands, resolved
-secrets, or original response bodies. Assertion-bearing requests use the shared
-boundary's no-spooling policy, since assertion-only secrets may be discovered after
-the exchange. Desktop direct file saving is deferred until after redaction for
-these requests, and a save failure leaves successful transport and results visible.
+secrets, or original response bodies. The shared boundary disables spooling only
+when request/certificate resolution uses secrets or active assertion values may
+reach secrets (including uncertain resolution). Its metadata preflight never
+consults the native provider. Plain assertions retain normal paging and streamed
+file output. Desktop opts into `PreparedRequest::reject_secret_output()`, enforcing
+the same direct-save refusal for request, selected certificate, and assertion
+secrets before the exchange. CLI trusted original-byte output keeps its policy.
 
 
 ### Execution and Reconciliation
