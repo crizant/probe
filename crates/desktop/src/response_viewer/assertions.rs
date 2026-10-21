@@ -71,12 +71,18 @@ pub(crate) fn single_line_actual(actual: &str) -> String {
 }
 
 pub(crate) fn copy_row(declaration: &Assertion, result: &AssertionResult) -> String {
-    let mut text = format!(
-        "{} {} {}",
-        declaration.expression,
-        declaration.operator,
-        declaration.value.as_deref().unwrap_or_default()
-    );
+    let mut text = format!("{} {}", declaration.expression, declaration.operator);
+    if !matches!(
+        declaration.operator.as_str(),
+        "isNull" | "isNotNull" | "exists" | "notExists"
+    ) && let Some(value) = declaration
+        .value
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        text.push(' ');
+        text.push_str(value);
+    }
     if result.outcome == AssertionOutcome::Failed
         && let Some(actual) = &result.actual
     {
@@ -139,7 +145,12 @@ mod tests {
         let error = Error(AssertionError::BodyUnavailable);
         for (outcomes, expected) in [
             (vec![Failed, Passed], vec!["1 of 2 failed"]),
+            (
+                vec![Failed, Disabled, Disabled],
+                vec!["1 of 1 failed", "2 skipped"],
+            ),
             (vec![error.clone()], vec!["1 error"]),
+            (vec![error.clone(), Disabled], vec!["1 error", "1 skipped"]),
             (
                 vec![error.clone(), error.clone(), Passed, Disabled],
                 vec!["2 errors", "1 passed", "1 skipped"],
@@ -188,6 +199,42 @@ mod interaction_tests {
     use super::*;
     use crate::response_viewer::ResponseViewerState;
     #[test]
+    fn copied_rows_omit_unused_or_absent_expected_values() {
+        let mut declaration = Assertion {
+            expression: "response.body.item".into(),
+            operator: String::new(),
+            value: Some("preserved unused value".into()),
+            disabled: None,
+            description: None,
+        };
+        let mut result = AssertionResult {
+            index: 0,
+            outcome: AssertionOutcome::Passed,
+            actual: Some("null".into()),
+            actual_truncated: false,
+        };
+        for operator in ["isNull", "isNotNull", "exists", "notExists"] {
+            declaration.operator = operator.into();
+            assert_eq!(
+                copy_row(&declaration, &result),
+                format!("response.body.item {operator}")
+            );
+        }
+        declaration.operator = "equals".into();
+        for value in [None, Some(String::new())] {
+            declaration.value = value;
+            assert_eq!(copy_row(&declaration, &result), "response.body.item equals");
+        }
+        result.outcome = AssertionOutcome::Failed;
+        assert_eq!(
+            copy_row(&declaration, &result),
+            "response.body.item equals\ngot null"
+        );
+        result.actual = None;
+        assert_eq!(copy_row(&declaration, &result), "response.body.item equals");
+    }
+
+    #[test]
     fn keyboard_selection_clamps_in_display_order_and_copy_includes_only_failed_actuals() {
         let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
             items: vec![probe_core::CollectionItem::Request(
@@ -200,6 +247,12 @@ mod interaction_tests {
         };
         let mut state = ResponseViewerState::default();
         state.move_assertion(key, &[2, 0, 1], 1);
+        assert_eq!(state.assertion_selection(key), Some(0));
+        state.move_assertion(key, &[2, 0, 1], 1);
+        assert_eq!(state.assertion_selection(key), Some(1));
+        state.move_assertion(key, &[2, 0, 1], 1);
+        assert_eq!(state.assertion_selection(key), Some(1));
+        state.move_assertion(key, &[2, 0, 1], -1);
         assert_eq!(state.assertion_selection(key), Some(0));
         state.move_assertion(key, &[2, 0, 1], isize::MAX);
         assert_eq!(state.assertion_selection(key), Some(1));

@@ -257,35 +257,40 @@ impl<'a> SecretRedactor<'a> {
     /// exposing secret material outside core. All variants share one matcher.
     #[must_use]
     pub fn with_json_literals(mut self) -> Self {
-        fn collect(value: &serde_json::Value, output: &mut Vec<String>) {
+        fn string_forms(text: &str, output: &mut Vec<String>) {
+            output.push(text.to_owned());
+            let encoded = serde_json::to_string(text).expect("strings serialize");
+            output.push(encoded[1..encoded.len() - 1].to_owned());
+        }
+        fn collect_strings(value: &serde_json::Value, output: &mut Vec<String>) {
             match value {
-                serde_json::Value::String(text) => output.push(text.clone()),
+                serde_json::Value::String(text) => string_forms(text, output),
                 serde_json::Value::Array(values) => {
-                    output.push(value.to_string());
                     for value in values {
-                        collect(value, output);
+                        collect_strings(value, output);
                     }
                 }
                 serde_json::Value::Object(values) => {
-                    output.push(value.to_string());
-                    for (key, value) in values {
-                        output.push(key.clone());
-                        collect(value, output);
+                    for value in values.values() {
+                        collect_strings(value, output);
                     }
                 }
-                serde_json::Value::Number(number) => {
-                    output.push(number.to_string());
-                    if let Some(float) = number.as_f64() {
-                        output.push(float.to_string());
-                    }
-                }
-                value => output.push(value.to_string()),
+                _ => {}
             }
         }
         let mut literals = Vec::new();
         for value in &self.values {
+            string_forms(value, &mut literals);
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(value) {
-                collect(&value, &mut literals);
+                // Keep the entire normalized literal, but do not turn ordinary
+                // object keys or nested numbers/bools/null into global secrets.
+                literals.push(value.to_string());
+                collect_strings(&value, &mut literals);
+                if let serde_json::Value::Number(number) = value
+                    && let Some(float) = number.as_f64()
+                {
+                    literals.push(float.to_string());
+                }
             }
         }
         self.values.extend(

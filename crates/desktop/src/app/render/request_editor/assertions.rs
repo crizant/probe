@@ -255,6 +255,9 @@ impl ProbeApp {
                     self.variable_context(cx),
                     move |value, _, cx| {
                         let _ = view.update(cx, |view, cx| {
+                            if matches!(field, AssertionField::Description) {
+                                view.request_editor.show_assertion_description(key, index);
+                            }
                             view.edit_request(
                                 key,
                                 |request| {

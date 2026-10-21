@@ -30,9 +30,9 @@ Release dates use Australia/Brisbane time (UTC+10).
   a compact reveal control, unary expected values stay disabled, and editor rows
   show matching outcomes from the latest send.
 - Shared assertion results and CLI JSON now include redacted actual display values
-  and truncation metadata. Human/quiet failure output includes the observed value.
-  Values are redacted before truncation; CLI flags, exit codes, and existing
-  outcome/error fields are unchanged.
+  and truncation metadata as additive JSON fields. Values are redacted before
+  truncation; existing CLI fields, human/quiet diagnostics, flags, and exit codes
+  are unchanged.
 
 ### Breaking changes from Probe v1.1.1
 

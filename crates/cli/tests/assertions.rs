@@ -171,6 +171,18 @@ fn mixed_failures_report_all_safe_outcomes_and_skip_only_collection_when_request
                 assert_eq!(results[3]["outcome"], "failed");
                 assert_eq!(results[4]["error"]["category"], "variable_resolution");
             }
+            assert_eq!(
+                value["error"]["message"],
+                if no_assertions {
+                    "Assertions: 1 passed, 1 failed, 0 errors, 0 disabled"
+                } else {
+                    "Assertions: 3 passed, 2 failed, 1 errors, 1 disabled"
+                }
+            );
+            let failed_status = &results[if no_assertions { 0 } else { 5 }];
+            assert_eq!(failed_status["outcome"], "failed");
+            assert_eq!(failed_status["actual"], "200");
+            assert_eq!(failed_status["actualTruncated"], false);
             assert_eq!(results.last().unwrap()["outcome"], "passed");
             let text = String::from_utf8_lossy(&output.stdout);
             for sensitive in [
@@ -210,7 +222,7 @@ fn human_and_quiet_summaries_keep_failures_and_exit_codes() {
                 assert!(output.stdout.is_empty());
                 assert_eq!(
                     String::from_utf8(output.stderr).unwrap(),
-                    "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\ncli assertion 1: got \"200\"\n"
+                    "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n"
                 );
             } else if quiet {
                 assert!(output.stdout.is_empty());
@@ -248,7 +260,7 @@ fn human_and_quiet_mixed_summaries_count_disabled_assertions_and_errors() {
         assert!(output.stdout.is_empty());
         assert_eq!(
             String::from_utf8(output.stderr).unwrap(),
-            "error[assertion_failed]: Assertions: 2 passed, 1 failed, 2 errors, 2 disabled\ncli assertion 1: got \"200\"\n"
+            "error[assertion_failed]: Assertions: 2 passed, 1 failed, 2 errors, 2 disabled\n"
         );
         server.join().unwrap();
         cleanup(path);
@@ -712,6 +724,10 @@ fn json_failure_actual_is_bounded_and_marks_truncation() {
     );
     assert_eq!(output.status.code(), Some(9));
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["error"]["message"],
+        "Assertions: 0 passed, 1 failed, 0 errors, 0 disabled"
+    );
     let result = &value["error"]["details"]["assertions"][0];
     assert_eq!(result["outcome"], "failed");
     assert_eq!(

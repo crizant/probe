@@ -512,25 +512,7 @@ pub(crate) fn assertion_summary(results: &[RunAssertionResult]) -> String {
             AssertionOutcome::Error(_) => errors += 1,
         }
     }
-    let mut summary = format!(
-        "Assertions: {passed} passed, {failed} failed, {errors} errors, {disabled} disabled"
-    );
-    for result in results
-        .iter()
-        .filter(|result| result.outcome == AssertionOutcome::Failed)
-    {
-        if let Some(actual) = &result.actual {
-            use std::fmt::Write as _;
-            let _ = write!(
-                summary,
-                "\n{} assertion {}: got {}",
-                result.source,
-                result.index + 1,
-                serde_json::to_string(actual).expect("display text is serializable")
-            );
-        }
-    }
-    summary
+    format!("Assertions: {passed} passed, {failed} failed, {errors} errors, {disabled} disabled")
 }
 
 fn response_output(

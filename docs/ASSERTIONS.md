@@ -142,6 +142,12 @@ results never retain its original bytes or secret-bearing values. Decoded string
 and object-key redaction precedes JSON escaping. Structured observations containing
 secret text may be entirely redacted. Only after redaction is display text capped
 at 512 Unicode characters, followed by `… [truncated]` and a truncation flag.
+JSON secret expansion keeps the complete literal, encoded/escaped forms, decoded
+string values, and normalized forms of top-level numbers. Object keys and nested
+non-string scalars are not independently treated as secrets. Explicit short secrets
+still use substring matching: a secret `1` redacts the final digit of status `201`.
+Use sufficiently distinctive secret values to avoid such unavoidable matches.
+
 Providers may block, and JSON parsing can be expensive; desktop callers must run
 the evaluator away from the UI thread.
 

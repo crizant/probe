@@ -365,7 +365,7 @@ impl ProbeApp {
                         _ => 0,
                     };
                     tab.accessibility_label(if failures > 0 {
-                        format!("Assertions {failures}")
+                        format!("Assertions, {failures} failed")
                     } else {
                         "Assertions".into()
                     })

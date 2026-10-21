@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::documentation::documentation_text;
 use crate::request_editor::{AssertionEdit, AssertionField};
 use probe_application::{AssertionError, AssertionOutcome, AssertionResult};
 
@@ -583,4 +584,123 @@ fn assertion_empty_skipped_and_failed_request_states_keep_editor_access(cx: &mut
     assert!(visual.debug_bounds("assertions-not-evaluated").is_none());
     click(&mut visual, "failed-response-tab-1");
     assert!(visual.debug_bounds("assertions-not-evaluated").is_some());
+}
+
+#[gpui_kit::test]
+fn clearing_an_existing_description_keeps_the_field_and_keyboard_focus(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1500.0), px(1000.0)), ProbeApp::new);
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/opencollection/assertions-bundled.yml");
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = loaded.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, loaded);
+            view.select_request(key, cx);
+            view.request_editor
+                .set_section(key, EditorSection::Assertions);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    click(&mut visual, "assertion-description-0");
+    cx.simulate_keystrokes(
+        window.into(),
+        if cfg!(target_os = "macos") {
+            "cmd-a backspace"
+        } else {
+            "ctrl-a backspace"
+        },
+    );
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("assertion-description-0").is_some());
+    window
+        .update(cx, |view, _, _| {
+            let row = &view
+                .active_request()
+                .unwrap()
+                .runtime
+                .assertions
+                .as_ref()
+                .unwrap()[0];
+            assert!(
+                documentation_text(row.description.as_ref())
+                    .unwrap_or_default()
+                    .is_empty()
+            );
+            assert!(view.request_editor.description_is_open(key, 0));
+        })
+        .unwrap();
+    // No extra click: typing must continue in the same field after it was cleared.
+    cx.simulate_input(window.into(), "Replacement description");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let row = &view
+                .active_request()
+                .unwrap()
+                .runtime
+                .assertions
+                .as_ref()
+                .unwrap()[0];
+            assert_eq!(
+                documentation_text(row.description.as_ref()),
+                Some("Replacement description")
+            );
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn result_jump_follows_the_original_declaration_and_ignores_removed_rows(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(1500.0), px(1000.0)), ProbeApp::new);
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/opencollection/assertions-bundled.yml");
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let key = loaded.requests()[0].key();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, loaded);
+            view.select_request(key, cx);
+            let declarations = view
+                .active_request()
+                .unwrap()
+                .runtime
+                .assertions
+                .clone()
+                .unwrap();
+            let (cancel, _) = oneshot::channel();
+            let generation = view
+                .execution
+                .begin_with_assertions(key, cancel, declarations);
+            view.complete_execution(
+                key,
+                generation,
+                Ok((
+                    super::workspace::tab_response(),
+                    vec![AssertionResult {
+                        index: 1,
+                        outcome: AssertionOutcome::Failed,
+                        actual: Some("0".into()),
+                        actual_truncated: false,
+                    }],
+                )),
+                None,
+                cx,
+            );
+            view.edit_request(key, |r| AssertionEdit::Remove(0).apply(r), cx);
+            view.jump_to_assertion(key, 1, cx);
+            assert_eq!(view.request_editor.section(key), EditorSection::Assertions);
+            assert!(view.request_editor.take_assertion_focus(key, 0));
+            assert!(!view.request_editor.take_assertion_focus(key, 1));
+            view.edit_request(key, |r| AssertionEdit::Remove(0).apply(r), cx);
+            view.jump_to_assertion(key, 1, cx);
+            assert!(!view.request_editor.take_assertion_focus(key, 0));
+            assert!(!view.request_editor.take_assertion_focus(key, 1));
+        })
+        .unwrap();
 }
