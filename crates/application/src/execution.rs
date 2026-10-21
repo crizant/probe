@@ -602,6 +602,28 @@ pub use session::{
 };
 
 #[cfg(test)]
+mod output_policy_tests {
+    use super::*;
+
+    #[test]
+    fn secret_assertions_without_file_output_are_allowed() {
+        let execution = prepare_request(
+            &Request::default(),
+            &RequestResolution::default(),
+            &NoSecrets,
+        )
+        .unwrap()
+        .reject_secret_output()
+        .into_http()
+        .unwrap();
+
+        // Rejecting secret file output must not reject an in-memory response.
+        // Call the policy directly so a regression fails before any transport I/O.
+        assert_eq!(execution.check_output(None, true), Ok(()));
+    }
+}
+
+#[cfg(test)]
 mod certificate_variable_tests {
     use super::*;
     use probe_core::ClientCertificate;
