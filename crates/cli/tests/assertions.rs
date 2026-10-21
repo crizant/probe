@@ -228,6 +228,59 @@ fn human_and_quiet_summaries_keep_failures_and_exit_codes() {
 }
 
 #[test]
+fn human_and_quiet_mixed_summaries_count_disabled_assertions_and_errors() {
+    let assertions = format!(
+        "{ASSERTIONS}    - expression: response.status\n      operator: equals\n      value: '{{{{alias}}}}'\n    - expression: another-disabled-expression\n      operator: invalid\n      disabled: true\n"
+    );
+    for quiet in [false, true] {
+        let (url, server) = serve_once(br#"{"name":"John Doe"}"#.to_vec(), "application/json");
+        let path = workspace(&url, "http", &assertions, true);
+        let mut flags = vec![
+            "--assert",
+            "response.status equals 201",
+            "--assert",
+            "response.body.missing isNull",
+        ];
+        if quiet {
+            flags.push("--quiet");
+        }
+        let output = run(&path, true, &flags);
+        assert_eq!(output.status.code(), Some(9));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            "error[assertion_failed]: Assertions: 2 passed, 1 failed, 2 errors, 2 disabled\n"
+        );
+        server.join().unwrap();
+        cleanup(path);
+    }
+}
+
+#[test]
+fn legacy_expect_migration_also_applies_to_non_run_commands() {
+    for command in [
+        vec!["request", "get", "missing.yml", "items/0"],
+        vec!["collection", "validate", "missing.yml"],
+    ] {
+        let output = probe()
+            .args(command)
+            .args(["--expect", "sensitive-value", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(!text.contains("sensitive-value"));
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments");
+        assert_eq!(
+            value["error"]["message"],
+            "--expect was removed after Probe v1.1.1; migrate to --assert 'response.status equals 200' (repeat --assert for AND checks)"
+        );
+        assert!(output.stderr.is_empty());
+    }
+}
+
+#[test]
 fn malformed_flags_and_legacy_migration_never_send_or_echo_values() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();

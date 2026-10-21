@@ -70,10 +70,7 @@ pub fn prepare_request<'a>(
         return Ok(PreparedRequest {
             execution: request.clone(),
             presentation: request.clone(),
-            disclosure: SecretDisclosure {
-                presentation_url: request.url.clone().unwrap_or_default(),
-                ..SecretDisclosure::default()
-            },
+            disclosure: SecretDisclosure::default(),
             resolution: *resolution,
             provider: secrets,
         });

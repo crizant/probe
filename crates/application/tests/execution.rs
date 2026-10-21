@@ -836,6 +836,68 @@ async fn only_secret_bearing_large_responses_bypass_the_spool_cache() {
 }
 
 #[tokio::test]
+async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present() {
+    use probe_application::AssertionOutcome;
+    use probe_core::Assertion;
+
+    let mut body = SECRET.as_bytes().to_vec();
+    body.resize(probe_http::MAX_IN_MEMORY_RESPONSE_BYTES + 1024, b'x');
+    let engine = HttpEngine::new().unwrap();
+    for has_assertions in [false, true] {
+        let cache_path = temporary_path("assertion-cache");
+        let (base, server) = serve_once(http_response("", &body));
+        let environments = environments();
+        let provider = RecordingProvider::default();
+        let prepared = prepare_request(&get(&base), &local(&environments), &provider).unwrap();
+        assert!(!prepared.uses_secrets());
+        assert!(provider.lookups.borrow().is_empty());
+        let assertions = if has_assertions {
+            vec![Assertion {
+                expression: "response.status".into(),
+                operator: "notEquals".into(),
+                value: Some("{{token}}".into()),
+                disabled: None,
+                description: None,
+            }]
+        } else {
+            Vec::new()
+        };
+        let (executed, outcomes) = prepared
+            .execute_with_assertions(
+                &engine,
+                ExecutionOptions {
+                    response_cache: Some(ResponseCache::new(cache_path.clone(), 64 * 1024 * 1024)),
+                    ..ExecutionOptions::default()
+                },
+                None,
+                std::future::pending::<()>(),
+                |_| {},
+                &assertions,
+            )
+            .await
+            .unwrap();
+        server.join().unwrap();
+        assert!(!executed.response.body_complete);
+        if has_assertions {
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(outcomes[0].outcome, AssertionOutcome::Passed);
+            assert_eq!(*provider.lookups.borrow(), ["token"]);
+            assert!(executed.response.body.starts_with(b"[REDACTED]"));
+            assert!(executed.response.body_file.is_none());
+            assert!(!cache_path.exists());
+        } else {
+            assert!(outcomes.is_empty());
+            assert!(provider.lookups.borrow().is_empty());
+            assert!(executed.response.body.starts_with(SECRET.as_bytes()));
+            assert!(executed.response.body_file.is_some());
+            assert!(cache_path.is_dir());
+            drop(executed);
+            std::fs::remove_dir_all(cache_path).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn file_output_keeps_original_bytes_and_returns_their_digest() {
     let (base, server) = serve_once(http_response("", SECRET.as_bytes()));
     let output = temporary_path("output");
