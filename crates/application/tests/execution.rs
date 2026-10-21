@@ -1349,6 +1349,7 @@ async fn assertion_execution_uses_original_bytes_and_one_cached_secret_for_the_w
 
 #[tokio::test]
 async fn failed_exchange_never_resolves_assertion_secrets() {
+    use probe_application::HttpExecutionError;
     use probe_core::Assertion;
     let (base, server) = serve_once(b"not an HTTP response".to_vec());
     let environments = environments();
@@ -1371,7 +1372,17 @@ async fn failed_exchange_never_resolves_assertion_secrets() {
         )
         .await;
     server.join().unwrap();
-    assert!(result.is_err());
+    let error = result.unwrap_err();
+    let HttpExecutionError::Http(http) = &error else {
+        panic!("expected a typed HTTP execution error");
+    };
+    assert_eq!(error.to_string(), http.to_string());
+    assert_eq!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<HttpError>(),
+        Some(http)
+    );
     assert!(provider.lookups.borrow().is_empty());
 }
 
@@ -1431,6 +1442,13 @@ async fn assertion_execution_preserves_typed_protocol_preparation_errors() {
             )
             .await
             .unwrap_err();
+        assert_eq!(error.to_string(), expected.to_string());
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<RequestProtocolError>(),
+            Some(&expected)
+        );
         assert_eq!(error, HttpExecutionError::Protocol(expected));
     }
 }

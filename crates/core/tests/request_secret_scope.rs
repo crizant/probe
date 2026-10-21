@@ -353,6 +353,8 @@ fn redaction_combines_overlapping_values_without_rescanning_replacement_markers(
         "[REDACTED] [REDACTED] [REDACTED] [REDACTED]"
     );
     assert_eq!(redactor.redact("xabcdefgh"), "[REDACTED]");
+    // Adjacent matches are distinct; only crossing overlaps share a marker.
+    assert_eq!(redactor.redact("abcabc"), "[REDACTED][REDACTED]");
     assert_eq!(
         redactor.redact_bytes(b"\xffabcdef\xfeabc"),
         b"\xff[REDACTED]\xfe[REDACTED]"

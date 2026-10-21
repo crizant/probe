@@ -400,9 +400,6 @@ fn parse_run(mut parser: Parser) -> Result<Command, CliError> {
             }
             "--assert" => options.assertions.push(parser.assertion()?),
             "--no-assertions" => parser.flag(&mut options.no_assertions, "--no-assertions")?,
-            other if other == "--expect" || other.starts_with("--expect=") => {
-                return Err(legacy_expect());
-            }
             "--send" => options.sends.push(SessionData::Text(
                 parser
                     .bump()
