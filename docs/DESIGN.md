@@ -249,11 +249,24 @@ tokens.
 
 ### Assertion surfaces
 
-HTTP and GraphQL Request Editors expose a scrollable Assertions list with keyboard
-accessible checkboxes, ordinary text fields, an operator menu, and Title Case add,
-delete, and reorder actions. Optional descriptions remain editable without flattening
-their structured representation. The response Assertions tab uses semantic status
-colors plus distinct glyphs and written status labels. It identifies each result by
-its declaration index and shows value-free shared diagnostics, preserving response
-access after failures. Both surfaces use the existing theme tokens and controls;
-text buttons and tabs retain an explicit `line_height(relative(1.25))`.
+HTTP and GraphQL Request Editors expose a scrollable Assertions list using the
+shared key/value row builders, keyboard-accessible enable switches, variable-aware
+expression/value inputs, and an operator menu. Title Case Add Assertion and Remove
+Assertion controls preserve persisted order. Empty descriptions have a compact
+Add Description affordance; editing preserves structured descriptions and unused
+unary values. Matching results from the latest send appear as row indicators.
+
+The response Assertions tab has a failure count in its label and one inline
+summary. Failed comparisons precede evaluation errors, passed checks, and skipped
+(disabled) checks, with stable order within each group. Rows show the original,
+uninterpolated declaration text; a description becomes the primary label when
+present. Failed rows have a semantic error border and a secondary monospace line
+with redacted, truncated actual values. Errors use warning icons and shared,
+value-free reasons. Status icons and written skipped/error information accompany
+semantic colours. Empty/all-disabled states use shared placeholders; request
+failures report that assertions were not evaluated. Up/Down selects results,
+Cmd/Ctrl+C copies a row, and Enter or double-click opens its editor declaration.
+
+Response access remains available after assertion failures. Both surfaces use
+existing theme tokens and controls; text buttons and tabs retain an explicit
+`line_height(relative(1.25))`.

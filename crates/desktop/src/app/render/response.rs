@@ -461,6 +461,29 @@ impl ProbeApp {
             .response_viewer
             .assertion_selection(key)
             .or_else(|| rows.first().map(|result| result.index));
+        let parts = summary(assertions);
+        let mut summary_line = div()
+            .id("assertion-summary")
+            .debug_selector(|| "assertion-summary".into())
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1))
+            .line_height(relative(1.25));
+        for part in &parts {
+            if part.separator {
+                summary_line =
+                    summary_line.child(div().text_color(theme.colors.text.muted).child("·"));
+            }
+            summary_line = summary_line.child(
+                div()
+                    .text_color(if part.separator {
+                        theme.colors.text.muted
+                    } else {
+                        summary_color
+                    })
+                    .child(part.text.clone()),
+            );
+        }
         let mut content = div()
             .id("assertion-result-list")
             .flex_1()
@@ -473,44 +496,14 @@ impl ProbeApp {
                 |content, scroll| content.track_scroll(scroll),
             )
             .child(div().when(skipped != assertions.len(), |content| {
-                content.child(
-                    div()
-                        .id("assertion-summary")
-                        .debug_selector(|| "assertion-summary".into())
-                        .flex()
-                        .items_center()
-                        .gap(px(theme.metrics.spacing_1))
-                        .line_height(relative(1.25))
-                        .child(
-                            div().text_color(summary_color).child(
-                                summary(assertions)
-                                    .split(" · ")
-                                    .next()
-                                    .unwrap_or_default()
-                                    .to_owned(),
-                            ),
-                        )
-                        .when(skipped > 0, |line| {
-                            line.child(
-                                div()
-                                    .text_color(theme.colors.text.muted)
-                                    .child(format!("· {skipped} skipped")),
-                            )
-                        })
-                        .when(errors > 0, |line| {
-                            line.child(div().text_color(theme.colors.text.muted).child(format!(
-                                "· {errors} {}",
-                                if errors == 1 { "error" } else { "errors" }
-                            )))
-                        }),
-                )
+                content.child(summary_line)
             }));
         let container = container.when(skipped == assertions.len(), |container| {
             container.child(
                 div()
                     .id("assertions-all-disabled")
                     .debug_selector(|| "assertions-all-disabled".into())
-                    .child(placeholder_message(theme, "All assertions disabled")),
+                    .child(placeholder_message(theme, &parts[0].text)),
             )
         });
         for result in rows {

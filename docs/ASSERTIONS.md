@@ -166,8 +166,10 @@ bodies. Its inline summary distinguishes failed comparisons, evaluation errors,
 passed checks, and skipped (disabled) declarations. Failed checks add a coloured
 count to the tab. Rows group failures first, then errors, passes, and skipped
 checks, preserving declaration order within each group. Descriptions become row
-labels when present; expressions, operators, and expected values come from the
-original declaration snapshot. Failed rows show redacted, bounded actuals;
+labels when present. The response tab shows the original, uninterpolated declaration
+text (expression, operator, and expected value) from the send's snapshot, together
+with redacted, truncated actual values for failed comparisons. It never displays
+resolved secret values. Failed rows show these safe actuals;
 evaluation errors show value-free reasons. Request transport failures report
 "Not evaluated — request failed". Empty results offer a shortcut to the editor;
 all-disabled executions retain their skipped rows and a shared placeholder.

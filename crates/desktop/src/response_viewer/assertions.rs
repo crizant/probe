@@ -25,23 +25,44 @@ pub(crate) fn ordered(results: &[AssertionResult]) -> Vec<&AssertionResult> {
     rows
 }
 
-pub(crate) fn summary(results: &[AssertionResult]) -> String {
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SummaryPart {
+    pub text: String,
+    pub separator: bool,
+}
+
+pub(crate) fn summary(results: &[AssertionResult]) -> Vec<SummaryPart> {
+    if results.is_empty() {
+        return Vec::new();
+    }
     let [failed, errors, passed, skipped] = counts(results);
-    let mut text = if failed > 0 {
+    let error_text = || format!("{errors} {}", if errors == 1 { "error" } else { "errors" });
+    let mut parts = vec![if failed > 0 {
         format!("{failed} of {} failed", failed + passed + errors)
-    } else {
+    } else if errors > 0 {
+        error_text()
+    } else if passed > 0 {
         format!("{passed} passed")
-    };
-    if skipped > 0 {
-        text.push_str(&format!(" · {skipped} skipped"));
+    } else {
+        "All assertions disabled".into()
+    }];
+    if failed == 0 && errors > 0 && passed > 0 {
+        parts.push(format!("{passed} passed"));
     }
-    if errors > 0 {
-        text.push_str(&format!(
-            " · {errors} {}",
-            if errors == 1 { "error" } else { "errors" }
-        ));
+    if skipped > 0 && skipped != results.len() {
+        parts.push(format!("{skipped} skipped"));
     }
-    text
+    if failed > 0 && errors > 0 {
+        parts.push(error_text());
+    }
+    parts
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| SummaryPart {
+            text,
+            separator: index > 0,
+        })
+        .collect()
 }
 
 pub(crate) fn single_line_actual(actual: &str) -> String {
@@ -87,7 +108,18 @@ mod tests {
             actual_truncated: false,
         })
         .collect();
-        assert_eq!(summary(&results), "2 of 5 failed · 1 skipped · 1 error");
+        let parts = summary(&results);
+        assert_eq!(
+            parts
+                .iter()
+                .map(|part| part.text.as_str())
+                .collect::<Vec<_>>(),
+            ["2 of 5 failed", "1 skipped", "1 error"]
+        );
+        assert_eq!(
+            parts.iter().map(|part| part.separator).collect::<Vec<_>>(),
+            [false, true, true]
+        );
         assert_eq!(
             ordered(&results)
                 .iter()
@@ -95,11 +127,59 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 4, 3, 0, 5, 2]
         );
-        assert_eq!(summary(&results[..1]), "1 passed");
+        assert_eq!(summary(&results[..1])[0].text, "1 passed");
         assert_eq!(
             single_line_actual("first\nsecond\tend"),
             "first\\nsecond\\tend"
         );
+    }
+    #[test]
+    fn summary_headlines_and_separators_cover_each_execution_state() {
+        use AssertionOutcome::{Disabled, Error, Failed, Passed};
+        let error = Error(AssertionError::BodyUnavailable);
+        for (outcomes, expected) in [
+            (vec![Failed, Passed], vec!["1 of 2 failed"]),
+            (vec![error.clone()], vec!["1 error"]),
+            (
+                vec![error.clone(), error.clone(), Passed, Disabled],
+                vec!["2 errors", "1 passed", "1 skipped"],
+            ),
+            (vec![Passed, Passed], vec!["2 passed"]),
+            (vec![Passed, Disabled], vec!["1 passed", "1 skipped"]),
+            (vec![Disabled, Disabled], vec!["All assertions disabled"]),
+            (
+                vec![Failed, error, Disabled],
+                vec!["1 of 2 failed", "1 skipped", "1 error"],
+            ),
+            (vec![], vec![]),
+        ] {
+            let results: Vec<_> = outcomes
+                .into_iter()
+                .enumerate()
+                .map(|(index, outcome)| AssertionResult {
+                    index,
+                    outcome,
+                    actual: None,
+                    actual_truncated: false,
+                })
+                .collect();
+            let parts = summary(&results);
+            assert_eq!(
+                parts
+                    .iter()
+                    .map(|part| part.text.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(
+                parts.iter().filter(|part| part.separator).count(),
+                parts.len().saturating_sub(1)
+            );
+            if let Some(headline) = parts.first() {
+                assert!(!headline.separator);
+            }
+            assert!(parts.iter().skip(1).all(|part| part.separator));
+        }
     }
 }
 

@@ -149,7 +149,9 @@ impl fmt::Display for AssertionError {
                 "assertion variable resolution failed or a value is unavailable"
             }
             Self::InvalidExpectedValue => "invalid or unsupported expected literal",
-            Self::BodyUnavailable => "complete in-memory response body is unavailable",
+            Self::BodyUnavailable => {
+                "The complete response body is unavailable for this assertion."
+            }
             Self::InvalidJsonBody => "response body is not valid JSON",
             Self::MissingProperty => "response property or array index does not exist",
             Self::IncompatibleOperands => "operator does not support these operand types",

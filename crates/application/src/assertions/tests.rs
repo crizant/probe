@@ -921,7 +921,7 @@ fn every_diagnostic_path_withholds_untrusted_inputs() {
             SECRET.as_bytes(),
             false,
             AssertionError::BodyUnavailable,
-            "complete in-memory response body is unavailable",
+            "The complete response body is unavailable for this assertion.",
         ),
         (
             assertion("response.body", "isNotNull", None),
