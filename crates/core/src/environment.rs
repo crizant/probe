@@ -264,12 +264,13 @@ impl<'a> SecretRedactor<'a> {
             if let Some(mut end) = match_len(remaining) {
                 // Include crossing overlaps too: consuming a short match must not
                 // skip a longer secret that begins inside it and expose its tail.
-                let mut offset = 1;
-                while offset < end {
+                for offset in 1..remaining.len() {
+                    if offset >= end {
+                        break;
+                    }
                     if let Some(length) = match_len(&remaining[offset..]) {
                         end = end.max(offset + length);
                     }
-                    offset += 1;
                 }
                 output.extend_from_slice(b"[REDACTED]");
                 remaining = &remaining[end..];
