@@ -400,6 +400,29 @@ fn json_secret_objects_preserve_unrelated_keys_scalars_and_status_codes() {
 }
 
 #[test]
+fn json_secret_arrays_redact_nested_strings_without_collecting_keys_or_scalars() {
+    use probe_core::{SecretRedactor, SecretValue};
+    for secret in [
+        r#"["secret-token"]"#,
+        r#"{"a":["secret-token"]}"#,
+        r#"{"a":[1,true,null,{"nested":[2,false,["secret-token"]]}]}"#,
+    ] {
+        let values = [SecretValue::new(secret.into())];
+        let redactor = SecretRedactor::from_environments([])
+            .with_values(&values)
+            .with_json_literals();
+        assert_eq!(redactor.redact("secret-token"), "[REDACTED]", "{secret}");
+        assert_eq!(
+            redactor.redact(
+                r#"{"a":"secret-token","status":201,"version":1,"enabled":true,"absent":null,"nested":[2,false]}"#
+            ),
+            r#"{"a":"[REDACTED]","status":201,"version":1,"enabled":true,"absent":null,"nested":[2,false]}"#,
+            "{secret}"
+        );
+    }
+}
+
+#[test]
 fn json_secret_strings_redact_decoded_and_escaped_forms() {
     use probe_core::{SecretRedactor, SecretValue};
     for secret in ["quoted\"secret\nline", r#""quoted\"secret\nline""#] {
