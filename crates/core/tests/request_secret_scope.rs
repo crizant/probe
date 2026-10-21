@@ -362,3 +362,89 @@ fn redaction_combines_overlapping_values_without_rescanning_replacement_markers(
     assert!(!format!("{redactor:?}").contains("abcdef"));
     assert!(provider.calls.borrow().is_empty());
 }
+
+#[test]
+fn unified_redaction_includes_fetched_values_and_decoded_literals_without_debug_disclosure() {
+    use probe_core::{SecretRedactor, SecretValue};
+    let values =
+        ["abc", "abcdef", r#""quoted\nsecret""#, "1e3"].map(|value| SecretValue::new(value.into()));
+    let empty = SecretRedactor::from_environments([]);
+    assert!(empty.is_empty());
+    let redactor = empty.with_values(&values).with_json_literals();
+    assert!(!redactor.is_empty());
+    assert_eq!(
+        redactor.redact("abcdef abc quoted\nsecret 1000"),
+        "[REDACTED] [REDACTED] [REDACTED] [REDACTED]"
+    );
+    let debug = format!("{redactor:?}");
+    assert!(debug.contains("SecretRedactor"));
+    assert!(debug.contains("[REDACTED]"));
+    for sensitive in ["abcdef", "quoted", "1000", "1e3"] {
+        assert!(!debug.contains(sensitive));
+    }
+}
+
+#[test]
+fn json_secret_objects_preserve_unrelated_keys_scalars_and_status_codes() {
+    use probe_core::{SecretRedactor, SecretValue};
+    let values = [SecretValue::new(
+        r#"{"type":"service_account","version":1,"enabled":true,"optional":null,"nested":[2,false]}"#.into(),
+    )];
+    let redactor = SecretRedactor::from_environments([])
+        .with_values(&values)
+        .with_json_literals();
+    let unrelated = r#"{"type":"response","version":1,"status":201,"enabled":true,"optional":null,"nested":[2,false]}"#;
+    assert_eq!(redactor.redact(unrelated), unrelated);
+    assert_eq!(redactor.redact("service_account"), "[REDACTED]");
+    assert_eq!(redactor.redact("200 201 401"), "200 201 401");
+}
+
+#[test]
+fn json_secret_arrays_redact_nested_strings_without_collecting_keys_or_scalars() {
+    use probe_core::{SecretRedactor, SecretValue};
+    for secret in [
+        r#"["secret-token"]"#,
+        r#"{"a":["secret-token"]}"#,
+        r#"{"a":[1,true,null,{"nested":[2,false,["secret-token"]]}]}"#,
+    ] {
+        let values = [SecretValue::new(secret.into())];
+        let redactor = SecretRedactor::from_environments([])
+            .with_values(&values)
+            .with_json_literals();
+        assert_eq!(redactor.redact("secret-token"), "[REDACTED]", "{secret}");
+        assert_eq!(
+            redactor.redact(
+                r#"{"a":"secret-token","status":201,"version":1,"enabled":true,"absent":null,"nested":[2,false]}"#
+            ),
+            r#"{"a":"[REDACTED]","status":201,"version":1,"enabled":true,"absent":null,"nested":[2,false]}"#,
+            "{secret}"
+        );
+    }
+}
+
+#[test]
+fn json_secret_strings_redact_decoded_and_escaped_forms() {
+    use probe_core::{SecretRedactor, SecretValue};
+    for secret in ["quoted\"secret\nline", r#""quoted\"secret\nline""#] {
+        let values = [SecretValue::new(secret.into())];
+        let redactor = SecretRedactor::from_environments([])
+            .with_values(&values)
+            .with_json_literals();
+        assert_eq!(redactor.redact("quoted\"secret\nline"), "[REDACTED]");
+        assert_eq!(redactor.redact(r#"quoted\"secret\nline"#), "[REDACTED]");
+        assert_eq!(
+            redactor.redact(&serde_json::to_string(secret).unwrap()),
+            "\"[REDACTED]\""
+        );
+    }
+}
+
+#[test]
+fn explicit_short_numeric_secrets_still_redact_matching_substrings() {
+    use probe_core::{SecretRedactor, SecretValue};
+    let values = [SecretValue::new("1".into())];
+    let redactor = SecretRedactor::from_environments([])
+        .with_values(&values)
+        .with_json_literals();
+    assert_eq!(redactor.redact("200 201"), "200 20[REDACTED]");
+}

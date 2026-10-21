@@ -2,7 +2,7 @@
 //!
 //! See `docs/ASSERTIONS.md` for the deliberately restricted evaluation language.
 
-use std::{borrow::Cow, cmp::Ordering, fmt};
+use std::{borrow::Cow, cmp::Ordering, fmt, sync::Arc};
 
 use probe_core::{Assertion, SecretProvider, resolve_environment_for_templates_with_provider};
 use probe_http::HttpResponse;
@@ -10,13 +10,110 @@ use serde_json::{Number, Value};
 
 use crate::RequestResolution;
 
-/// One result per declaration, in input order. No declaration or runtime values
-/// are copied into results: even response properties may contain echoed secrets.
+/// One result per declaration, in input order. Actual values are redacted using
+/// the complete execution disclosure before they leave the application boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssertionResult {
     /// Zero-based position in the supplied assertion list.
     pub index: usize,
     pub outcome: AssertionOutcome,
+    /// Safe display text, absent for disabled declarations and evaluation errors.
+    pub actual: Option<String>,
+    /// Whether the redacted display value exceeded the display limit.
+    pub actual_truncated: bool,
+}
+
+/// Maximum Unicode characters retained before the explicit truncation marker.
+pub const MAX_ASSERTION_ACTUAL_CHARS: usize = 512;
+
+// Never Debug/serialize raw observations. They stay inside the execution boundary
+// until every assertion has disclosed its secrets (including later declarations).
+pub(crate) struct PendingAssertionResult {
+    index: usize,
+    outcome: AssertionOutcome,
+    actual: Option<ObservedActual>,
+}
+
+// Share the parsed original body for repeated observations instead of cloning a
+// potentially large object for every declaration. No observation escapes unredacted.
+enum ObservedActual {
+    Status(u16),
+    Body {
+        root: Arc<Value>,
+        expression: String,
+    },
+}
+
+impl PendingAssertionResult {
+    pub(crate) fn redact(self, redactor: &probe_core::SecretRedactor<'_>) -> AssertionResult {
+        fn safe_value(value: &Value, redactor: &probe_core::SecretRedactor<'_>) -> String {
+            match value {
+                Value::String(text) => redactor.redact(text),
+                Value::Array(_) | Value::Object(_) => {
+                    let original = value.to_string();
+                    if redactor.is_empty() {
+                        return original;
+                    }
+                    // An entire structured value may itself contain a secret. Avoid
+                    // reconstructing fragments of such a value after replacement.
+                    if redactor.redact(&original) != original {
+                        return "[REDACTED]".into();
+                    }
+                    fn decoded(value: &Value, redactor: &probe_core::SecretRedactor<'_>) -> Value {
+                        match value {
+                            Value::String(text) => Value::String(redactor.redact(text)),
+                            Value::Array(values) => {
+                                Value::Array(values.iter().map(|v| decoded(v, redactor)).collect())
+                            }
+                            Value::Object(values) => Value::Object(
+                                values
+                                    .iter()
+                                    .map(|(k, v)| (redactor.redact(k), decoded(v, redactor)))
+                                    .collect(),
+                            ),
+                            _ => {
+                                let original = value.to_string();
+                                let safe = redactor.redact(&original);
+                                if safe == original {
+                                    value.clone()
+                                } else {
+                                    Value::String(safe)
+                                }
+                            }
+                        }
+                    }
+                    // Redact decoded strings/keys before JSON escaping, so quoted
+                    // and multiline secrets cannot evade the unified matcher.
+                    decoded(value, redactor).to_string()
+                }
+                _ => redactor.redact(&value.to_string()),
+            }
+        }
+        let mut actual = self.actual.as_ref().map(|observed| match observed {
+            ObservedActual::Status(status) => redactor.redact(&status.to_string()),
+            ObservedActual::Body { root, expression } => {
+                let path = parse_expression(expression)
+                    .expect("observed expression was evaluated")
+                    .expect("body expression");
+                let value = select(root, &path).expect("observed property was evaluated");
+                safe_value(&value, redactor)
+            }
+        });
+        let mut actual_truncated = false;
+        if let Some(text) = &mut actual
+            && let Some((offset, _)) = text.char_indices().nth(MAX_ASSERTION_ACTUAL_CHARS)
+        {
+            text.truncate(offset);
+            text.push_str("… [truncated]");
+            actual_truncated = true;
+        }
+        AssertionResult {
+            index: self.index,
+            outcome: self.outcome,
+            actual,
+            actual_truncated,
+        }
+    }
 }
 
 /// Disabled declarations are retained for stable indexing but never evaluated.
@@ -52,7 +149,9 @@ impl fmt::Display for AssertionError {
                 "assertion variable resolution failed or a value is unavailable"
             }
             Self::InvalidExpectedValue => "invalid or unsupported expected literal",
-            Self::BodyUnavailable => "complete in-memory response body is unavailable",
+            Self::BodyUnavailable => {
+                "The complete response body is unavailable for this assertion."
+            }
             Self::InvalidJsonBody => "response body is not valid JSON",
             Self::MissingProperty => "response property or array index does not exist",
             Self::IncompatibleOperands => "operator does not support these operand types",
@@ -80,25 +179,76 @@ pub fn evaluate_assertions(
     secrets: &dyn SecretProvider,
 ) -> Vec<AssertionResult> {
     let secrets = crate::execution::CachedSecrets::new(secrets);
-    evaluate_with_disclosure(assertions, response, resolution, &secrets, |_| {})
+    let mut environments = Vec::new();
+    let pending = evaluate_with_disclosure(assertions, response, resolution, &secrets, |env| {
+        environments.push(env)
+    });
+    let fetched = secrets.redaction_values();
+    let redactor = probe_core::SecretRedactor::from_environments(&environments)
+        .with_values(&fetched)
+        .with_json_literals();
+    pending
+        .into_iter()
+        .map(|result| result.redact(&redactor))
+        .collect()
+}
+
+/// A metadata-only storage preflight. Never consult the caller's secret provider.
+/// A failed resolution is treated conservatively: no original bytes may be spooled.
+/// Disabled declarations and unary values cannot resolve secrets during evaluation.
+pub(crate) fn may_resolve_secrets(
+    assertions: &[Assertion],
+    resolution: &RequestResolution<'_>,
+) -> bool {
+    assertions.iter().any(|assertion| {
+        if assertion.disabled == Some(true)
+            || matches!(assertion.operator.as_str(), "isNull" | "isNotNull")
+        {
+            return false;
+        }
+        let Some(template) = assertion
+            .value
+            .as_deref()
+            .filter(|value| value.contains("{{"))
+        else {
+            return false;
+        };
+        match resolve_environment_for_templates_with_provider(
+            [template],
+            resolution.environments,
+            resolution.environment,
+            resolution.overrides,
+            &crate::NoSecrets,
+            resolution.workspace_identity,
+        ) {
+            Ok(environment) => {
+                environment.has_resolved_secrets()
+                    || environment.interpolate_strict(template).is_err()
+            }
+            Err(_) => true,
+        }
+    })
 }
 
 pub(crate) fn evaluate_with_disclosure(
     assertions: &[Assertion],
     response: &HttpResponse,
     resolution: &RequestResolution<'_>,
-    secrets: &dyn SecretProvider,
+    secrets: &crate::execution::CachedSecrets<'_>,
     mut disclose: impl FnMut(probe_core::ResolvedEnvironment),
-) -> Vec<AssertionResult> {
+) -> Vec<PendingAssertionResult> {
     // Parse only on demand, once, and never use an incomplete preview as JSON.
     let mut body = None;
     assertions
         .iter()
         .enumerate()
-        .map(|(index, assertion)| AssertionResult {
-            index,
-            outcome: if assertion.disabled == Some(true) {
-                AssertionOutcome::Disabled
+        .map(|(index, assertion)| {
+            if assertion.disabled == Some(true) {
+                PendingAssertionResult {
+                    index,
+                    outcome: AssertionOutcome::Disabled,
+                    actual: None,
+                }
             } else {
                 match evaluate_one(
                     assertion,
@@ -108,11 +258,22 @@ pub(crate) fn evaluate_with_disclosure(
                     &mut body,
                     &mut disclose,
                 ) {
-                    Ok(true) => AssertionOutcome::Passed,
-                    Ok(false) => AssertionOutcome::Failed,
-                    Err(error) => AssertionOutcome::Error(error),
+                    Ok((passed, actual)) => PendingAssertionResult {
+                        index,
+                        outcome: if passed {
+                            AssertionOutcome::Passed
+                        } else {
+                            AssertionOutcome::Failed
+                        },
+                        actual: Some(actual),
+                    },
+                    Err(error) => PendingAssertionResult {
+                        index,
+                        outcome: AssertionOutcome::Error(error),
+                        actual: None,
+                    },
                 }
-            },
+            }
         })
         .collect()
 }
@@ -149,22 +310,31 @@ fn evaluate_one(
     assertion: &Assertion,
     response: &HttpResponse,
     resolution: &RequestResolution<'_>,
-    secrets: &dyn SecretProvider,
-    body: &mut Option<Result<Value, AssertionError>>,
+    secrets: &crate::execution::CachedSecrets<'_>,
+    body: &mut Option<Result<Arc<Value>, AssertionError>>,
     disclose: &mut impl FnMut(probe_core::ResolvedEnvironment),
-) -> Result<bool, AssertionError> {
+) -> Result<(bool, ObservedActual), AssertionError> {
     let operator = Operator::parse(&assertion.operator)?;
     let path = parse_expression(&assertion.expression)?;
+    let root = if path.is_some() {
+        Some(Arc::clone(parsed_body(body, response)?))
+    } else {
+        None
+    };
+    let observation = || match &root {
+        Some(root) => ObservedActual::Body {
+            root: Arc::clone(root),
+            expression: assertion.expression.clone(),
+        },
+        None => ObservedActual::Status(response.status),
+    };
     let actual = match path.as_deref() {
         None => Cow::Owned(Value::from(response.status)),
-        Some(path) => {
-            let parsed = parsed_body(body, response)?;
-            select(parsed, path)?
-        }
+        Some(path) => select(root.as_ref().expect("body was parsed"), path)?,
     };
     match operator {
-        Operator::IsNull => return Ok(actual.is_null()),
-        Operator::IsNotNull => return Ok(!actual.is_null()),
+        Operator::IsNull => return Ok((actual.is_null(), observation())),
+        Operator::IsNotNull => return Ok((!actual.is_null(), observation())),
         _ => {}
     }
     let template = assertion
@@ -173,26 +343,32 @@ fn evaluate_one(
         .ok_or(AssertionError::MissingExpectedValue)?;
     let resolved = resolve_expected(template, resolution, secrets, disclose)?;
     if matches!(operator, Operator::Contains | Operator::NotContains) {
-        let Value::String(actual) = actual.as_ref() else {
+        let Value::String(text) = actual.as_ref() else {
             return Err(AssertionError::IncompatibleOperands);
         };
         let needle = substring_needle(resolved.as_ref())?;
-        let found = actual.contains(needle.as_ref());
-        return Ok(found == matches!(operator, Operator::Contains));
+        let found = text.contains(needle.as_ref());
+        return Ok((
+            found == matches!(operator, Operator::Contains),
+            observation(),
+        ));
     }
     let expected = parse_expected(resolved.as_ref())?;
-    compare(actual.as_ref(), operator, &expected)
+    let passed = compare(actual.as_ref(), operator, &expected)?;
+    Ok((passed, observation()))
 }
 
 fn parsed_body<'a>(
-    body: &'a mut Option<Result<Value, AssertionError>>,
+    body: &'a mut Option<Result<Arc<Value>, AssertionError>>,
     response: &HttpResponse,
-) -> Result<&'a Value, AssertionError> {
+) -> Result<&'a Arc<Value>, AssertionError> {
     if body.is_none() {
         *body = Some(if !response.body_complete {
             Err(AssertionError::BodyUnavailable)
         } else {
-            serde_json::from_slice(&response.body).map_err(|_| AssertionError::InvalidJsonBody)
+            serde_json::from_slice(&response.body)
+                .map(Arc::new)
+                .map_err(|_| AssertionError::InvalidJsonBody)
         });
     }
     match body.as_ref() {
@@ -206,7 +382,7 @@ fn parsed_body<'a>(
 fn resolve_expected<'a>(
     template: &'a str,
     resolution: &RequestResolution<'_>,
-    secrets: &dyn SecretProvider,
+    secrets: &crate::execution::CachedSecrets<'_>,
     disclose: &mut impl FnMut(probe_core::ResolvedEnvironment),
 ) -> Result<Cow<'a, str>, AssertionError> {
     if !template.contains("{{") {
@@ -221,10 +397,15 @@ fn resolve_expected<'a>(
         resolution.workspace_identity,
     )
     .map_err(|_| AssertionError::VariableResolution)?;
-    let result = environment
+    let result: Result<Cow<'_, str>, AssertionError> = environment
         .interpolate_strict(template)
         .map(Cow::Owned)
         .map_err(|_| AssertionError::VariableResolution);
+    if environment.has_resolved_secrets()
+        && let Ok(value) = &result
+    {
+        secrets.record_assertion_disclosure(value.to_string());
+    }
     disclose(environment);
     result
 }

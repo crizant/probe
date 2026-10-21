@@ -73,6 +73,7 @@ pub fn prepare_request<'a>(
             disclosure: SecretDisclosure::default(),
             resolution: *resolution,
             provider: secrets,
+            reject_secret_output: false,
         });
     }
     let environment = resolve_environment_for_request_with_provider(
@@ -97,6 +98,7 @@ pub fn prepare_request<'a>(
         disclosure,
         resolution: *resolution,
         provider: secrets,
+        reject_secret_output: false,
     })
 }
 
@@ -105,6 +107,7 @@ pub fn prepare_request<'a>(
 pub(crate) struct CachedSecrets<'a> {
     provider: &'a dyn SecretProvider,
     values: RefCell<BTreeMap<String, Result<Option<SecretValue>, SecretError>>>,
+    derived_values: RefCell<Vec<SecretValue>>,
 }
 
 impl<'a> CachedSecrets<'a> {
@@ -112,7 +115,27 @@ impl<'a> CachedSecrets<'a> {
         Self {
             provider,
             values: RefCell::new(BTreeMap::new()),
+            derived_values: RefCell::new(Vec::new()),
         }
+    }
+    pub(crate) fn record_assertion_disclosure(&self, text: String) {
+        self.derived_values
+            .borrow_mut()
+            .push(SecretValue::new(text));
+    }
+
+    pub(crate) fn redaction_values(&self) -> Vec<SecretValue> {
+        let values: Vec<_> = self
+            .values
+            .borrow()
+            .values()
+            .filter_map(|result| match result {
+                Ok(Some(value)) => Some(value.clone()),
+                _ => None,
+            })
+            .chain(self.derived_values.borrow().iter().cloned())
+            .collect();
+        values
     }
 }
 
@@ -136,6 +159,7 @@ pub struct PreparedRequest<'a> {
     execution: Request,
     presentation: Request,
     disclosure: SecretDisclosure,
+    reject_secret_output: bool,
 }
 
 impl<'a> PreparedRequest<'a> {
@@ -151,6 +175,16 @@ impl<'a> PreparedRequest<'a> {
         self.disclosure.uses_secrets()
     }
 
+    /// Refuses explicit response output if the request, selected certificate, or
+    /// active assertion values may use secrets. Checked before the HTTP exchange.
+    /// Ordinary execution still returns the redacted response and safe outcomes.
+    /// Interfaces that allow trusted original-byte output retain the default policy.
+    #[must_use]
+    pub fn reject_secret_output(mut self) -> Self {
+        self.reject_secret_output = true;
+        self
+    }
+
     /// Converts the execution request into HTTP engine input.
     ///
     /// Resolves reachable certificate variables, including secrets, without reading
@@ -160,7 +194,7 @@ impl<'a> PreparedRequest<'a> {
     }
 
     /// Executes HTTP/GraphQL assertions against original response bytes, returning
-    /// only value-free results and the redacted response. Uses the preparation's
+    /// only redacted, bounded actual values and the redacted response. Reuses the
     /// cached provider for the entire batch, including request/certificate secrets.
     pub async fn execute_with_assertions<C, P>(
         self,
@@ -179,9 +213,13 @@ impl<'a> PreparedRequest<'a> {
             .into_http_parts()
             .map_err(HttpExecutionError::Protocol)?;
         let mut options = options;
-        if !assertions.is_empty() {
-            // Assertion-only secrets are resolved after the exchange; prevent raw
-            // bytes from reaching the response spool cache in the meantime.
+        let assertion_secrets = crate::assertions::may_resolve_secrets(assertions, &resolution);
+        execution
+            .check_output(output, assertion_secrets)
+            .map_err(HttpExecutionError::Http)?;
+        if assertion_secrets {
+            // Assertion-only secrets are resolved after the exchange. Preserve disk
+            // paging for plain assertions, but fail closed on uncertain reachability.
             options.response_cache = None;
         }
         let (mut executed, disclosure) = execution
@@ -196,7 +234,16 @@ impl<'a> PreparedRequest<'a> {
             &provider,
             |environment| environments.push(environment),
         );
-        executed.response = disclosure.redact_response_with(executed.response, &environments);
+        let fetched = provider.redaction_values();
+        let redactor =
+            SecretRedactor::from_environments(disclosure.secrets.iter().chain(&environments))
+                .with_values(&fetched)
+                .with_json_literals();
+        let outcomes = outcomes
+            .into_iter()
+            .map(|result| result.redact(&redactor))
+            .collect();
+        executed.response = disclosure.redact_response_using(executed.response, &redactor);
         Ok((executed, outcomes))
     }
 
@@ -251,6 +298,7 @@ impl<'a> PreparedRequest<'a> {
                 client_identity,
                 request,
                 disclosure: self.disclosure,
+                reject_secret_output: self.reject_secret_output,
             },
             self.resolution,
             self.provider,
@@ -316,6 +364,7 @@ pub struct HttpExecution {
     client_identity: Result<Option<probe_http::ClientIdentity>, HttpError>,
     request: PreparedHttpRequest,
     disclosure: SecretDisclosure,
+    reject_secret_output: bool,
 }
 
 impl HttpExecution {
@@ -323,6 +372,22 @@ impl HttpExecution {
     #[must_use]
     pub const fn uses_secrets(&self) -> bool {
         self.disclosure.uses_secrets()
+    }
+
+    fn check_output(
+        &self,
+        output: Option<&Path>,
+        assertion_secrets: bool,
+    ) -> Result<(), HttpError> {
+        if self.reject_secret_output
+            && output.is_some()
+            && (self.uses_secrets() || assertion_secrets)
+        {
+            return Err(HttpError::InvalidBody(
+                "Saving a response directly to a file is unavailable when secret variables or unresolved assertion values are involved.".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Executes the request in memory, or streams the original response bytes to `output`.
@@ -351,8 +416,8 @@ impl HttpExecution {
     }
 
     // Only application code can observe the original response or its disclosure
-    // context. Keeping assertion inputs out of this future preserves the desktop's
-    // Send execution contract with providers that are deliberately not Sync.
+    // context. Transport-only execution remains independent of borrowed assertion
+    // providers that are deliberately not Sync.
     async fn execute_raw<C, P>(
         self,
         engine: &HttpEngine,
@@ -368,6 +433,7 @@ impl HttpExecution {
         // Selection errors contain only fixed configuration diagnostics or typed
         // resolver errors (variable names, never resolved values). Preserve these
         // safe errors.
+        self.check_output(output, false)?;
         options.client_identity = self.client_identity?;
         if self.disclosure.uses_secrets() {
             // Cache spool files would retain unredacted response bytes.
@@ -473,17 +539,21 @@ impl SecretDisclosure {
 
     fn redact_response_with(
         &self,
-        mut response: HttpResponse,
+        response: HttpResponse,
         environments: &[ResolvedEnvironment],
     ) -> HttpResponse {
         // The request/certificate disclosure and every assertion environment must
         // participate in one longest-first match against the original bytes.
         let secrets = SecretRedactor::from_environments(self.secrets.iter().chain(environments));
-        if !self.uses_secrets()
-            && !environments
-                .iter()
-                .any(ResolvedEnvironment::has_resolved_secrets)
-        {
+        self.redact_response_using(response, &secrets)
+    }
+
+    fn redact_response_using(
+        &self,
+        mut response: HttpResponse,
+        secrets: &SecretRedactor<'_>,
+    ) -> HttpResponse {
+        if secrets.is_empty() {
             return response;
         }
         // A redirect may encode or transform secret bytes, so only the
@@ -564,6 +634,77 @@ pub use session::{
     CloseOrigin, Session, SessionData, SessionError, SessionEvent, SessionSender,
     WebSocketExecution,
 };
+
+#[cfg(test)]
+mod cached_secret_tests {
+    use super::*;
+
+    struct Provider;
+
+    impl SecretProvider for Provider {
+        fn resolve_secret(
+            &self,
+            context: &SecretContext<'_>,
+        ) -> Result<Option<SecretValue>, SecretError> {
+            match context.variable_name {
+                "available" => Ok(Some(SecretValue::new("fetched-only-secret".into()))),
+                "missing" => Ok(None),
+                _ => Err(SecretError),
+            }
+        }
+    }
+
+    #[test]
+    fn successfully_fetched_secrets_redact_even_without_environment_disclosures() {
+        let cache = CachedSecrets::new(&Provider);
+        for name in ["available", "missing", "failed"] {
+            let result = cache.resolve_secret(&SecretContext {
+                workspace_identity: None,
+                environment_name: None,
+                variable_name: name,
+            });
+            match name {
+                "available" => assert_eq!(
+                    result,
+                    Ok(Some(SecretValue::new("fetched-only-secret".into())))
+                ),
+                "missing" => assert_eq!(result, Ok(None)),
+                _ => assert_eq!(result, Err(SecretError)),
+            }
+        }
+
+        let values = cache.redaction_values();
+        assert_eq!(values, vec![SecretValue::new("fetched-only-secret".into())]);
+        let redactor = SecretRedactor::from_environments([]).with_values(&values);
+        assert_eq!(
+            redactor.redact("before fetched-only-secret after"),
+            "before [REDACTED] after"
+        );
+        assert_eq!(redactor.redact("ordinary response"), "ordinary response");
+    }
+}
+
+#[cfg(test)]
+mod output_policy_tests {
+    use super::*;
+
+    #[test]
+    fn secret_assertions_without_file_output_are_allowed() {
+        let execution = prepare_request(
+            &Request::default(),
+            &RequestResolution::default(),
+            &NoSecrets,
+        )
+        .unwrap()
+        .reject_secret_output()
+        .into_http()
+        .unwrap();
+
+        // Rejecting secret file output must not reject an in-memory response.
+        // Call the policy directly so a regression fails before any transport I/O.
+        assert_eq!(execution.check_output(None, true), Ok(()));
+    }
+}
 
 #[cfg(test)]
 mod certificate_variable_tests {

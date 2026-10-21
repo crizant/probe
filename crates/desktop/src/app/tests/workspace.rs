@@ -3,7 +3,7 @@ use crate::app::{NewGraphqlRequest, NewRequest, documentation::OverviewTarget};
 use probe_core::ItemKind;
 use probe_opencollection::ItemLocator;
 
-fn tab_response() -> HttpResponse {
+pub(super) fn tab_response() -> HttpResponse {
     let body = br#"{"ok":true}"#.to_vec();
     HttpResponse {
         status: 200,
@@ -39,7 +39,7 @@ fn closing_saved_request_unloads_response_and_reopening_starts_fresh(cx: &mut Te
             view.select_request(key, cx);
             let (cancel, _) = oneshot::channel();
             let generation = view.execution.begin(key, cancel);
-            view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+            view.complete_execution(key, generation, Ok((tab_response(), Vec::new())), None, cx);
             view.response_viewer.set_tab(key, ResponseViewerTab::Raw);
             view.response_viewer.set_raw_view(key, RawBodyView::Base64);
             view.request_editor.set_section(key, EditorSection::Headers);
@@ -101,11 +101,11 @@ fn closing_saved_request_cancels_execution_and_ignores_late_completion(cx: &mut 
             assert_eq!(cancelled.try_recv(), Ok(()));
             assert!(view.execution.response(key).is_none());
 
-            view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+            view.complete_execution(key, generation, Ok((tab_response(), Vec::new())), None, cx);
             assert!(view.execution.response(key).is_none());
             assert!(view.response_viewer.document(key).is_none());
             view.select_request(key, cx);
-            view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+            view.complete_execution(key, generation, Ok((tab_response(), Vec::new())), None, cx);
             assert!(view.execution.response(key).is_none());
             assert!(view.response_viewer.document(key).is_none());
         })
@@ -147,7 +147,13 @@ fn close_other_tabs_unloads_other_responses_and_preserves_the_kept_response(
                 view.select_request(key, cx);
                 let (cancel, _) = oneshot::channel();
                 let generation = view.execution.begin(key, cancel);
-                view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+                view.complete_execution(
+                    key,
+                    generation,
+                    Ok((tab_response(), Vec::new())),
+                    None,
+                    cx,
+                );
                 assert!(view.response_viewer.document(key).is_some());
             }
             let keep = keys[0];
@@ -193,7 +199,7 @@ fn closing_response_tab_unloads_image_and_encoded_documents(cx: &mut TestAppCont
             response.size = response.body.len();
             let (cancel, _) = oneshot::channel();
             let generation = view.execution.begin(key, cancel);
-            view.complete_execution(key, generation, Ok(response), None, cx);
+            view.complete_execution(key, generation, Ok((response, Vec::new())), None, cx);
             assert!(matches!(
                 view.response_viewer.document(key).unwrap().image_preview,
                 Some(crate::response_viewer::ResponseImagePreview::Ready(_))
@@ -208,7 +214,13 @@ fn closing_response_tab_unloads_image_and_encoded_documents(cx: &mut TestAppCont
                 view.select_request(key, cx);
                 let (cancel, _) = oneshot::channel();
                 let generation = view.execution.begin(key, cancel);
-                view.complete_execution(key, generation, Ok(tab_response()), None, cx);
+                view.complete_execution(
+                    key,
+                    generation,
+                    Ok((tab_response(), Vec::new())),
+                    None,
+                    cx,
+                );
                 view.response_viewer.set_tab(key, ResponseViewerTab::Raw);
                 view.response_viewer.set_raw_view(key, raw_view);
                 view.start_base64_encoding(key, cx);
@@ -245,7 +257,7 @@ fn response_jobs_finishing_after_tab_close_do_not_recreate_documents(cx: &mut Te
             let (cancel, _) = oneshot::channel();
             let execution = view.execution.begin(key, cancel);
             view.execution
-                .finish(key, execution, Ok(response.clone()), None);
+                .finish(key, execution, Ok((response.clone(), Vec::new())), None);
             let generation = view.response_viewer.allocate_generation();
             let (document, pretty_pending, inspection_pending) =
                 crate::response_viewer::prepare_document(&response, generation);
@@ -361,7 +373,13 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
             assert_eq!(view.dirty_keys().len(), 2);
             let (cancel, _) = oneshot::channel();
             let generation = view.execution.begin(http_key, cancel);
-            view.complete_execution(http_key, generation, Ok(tab_response()), None, cx);
+            view.complete_execution(
+                http_key,
+                generation,
+                Ok((tab_response(), Vec::new())),
+                None,
+                cx,
+            );
             assert!(view.response_viewer.document(http_key).is_some());
             view.close_tab_now(http_key, cx);
             assert!(!view.detached_requests.contains(&http_key));
@@ -2908,20 +2926,23 @@ fn discarding_a_dirty_tab_restores_the_workspace_request(cx: &mut TestAppContext
             view.complete_execution(
                 key,
                 generation,
-                Ok(HttpResponse {
-                    status: 200,
-                    initial_url: "https://example.com/start".to_owned(),
-                    url_changed: false,
-                    reason: "OK".to_owned(),
-                    url: "https://discarded.example".to_owned(),
-                    duration: Duration::from_millis(12),
-                    size: 2,
-                    headers: Vec::new(),
-                    body: b"ok".to_vec(),
-                    body_complete: true,
-                    body_file: None,
-                    body_retention_error: None,
-                }),
+                Ok((
+                    HttpResponse {
+                        status: 200,
+                        initial_url: "https://example.com/start".to_owned(),
+                        url_changed: false,
+                        reason: "OK".to_owned(),
+                        url: "https://discarded.example".to_owned(),
+                        duration: Duration::from_millis(12),
+                        size: 2,
+                        headers: Vec::new(),
+                        body: b"ok".to_vec(),
+                        body_complete: true,
+                        body_file: None,
+                        body_retention_error: None,
+                    },
+                    Vec::new(),
+                )),
                 None,
                 cx,
             );
@@ -4065,7 +4086,13 @@ fn http_completion_after_reload_shows_the_response_for_the_remapped_request(
             let generation = view.execution.begin(old_key, cancel);
 
             let new_key = reload_unchanged_fixture(view, &fixture)[&old_key];
-            view.complete_execution(old_key, generation, Ok(tab_response()), None, cx);
+            view.complete_execution(
+                old_key,
+                generation,
+                Ok((tab_response(), Vec::new())),
+                None,
+                cx,
+            );
 
             assert!(matches!(
                 view.execution.response(new_key),
@@ -4104,7 +4131,7 @@ fn response_jobs_running_across_reloads_finish_on_the_remapped_request(cx: &mut 
                 .set_raw_view(first_key, RawBodyView::Base64);
             let (cancel, _) = oneshot::channel();
             let generation = view.execution.begin(first_key, cancel);
-            view.complete_execution(first_key, generation, Ok(response), None, cx);
+            view.complete_execution(first_key, generation, Ok((response, Vec::new())), None, cx);
             let document = view.response_viewer.document(first_key).unwrap();
             assert!(document.pretty_pending);
             assert!(document.inspection_pending);

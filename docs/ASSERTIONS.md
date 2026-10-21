@@ -3,15 +3,16 @@
 `probe_application::evaluate_assertions(&[probe_core::Assertion], &HttpResponse,
 &RequestResolution, &dyn SecretProvider) -> Vec<AssertionResult>` is a standalone
 operation. HTTP and GraphQL use the same completed transport response; GraphQL's
-`data` and `errors` remain ordinary JSON properties. Live CLI runs invoke the shared
+`data` and `errors` remain ordinary JSON properties. CLI and desktop sends invoke the shared
 evaluator through the application execution boundary before response redaction.
-Desktop execution remains unchanged; desktop assertion UI is outside this work.
 Collection persistence and the YAML format are unchanged. See [CLI](CLI.md) for
 `--assert`, `--no-assertions`, structured results, exit codes, and the breaking
 migration from Probe v1.1.1's removed `--expect` flag.
 
 Each input declaration produces one result in source order, with its zero-based
 index and `Passed`, `Failed`, `Disabled`, or `Error(AssertionError)` outcome.
+Passed and failed checks also carry safe `actual` display text and an
+`actual_truncated` flag; disabled checks and evaluation errors have no actual.
 Errors have structured categories and value-free `Display` diagnostics. Disabled
 assertions do not parse expressions, resolve values, or inspect the response.
 Failures and errors do not stop subsequent assertions. Input data is immutable.
@@ -96,8 +97,11 @@ regardless of body availability. Future adapters must supply an unredacted
 completed response for secret comparisons; evaluating an already redacted response
 cannot recover its original values. `PreparedRequest::execute_with_assertions`
 evaluates original bytes internally and returns only safe outcomes and redacted
-response data. HTTP failures do not evaluate assertions. Explicit output files
-retain the existing original-byte behavior.
+response data. HTTP failures do not evaluate assertions. CLI explicit output files
+retain the existing original-byte behavior. Desktop direct saves stream complete
+non-secret responses, with or without assertions. Desktop execution opts into
+`PreparedRequest::reject_secret_output()`, refusing direct saves before the exchange
+when request, selected certificate, or active assertion values may use secrets.
 
 ## Variables and disclosure
 
@@ -112,9 +116,15 @@ The standalone evaluator caches provider values and failures across its batch.
 Integrated execution reuses the existing preparation `CachedSecrets`, sharing lookups
 with request and certificate resolution. Request, certificate, and assertion secrets
 are combined and deduplicated before a single longest-first redaction of the original
-response; raw response data and resolved values never cross the application boundary. Runs with assertions bypass response spool caching so those
-files cannot retain assertion-only secrets. Disabled and unary declarations never
-resolve ignored values.
+response and observations; raw response data and resolved secrets never cross
+this boundary. Fetched secrets remain in the matcher even when a later resolver
+step fails. JSON literal representations used for comparison participate in the
+same longest-first, overlap-aware, single-pass matcher.
+A metadata-only preflight uses the same environment resolver without a native secret
+provider to decide whether active assertion values could reach secrets. Such runs
+bypass response spool caching; uncertain resolution also disables spooling. Plain
+assertions retain normal disk-backed paging. Disabled and unary declarations never
+resolve ignored values or restrict storage based on those values.
 
 Missing, disabled, malformed, unavailable, or provider-failed references return
 `VariableResolution`. Assertions always require available values, including when
@@ -122,10 +132,63 @@ Missing, disabled, malformed, unavailable, or provider-failed references return
 cannot establish a pass. This assertion-specific rule does not alter the existing
 strict/non-strict request-sending behavior.
 
-Results contain no expressions, descriptions, operand values, variable names,
-provider diagnostics, parser errors, response content, or secret-bearing execution
-state. `Debug`, `Display`, and error sources cannot expose those inputs, including
-secrets that a server echoes or transforms. Interfaces can associate results with
-declarations by index; any future display of declarations needs its own disclosure
-review. Providers may block, and JSON parsing can be expensive; desktop callers
-must run the evaluator away from the UI thread.
+Error diagnostics contain no expressions, descriptions, expected operands,
+variable names, provider diagnostics, parser details, or response content.
+Actual observations remain private until the entire batch has resolved its
+reachable secrets. They share the execution's unified `SecretRedactor`, including
+request/certificate secrets and assertion secrets discovered later in the batch.
+The parsed original JSON body is shared temporarily between pending observations;
+results never retain its original bytes or secret-bearing values. Decoded string
+and object-key redaction precedes JSON escaping. Structured observations containing
+secret text may be entirely redacted. Only after redaction is display text capped
+at 512 Unicode characters, followed by `… [truncated]` and a truncation flag.
+JSON secret expansion keeps the complete literal, encoded/escaped forms, decoded
+string values, and normalized forms of top-level numbers. Object keys and nested
+non-string scalars are not independently treated as secrets. Explicit short secrets
+still use substring matching: a secret `1` redacts the final digit of status `201`.
+Use sufficiently distinctive secret values to avoid such unavoidable matches.
+
+Providers may block, and JSON parsing can be expensive; desktop callers must run
+the evaluator away from the UI thread.
+
+## Desktop
+
+HTTP and GraphQL requests have an **Assertions** editor tab. Add, enable or disable,
+edit, and remove declarations in persisted order. The operator menu offers the eight
+supported operators and retains an existing unknown operator until explicitly changed.
+Descriptions are optional; editing other properties preserves structured descriptions,
+explicit nulls, and omitted fields. Empty descriptions use an Add Description
+affordance instead of a full input row. Unary operators disable, and keep, any
+unused expected value.
+`{{variables}}` remain ordinary text in the editor. Changes use the normal draft,
+dirty indicator, Save, reload, and reconciliation workflows. Adding and deleting
+a new assertion restores an originally absent list; an explicitly empty baseline
+stays explicitly empty. WebSocket requests do
+not offer this editor.
+
+Every HTTP/GraphQL send evaluates the request's current declaration snapshot. The
+response **Assertions** tab is available after completion, including for truncated
+bodies. Its inline summary distinguishes failed comparisons, evaluation errors,
+passed checks, and skipped (disabled) declarations. Failed checks add a coloured
+count to the tab. Rows group failures first, then errors, passes, and skipped
+checks, preserving declaration order within each group. Descriptions become row
+labels when present. The response tab shows the original, uninterpolated declaration
+text (expression, operator, and expected value) from the send's snapshot, together
+with redacted, truncated actual values for failed comparisons. It never displays
+resolved secret values. Failed rows show these safe actuals;
+evaluation errors show value-free reasons. Request transport failures report
+"Not evaluated — request failed". Empty results offer a shortcut to the editor;
+all-disabled executions retain their skipped rows and a shared placeholder.
+
+Up/Down selects results. Enter or double-click focuses the corresponding unchanged
+editor declaration; changed or removed declarations report that the snapshot is
+stale. Cmd/Ctrl+C copies the original expression, operator, expected value, and
+redacted actual for a failed comparison. Editor rows show the latest outcome only
+while their declarations still match that execution. Failures and assertion
+errors keep all response tabs available. Status assertions work on truncated
+responses; body assertions report body unavailable.
+
+Results belong to the completed execution, so later edits do not change them. A new
+send replaces them; cancellation, closing or deleting the request, and workspace
+replacement discard them. Reloads preserve valid response/result pairs through the
+existing request-key remapping and execution-generation checks.

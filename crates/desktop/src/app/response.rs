@@ -111,7 +111,13 @@ impl ProbeApp {
             }
         }
         let (cancellation_sender, cancellation_receiver) = tokio::sync::oneshot::channel();
-        let generation = self.execution.begin(key, cancellation_sender);
+        // Keep only the original declarations, never interpolated values, with this send.
+        let generation = self.execution.begin_with_assertions(
+            key,
+            cancellation_sender,
+            input.request.runtime.assertions.clone().unwrap_or_default(),
+        );
+        self.response_viewer.remove(key);
         let (result_receiver, mut progress_receiver, presence_receiver) = self
             .execution_service
             .as_ref()
@@ -137,7 +143,7 @@ impl ProbeApp {
                 });
             }
             let (result, saved_to) = match result_receiver.await {
-                Ok(Ok((response, saved_to))) => (Ok(response), saved_to),
+                Ok(Ok((response, saved_to, assertions))) => (Ok((response, assertions)), saved_to),
                 Ok(Err(error)) => (Err(error), None),
                 Err(_) => (
                     Err(HttpError::Transport(
@@ -159,17 +165,18 @@ impl ProbeApp {
         &mut self,
         key: RequestKey,
         generation: u64,
-        result: Result<HttpResponse, HttpError>,
+        result: Result<(HttpResponse, Vec<probe_application::AssertionResult>), HttpError>,
         saved_to: Option<SavedResponseBody>,
         cx: &mut Context<Self>,
     ) {
         let completed = result.is_ok();
-        if let Some(key) = self
+        let Some(key) = self
             .execution
             .finish(key, generation, result, saved_to.clone())
-        {
-            self.refresh_response_document(key, cx);
-        }
+        else {
+            return;
+        };
+        self.refresh_response_document(key, cx);
         if completed && let Some(path) = saved_to {
             self.show_toast(
                 ToastIntent::Success,
@@ -180,7 +187,9 @@ impl ProbeApp {
     }
 
     pub(super) fn refresh_response_document(&mut self, key: RequestKey, cx: &mut Context<Self>) {
-        let Some(ResponseState::Complete { response, saved_to }) = self.execution.response(key)
+        let Some(ResponseState::Complete {
+            response, saved_to, ..
+        }) = self.execution.response(key)
         else {
             self.response_viewer.remove(key);
             return;
@@ -242,6 +251,65 @@ impl ProbeApp {
                 });
             })
             .detach();
+        }
+    }
+
+    pub(super) fn jump_to_assertion(
+        &mut self,
+        key: RequestKey,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let declaration = match self.execution.response(key) {
+            Some(ResponseState::Complete {
+                assertion_declarations,
+                ..
+            }) => assertion_declarations.get(index),
+            _ => None,
+        };
+        let target = self
+            .loaded_workspace
+            .as_ref()
+            .and_then(|loaded| loaded.workspace().request(key))
+            .and_then(|request| request.runtime.assertions.as_ref())
+            .and_then(|rows| {
+                declaration.and_then(|declaration| {
+                    if rows.get(index) == Some(declaration) {
+                        Some(index)
+                    } else {
+                        rows.iter().position(|row| row == declaration)
+                    }
+                })
+            });
+        if let Some(target) = target {
+            self.request_editor.focus_assertion(key, target);
+        } else {
+            self.show_toast(
+                ToastIntent::Info,
+                "This assertion has changed since the response was sent.",
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    pub(super) fn copy_assertion_result(
+        &self,
+        key: RequestKey,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ResponseState::Complete {
+            assertions,
+            assertion_declarations,
+            ..
+        }) = self.execution.response(key)
+            && let Some(result) = assertions.iter().find(|result| result.index == index)
+            && let Some(declaration) = assertion_declarations.get(index)
+        {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                crate::response_viewer::assertions::copy_row(declaration, result),
+            ));
         }
     }
 
@@ -405,7 +473,9 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ResponseState::Complete { response, saved_to }) = self.execution.response(key)
+        let Some(ResponseState::Complete {
+            response, saved_to, ..
+        }) = self.execution.response(key)
         else {
             return;
         };

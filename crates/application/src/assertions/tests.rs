@@ -921,7 +921,7 @@ fn every_diagnostic_path_withholds_untrusted_inputs() {
             SECRET.as_bytes(),
             false,
             AssertionError::BodyUnavailable,
-            "complete in-memory response body is unavailable",
+            "The complete response body is unavailable for this assertion.",
         ),
         (
             assertion("response.body", "isNotNull", None),
@@ -992,4 +992,295 @@ fn batch_caches_provider_success_missing_values_and_failures() {
         };
         assert!(results.iter().all(|r| r.outcome == expected));
     }
+}
+
+#[test]
+fn storage_preflight_distinguishes_plain_ignored_and_reachable_secret_values() {
+    let loaded = fixture();
+    let environments = loaded.workspace().environments();
+    let resolution = RequestResolution {
+        environments,
+        environment: Some("child"),
+        ..RequestResolution::default()
+    };
+    assert!(!may_resolve_secrets(&[], &resolution));
+    for value in ["200", "{{status}}", "{{embedded}}"] {
+        assert!(
+            !may_resolve_secrets(
+                &[assertion("response.status", "equals", Some(value))],
+                &resolution
+            ),
+            "plain value: {value}"
+        );
+    }
+    for value in ["{{token}}", "{{alias}}", "{{missing}}", "{{malformed"] {
+        assert!(
+            may_resolve_secrets(
+                &[assertion("response.status", "equals", Some(value))],
+                &resolution
+            ),
+            "secret or uncertain value: {value}"
+        );
+    }
+    let mut disabled = assertion("response.status", "equals", Some("{{token}}"));
+    disabled.disabled = Some(true);
+    assert!(!may_resolve_secrets(&[disabled], &resolution));
+    for operator in ["isNull", "isNotNull"] {
+        assert!(!may_resolve_secrets(
+            &[assertion("response.body", operator, Some("{{token}}"))],
+            &resolution
+        ));
+    }
+    let plain_override = [("alias".into(), "200".into())];
+    assert!(!may_resolve_secrets(
+        &[assertion("response.status", "equals", Some("{{alias}}"))],
+        &RequestResolution {
+            overrides: &plain_override,
+            ..resolution
+        }
+    ));
+    let secret_override = [("token".into(), "runtime-secret".into())];
+    assert!(may_resolve_secrets(
+        &[assertion("response.status", "equals", Some("{{token}}"))],
+        &RequestResolution {
+            overrides: &secret_override,
+            ..resolution
+        }
+    ));
+    assert!(may_resolve_secrets(
+        &[assertion("response.status", "equals", Some("{{status}}"))],
+        &RequestResolution {
+            environment: Some("missing-environment"),
+            ..resolution
+        }
+    ));
+}
+
+#[test]
+fn observed_values_are_bounded_after_redaction_and_errors_are_not_failures() {
+    let body = serde_json::json!({"name":"Ada", "items":[1,true,null], "long":"é".repeat(MAX_ASSERTION_ACTUAL_CHARS+1)});
+    let declarations = [
+        assertion("response.status", "equals", Some("200")),
+        assertion("response.body.name", "equals", Some("Grace")),
+        assertion("response.body.items[1]", "equals", Some("true")),
+        assertion("response.body.items[2]", "isNull", None),
+        assertion("response.body.missing", "equals", Some("null")),
+        assertion("invalid", "equals", Some("200")),
+        assertion("response.body.long", "equals", Some("short")),
+        Assertion {
+            disabled: Some(true),
+            ..assertion("invalid", "invalid", None)
+        },
+    ];
+    let results = evaluate_assertions(
+        &declarations,
+        &response(&serde_json::to_vec(&body).unwrap()),
+        &RequestResolution::default(),
+        &NoSecrets,
+    );
+    assert_eq!(results[0].actual.as_deref(), Some("200"));
+    assert_eq!(results[0].outcome, AssertionOutcome::Passed);
+    assert_eq!(results[1].actual.as_deref(), Some("Ada"));
+    assert_eq!(results[1].outcome, AssertionOutcome::Failed);
+    assert_eq!(results[2].actual.as_deref(), Some("true"));
+    assert_eq!(results[3].actual.as_deref(), Some("null"));
+    assert_eq!(
+        results[4].outcome,
+        AssertionOutcome::Error(AssertionError::MissingProperty)
+    );
+    assert_eq!(
+        results[5].outcome,
+        AssertionOutcome::Error(AssertionError::UnsupportedExpression)
+    );
+    assert!(results[4].actual.is_none());
+    assert!(results[5].actual.is_none());
+    assert_eq!(
+        results[6].actual.as_deref(),
+        Some(format!("{}… [truncated]", "é".repeat(MAX_ASSERTION_ACTUAL_CHARS)).as_str())
+    );
+    assert!(results[6].actual_truncated);
+    assert_eq!(results[7].outcome, AssertionOutcome::Disabled);
+    assert!(results[7].actual.is_none());
+    for (bytes, complete, error) in [
+        (&b"not json"[..], true, AssertionError::InvalidJsonBody),
+        (&b"{}"[..], false, AssertionError::BodyUnavailable),
+    ] {
+        let mut response = response(bytes);
+        response.body_complete = complete;
+        let result = evaluate_assertions(
+            &[assertion("response.body", "isNull", None)],
+            &response,
+            &RequestResolution::default(),
+            &NoSecrets,
+        )
+        .remove(0);
+        assert_eq!(result.outcome, AssertionOutcome::Error(error));
+        assert!(result.actual.is_none());
+    }
+}
+
+#[test]
+fn actuals_use_secrets_disclosed_later_and_redact_decoded_json_before_escaping() {
+    let loaded = fixture();
+    let resolution = RequestResolution {
+        environments: loaded.workspace().environments(),
+        environment: Some("child"),
+        workspace_identity: Some("fixture"),
+        ..RequestResolution::default()
+    };
+    for secret in ["sensitive-token", "quote\"and\nnewline", "é-secret"] {
+        let provider = Provider {
+            value: Ok(Some(secret)),
+            calls: Cell::new(0),
+        };
+        let body = serde_json::json!({"echo":secret,"nested": {(secret): [secret]}});
+        let declarations = [
+            assertion("response.body.echo", "equals", Some("different")),
+            assertion("response.body.nested", "isNotNull", None),
+            assertion("response.body.echo", "equals", Some("{{token}}")),
+        ];
+        let results = evaluate_assertions(
+            &declarations,
+            &response(&serde_json::to_vec(&body).unwrap()),
+            &resolution,
+            &provider,
+        );
+        assert_eq!(results[0].actual.as_deref(), Some("[REDACTED]"));
+        assert!(!format!("{results:?}").contains(secret));
+        assert!(!results[1].actual.as_ref().unwrap().contains(secret));
+        assert!(results[1].actual.as_ref().unwrap().contains("[REDACTED]"));
+    }
+    // A long secret straddling the display limit is removed before truncation.
+    let secret = "x".repeat(MAX_ASSERTION_ACTUAL_CHARS + 100);
+    let provider = Provider {
+        value: Ok(Some(&secret)),
+        calls: Cell::new(0),
+    };
+    let results = evaluate_assertions(
+        &[assertion("response.body", "equals", Some("{{token}}"))],
+        &response(&serde_json::to_vec(&secret).unwrap()),
+        &resolution,
+        &provider,
+    );
+    assert_eq!(results[0].actual.as_deref(), Some("[REDACTED]"));
+    assert!(!results[0].actual_truncated);
+}
+
+#[test]
+fn partially_failed_resolution_still_redacts_every_fetched_secret() {
+    let loaded = fixture();
+    let resolution = RequestResolution {
+        environments: loaded.workspace().environments(),
+        environment: Some("child"),
+        workspace_identity: Some("fixture"),
+        ..RequestResolution::default()
+    };
+    let provider = Provider {
+        value: Ok(Some("secret-before-error")),
+        calls: Cell::new(0),
+    };
+    let results = evaluate_assertions(
+        &[
+            assertion("response.body", "equals", Some("different")),
+            assertion("response.body", "equals", Some("{{token}}-{{missing}}")),
+        ],
+        &response(br#""secret-before-error""#),
+        &resolution,
+        &provider,
+    );
+    assert_eq!(results[0].actual.as_deref(), Some("[REDACTED]"));
+    assert_eq!(
+        results[1].outcome,
+        AssertionOutcome::Error(AssertionError::VariableResolution)
+    );
+    assert_eq!(provider.calls.get(), 1);
+}
+
+#[test]
+fn actuals_redact_literal_decoding_and_secret_derived_numbers() {
+    let loaded = fixture();
+    let resolution = RequestResolution {
+        environments: loaded.workspace().environments(),
+        environment: Some("child"),
+        workspace_identity: Some("fixture"),
+        ..RequestResolution::default()
+    };
+    for (secret, expected, body) in [
+        (
+            "\"decoded-secret\"",
+            "{{token}}",
+            br#""decoded-secret""#.as_slice(),
+        ),
+        ("1e3", "{{token}}", b"1e3".as_slice()),
+        ("3", "1e{{token}}", b"1000".as_slice()),
+    ] {
+        let provider = Provider {
+            value: Ok(Some(secret)),
+            calls: Cell::new(0),
+        };
+        let results = evaluate_assertions(
+            &[assertion("response.body", "equals", Some(expected))],
+            &response(body),
+            &resolution,
+            &provider,
+        );
+        assert_eq!(results[0].outcome, AssertionOutcome::Passed);
+        assert_eq!(results[0].actual.as_deref(), Some("[REDACTED]"));
+    }
+}
+
+#[test]
+fn structured_actuals_redact_whole_values_when_serialized_secrets_match() {
+    let secrets = [SecretValue::new("container-secret".into())];
+    let redactor = probe_core::SecretRedactor::from_environments([]).with_values(&secrets);
+    for body in [
+        serde_json::json!({"echo": "container-secret"}),
+        serde_json::json!(["container-secret"]),
+    ] {
+        let result = PendingAssertionResult {
+            index: 0,
+            outcome: AssertionOutcome::Passed,
+            actual: Some(ObservedActual::Body {
+                root: Arc::new(body),
+                expression: "response.body".into(),
+            }),
+        }
+        .redact(&redactor);
+        assert_eq!(result.actual.as_deref(), Some("[REDACTED]"));
+        assert!(!result.actual_truncated);
+    }
+}
+
+#[test]
+fn structured_actuals_redact_decoded_strings_and_arrays_preserving_json_types() {
+    // JSON escaping prevents the raw matcher from seeing this secret in the
+    // serialized container. Its decoded strings must still be redacted.
+    let secret = "quoted\"secret\nline";
+    let secrets = [SecretValue::new(secret.into())];
+    let redactor = probe_core::SecretRedactor::from_environments([]).with_values(&secrets);
+    let body = serde_json::json!({
+        "text": secret,
+        "nested": [secret, {"echo": secret}, [secret, true, false, 42, 2.5, null]],
+        "ordinary": "safe text"
+    });
+    let result = PendingAssertionResult {
+        index: 0,
+        outcome: AssertionOutcome::Passed,
+        actual: Some(ObservedActual::Body {
+            root: Arc::new(body),
+            expression: "response.body".into(),
+        }),
+    }
+    .redact(&redactor);
+    let actual: Value = serde_json::from_str(result.actual.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "text": "[REDACTED]",
+            "nested": ["[REDACTED]", {"echo": "[REDACTED]"},
+                ["[REDACTED]", true, false, 42, 2.5, null]],
+            "ordinary": "safe text"
+        })
+    );
+    assert!(!result.actual_truncated);
 }

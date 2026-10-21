@@ -11,7 +11,9 @@ use crate::credentials::{CredentialId, CredentialStore, NativeSecretProvider};
 use crate::filesystem::workspace_base_directory;
 use atomic_write_file::AtomicWriteFile;
 use directories::{ProjectDirs, UserDirs};
-use probe_application::{NoSecrets, RequestResolution, prepare_request};
+use probe_application::{
+    AssertionResult, HttpExecutionError, NoSecrets, RequestResolution, prepare_request,
+};
 use probe_core::{Environment, Request, RequestKey, SecretContext, SecretError, SecretProvider};
 use probe_http::{
     ExecutionOptions, HttpEngine, HttpError, HttpProgress, HttpResponse, ResponseBodyFile,
@@ -39,8 +41,10 @@ pub(crate) enum ResponseState {
         progress: Option<ResponseProgress>,
     },
     Complete {
-        response: HttpResponse,
+        response: Box<HttpResponse>,
         saved_to: Option<SavedResponseBody>,
+        assertions: Vec<AssertionResult>,
+        assertion_declarations: Arc<Vec<probe_core::Assertion>>,
     },
     Failed(String),
     Cancelled,
@@ -71,6 +75,7 @@ impl ResponseState {
 pub(crate) struct ActiveRequest {
     pub(crate) generation: u64,
     pub(crate) cancellation: oneshot::Sender<()>,
+    assertion_declarations: Vec<probe_core::Assertion>,
 }
 
 #[derive(Default)]
@@ -82,7 +87,17 @@ pub(crate) struct ExecutionState {
 }
 
 impl ExecutionState {
+    #[cfg(test)]
     pub(crate) fn begin(&mut self, key: RequestKey, cancellation: oneshot::Sender<()>) -> u64 {
+        self.begin_with_assertions(key, cancellation, Vec::new())
+    }
+
+    pub(crate) fn begin_with_assertions(
+        &mut self,
+        key: RequestKey,
+        cancellation: oneshot::Sender<()>,
+        assertion_declarations: Vec<probe_core::Assertion>,
+    ) -> u64 {
         self.cancel(key);
         self.next_generation = self.next_generation.wrapping_add(1);
         let generation = self.next_generation;
@@ -91,6 +106,7 @@ impl ExecutionState {
             ActiveRequest {
                 generation,
                 cancellation,
+                assertion_declarations,
             },
         );
         self.responses.insert(
@@ -110,7 +126,7 @@ impl ExecutionState {
         &mut self,
         key: RequestKey,
         generation: u64,
-        result: Result<HttpResponse, HttpError>,
+        result: Result<(HttpResponse, Vec<AssertionResult>), HttpError>,
         saved_to: Option<SavedResponseBody>,
     ) -> Option<RequestKey> {
         let key = self.resolve_key(key);
@@ -121,10 +137,15 @@ impl ExecutionState {
         {
             return None;
         }
-        self.active.remove(&key);
+        let active = self.active.remove(&key).expect("generation was checked");
         self.key_aliases.retain(|_, target| *target != key);
         let response = match result {
-            Ok(response) => ResponseState::Complete { response, saved_to },
+            Ok((response, assertions)) => ResponseState::Complete {
+                response: Box::new(response),
+                saved_to,
+                assertions,
+                assertion_declarations: Arc::new(active.assertion_declarations),
+            },
             Err(HttpError::Cancelled) => ResponseState::Cancelled,
             Err(error) => ResponseState::Failed(error.to_string()),
         };
@@ -286,7 +307,14 @@ pub(crate) struct ExecutionService {
     credentials: Arc<dyn CredentialStore>,
 }
 
-type ExecutionResult = Result<(HttpResponse, Option<SavedResponseBody>), HttpError>;
+type ExecutionResult = Result<
+    (
+        HttpResponse,
+        Option<SavedResponseBody>,
+        Vec<AssertionResult>,
+    ),
+    HttpError,
+>;
 type ExecutionReceivers = (
     oneshot::Receiver<ExecutionResult>,
     mpsc::UnboundedReceiver<HttpProgress>,
@@ -468,83 +496,72 @@ impl ExecutionService {
         let (presence_sender, presence_receiver) = oneshot::channel();
         let engine = self.engine.clone();
         let credentials = Arc::clone(&self.credentials);
-        self.runtime
-            .as_ref()
-            .expect("execution runtime is active")
-            .spawn(async move {
-                let observer = Arc::new(SecretPresenceObserver::default());
-                let observer_for_resolution = Arc::clone(&observer);
-                let prepared = tokio::task::spawn_blocking(move || {
-                    let native;
-                    let provider: &dyn SecretProvider = match &input.credential_workspace {
-                        Some(workspace) => {
-                            native = ObservingSecretProvider {
-                                inner: NativeSecretProvider {
-                                    store: credentials.as_ref(),
-                                    workspace,
-                                },
-                                observer: &observer_for_resolution,
-                            };
-                            &native
-                        }
-                        None => &NoSecrets,
+        let runtime = self.runtime.as_ref().expect("execution runtime is active");
+        let handle = runtime.handle().clone();
+        // PreparedRequest borrows a non-Send provider and owns a RefCell cache.
+        // Keep preparation, async execution, and evaluation on one blocking worker;
+        // Handle::block_on drives I/O on the existing runtime, never on GPUI.
+        runtime.spawn_blocking(move || {
+            let observer = SecretPresenceObserver::default();
+            let native;
+            let provider: &dyn SecretProvider = match &input.credential_workspace {
+                Some(workspace) => {
+                    native = ObservingSecretProvider {
+                        inner: NativeSecretProvider {
+                            store: credentials.as_ref(),
+                            workspace,
+                        },
+                        observer: &observer,
                     };
-                    let resolution = RequestResolution {
-                        environments: &input.environments,
-                    client_certificates: &input.client_certificates,
-                        environment: input.environment.as_deref(),
-                        ..RequestResolution::default()
-                    };
-                    prepare_request(&input.request, &resolution, provider)
-                        .map_err(|error| error.to_string())
-                        .and_then(|prepared| {
-                            prepared.into_http().map_err(|error| error.to_string())
-                        })
-                })
-                .await;
-                let _ = presence_sender.send(observer.snapshot());
-                let execution = match prepared {
-                    Ok(Ok(execution)) => execution,
-                    Ok(Err(message)) => {
-                        let _ = result_sender.send(Err(HttpError::InvalidBody(message)));
-                        return;
-                    }
-                    Err(_) => {
-                        let _ = result_sender.send(Err(HttpError::InvalidBody(
-                            "request resolution failed".into(),
-                        )));
-                        return;
-                    }
-                };
-                // Direct file output writes response bytes before redaction.
-                if execution.uses_secrets() && output.is_some() {
-                    let _ = result_sender.send(Err(HttpError::InvalidBody(
-                        "saving a response directly to a file is unavailable for requests using secret variables".into(),
-                    )));
-                    return;
+                    &native
                 }
-                let cancellation = async move {
-                    let _ = cancellation.await;
-                };
-                let result = execution
-                    .execute(
+                None => &NoSecrets,
+            };
+            let resolution = RequestResolution {
+                environments: &input.environments,
+                client_certificates: &input.client_certificates,
+                environment: input.environment.as_deref(),
+                ..RequestResolution::default()
+            };
+            let result = handle.block_on(async {
+                let prepared = prepare_request(&input.request, &resolution, provider)
+                    .map_err(|error| HttpError::InvalidBody(error.to_string()))?;
+                let assertions = input
+                    .request
+                    .runtime
+                    .assertions
+                    .as_deref()
+                    .unwrap_or_default();
+                let (executed, assertions) = prepared
+                    .reject_secret_output()
+                    .execute_with_assertions(
                         &engine,
                         options,
                         output.as_deref(),
-                        cancellation,
+                        async move {
+                            let _ = cancellation.await;
+                        },
                         move |progress| {
                             let _ = progress_sender.send(progress);
                         },
+                        assertions,
                     )
                     .await
-                    .map(|executed| {
-                        let saved_to = output.zip(executed.body_sha256).map(|(path, sha256)| {
-                            SavedResponseBody { path, sha256 }
-                        });
-                        (executed.response, saved_to)
-                    });
-                let _ = result_sender.send(result);
+                    .map_err(|error| match error {
+                        HttpExecutionError::Http(error) => error,
+                        HttpExecutionError::Protocol(error) => {
+                            HttpError::InvalidBody(error.to_string())
+                        }
+                    })?;
+                let saved_to = output
+                    .zip(executed.body_sha256)
+                    .map(|(path, sha256)| SavedResponseBody { path, sha256 });
+                Ok((executed.response, saved_to, assertions))
             });
+            // Includes secrets reached only by assertion values.
+            let _ = presence_sender.send(observer.snapshot());
+            let _ = result_sender.send(result);
+        });
         (result_receiver, progress_receiver, presence_receiver)
     }
 }
@@ -832,7 +849,7 @@ mod tests {
         VariableValue, VariableValueSet,
     };
     use probe_http::ExecutionOptions;
-    use probe_http::{HttpError, HttpProgress, HttpResponse, ResponseHeader};
+    use probe_http::{HttpError, HttpProgress, HttpResponse, ResponseCache, ResponseHeader};
     use sha2::{Digest, Sha256};
     use tokio::sync::oneshot;
 
@@ -882,18 +899,91 @@ mod tests {
         let second_generation = state.begin(key, second);
 
         assert_eq!(
-            state.finish(key, first_generation, Ok(response(201)), None),
+            state.finish(key, first_generation, Ok((response(201), Vec::new())), None),
             None
         );
         assert!(matches!(
             state.response(key),
             Some(ResponseState::Running { .. })
         ));
-        state.finish(key, second_generation, Ok(response(204)), None);
+        state.finish(
+            key,
+            second_generation,
+            Ok((response(204), Vec::new())),
+            None,
+        );
         assert!(matches!(
             state.response(key),
             Some(ResponseState::Complete { response, .. }) if response.status == 204
         ));
+    }
+
+    fn outcomes(
+        outcome: probe_application::AssertionOutcome,
+    ) -> Vec<probe_application::AssertionResult> {
+        vec![probe_application::AssertionResult {
+            actual: None,
+            actual_truncated: false,
+            index: 0,
+            outcome,
+        }]
+    }
+
+    #[test]
+    fn assertion_snapshots_follow_generation_and_key_lifecycle() {
+        use probe_application::AssertionOutcome::{Failed, Passed};
+        let (a, b) = two_keys();
+        let (new_a, new_b) = two_keys();
+        let mut state = ExecutionState::default();
+        let (tx, _) = oneshot::channel();
+        let first = state.begin(a, tx);
+        state.finish(a, first, Ok((response(200), outcomes(Passed))), None);
+        let (tx, _) = oneshot::channel();
+        let declaration = probe_core::Assertion {
+            expression: "response.status".into(),
+            operator: "equals".into(),
+            value: Some("{{original}}".into()),
+            disabled: None,
+            description: None,
+        };
+        let second = state.begin_with_assertions(a, tx, vec![declaration.clone()]);
+        assert!(matches!(
+            state.response(a),
+            Some(ResponseState::Running { .. })
+        ));
+        assert_eq!(
+            state.finish(a, first, Ok((response(200), outcomes(Passed))), None),
+            None
+        );
+        let (tx, _) = oneshot::channel();
+        let other = state.begin(b, tx);
+        state.finish(b, other, Ok((response(201), outcomes(Passed))), None);
+        state.remap_requests(&BTreeMap::from([(a, new_a), (b, new_b)]));
+        state.finish(a, second, Ok((response(202), outcomes(Failed))), None);
+        assert!(
+            matches!(state.response(new_a), Some(ResponseState::Complete { response, assertions, assertion_declarations, .. }) if response.status == 202 && assertions == &outcomes(Failed) && assertion_declarations.as_slice() == [declaration])
+        );
+        assert!(
+            matches!(state.response(new_b), Some(ResponseState::Complete { response, assertions, .. }) if response.status == 201 && assertions == &outcomes(Passed))
+        );
+        let (tx, _) = oneshot::channel();
+        let cancelled = state.begin(new_a, tx);
+        state.cancel(new_a);
+        state.finish(
+            new_a,
+            cancelled,
+            Ok((response(200), outcomes(Passed))),
+            None,
+        );
+        assert_eq!(state.response(new_a), Some(&ResponseState::Cancelled));
+        state.remove(new_b);
+        assert_eq!(
+            state.finish(b, other, Ok((response(201), outcomes(Passed))), None),
+            None
+        );
+        state.clear();
+        assert!(state.response(new_a).is_none());
+        assert!(state.response(new_b).is_none());
     }
 
     #[test]
@@ -967,7 +1057,7 @@ mod tests {
         assert!(receiver.try_recv().is_ok());
         assert!(state.response(key).is_none());
 
-        state.finish(key, generation, Ok(response(200)), None);
+        state.finish(key, generation, Ok((response(200), Vec::new())), None);
         assert!(state.response(key).is_none());
     }
 
@@ -991,7 +1081,7 @@ mod tests {
         ));
 
         assert_eq!(
-            state.finish(old_key, generation, Ok(response(202)), None),
+            state.finish(old_key, generation, Ok((response(202), Vec::new())), None),
             Some(new_key)
         );
 
@@ -1020,8 +1110,8 @@ mod tests {
         state.remap_requests(&BTreeMap::from([(old_a, new_a), (old_b, new_b)]));
         assert!(receiver_a.try_recv().is_err());
         assert!(receiver_b.try_recv().is_err());
-        state.finish(old_a, generation_a, Ok(response(201)), None);
-        state.finish(old_b, generation_b, Ok(response(202)), None);
+        state.finish(old_a, generation_a, Ok((response(201), Vec::new())), None);
+        state.finish(old_b, generation_b, Ok((response(202), Vec::new())), None);
 
         assert!(
             matches!(state.response(new_a), Some(ResponseState::Complete { response, .. }) if response.status == 201)
@@ -1046,11 +1136,21 @@ mod tests {
         state.remap_requests(&BTreeMap::from([(retained, new_retained)]));
         assert!(removed_receiver.try_recv().is_ok());
         assert_eq!(
-            state.finish(removed, removed_generation, Ok(response(201)), None),
+            state.finish(
+                removed,
+                removed_generation,
+                Ok((response(201), Vec::new())),
+                None
+            ),
             None
         );
         assert!(state.response(replacement).is_none());
-        state.finish(retained, retained_generation, Ok(response(202)), None);
+        state.finish(
+            retained,
+            retained_generation,
+            Ok((response(202), Vec::new())),
+            None,
+        );
         assert!(
             matches!(state.response(new_retained), Some(ResponseState::Complete { response, .. }) if response.status == 202)
         );
@@ -1319,7 +1419,7 @@ mod tests {
             None,
             cancellation,
         );
-        let (response, _) = service
+        let (response, _, _) = service
             .runtime
             .as_ref()
             .unwrap()
@@ -1332,6 +1432,337 @@ mod tests {
         assert!(response.url.contains("{{token}}"));
         assert!(!format!("{response:?}").contains(secret));
         assert_eq!(response.body, b"[REDACTED]");
+    }
+
+    #[test]
+    fn desktop_assertions_use_original_bytes_and_assertion_only_native_secrets() {
+        use probe_application::{AssertionError, AssertionOutcome};
+        use probe_core::{Assertion, RequestKind, RequestRuntime};
+        for graphql in [false, true] {
+            let secret = "ASSERTION_ONLY_NATIVE_SECRET";
+            let workspace = std::env::temp_dir();
+            let store = Arc::new(FakeCredentials::new(false));
+            let id = CredentialId::for_workspace(&workspace, "production", "token").unwrap();
+            store.set(&id, secret).unwrap();
+            let service = ExecutionService::with_credentials(store.clone()).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                while !bytes.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
+                let body = format!("{{\"token\":\"{secret}\"}}");
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            });
+            let assertion =
+                |expression: &str, operator: &str, value: Option<&str>, disabled| Assertion {
+                    expression: expression.into(),
+                    operator: operator.into(),
+                    value: value.map(str::to_owned),
+                    disabled,
+                    description: None,
+                };
+            let mut request = Request {
+                url: Some(format!("http://{address}/")),
+                method: Some("GET".into()),
+                runtime: RequestRuntime {
+                    assertions: Some(vec![
+                        assertion("response.body.token", "equals", Some("{{token}}"), None),
+                        assertion("response.status", "equals", Some("404"), None),
+                        assertion("response.status", "equals", Some("{{missing}}"), None),
+                        assertion(
+                            "sensitive declaration",
+                            "future",
+                            Some("{{unused}}"),
+                            Some(true),
+                        ),
+                        assertion("response.body.token", "isNotNull", Some("{{unused}}"), None),
+                    ]),
+                },
+                ..Request::default()
+            };
+            if graphql {
+                request.kind = RequestKind::Graphql { body: None };
+            }
+            let (_cancel, cancellation) = oneshot::channel();
+            let (receiver, _, presence) = service.execute(
+                native_input(request, workspace),
+                ExecutionOptions::default(),
+                None,
+                cancellation,
+            );
+            let runtime = service.runtime.as_ref().unwrap();
+            let (response, saved_to, results) = runtime.block_on(receiver).unwrap().unwrap();
+            let observed = runtime.block_on(presence).unwrap();
+            server.join().unwrap();
+            assert!(saved_to.is_none());
+            assert_eq!(
+                results
+                    .iter()
+                    .map(|r| r.outcome.clone())
+                    .collect::<Vec<_>>(),
+                vec![
+                    AssertionOutcome::Passed,
+                    AssertionOutcome::Failed,
+                    AssertionOutcome::Error(AssertionError::VariableResolution),
+                    AssertionOutcome::Disabled,
+                    AssertionOutcome::Passed,
+                ]
+            );
+            assert_eq!(store.reads.load(Ordering::Relaxed), 1);
+            assert!(observed.found.contains(id.persistence_key()));
+            assert!(!format!("{response:?} {results:?}").contains(secret));
+            assert!(String::from_utf8_lossy(&response.body).contains("[REDACTED]"));
+        }
+    }
+
+    #[test]
+    fn desktop_large_plain_assertion_responses_keep_paging_and_stream_complete_saves() {
+        use probe_application::AssertionOutcome;
+        use probe_core::{Assertion, RequestRuntime};
+        for save in [false, true] {
+            let mut body = vec![b'x'; probe_http::MAX_IN_MEMORY_RESPONSE_BYTES];
+            body.extend(vec![b'y'; 1024]);
+            let expected = body.clone();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut buffer = [0; 4096];
+                assert!(stream.read(&mut buffer).unwrap() > 0);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            });
+            let directory = tempfile::TempDir::new().unwrap();
+            let output = directory.path().join("response.bin");
+            let service =
+                ExecutionService::with_credentials(Arc::new(FakeCredentials::new(false))).unwrap();
+            let (_cancel, cancellation) = oneshot::channel();
+            let (receiver, mut progress, _) = service.execute(
+                ExecutionInput {
+                    request: Request {
+                        url: Some(format!("http://{address}/")),
+                        method: Some("GET".into()),
+                        runtime: RequestRuntime {
+                            assertions: Some(vec![Assertion {
+                                expression: "response.status".into(),
+                                operator: "equals".into(),
+                                value: Some("200".into()),
+                                disabled: None,
+                                description: None,
+                            }]),
+                        },
+                        ..Request::default()
+                    },
+                    environments: Vec::new(),
+                    client_certificates: Vec::new(),
+                    environment: None,
+                    credential_workspace: None,
+                },
+                ExecutionOptions {
+                    response_cache: Some(ResponseCache::new(
+                        directory.path().join("cache"),
+                        64 * 1024 * 1024,
+                    )),
+                    ..ExecutionOptions::default()
+                },
+                save.then(|| output.clone()),
+                cancellation,
+            );
+            let (response, saved_to, results) = service
+                .runtime
+                .as_ref()
+                .unwrap()
+                .block_on(receiver)
+                .unwrap()
+                .unwrap();
+            server.join().unwrap();
+            assert_eq!(response.status, 200);
+            assert_eq!(results[0].outcome, AssertionOutcome::Passed);
+            assert!(!response.body_complete);
+            if save {
+                assert_eq!(fs::read(&output).unwrap(), expected);
+                assert_eq!(saved_to.as_ref().unwrap().path(), output);
+                let exported = directory.path().join("exported.bin");
+                save_response_body(&response, saved_to.as_ref(), &exported).unwrap();
+                assert_eq!(fs::read(exported).unwrap(), expected);
+            } else {
+                let file = response
+                    .body_file
+                    .as_ref()
+                    .expect("plain assertions must retain the complete paged body");
+                assert_eq!(fs::read(file.path()).unwrap(), expected);
+                let (document, _, _) = crate::response_viewer::prepare_document(&response, 1);
+                assert!(document.file_backed);
+                assert_eq!(document.total_size, expected.len());
+                assert_eq!(
+                    super::read_response_page(file, probe_http::MAX_IN_MEMORY_RESPONSE_BYTES, 1024)
+                        .unwrap(),
+                    vec![b'y'; 1024]
+                );
+            }
+            assert!(matches!(
+                progress.try_recv(),
+                Ok(HttpProgress::ResponseStarted { status: 200, .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn desktop_sends_resolve_collection_client_certificate_scope() {
+        for assertions in [
+            None,
+            Some(vec![probe_core::Assertion {
+                expression: "response.status".into(),
+                operator: "equals".into(),
+                value: Some("200".into()),
+                disabled: None,
+                description: None,
+            }]),
+        ] {
+            let directory = tempfile::TempDir::new().unwrap();
+            let service =
+                ExecutionService::with_credentials(Arc::new(FakeCredentials::new(false))).unwrap();
+            let (_cancel, cancellation) = oneshot::channel();
+            let (receiver, _, _) = service.execute(
+                ExecutionInput {
+                    request: Request {
+                        url: Some("https://127.0.0.1:1/".into()),
+                        method: Some("GET".into()),
+                        runtime: probe_core::RequestRuntime { assertions },
+                        ..Request::default()
+                    },
+                    environments: Vec::new(),
+                    environment: None,
+                    credential_workspace: None,
+                    client_certificates: vec![probe_core::ClientCertificate::Pem {
+                        domain: "127.0.0.1:1".into(),
+                        disabled: false,
+                        certificate_file_path: directory
+                            .path()
+                            .join("missing-cert.pem")
+                            .display()
+                            .to_string(),
+                        private_key_file_path: directory
+                            .path()
+                            .join("missing-key.pem")
+                            .display()
+                            .to_string(),
+                        passphrase: None,
+                    }],
+                },
+                ExecutionOptions::default(),
+                None,
+                cancellation,
+            );
+            let result = service
+                .runtime
+                .as_ref()
+                .unwrap()
+                .block_on(receiver)
+                .unwrap();
+            assert!(
+                matches!(result, Err(HttpError::ClientConfiguration(message)) if message == "cannot read client certificate file")
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_direct_save_refuses_request_assertion_and_certificate_secrets_consistently() {
+        use probe_core::{Assertion, ClientCertificate};
+        for source in ["request", "assertion", "certificate"] {
+            for with_assertions in [false, true] {
+                if source == "assertion" && !with_assertions {
+                    continue;
+                }
+                let directory = tempfile::TempDir::new().unwrap();
+                let store = Arc::new(FakeCredentials::new(false));
+                let id =
+                    CredentialId::for_workspace(directory.path(), "production", "token").unwrap();
+                store.set(&id, "runtime-secret").unwrap();
+                let service = ExecutionService::with_credentials(store).unwrap();
+                let mut input = native_input(
+                    Request {
+                        url: Some(
+                            if source == "request" {
+                                "https://127.0.0.1:1/{{token}}"
+                            } else {
+                                "https://127.0.0.1:1/"
+                            }
+                            .into(),
+                        ),
+                        method: Some("GET".into()),
+                        ..Request::default()
+                    },
+                    directory.path().to_owned(),
+                );
+                if with_assertions {
+                    input.request.runtime.assertions = Some(vec![Assertion {
+                        expression: "response.status".into(),
+                        operator: "equals".into(),
+                        value: Some(
+                            if source == "assertion" {
+                                "{{outer}}"
+                            } else {
+                                "200"
+                            }
+                            .into(),
+                        ),
+                        disabled: None,
+                        description: None,
+                    }]);
+                }
+                if source == "certificate" {
+                    input.client_certificates = vec![ClientCertificate::Pem {
+                        domain: "127.0.0.1:1".into(),
+                        disabled: false,
+                        certificate_file_path: "unused.pem".into(),
+                        private_key_file_path: "unused-key.pem".into(),
+                        passphrase: Some("{{token}}".into()),
+                    }];
+                }
+                let output = directory.path().join("response.bin");
+                let (_cancel, cancellation) = oneshot::channel();
+                let (receiver, _, _) = service.execute(
+                    input,
+                    ExecutionOptions::default(),
+                    Some(output.clone()),
+                    cancellation,
+                );
+                let result = service
+                    .runtime
+                    .as_ref()
+                    .unwrap()
+                    .block_on(receiver)
+                    .unwrap();
+                assert!(
+                    matches!(result, Err(HttpError::InvalidBody(message)) if message == "Saving a response directly to a file is unavailable when secret variables or unresolved assertion values are involved."),
+                    "source: {source}, assertions: {with_assertions}"
+                );
+                assert!(!output.exists());
+            }
+        }
     }
 
     #[test]

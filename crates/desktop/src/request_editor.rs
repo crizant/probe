@@ -1,9 +1,111 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet, HashMap},
+};
 
 use probe_core::{
     Authentication, AuthenticationKind, AuthenticationValue, Body, QueryParameter, RawBody,
     RawBodyKind, Request, RequestBody, RequestKey, RequestKind, synchronize_path_parameters,
 };
+
+pub(crate) const ASSERTION_OPERATORS: [&str; 8] = [
+    "equals",
+    "notEquals",
+    "contains",
+    "notContains",
+    "greaterThan",
+    "lessThan",
+    "isNull",
+    "isNotNull",
+];
+
+#[derive(Clone, Copy)]
+pub(crate) enum AssertionField {
+    Expression,
+    Operator,
+    Value,
+    Description,
+}
+
+impl AssertionField {
+    pub(crate) const fn id(self) -> &'static str {
+        match self {
+            Self::Expression => "assertion-expression",
+            Self::Operator => "assertion-operator-value",
+            Self::Value => "assertion-value",
+            Self::Description => "assertion-description",
+        }
+    }
+}
+
+pub(crate) enum AssertionEdit {
+    Add,
+    Remove(usize),
+    Enabled(usize, bool),
+    Text(usize, AssertionField, String),
+}
+
+impl AssertionEdit {
+    pub(crate) fn apply(self, request: &mut Request) {
+        if request.kind.is_websocket() {
+            return;
+        }
+        if matches!(self, Self::Add) {
+            request
+                .runtime
+                .assertions
+                .get_or_insert_default()
+                .push(probe_core::Assertion {
+                    expression: "response.status".into(),
+                    operator: "equals".into(),
+                    value: Some("200".into()),
+                    disabled: None,
+                    description: None,
+                });
+            return;
+        }
+        let Some(rows) = request.runtime.assertions.as_mut() else {
+            return;
+        };
+        match self {
+            Self::Add => unreachable!(),
+            Self::Remove(index) => {
+                if index < rows.len() {
+                    rows.remove(index);
+                }
+            }
+            Self::Enabled(index, enabled) => {
+                if let Some(row) = rows.get_mut(index)
+                    && (row.disabled != Some(true)) != enabled
+                {
+                    row.disabled = Some(!enabled);
+                }
+            }
+            Self::Text(index, field, text) => {
+                let Some(row) = rows.get_mut(index) else {
+                    return;
+                };
+                match field {
+                    AssertionField::Expression => row.expression = text,
+                    AssertionField::Operator => row.operator = text,
+                    AssertionField::Value => {
+                        if row.value.as_deref().unwrap_or_default() != text {
+                            row.value = Some(text);
+                        }
+                    }
+                    AssertionField::Description => match &mut row.description {
+                        Some(probe_core::Documentation::Content { content, .. }) => *content = text,
+                        Some(probe_core::Documentation::Text(value)) => *value = text,
+                        _ if !text.is_empty() => {
+                            row.description = Some(probe_core::Documentation::Text(text))
+                        }
+                        _ => {}
+                    },
+                }
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum EditorSection {
@@ -14,6 +116,7 @@ pub(crate) enum EditorSection {
     Body,
     Authentication,
     Docs,
+    Assertions,
     GraphqlQuery,
     GraphqlVariables,
     GraphqlOperationName,
@@ -22,16 +125,17 @@ pub(crate) enum EditorSection {
 }
 
 impl EditorSection {
-    pub(crate) const ALL_HTTP: [Self; 6] = [
+    pub(crate) const ALL_HTTP: [Self; 7] = [
         Self::Path,
         Self::Query,
         Self::Headers,
         Self::Body,
         Self::Authentication,
         Self::Docs,
+        Self::Assertions,
     ];
 
-    pub(crate) const ALL_GRAPHQL: [Self; 9] = [
+    pub(crate) const ALL_GRAPHQL: [Self; 10] = [
         Self::Path,
         Self::Query,
         Self::Headers,
@@ -41,6 +145,7 @@ impl EditorSection {
         Self::GraphqlExtensions,
         Self::Authentication,
         Self::Docs,
+        Self::Assertions,
     ];
 
     pub(crate) const ALL_WEBSOCKET: [Self; 4] = [
@@ -58,6 +163,7 @@ impl EditorSection {
             Self::Body => "Body",
             Self::Authentication => "Authentication",
             Self::Docs => "Documentation",
+            Self::Assertions => "Assertions",
             Self::GraphqlQuery => "Document",
             Self::GraphqlVariables => "Variables",
             Self::GraphqlOperationName => "Operation name",
@@ -199,13 +305,57 @@ const fn hex(byte: u8) -> Option<u8> {
 #[derive(Debug, Default)]
 pub(crate) struct RequestEditorState {
     sections: HashMap<RequestKey, EditorSection>,
+    assertion_descriptions: HashMap<RequestKey, BTreeSet<usize>>,
+    assertion_focus: Cell<Option<(RequestKey, usize)>>,
     body_drafts: BTreeMap<(RequestKey, BodyEditorKind), RequestBody>,
 }
 
 impl RequestEditorState {
     pub(crate) fn clear(&mut self) {
         self.sections.clear();
+        self.assertion_descriptions.clear();
+        self.assertion_focus.set(None);
         self.body_drafts.clear();
+    }
+
+    pub(crate) fn show_assertion_description(&mut self, key: RequestKey, index: usize) {
+        self.assertion_descriptions
+            .entry(key)
+            .or_default()
+            .insert(index);
+    }
+    pub(crate) fn description_is_open(&self, key: RequestKey, index: usize) -> bool {
+        self.assertion_descriptions
+            .get(&key)
+            .is_some_and(|rows| rows.contains(&index))
+    }
+    pub(crate) fn focus_assertion(&mut self, key: RequestKey, index: usize) {
+        self.set_section(key, EditorSection::Assertions);
+        self.assertion_focus.set(Some((key, index)));
+    }
+    pub(crate) fn take_assertion_focus(&self, key: RequestKey, index: usize) -> bool {
+        if self.assertion_focus.get() != Some((key, index)) {
+            return false;
+        }
+        self.assertion_focus.set(None);
+        true
+    }
+    pub(crate) fn assertion_removed(&mut self, key: RequestKey, index: usize) {
+        if let Some(rows) = self.assertion_descriptions.get_mut(&key) {
+            *rows = rows
+                .iter()
+                .filter_map(|row| {
+                    if *row < index {
+                        Some(*row)
+                    } else if *row > index {
+                        Some(*row - 1)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+        self.assertion_focus.set(None);
     }
 
     pub(crate) fn section(&self, key: RequestKey) -> EditorSection {
@@ -218,6 +368,14 @@ impl RequestEditorState {
 
     pub(crate) fn remove(&mut self, key: RequestKey) {
         self.sections.remove(&key);
+        self.assertion_descriptions.remove(&key);
+        if self
+            .assertion_focus
+            .get()
+            .is_some_and(|(target, _)| target == key)
+        {
+            self.assertion_focus.set(None);
+        }
     }
 
     pub(crate) fn ensure_available_section(
@@ -239,6 +397,15 @@ impl RequestEditorState {
     }
 
     pub(crate) fn remap_requests(&mut self, keys: &BTreeMap<RequestKey, RequestKey>) {
+        self.assertion_descriptions = std::mem::take(&mut self.assertion_descriptions)
+            .into_iter()
+            .filter_map(|(key, rows)| keys.get(&key).map(|new| (*new, rows)))
+            .collect();
+        self.assertion_focus.set(
+            self.assertion_focus
+                .get()
+                .and_then(|(key, index)| keys.get(&key).map(|new| (*new, index))),
+        );
         self.sections = std::mem::take(&mut self.sections)
             .into_iter()
             .filter_map(|(old_key, section)| keys.get(&old_key).map(|new_key| (*new_key, section)))
@@ -865,6 +1032,150 @@ mod tests {
         assert!(yaml.contains("title: Future"));
         assert!(yaml.contains("type: cbor"));
         assert!(yaml.contains("x-vendor: retained"));
+    }
+
+    #[test]
+    fn assertion_edits_preserve_absence_optional_values_and_description_structure() {
+        use super::{AssertionEdit as Edit, AssertionField as Field};
+        use probe_core::{Assertion, Documentation};
+        let mut request = Request::default();
+        Edit::Text(0, Field::Value, String::new()).apply(&mut request);
+        Edit::Remove(0).apply(&mut request);
+        assert_eq!(request.runtime.assertions, None);
+        request.runtime.assertions = Some(Vec::new());
+        Edit::Remove(0).apply(&mut request);
+        assert_eq!(request.runtime.assertions, Some(Vec::new()));
+        let description = Documentation::Content {
+            content: "original".into(),
+            media_type: "text/markdown".into(),
+        };
+        request.runtime.assertions = Some(vec![Assertion {
+            expression: "response.status".into(),
+            operator: "futureOperator".into(),
+            value: None,
+            disabled: None,
+            description: Some(description.clone()),
+        }]);
+        let original = request.clone();
+        Edit::Enabled(0, true).apply(&mut request);
+        Edit::Text(0, Field::Value, String::new()).apply(&mut request);
+        assert_eq!(request, original);
+        Edit::Text(0, Field::Expression, "response.body.value".into()).apply(&mut request);
+        let row = &request.runtime.assertions.as_ref().unwrap()[0];
+        assert_eq!(row.operator, "futureOperator");
+        assert_eq!(row.description, Some(description));
+        Edit::Text(0, Field::Value, "{{retained}}".into()).apply(&mut request);
+        Edit::Text(0, Field::Operator, "isNull".into()).apply(&mut request);
+        Edit::Text(0, Field::Description, "changed".into()).apply(&mut request);
+        let row = &request.runtime.assertions.as_ref().unwrap()[0];
+        assert_eq!(row.value.as_deref(), Some("{{retained}}"));
+        assert!(
+            matches!(&row.description, Some(Documentation::Content { content, media_type }) if content == "changed" && media_type == "text/markdown")
+        );
+        request.kind = probe_core::RequestKind::WebSocket { message: None };
+        let websocket = request.clone();
+        Edit::Add.apply(&mut request);
+        Edit::Remove(0).apply(&mut request);
+        assert_eq!(request, websocket);
+        assert!(
+            !super::EditorSection::Assertions.available_for(probe_core::RequestProtocol::WebSocket)
+        );
+    }
+
+    #[test]
+    fn assertion_remove_respects_index_bounds_and_retains_order() {
+        use super::{AssertionEdit as Edit, AssertionField as Field};
+        let mut request = Request::default();
+        Edit::Add.apply(&mut request);
+        Edit::Text(0, Field::Expression, "first".into()).apply(&mut request);
+        Edit::Add.apply(&mut request);
+        Edit::Text(1, Field::Expression, "second".into()).apply(&mut request);
+        Edit::Add.apply(&mut request);
+        Edit::Text(2, Field::Expression, "third".into()).apply(&mut request);
+        let original = request.clone();
+        for edit in [Edit::Remove(3), Edit::Remove(usize::MAX)] {
+            edit.apply(&mut request);
+            assert_eq!(request, original);
+        }
+        Edit::Remove(1).apply(&mut request);
+        let rows = request.runtime.assertions.as_ref().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].expression, "first");
+        assert_eq!(rows[1].expression, "third");
+    }
+
+    #[test]
+    fn assertion_plain_text_descriptions_can_be_replaced_and_cleared() {
+        use super::{AssertionEdit as Edit, AssertionField as Field};
+        let mut request = Request::default();
+        Edit::Add.apply(&mut request);
+        request.runtime.assertions.as_mut().unwrap()[0].description =
+            Some(probe_core::Documentation::Text("original".into()));
+        for text in ["edited {{ordinaryText}}", ""] {
+            Edit::Text(0, Field::Description, text.into()).apply(&mut request);
+            assert_eq!(
+                request.runtime.assertions.as_ref().unwrap()[0].description,
+                Some(probe_core::Documentation::Text(text.into()))
+            );
+        }
+    }
+
+    #[test]
+    fn blank_assertion_descriptions_preserve_absence_until_text_is_entered() {
+        use super::{AssertionEdit as Edit, AssertionField as Field};
+        use probe_core::Documentation;
+
+        for original in [None, Some(Documentation::Null)] {
+            let mut request = Request::default();
+            Edit::Add.apply(&mut request);
+            request.runtime.assertions.as_mut().unwrap()[0].description = original.clone();
+            Edit::Text(0, Field::Description, String::new()).apply(&mut request);
+            assert_eq!(
+                request.runtime.assertions.as_ref().unwrap()[0].description,
+                original
+            );
+            Edit::Text(0, Field::Description, "New description".into()).apply(&mut request);
+            assert_eq!(
+                request.runtime.assertions.as_ref().unwrap()[0].description,
+                Some(Documentation::Text("New description".into()))
+            );
+        }
+    }
+
+    #[test]
+    fn assertions_section_is_named_and_selectable_for_http_and_graphql() {
+        let key = request_key();
+        let mut editor = RequestEditorState::default();
+        for protocol in [
+            probe_core::RequestProtocol::Http,
+            probe_core::RequestProtocol::Graphql,
+        ] {
+            editor.set_section(key, EditorSection::Assertions);
+            editor.ensure_available_section(key, protocol);
+            assert_eq!(editor.section(key), EditorSection::Assertions);
+            assert_eq!(editor.section(key).label(), "Assertions");
+        }
+    }
+
+    #[test]
+    fn assertion_reveal_and_focus_follow_remapping_and_close() {
+        let old = request_key();
+        let new = replacement_request_key();
+        let mut state = RequestEditorState::default();
+        state.show_assertion_description(old, 2);
+        state.assertion_removed(old, 1);
+        assert!(state.description_is_open(old, 1));
+        state.focus_assertion(old, 1);
+        state.remap_requests(&BTreeMap::from([(old, new)]));
+        assert_eq!(state.section(new), EditorSection::Assertions);
+        assert!(state.description_is_open(new, 1));
+        assert!(state.take_assertion_focus(new, 1));
+        assert!(!state.take_assertion_focus(new, 1));
+        state.remove(new);
+        assert!(!state.description_is_open(new, 1));
+        state.focus_assertion(new, 0);
+        state.clear();
+        assert!(!state.take_assertion_focus(new, 0));
     }
 
     fn request_key() -> probe_core::RequestKey {

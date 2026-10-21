@@ -836,8 +836,8 @@ async fn only_secret_bearing_large_responses_bypass_the_spool_cache() {
 }
 
 #[tokio::test]
-async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present() {
-    use probe_application::AssertionOutcome;
+async fn assertion_execution_bypasses_spooling_when_assertion_values_can_reach_secrets() {
+    use probe_application::{AssertionError, AssertionOutcome};
     use probe_core::Assertion;
 
     let mut body = SECRET.as_bytes().to_vec();
@@ -852,13 +852,22 @@ async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present(
         assert!(!prepared.uses_secrets());
         assert!(provider.lookups.borrow().is_empty());
         let assertions = if has_assertions {
-            vec![Assertion {
-                expression: "response.status".into(),
-                operator: "notEquals".into(),
-                value: Some("{{token}}".into()),
-                disabled: None,
-                description: None,
-            }]
+            vec![
+                Assertion {
+                    expression: "response.status".into(),
+                    operator: "notEquals".into(),
+                    value: Some("{{token}}".into()),
+                    disabled: None,
+                    description: None,
+                },
+                Assertion {
+                    expression: "response.body.token".into(),
+                    operator: "isNotNull".into(),
+                    value: None,
+                    disabled: None,
+                    description: None,
+                },
+            ]
         } else {
             Vec::new()
         };
@@ -879,7 +888,11 @@ async fn assertion_execution_bypasses_spooling_only_when_assertions_are_present(
         server.join().unwrap();
         assert!(!executed.response.body_complete);
         if has_assertions {
-            assert_eq!(outcomes.len(), 1);
+            assert_eq!(outcomes.len(), 2);
+            assert_eq!(
+                outcomes[1].outcome,
+                AssertionOutcome::Error(AssertionError::BodyUnavailable)
+            );
             assert_eq!(outcomes[0].outcome, AssertionOutcome::Passed);
             assert_eq!(*provider.lookups.borrow(), ["token"]);
             assert!(executed.response.body.starts_with(b"[REDACTED]"));
@@ -1336,6 +1349,9 @@ async fn assertion_execution_uses_original_bytes_and_one_cached_secret_for_the_w
             ]
         );
         assert!(!format!("{executed:?} {outcomes:?}").contains(SECRET));
+        assert_eq!(outcomes[0].actual.as_deref(), Some("[REDACTED]"));
+        assert_eq!(outcomes[1].actual.as_deref(), Some("[REDACTED]"));
+        assert!(outcomes[2].actual.is_none());
         assert_eq!(executed.response.body, br#"{"token":"[REDACTED]"}"#);
         assert!(
             executed
@@ -1451,4 +1467,34 @@ async fn assertion_execution_preserves_typed_protocol_preparation_errors() {
         );
         assert_eq!(error, HttpExecutionError::Protocol(expected));
     }
+}
+
+#[tokio::test]
+async fn rejecting_secret_output_also_applies_after_plain_http_conversion() {
+    let environments = environments();
+    let provider = RecordingProvider::default();
+    let output = temporary_path("refused-secret-output");
+    let execution = prepare_request(
+        &get("http://127.0.0.1:1/{{token}}"),
+        &local(&environments),
+        &provider,
+    )
+    .unwrap()
+    .reject_secret_output()
+    .into_http()
+    .unwrap();
+    let result = execution
+        .execute(
+            &HttpEngine::new().unwrap(),
+            ExecutionOptions::default(),
+            Some(&output),
+            std::future::pending::<()>(),
+            |_| {},
+        )
+        .await;
+    assert!(
+        matches!(result, Err(probe_http::HttpError::InvalidBody(message))
+        if message == "Saving a response directly to a file is unavailable when secret variables or unresolved assertion values are involved.")
+    );
+    assert!(!output.exists());
 }

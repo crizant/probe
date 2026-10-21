@@ -10,7 +10,10 @@ mod client_certificate;
 mod execution;
 mod websocket_input;
 
-pub use assertions::{AssertionError, AssertionOutcome, AssertionResult, evaluate_assertions};
+pub use assertions::{
+    AssertionError, AssertionOutcome, AssertionResult, MAX_ASSERTION_ACTUAL_CHARS,
+    evaluate_assertions,
+};
 
 pub use websocket_input::WebSocketInputFormat;
 

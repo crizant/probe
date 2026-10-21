@@ -2,6 +2,7 @@ use super::*;
 use gpui_kit::SharedString;
 use probe_core::FolderKey;
 
+mod assertions;
 mod authentication;
 mod body;
 mod file;
@@ -153,41 +154,54 @@ impl ProbeApp {
             .is_some_and(ResponseState::is_running);
         let sections = EditorSection::for_protocol(request.kind.protocol());
         let mut section_tabs = Tabs::new("request-editor-sections")
+            .w_full()
+            .min_w(px(0.0))
+            .overflow_x_scroll()
             .flex()
             .items_center()
             .gap(px(theme.metrics.spacing_1));
         for (index, section) in sections.iter().copied().enumerate() {
             let section_view = cx.weak_entity();
-            section_tabs = section_tabs.child(components::text_tab(
-                theme,
-                ("request-editor-section", index),
-                format!(
-                    "{}{}",
-                    section.label(),
-                    match section {
-                        EditorSection::Query => format!("  {}", request.query_parameters.len()),
-                        EditorSection::Path => format!("  {}", request.path_parameters.len()),
-                        EditorSection::Headers => format!("  {}", request.headers.len()),
-                        EditorSection::WebSocketMessage
-                        | EditorSection::Docs
-                        | EditorSection::Body
-                        | EditorSection::Authentication
-                        | EditorSection::GraphqlQuery
-                        | EditorSection::GraphqlVariables
-                        | EditorSection::GraphqlOperationName
-                        | EditorSection::GraphqlExtensions => String::new(),
-                    }
-                ),
-                self.request_editor.section(key) == section,
-                index + 1,
-                sections.len(),
-                move |_, _, cx| {
-                    let _ = section_view.update(cx, |view, cx| {
-                        view.request_editor.set_section(key, section);
-                        cx.notify();
-                    });
-                },
-            ));
+            section_tabs = section_tabs.child(
+                components::text_tab(
+                    theme,
+                    ("request-editor-section", index),
+                    format!(
+                        "{}{}",
+                        section.label(),
+                        match section {
+                            EditorSection::Assertions => format!(
+                                "  {}",
+                                request.runtime.assertions.as_ref().map_or(0, Vec::len)
+                            ),
+                            EditorSection::Query => format!("  {}", request.query_parameters.len()),
+                            EditorSection::Path => format!("  {}", request.path_parameters.len()),
+                            EditorSection::Headers => format!("  {}", request.headers.len()),
+                            EditorSection::WebSocketMessage
+                            | EditorSection::Docs
+                            | EditorSection::Body
+                            | EditorSection::Authentication
+                            | EditorSection::GraphqlQuery
+                            | EditorSection::GraphqlVariables
+                            | EditorSection::GraphqlOperationName
+                            | EditorSection::GraphqlExtensions => String::new(),
+                        }
+                    ),
+                    self.request_editor.section(key) == section,
+                    index + 1,
+                    sections.len(),
+                    move |_, _, cx| {
+                        let _ = section_view.update(cx, |view, cx| {
+                            view.request_editor.set_section(key, section);
+                            cx.notify();
+                        });
+                    },
+                )
+                .flex_none()
+                .when(section == EditorSection::Assertions, |tab| {
+                    tab.debug_selector(|| "request-tab-assertions".into())
+                }),
+            );
         }
 
         let section_kind = self.request_editor.section(key);
@@ -469,6 +483,9 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         match self.request_editor.section(key) {
+            EditorSection::Assertions => {
+                self.render_assertions_editor(key, request, theme, list_scroll, cx)
+            }
             EditorSection::Docs => {
                 let view = cx.weak_entity();
                 documentation_sections(

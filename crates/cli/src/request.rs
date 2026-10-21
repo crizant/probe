@@ -376,6 +376,8 @@ pub(crate) fn run(
                 result.index - collection.len()
             },
             outcome: result.outcome,
+            actual: result.actual,
+            actual_truncated: result.actual_truncated,
         })
         .collect();
     if outcomes.iter().any(|result| {
@@ -464,6 +466,8 @@ pub(crate) struct RunAssertionResult {
     pub(crate) source: &'static str,
     pub(crate) index: usize,
     pub(crate) outcome: AssertionOutcome,
+    pub(crate) actual: Option<String>,
+    pub(crate) actual_truncated: bool,
 }
 
 pub(crate) fn assertion_json(result: &RunAssertionResult) -> serde_json::Value {
@@ -474,6 +478,10 @@ pub(crate) fn assertion_json(result: &RunAssertionResult) -> serde_json::Value {
         AssertionOutcome::Error(_) => "error",
     };
     let mut json = json!({ "source": result.source, "index": result.index, "outcome": outcome });
+    if let Some(actual) = &result.actual {
+        json["actual"] = json!(actual);
+        json["actualTruncated"] = json!(result.actual_truncated);
+    }
     if let AssertionOutcome::Error(error) = result.outcome {
         let category = match error {
             AssertionError::UnsupportedExpression => "unsupported_expression",

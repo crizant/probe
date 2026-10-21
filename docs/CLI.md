@@ -318,8 +318,9 @@ Failed or errored assertions use `assertion_failed` and exit 9. Success JSON add
 envelope with `error.details.assertions` and no top-level response. `source` is
 `collection` or `cli`; `index` is the zero-based declaration position within that
 source, including disabled collection declarations. Outcomes are `passed`, `failed`,
-`disabled`, or `error`; errors include only a safe `category`. No assertion output
-contains expressions, descriptions, operands, response content, or secret values.
+`disabled`, or `error`; errors include only a safe `category`. Assertion diagnostics
+omit expressions, descriptions, and expected operands. JSON results may include
+redacted, truncated actual observations, never resolved secrets.
 Human output shows counts of passed, failed, errored, and disabled assertions.
 `--quiet` suppresses successful output while retaining failure diagnostics and exit
 codes. Runs with no assertions retain their existing output and exit behavior.
@@ -807,8 +808,8 @@ When collection or CLI assertions are present and all active checks pass,
     "url": "https://api.example.com/users"
   },
   "assertions": [
-    { "source": "collection", "index": 0, "outcome": "passed" },
-    { "source": "cli", "index": 0, "outcome": "passed" }
+    { "source": "collection", "index": 0, "outcome": "passed", "actual": "200", "actualTruncated": false },
+    { "source": "cli", "index": 0, "outcome": "passed", "actual": "0", "actualTruncated": false }
   ]
 }
 ```
@@ -817,7 +818,19 @@ An error outcome adds `"error": {"category": "body_unavailable"}` or another
 value-free evaluator category: `unsupported_expression`, `unsupported_operator`,
 `missing_expected_value`, `variable_resolution`, `invalid_expected_value`,
 `invalid_json_body`, `missing_property`, or `incompatible_operands`.
-No raw expression, actual value, or expected value is included.
+Passed and failed checks add `actual` (redacted display text) and
+`actualTruncated` (boolean). Errors and disabled checks omit both fields. Actuals
+use the same unified secret redactor as response presentation, including secrets
+resolved by later assertions. Strings are decoded before redaction; numbers use
+JSON spelling. Structured values are JSON display text and may be fully redacted.
+After redaction, values longer than 512 Unicode characters end with
+`… [truncated]` and set `actualTruncated: true`. Actual values appear only in JSON
+assertion results; the existing error message and human/quiet stderr remain the
+single counts line. Existing fields, exit codes, flags, outcome names, and error
+categories are unchanged. `BodyUnavailable` still emits the `body_unavailable`
+category; its shared display wording is used by the desktop, not CLI output.
+Expressions, descriptions, and expected values remain absent from CLI result
+diagnostics.
 
 Structured errors use:
 

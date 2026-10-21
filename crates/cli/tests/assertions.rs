@@ -125,12 +125,12 @@ fn collection_and_cli_assertions_cover_both_layouts_and_protocols_without_writes
             assert_eq!(results.len(), 7);
             assert_eq!(
                 results[0],
-                serde_json::json!({"source":"collection","index":0,"outcome":"passed"})
+                serde_json::json!({"source":"collection","index":0,"outcome":"passed","actual":"200","actualTruncated":false})
             );
             assert_eq!(results[2]["outcome"], "disabled");
             assert_eq!(
                 results[3],
-                serde_json::json!({"source":"cli","index":0,"outcome":"passed"})
+                serde_json::json!({"source":"cli","index":0,"outcome":"passed","actual":"1","actualTruncated":false})
             );
             assert_eq!(results[6]["index"], 3);
             assert!(output.stderr.is_empty());
@@ -171,11 +171,22 @@ fn mixed_failures_report_all_safe_outcomes_and_skip_only_collection_when_request
                 assert_eq!(results[3]["outcome"], "failed");
                 assert_eq!(results[4]["error"]["category"], "variable_resolution");
             }
+            assert_eq!(
+                value["error"]["message"],
+                if no_assertions {
+                    "Assertions: 1 passed, 1 failed, 0 errors, 0 disabled"
+                } else {
+                    "Assertions: 3 passed, 2 failed, 1 errors, 1 disabled"
+                }
+            );
+            let failed_status = &results[if no_assertions { 0 } else { 5 }];
+            assert_eq!(failed_status["outcome"], "failed");
+            assert_eq!(failed_status["actual"], "200");
+            assert_eq!(failed_status["actualTruncated"], false);
             assert_eq!(results.last().unwrap()["outcome"], "passed");
             let text = String::from_utf8_lossy(&output.stdout);
             for sensitive in [
                 "SECRET_EXPECTED",
-                "John Doe",
                 "response.body.name",
                 SECRET,
                 "sensitive-disabled-expression",
@@ -697,4 +708,34 @@ fn overlapping_assertion_and_request_secrets_never_leave_echoed_fragments_in_out
             }
         }
     }
+}
+
+#[test]
+fn json_failure_actual_is_bounded_and_marks_truncation() {
+    let (url, server) = serve_once(
+        serde_json::to_vec(&"é".repeat(600)).unwrap(),
+        "application/json",
+    );
+    let path = workspace(&url, "http", "", true);
+    let output = run(
+        &path,
+        true,
+        &["--json", "--assert", "response.body equals short"],
+    );
+    assert_eq!(output.status.code(), Some(9));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["error"]["message"],
+        "Assertions: 0 passed, 1 failed, 0 errors, 0 disabled"
+    );
+    let result = &value["error"]["details"]["assertions"][0];
+    assert_eq!(result["outcome"], "failed");
+    assert_eq!(
+        result["actual"],
+        format!("{}… [truncated]", "é".repeat(512))
+    );
+    assert_eq!(result["actualTruncated"], true);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&"é".repeat(513)));
+    server.join().unwrap();
+    cleanup(path);
 }

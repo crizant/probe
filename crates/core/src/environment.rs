@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
@@ -216,9 +217,14 @@ impl ResolvedEnvironment {
 
 /// Combined, opaque disclosure context for values resolved by separate operations.
 /// Values are deduplicated and matched longest first against original input only.
-#[derive(Debug)]
 pub struct SecretRedactor<'a> {
-    values: Vec<&'a SecretValue>,
+    values: Vec<Cow<'a, str>>,
+}
+
+impl fmt::Debug for SecretRedactor<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SecretRedactor([REDACTED])")
+    }
 }
 
 impl<'a> SecretRedactor<'a> {
@@ -226,18 +232,86 @@ impl<'a> SecretRedactor<'a> {
     pub fn from_environments(
         environments: impl IntoIterator<Item = &'a ResolvedEnvironment>,
     ) -> Self {
-        let mut values: Vec<_> = environments
-            .into_iter()
-            .flat_map(|environment| environment.secrets.values())
-            .filter(|value| !value.expose_for_execution().is_empty())
-            .collect();
-        values.sort_by(|a, b| {
-            let a = a.expose_for_execution();
-            let b = b.expose_for_execution();
-            b.len().cmp(&a.len()).then_with(|| a.cmp(b))
-        });
-        values.dedup();
-        Self { values }
+        Self { values: Vec::new() }.with_values(
+            environments
+                .into_iter()
+                .flat_map(|environment| environment.secrets.values()),
+        )
+    }
+
+    /// Includes values fetched before a larger resolution failed. They use the
+    /// same longest-first, overlap-aware matcher as resolved environments.
+    #[must_use]
+    pub fn with_values(mut self, values: impl IntoIterator<Item = &'a SecretValue>) -> Self {
+        self.values.extend(
+            values
+                .into_iter()
+                .map(|value| Cow::Borrowed(value.expose_for_execution()))
+                .filter(|value| !value.is_empty()),
+        );
+        self.sort_values();
+        self
+    }
+
+    /// Adds decoded JSON literals used by assertion comparison/presentation without
+    /// exposing secret material outside core. All variants share one matcher.
+    #[must_use]
+    pub fn with_json_literals(mut self) -> Self {
+        fn string_forms(text: &str, output: &mut Vec<String>) {
+            output.push(text.to_owned());
+            let encoded = serde_json::to_string(text).expect("strings serialize");
+            output.push(encoded[1..encoded.len() - 1].to_owned());
+        }
+        fn collect_strings(value: &serde_json::Value, output: &mut Vec<String>) {
+            match value {
+                serde_json::Value::String(text) => string_forms(text, output),
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        collect_strings(value, output);
+                    }
+                }
+                serde_json::Value::Object(values) => {
+                    for value in values.values() {
+                        collect_strings(value, output);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut literals = Vec::new();
+        for value in &self.values {
+            string_forms(value, &mut literals);
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(value) {
+                // Keep the entire normalized literal, but do not turn ordinary
+                // object keys or nested numbers/bools/null into global secrets.
+                literals.push(value.to_string());
+                collect_strings(&value, &mut literals);
+                if let serde_json::Value::Number(number) = value
+                    && let Some(float) = number.as_f64()
+                {
+                    literals.push(float.to_string());
+                }
+            }
+        }
+        self.values.extend(
+            literals
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .map(Cow::Owned),
+        );
+        self.sort_values();
+        self
+    }
+
+    fn sort_values(&mut self) {
+        self.values
+            .sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        self.values.dedup();
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
     }
 
     #[must_use]
@@ -254,7 +328,7 @@ impl<'a> SecretRedactor<'a> {
         let match_len = |bytes: &[u8]| {
             self.values
                 .iter()
-                .map(|value| value.expose_for_execution().as_bytes())
+                .map(|value| value.as_bytes())
                 .find(|value| bytes.starts_with(value))
                 .map(<[u8]>::len)
         };
