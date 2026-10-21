@@ -376,7 +376,10 @@ fn unified_redaction_includes_fetched_values_and_decoded_literals_without_debug_
         redactor.redact("abcdef abc quoted\nsecret 1000"),
         "[REDACTED] [REDACTED] [REDACTED] [REDACTED]"
     );
+    let debug = format!("{redactor:?}");
+    assert!(debug.contains("SecretRedactor"));
+    assert!(debug.contains("[REDACTED]"));
     for sensitive in ["abcdef", "quoted", "1000", "1e3"] {
-        assert!(!format!("{redactor:?}").contains(sensitive));
+        assert!(!debug.contains(sensitive));
     }
 }

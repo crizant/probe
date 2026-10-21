@@ -636,6 +636,55 @@ pub use session::{
 };
 
 #[cfg(test)]
+mod cached_secret_tests {
+    use super::*;
+
+    struct Provider;
+
+    impl SecretProvider for Provider {
+        fn resolve_secret(
+            &self,
+            context: &SecretContext<'_>,
+        ) -> Result<Option<SecretValue>, SecretError> {
+            match context.variable_name {
+                "available" => Ok(Some(SecretValue::new("fetched-only-secret".into()))),
+                "missing" => Ok(None),
+                _ => Err(SecretError),
+            }
+        }
+    }
+
+    #[test]
+    fn successfully_fetched_secrets_redact_even_without_environment_disclosures() {
+        let cache = CachedSecrets::new(&Provider);
+        for name in ["available", "missing", "failed"] {
+            let result = cache.resolve_secret(&SecretContext {
+                workspace_identity: None,
+                environment_name: None,
+                variable_name: name,
+            });
+            match name {
+                "available" => assert_eq!(
+                    result,
+                    Ok(Some(SecretValue::new("fetched-only-secret".into())))
+                ),
+                "missing" => assert_eq!(result, Ok(None)),
+                _ => assert_eq!(result, Err(SecretError)),
+            }
+        }
+
+        let values = cache.redaction_values();
+        assert_eq!(values, vec![SecretValue::new("fetched-only-secret".into())]);
+        let redactor = SecretRedactor::from_environments([]).with_values(&values);
+        assert_eq!(
+            redactor.redact("before fetched-only-secret after"),
+            "before [REDACTED] after"
+        );
+        assert_eq!(redactor.redact("ordinary response"), "ordinary response");
+    }
+}
+
+#[cfg(test)]
 mod output_policy_tests {
     use super::*;
 

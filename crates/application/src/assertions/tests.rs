@@ -1228,3 +1228,59 @@ fn actuals_redact_literal_decoding_and_secret_derived_numbers() {
         assert_eq!(results[0].actual.as_deref(), Some("[REDACTED]"));
     }
 }
+
+#[test]
+fn structured_actuals_redact_whole_values_when_serialized_secrets_match() {
+    let secrets = [SecretValue::new("container-secret".into())];
+    let redactor = probe_core::SecretRedactor::from_environments([]).with_values(&secrets);
+    for body in [
+        serde_json::json!({"echo": "container-secret"}),
+        serde_json::json!(["container-secret"]),
+    ] {
+        let result = PendingAssertionResult {
+            index: 0,
+            outcome: AssertionOutcome::Passed,
+            actual: Some(ObservedActual::Body {
+                root: Arc::new(body),
+                expression: "response.body".into(),
+            }),
+        }
+        .redact(&redactor);
+        assert_eq!(result.actual.as_deref(), Some("[REDACTED]"));
+        assert!(!result.actual_truncated);
+    }
+}
+
+#[test]
+fn structured_actuals_redact_decoded_strings_and_arrays_preserving_json_types() {
+    // JSON escaping prevents the raw matcher from seeing this secret in the
+    // serialized container. Its decoded strings must still be redacted.
+    let secret = "quoted\"secret\nline";
+    let secrets = [SecretValue::new(secret.into())];
+    let redactor = probe_core::SecretRedactor::from_environments([]).with_values(&secrets);
+    let body = serde_json::json!({
+        "text": secret,
+        "nested": [secret, {"echo": secret}, [secret, true, false, 42, 2.5, null]],
+        "ordinary": "safe text"
+    });
+    let result = PendingAssertionResult {
+        index: 0,
+        outcome: AssertionOutcome::Passed,
+        actual: Some(ObservedActual::Body {
+            root: Arc::new(body),
+            expression: "response.body".into(),
+        }),
+    }
+    .redact(&redactor);
+    let actual: Value = serde_json::from_str(result.actual.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "text": "[REDACTED]",
+            "nested": ["[REDACTED]", {"echo": "[REDACTED]"},
+                ["[REDACTED]", true, false, 42, 2.5, null]],
+            "ordinary": "safe text"
+        })
+    );
+    assert!(!result.actual_truncated);
+}
