@@ -1057,6 +1057,99 @@ fn storage_preflight_distinguishes_plain_ignored_and_reachable_secret_values() {
 }
 
 #[test]
+fn batched_storage_preflight_blocks_missing_and_secret_values_in_any_position() {
+    let loaded = fixture();
+    let resolution = RequestResolution {
+        environments: loaded.workspace().environments(),
+        environment: Some("child"),
+        ..RequestResolution::default()
+    };
+    for unsafe_value in [
+        "{{missing}}",
+        "{{disabled}}",
+        "{{token}}",
+        "{{alias}}",
+        "{{malformed",
+    ] {
+        for values in [
+            ["{{status}}", "{{embedded}}", unsafe_value],
+            [unsafe_value, "{{status}}", "{{embedded}}"],
+        ] {
+            let assertions: Vec<_> = values
+                .into_iter()
+                .map(|value| assertion("response.status", "equals", Some(value)))
+                .collect();
+            assert!(may_resolve_secrets(&assertions, &resolution), "{values:?}");
+        }
+    }
+}
+
+#[test]
+fn batched_storage_preflight_uses_inheritance_and_invocation_overrides() {
+    let loaded = fixture();
+    let assertions = [
+        assertion("response.status", "equals", Some("{{status}}")),
+        assertion("response.body.text", "equals", Some("{{text}}")),
+        assertion("response.body.token", "equals", Some("{{alias}}")),
+    ];
+    let plain = [("alias".into(), "{{text}}".into())];
+    let missing = [("alias".into(), "{{missing}}".into())];
+    let secret = [("alias".into(), "{{token}}".into())];
+    for environment in ["base", "child", "disabled-secret"] {
+        for (overrides, blocked) in [
+            (plain.as_slice(), false),
+            (missing.as_slice(), true),
+            (secret.as_slice(), true),
+            (&[][..], true),
+        ] {
+            let resolution = RequestResolution {
+                environments: loaded.workspace().environments(),
+                environment: Some(environment),
+                overrides,
+                ..RequestResolution::default()
+            };
+            assert_eq!(
+                may_resolve_secrets(&assertions, &resolution),
+                blocked,
+                "{environment}"
+            );
+        }
+    }
+}
+
+#[test]
+fn batched_storage_preflight_ignores_disabled_and_unary_values() {
+    let loaded = fixture();
+    for value in ["{{token}}", "{{missing}}", "{{malformed"] {
+        let mut disabled = assertion("response.status", "equals", Some(value));
+        disabled.disabled = Some(true);
+        let mut assertions = vec![
+            disabled,
+            assertion("response.body", "isNull", Some(value)),
+            assertion("response.body", "isNotNull", Some(value)),
+        ];
+        // Ignored values must not even trigger environment resolution.
+        assert!(!may_resolve_secrets(
+            &assertions,
+            &RequestResolution {
+                environments: loaded.workspace().environments(),
+                environment: Some("missing-environment"),
+                ..RequestResolution::default()
+            }
+        ));
+        assertions.push(assertion("response.status", "equals", Some("{{status}}")));
+        assert!(!may_resolve_secrets(
+            &assertions,
+            &RequestResolution {
+                environments: loaded.workspace().environments(),
+                environment: Some("child"),
+                ..RequestResolution::default()
+            }
+        ));
+    }
+}
+
+#[test]
 fn observed_values_are_bounded_after_redaction_and_errors_are_not_failures() {
     let body = serde_json::json!({"name":"Ada", "items":[1,true,null], "long":"é".repeat(MAX_ASSERTION_ACTUAL_CHARS+1)});
     let declarations = [

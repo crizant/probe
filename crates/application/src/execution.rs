@@ -534,17 +534,7 @@ impl SecretDisclosure {
     }
 
     fn redact_response(&self, response: HttpResponse) -> HttpResponse {
-        self.redact_response_with(response, &[])
-    }
-
-    fn redact_response_with(
-        &self,
-        response: HttpResponse,
-        environments: &[ResolvedEnvironment],
-    ) -> HttpResponse {
-        // The request/certificate disclosure and every assertion environment must
-        // participate in one longest-first match against the original bytes.
-        let secrets = SecretRedactor::from_environments(self.secrets.iter().chain(environments));
+        let secrets = SecretRedactor::from_environments(self.secrets.iter());
         self.redact_response_using(response, &secrets)
     }
 
@@ -1192,9 +1182,12 @@ mod combined_disclosure_tests {
             body_file: None,
             body_retention_error: None,
         };
+        let secrets = SecretRedactor::from_environments(
+            execution.disclosure.secrets.iter().chain([&assertions]),
+        );
         let response = execution
             .disclosure
-            .redact_response_with(response, &[assertions]);
+            .redact_response_using(response, &secrets);
         assert_eq!(response.body, b"[REDACTED] [REDACTED] [REDACTED]");
         assert_eq!(
             response.headers[0].value,

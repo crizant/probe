@@ -395,7 +395,6 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         use crate::response_viewer::assertions::{counts, ordered, summary};
-        use probe_application::AssertionOutcome;
         let (assertions, declarations) = match self.execution.response(key) {
             Some(ResponseState::Complete {
                 assertions,
@@ -446,44 +445,12 @@ impl ProbeApp {
                 )
                 .into_any_element();
         }
-        let [failed, errors, _, skipped] = counts(assertions);
-        let summary_color = if skipped == assertions.len() {
-            theme.colors.text.muted
-        } else if failed > 0 {
-            theme.colors.status.error
-        } else if errors > 0 {
-            theme.colors.status.warning
-        } else {
-            theme.colors.status.success
-        };
+        let [_, _, _, skipped] = counts(assertions);
         let rows = ordered(assertions);
         let selected = self
             .response_viewer
             .assertion_selection(key)
             .or_else(|| rows.first().map(|result| result.index));
-        let parts = summary(assertions);
-        let mut summary_line = div()
-            .id("assertion-summary")
-            .debug_selector(|| "assertion-summary".into())
-            .flex()
-            .items_center()
-            .gap(px(theme.metrics.spacing_1))
-            .line_height(relative(1.25));
-        for part in &parts {
-            if part.separator {
-                summary_line =
-                    summary_line.child(div().text_color(theme.colors.text.muted).child("·"));
-            }
-            summary_line = summary_line.child(
-                div()
-                    .text_color(if part.separator {
-                        theme.colors.text.muted
-                    } else {
-                        summary_color
-                    })
-                    .child(part.text.clone()),
-            );
-        }
         let mut content = div()
             .id("assertion-result-list")
             .flex_1()
@@ -496,195 +463,264 @@ impl ProbeApp {
                 |content, scroll| content.track_scroll(scroll),
             )
             .child(div().when(skipped != assertions.len(), |content| {
-                content.child(summary_line)
+                content.child(self.render_assertion_summary(assertions, theme))
             }));
         let container = container.when(skipped == assertions.len(), |container| {
             container.child(
                 div()
                     .id("assertions-all-disabled")
                     .debug_selector(|| "assertions-all-disabled".into())
-                    .child(placeholder_message(theme, &parts[0].text)),
+                    .child(placeholder_message(theme, &summary(assertions)[0])),
             )
         });
         for result in rows {
-            let index = result.index;
-            let declaration = declarations.get(index);
-            let disabled = result.outcome == AssertionOutcome::Disabled;
-            let failed = result.outcome == AssertionOutcome::Failed;
-            let color = match result.outcome {
-                AssertionOutcome::Passed => theme.colors.status.success,
-                AssertionOutcome::Failed => theme.colors.status.error,
-                AssertionOutcome::Error(_) => theme.colors.status.warning,
-                AssertionOutcome::Disabled => theme.colors.text.muted,
-            };
-            let text_color = if disabled {
-                theme.colors.text.muted
-            } else {
-                theme.colors.text.primary
-            };
-            let description = declaration
-                .and_then(|row| documentation_text(row.description.as_ref()))
-                .filter(|text| !text.is_empty());
-            let mono = |text: String| {
-                div()
-                    .font_family(theme.typography.monospace_family)
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(text)
-            };
-            let mut primary = div()
-                .min_h(px(theme.metrics.tree_row_height))
-                .px(px(theme.metrics.spacing_1))
-                .flex()
-                .items_center()
-                .gap(px(theme.metrics.spacing_2))
-                .line_height(relative(1.25))
-                .child(components::assertion_status_icon(theme, &result.outcome).text_color(color));
-            if let Some(description) = description {
-                primary = primary.child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .flex()
-                        .flex_col()
-                        .child(components::truncated_label(description.to_owned()))
-                        .child(
-                            mono(
-                                declaration
-                                    .map(|row| row.expression.clone())
-                                    .unwrap_or_default(),
-                            )
-                            .text_color(theme.colors.text.muted),
-                        ),
-                );
-            } else {
-                primary = primary.child(
-                    mono(
-                        declaration
-                            .map(|row| row.expression.clone())
-                            .unwrap_or_default(),
-                    )
-                    .flex_1(),
-                );
-            }
-            primary = primary
-                .child(
-                    div().text_color(theme.colors.text.muted).child(
-                        declaration
-                            .map(|row| row.operator.clone())
-                            .unwrap_or_default(),
-                    ),
-                )
-                .child(
-                    mono(
-                        declaration
-                            .filter(|row| !matches!(row.operator.as_str(), "isNull" | "isNotNull"))
-                            .and_then(|row| row.value.clone())
-                            .unwrap_or_default(),
-                    )
-                    .flex_1(),
-                )
-                .when(disabled, |line| line.child(div().child("Skipped")));
-            let view = cx.weak_entity();
-            let mut row = div()
-                .id(("assertion-result", index))
-                .debug_selector(move || format!("assertion-result-{index}"))
-                .flex()
-                .flex_col()
-                .line_height(relative(1.25))
-                .text_color(text_color)
-                .border_l_2()
-                .border_color(if failed {
-                    theme.colors.status.error
-                } else {
-                    transparent_black().into()
-                })
-                .when(selected == Some(index), |row| {
-                    row.bg(theme.colors.selection.inactive_background)
-                })
-                .cursor(CursorStyle::PointingHand)
-                .child(primary)
-                .on_click(move |event, window, cx| {
-                    let _ = view.update(cx, |view, cx| {
-                        view.response_viewer.select_assertion(key, index);
-                        view.assertion_results_focus.focus(window, cx);
-                        if event.click_count() > 1 {
-                            view.jump_to_assertion(key, index, cx);
-                        }
-                        cx.notify();
-                    });
-                });
-            if failed && let Some(actual) = &result.actual {
-                row = row.child(
-                    mono(format!(
-                        "got {}",
-                        crate::response_viewer::assertions::single_line_actual(actual)
-                    ))
-                    .id(("assertion-actual", index))
-                    .debug_selector(move || format!("assertion-actual-{index}"))
-                    .pl(px(theme.metrics.spacing_3)),
-                );
-            }
-            if let AssertionOutcome::Error(error) = result.outcome {
-                row = row.child(
-                    div()
-                        .id(("assertion-error", index))
-                        .debug_selector(move || format!("assertion-error-{index}"))
-                        .pl(px(theme.metrics.spacing_3))
-                        .text_color(theme.colors.text.secondary)
-                        .line_height(relative(1.25))
-                        .child(error.to_string()),
-                );
-            }
-            content = content.child(row);
+            content = content.child(self.render_assertion_result_row(
+                key,
+                result,
+                declarations.get(result.index),
+                selected,
+                theme,
+                cx,
+            ));
         }
         container
             .track_focus(&self.assertion_results_focus)
             .tab_stop(true)
             .child(content)
             .on_key_down(
-                cx.listener(move |view, event: &gpui_kit::KeyDownEvent, window, cx| {
-                    let indices = match view.execution.response(key) {
-                        Some(ResponseState::Complete { assertions, .. }) => ordered(assertions)
-                            .iter()
-                            .map(|r| r.index)
-                            .collect::<Vec<_>>(),
-                        _ => return,
-                    };
-                    let selected = view
-                        .response_viewer
-                        .assertion_selection(key)
-                        .or_else(|| indices.first().copied());
-                    match event.keystroke.key.as_str() {
-                        "up" | "down" => view.response_viewer.move_assertion(
-                            key,
-                            &indices,
-                            if event.keystroke.key == "up" { -1 } else { 1 },
-                        ),
-                        "enter" => {
-                            if let Some(index) = selected {
-                                view.jump_to_assertion(key, index, cx);
-                            }
-                        }
-                        "c" if if cfg!(target_os = "macos") {
-                            event.keystroke.modifiers.platform
-                        } else {
-                            event.keystroke.modifiers.control
-                        } =>
-                        {
-                            if let Some(index) = selected {
-                                view.copy_assertion_result(key, index, cx);
-                            }
-                        }
-                        _ => return,
-                    }
-                    let _ = window;
-                    cx.stop_propagation();
-                    cx.notify();
+                cx.listener(move |view, event: &gpui_kit::KeyDownEvent, _, cx| {
+                    view.handle_assertion_result_key(key, event, cx);
                 }),
             )
             .into_any_element()
+    }
+
+    fn render_assertion_summary(
+        &self,
+        assertions: &[probe_application::AssertionResult],
+        theme: Theme,
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        use crate::response_viewer::assertions::{counts, summary};
+        let [failed, errors, _, skipped] = counts(assertions);
+        let summary_color = if skipped == assertions.len() {
+            theme.colors.text.muted
+        } else if failed > 0 {
+            theme.colors.status.error
+        } else if errors > 0 {
+            theme.colors.status.warning
+        } else {
+            theme.colors.status.success
+        };
+        let mut summary_line = div()
+            .id("assertion-summary")
+            .debug_selector(|| "assertion-summary".into())
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_1))
+            .line_height(relative(1.25));
+        for (index, part) in summary(assertions).into_iter().enumerate() {
+            if index > 0 {
+                summary_line =
+                    summary_line.child(div().text_color(theme.colors.text.muted).child("·"));
+            }
+            summary_line = summary_line.child(
+                div()
+                    .text_color(if index > 0 {
+                        theme.colors.text.muted
+                    } else {
+                        summary_color
+                    })
+                    .child(part),
+            );
+        }
+        summary_line
+    }
+
+    fn render_assertion_result_row(
+        &self,
+        key: RequestKey,
+        result: &probe_application::AssertionResult,
+        declaration: Option<&probe_core::Assertion>,
+        selected: Option<usize>,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        use probe_application::AssertionOutcome;
+        let index = result.index;
+        let disabled = result.outcome == AssertionOutcome::Disabled;
+        let failed = result.outcome == AssertionOutcome::Failed;
+        let color = match result.outcome {
+            AssertionOutcome::Passed => theme.colors.status.success,
+            AssertionOutcome::Failed => theme.colors.status.error,
+            AssertionOutcome::Error(_) => theme.colors.status.warning,
+            AssertionOutcome::Disabled => theme.colors.text.muted,
+        };
+        let text_color = if disabled {
+            theme.colors.text.muted
+        } else {
+            theme.colors.text.primary
+        };
+        let description = declaration
+            .and_then(|row| documentation_text(row.description.as_ref()))
+            .filter(|text| !text.is_empty());
+        let mono = |text: String| {
+            div()
+                .font_family(theme.typography.monospace_family)
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(text)
+        };
+        let mut primary = div()
+            .min_h(px(theme.metrics.tree_row_height))
+            .px(px(theme.metrics.spacing_1))
+            .flex()
+            .items_center()
+            .gap(px(theme.metrics.spacing_2))
+            .line_height(relative(1.25))
+            .child(components::assertion_status_icon(theme, &result.outcome).text_color(color));
+        if let Some(description) = description {
+            primary = primary.child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .child(components::truncated_label(description.to_owned()))
+                    .child(
+                        mono(
+                            declaration
+                                .map(|row| row.expression.clone())
+                                .unwrap_or_default(),
+                        )
+                        .text_color(theme.colors.text.muted),
+                    ),
+            );
+        } else {
+            primary = primary.child(
+                mono(
+                    declaration
+                        .map(|row| row.expression.clone())
+                        .unwrap_or_default(),
+                )
+                .flex_1(),
+            );
+        }
+        primary = primary
+            .child(
+                div().text_color(theme.colors.text.muted).child(
+                    declaration
+                        .map(|row| row.operator.clone())
+                        .unwrap_or_default(),
+                ),
+            )
+            .child(
+                mono(
+                    declaration
+                        .filter(|row| !matches!(row.operator.as_str(), "isNull" | "isNotNull"))
+                        .and_then(|row| row.value.clone())
+                        .unwrap_or_default(),
+                )
+                .flex_1(),
+            )
+            .when(disabled, |line| line.child(div().child("Skipped")));
+        let view = cx.weak_entity();
+        let mut row = div()
+            .id(("assertion-result", index))
+            .debug_selector(move || format!("assertion-result-{index}"))
+            .flex()
+            .flex_col()
+            .line_height(relative(1.25))
+            .text_color(text_color)
+            .border_l_2()
+            .border_color(if failed {
+                theme.colors.status.error
+            } else {
+                transparent_black().into()
+            })
+            .when(selected == Some(index), |row| {
+                row.bg(theme.colors.selection.inactive_background)
+            })
+            .cursor(CursorStyle::PointingHand)
+            .child(primary)
+            .on_click(move |event, window, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.response_viewer.select_assertion(key, index);
+                    view.assertion_results_focus.focus(window, cx);
+                    if event.click_count() > 1 {
+                        view.jump_to_assertion(key, index, cx);
+                    }
+                    cx.notify();
+                });
+            });
+        if failed && let Some(actual) = &result.actual {
+            row = row.child(
+                mono(format!(
+                    "got {}",
+                    crate::response_viewer::assertions::single_line_actual(actual)
+                ))
+                .id(("assertion-actual", index))
+                .debug_selector(move || format!("assertion-actual-{index}"))
+                .pl(px(theme.metrics.spacing_3)),
+            );
+        }
+        if let AssertionOutcome::Error(error) = result.outcome {
+            row = row.child(
+                div()
+                    .id(("assertion-error", index))
+                    .debug_selector(move || format!("assertion-error-{index}"))
+                    .pl(px(theme.metrics.spacing_3))
+                    .text_color(theme.colors.text.secondary)
+                    .line_height(relative(1.25))
+                    .child(error.to_string()),
+            );
+        }
+        row
+    }
+
+    fn handle_assertion_result_key(
+        &mut self,
+        key: RequestKey,
+        event: &gpui_kit::KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::response_viewer::assertions::ordered;
+        let indices = match self.execution.response(key) {
+            Some(ResponseState::Complete { assertions, .. }) => ordered(assertions)
+                .iter()
+                .map(|r| r.index)
+                .collect::<Vec<_>>(),
+            _ => return,
+        };
+        let selected = self
+            .response_viewer
+            .assertion_selection(key)
+            .or_else(|| indices.first().copied());
+        match event.keystroke.key.as_str() {
+            "up" | "down" => self.response_viewer.move_assertion(
+                key,
+                &indices,
+                if event.keystroke.key == "up" { -1 } else { 1 },
+            ),
+            "enter" => {
+                if let Some(index) = selected {
+                    self.jump_to_assertion(key, index, cx);
+                }
+            }
+            "c" if if cfg!(target_os = "macos") {
+                event.keystroke.modifiers.platform
+            } else {
+                event.keystroke.modifiers.control
+            } =>
+            {
+                if let Some(index) = selected {
+                    self.copy_assertion_result(key, index, cx);
+                }
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
     }
 
     pub(super) fn render_raw_response_tabs(

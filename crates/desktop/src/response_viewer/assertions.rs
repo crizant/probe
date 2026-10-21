@@ -25,13 +25,7 @@ pub(crate) fn ordered(results: &[AssertionResult]) -> Vec<&AssertionResult> {
     rows
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct SummaryPart {
-    pub text: String,
-    pub separator: bool,
-}
-
-pub(crate) fn summary(results: &[AssertionResult]) -> Vec<SummaryPart> {
+pub(crate) fn summary(results: &[AssertionResult]) -> Vec<String> {
     if results.is_empty() {
         return Vec::new();
     }
@@ -56,13 +50,6 @@ pub(crate) fn summary(results: &[AssertionResult]) -> Vec<SummaryPart> {
         parts.push(error_text());
     }
     parts
-        .into_iter()
-        .enumerate()
-        .map(|(index, text)| SummaryPart {
-            text,
-            separator: index > 0,
-        })
-        .collect()
 }
 
 pub(crate) fn single_line_actual(actual: &str) -> String {
@@ -72,13 +59,11 @@ pub(crate) fn single_line_actual(actual: &str) -> String {
 
 pub(crate) fn copy_row(declaration: &Assertion, result: &AssertionResult) -> String {
     let mut text = format!("{} {}", declaration.expression, declaration.operator);
-    if !matches!(
-        declaration.operator.as_str(),
-        "isNull" | "isNotNull" | "exists" | "notExists"
-    ) && let Some(value) = declaration
-        .value
-        .as_deref()
-        .filter(|value| !value.is_empty())
+    if !matches!(declaration.operator.as_str(), "isNull" | "isNotNull")
+        && let Some(value) = declaration
+            .value
+            .as_deref()
+            .filter(|value| !value.is_empty())
     {
         text.push(' ');
         text.push_str(value);
@@ -96,36 +81,16 @@ mod tests {
     use super::*;
     use probe_application::AssertionError;
     #[test]
-    fn summary_and_order_distinguish_failures_errors_and_skipped() {
-        let results: Vec<_> = [
-            AssertionOutcome::Passed,
-            AssertionOutcome::Failed,
-            AssertionOutcome::Disabled,
-            AssertionOutcome::Error(AssertionError::BodyUnavailable),
-            AssertionOutcome::Failed,
-            AssertionOutcome::Passed,
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, outcome)| AssertionResult {
-            index,
-            outcome,
-            actual: None,
-            actual_truncated: false,
-        })
-        .collect();
-        let parts = summary(&results);
-        assert_eq!(
-            parts
-                .iter()
-                .map(|part| part.text.as_str())
-                .collect::<Vec<_>>(),
-            ["2 of 5 failed", "1 skipped", "1 error"]
-        );
-        assert_eq!(
-            parts.iter().map(|part| part.separator).collect::<Vec<_>>(),
-            [false, true, true]
-        );
+    fn results_remain_stably_ordered_by_outcome() {
+        use AssertionOutcome::{Disabled, Error, Failed, Passed};
+        let results = results(vec![
+            Passed,
+            Failed,
+            Disabled,
+            Error(AssertionError::BodyUnavailable),
+            Failed,
+            Passed,
+        ]);
         assert_eq!(
             ordered(&results)
                 .iter()
@@ -133,18 +98,39 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 4, 3, 0, 5, 2]
         );
-        assert_eq!(summary(&results[..1])[0].text, "1 passed");
+    }
+
+    #[test]
+    fn actual_text_escapes_control_characters() {
         assert_eq!(
             single_line_actual("first\nsecond\tend"),
             "first\\nsecond\\tend"
         );
     }
+
+    fn results(outcomes: Vec<AssertionOutcome>) -> Vec<AssertionResult> {
+        outcomes
+            .into_iter()
+            .enumerate()
+            .map(|(index, outcome)| AssertionResult {
+                index,
+                outcome,
+                actual: None,
+                actual_truncated: false,
+            })
+            .collect()
+    }
+
     #[test]
-    fn summary_headlines_and_separators_cover_each_execution_state() {
+    fn summary_covers_each_execution_state() {
         use AssertionOutcome::{Disabled, Error, Failed, Passed};
         let error = Error(AssertionError::BodyUnavailable);
         for (outcomes, expected) in [
             (vec![Failed, Passed], vec!["1 of 2 failed"]),
+            (
+                vec![Passed, Failed, Disabled, error.clone(), Failed, Passed],
+                vec!["2 of 5 failed", "1 skipped", "1 error"],
+            ),
             (
                 vec![Failed, Disabled, Disabled],
                 vec!["1 of 1 failed", "2 skipped"],
@@ -155,6 +141,7 @@ mod tests {
                 vec![error.clone(), error.clone(), Passed, Disabled],
                 vec!["2 errors", "1 passed", "1 skipped"],
             ),
+            (vec![Passed], vec!["1 passed"]),
             (vec![Passed, Passed], vec!["2 passed"]),
             (vec![Passed, Disabled], vec!["1 passed", "1 skipped"]),
             (vec![Disabled, Disabled], vec!["All assertions disabled"]),
@@ -164,32 +151,7 @@ mod tests {
             ),
             (vec![], vec![]),
         ] {
-            let results: Vec<_> = outcomes
-                .into_iter()
-                .enumerate()
-                .map(|(index, outcome)| AssertionResult {
-                    index,
-                    outcome,
-                    actual: None,
-                    actual_truncated: false,
-                })
-                .collect();
-            let parts = summary(&results);
-            assert_eq!(
-                parts
-                    .iter()
-                    .map(|part| part.text.as_str())
-                    .collect::<Vec<_>>(),
-                expected
-            );
-            assert_eq!(
-                parts.iter().filter(|part| part.separator).count(),
-                parts.len().saturating_sub(1)
-            );
-            if let Some(headline) = parts.first() {
-                assert!(!headline.separator);
-            }
-            assert!(parts.iter().skip(1).all(|part| part.separator));
+            assert_eq!(summary(&results(outcomes)), expected);
         }
     }
 }
@@ -213,7 +175,7 @@ mod interaction_tests {
             actual: Some("null".into()),
             actual_truncated: false,
         };
-        for operator in ["isNull", "isNotNull", "exists", "notExists"] {
+        for operator in ["isNull", "isNotNull"] {
             declaration.operator = operator.into();
             assert_eq!(
                 copy_row(&declaration, &result),

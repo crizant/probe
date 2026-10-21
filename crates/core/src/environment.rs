@@ -257,14 +257,22 @@ impl<'a> SecretRedactor<'a> {
     /// exposing secret material outside core. All variants share one matcher.
     #[must_use]
     pub fn with_json_literals(mut self) -> Self {
-        fn string_forms(text: &str, output: &mut Vec<String>) {
-            output.push(text.to_owned());
-            let encoded = serde_json::to_string(text).expect("strings serialize");
-            output.push(encoded[1..encoded.len() - 1].to_owned());
+        fn escaped_form(text: &str, output: &mut Vec<String>) {
+            // JSON escaping only changes quotes, backslashes, and control bytes.
+            if text
+                .bytes()
+                .any(|byte| byte == b'"' || byte == b'\\' || byte < 0x20)
+            {
+                let encoded = serde_json::to_string(text).expect("strings serialize");
+                output.push(encoded[1..encoded.len() - 1].to_owned());
+            }
         }
         fn collect_strings(value: &serde_json::Value, output: &mut Vec<String>) {
             match value {
-                serde_json::Value::String(text) => string_forms(text, output),
+                serde_json::Value::String(text) => {
+                    output.push(text.clone());
+                    escaped_form(text, output);
+                }
                 serde_json::Value::Array(values) => {
                     for value in values {
                         collect_strings(value, output);
@@ -279,17 +287,24 @@ impl<'a> SecretRedactor<'a> {
             }
         }
         let mut literals = Vec::new();
-        for value in &self.values {
-            string_forms(value, &mut literals);
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(value) {
+        for raw in &self.values {
+            // The raw form is already present; derive only transformed forms.
+            escaped_form(raw, &mut literals);
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
                 // Keep the entire normalized literal, but do not turn ordinary
                 // object keys or nested numbers/bools/null into global secrets.
-                literals.push(value.to_string());
+                let normalized = value.to_string();
+                if normalized != **raw {
+                    literals.push(normalized);
+                }
                 collect_strings(&value, &mut literals);
                 if let serde_json::Value::Number(number) = value
                     && let Some(float) = number.as_f64()
                 {
-                    literals.push(float.to_string());
+                    let normalized = float.to_string();
+                    if normalized != **raw {
+                        literals.push(normalized);
+                    }
                 }
             }
         }
