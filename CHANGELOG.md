@@ -11,11 +11,12 @@ Release dates use Australia/Brisbane time (UTC+10).
 - Live CLI HTTP/GraphQL runs now evaluate persisted OpenCollection assertions.
   Disabled checks do not affect success; `--no-assertions` skips collection checks.
   Failed or errored assertions exit 9 with `assertion_failed`.
-- Removed `--expect` and its status OR shorthand. Use repeatable
+- Removing `--expect` (including its status OR shorthand), renaming the JSON
+  field `expectations` to `assertions`, and renaming the error category
+  `expectation_failed` to `assertion_failed` are breaking changes from v1.1.1.
+  The next release requires a major version bump under semver. Use repeatable
   `--assert 'response.status equals 200'` or body checks with the shared eight
-  operators. All active checks must pass. JSON uses safe `assertions` results with
-  source and declaration index, replacing `expectations` and `expectation_failed`.
-  This is not a backward-compatible 1.x change; the release version is unchanged.
+  operators; all active checks must pass.
 
 ### Added
 

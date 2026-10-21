@@ -335,7 +335,7 @@ field and `expectation_failed` category are removed; use `assertions` and
 error without echoing its value. Automatic collection assertion evaluation can also
 change a previously successful run into exit 9; use `--no-assertions` to skip those
 checks. This is a breaking change from v1.1.1, not a backward-compatible 1.x change.
-The release version is unchanged by this implementation.
+The next release requires a major version bump under semver.
 
 Probe supports OpenCollection-native GraphQL items (`info.type: graphql` with a `graphql` section).
 Their protocol identity and body stay native when saved. At execution time Probe resolves the same

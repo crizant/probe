@@ -92,6 +92,13 @@ impl CliError {
         }
     }
 
+    pub(crate) fn http_execution(error: probe_application::HttpExecutionError) -> Self {
+        match error {
+            probe_application::HttpExecutionError::Protocol(error) => Self::request_protocol(error),
+            probe_application::HttpExecutionError::Http(error) => Self::http(error),
+        }
+    }
+
     pub(crate) fn http(error: HttpError) -> Self {
         let category = if error.is_configuration() {
             "request_configuration"
@@ -395,5 +402,41 @@ mod session_errors {
                 assert!(mapped.details.is_none());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod http_execution_errors {
+    use super::*;
+    use probe_application::HttpExecutionError;
+
+    #[test]
+    fn protocol_and_transport_diagnostics_keep_their_specific_mappings() {
+        let invalid =
+            CliError::http_execution(HttpExecutionError::Protocol(RequestProtocolError::NotHttp));
+        assert_eq!(
+            (invalid.category, invalid.exit_code),
+            ("invalid_arguments", 2)
+        );
+        assert_eq!(invalid.message, RequestProtocolError::NotHttp.to_string());
+        let selection = CliError::http_execution(HttpExecutionError::Protocol(
+            RequestProtocolError::InvalidBodySelection(
+                "GraphQL body variants have no selected value".into(),
+            ),
+        ));
+        assert_eq!(
+            (selection.category, selection.exit_code),
+            ("request_configuration", 5)
+        );
+        assert_eq!(
+            selection.message,
+            HttpError::InvalidBodySelection("GraphQL body variants have no selected value".into())
+                .to_string()
+        );
+        let timeout = CliError::http_execution(HttpExecutionError::Http(HttpError::Timeout));
+        assert_eq!(
+            (timeout.category, timeout.exit_code),
+            ("request_timeout", 6)
+        );
     }
 }

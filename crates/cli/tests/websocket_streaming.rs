@@ -1513,3 +1513,26 @@ fn stdin_format_is_rejected_before_consuming_a_workspace_from_stdin() {
         assert_eq!(stdin.position(), 0);
     }
 }
+
+#[test]
+fn no_assertions_alone_keeps_live_websocket_output() {
+    let (url, server) = server(|mut socket| async move {
+        socket.send(Message::Text("reply".into())).await.unwrap();
+        close(&mut socket).await;
+    });
+    let path = workspace(&url, None);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&path)
+        .arg("items/0")
+        .arg("--no-assertions")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let human = String::from_utf8(output.stdout).unwrap();
+    assert!(human.contains("reply"));
+    assert!(!human.contains("Assertions:"));
+    server.join().unwrap();
+    fs::remove_file(path).unwrap();
+}

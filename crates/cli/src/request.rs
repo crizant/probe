@@ -359,7 +359,7 @@ pub(crate) fn run(
                 &assertions,
             )
             .await
-            .map_err(CliError::http)
+            .map_err(CliError::http_execution)
     })?;
     let response = executed.response;
     let outcomes: Vec<_> = results

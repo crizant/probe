@@ -110,9 +110,9 @@ Only secrets reachable from an active binary assertion value that contains
 interpolation are requested, including transitive references.
 The standalone evaluator caches provider values and failures across its batch.
 Integrated execution reuses the existing preparation `CachedSecrets`, sharing lookups
-with request and certificate resolution. Assertion-only secrets join response
-redaction after evaluation; raw response data and resolved values never cross the
-application boundary. Runs with assertions bypass response spool caching so those
+with request and certificate resolution. Request, certificate, and assertion secrets
+are combined and deduplicated before a single longest-first redaction of the original
+response; raw response data and resolved values never cross the application boundary. Runs with assertions bypass response spool caching so those
 files cannot retain assertion-only secrets. Disabled and unary declarations never
 resolve ignored values.
 

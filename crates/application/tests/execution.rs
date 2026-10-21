@@ -1395,3 +1395,42 @@ fn desktop_http_execution_future_remains_send() {
         |_| {},
     ));
 }
+
+#[tokio::test]
+async fn assertion_execution_preserves_typed_protocol_preparation_errors() {
+    use probe_application::HttpExecutionError;
+    use probe_core::{GraphqlBody, RequestKind, RequestProtocol, RequestProtocolError};
+    let engine = HttpEngine::new().unwrap();
+    for (kind, expected) in [
+        (
+            RequestKind::WebSocket { message: None },
+            RequestProtocolError::UnsupportedExecution(RequestProtocol::WebSocket),
+        ),
+        (
+            RequestKind::Graphql {
+                body: Some(GraphqlBody::Variants(vec![])),
+            },
+            RequestProtocolError::InvalidBodySelection(
+                "GraphQL body variants have no selected value".into(),
+            ),
+        ),
+    ] {
+        let request = Request {
+            kind,
+            ..get("https://example.test")
+        };
+        let error = prepare_request(&request, &RequestResolution::default(), &NoSecrets)
+            .unwrap()
+            .execute_with_assertions(
+                &engine,
+                ExecutionOptions::default(),
+                None,
+                std::future::pending::<()>(),
+                |_| {},
+                &[],
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, HttpExecutionError::Protocol(expected));
+    }
+}

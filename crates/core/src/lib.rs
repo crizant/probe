@@ -25,8 +25,8 @@ pub use collection::{
     sort_import_diagnostics, warning_import_diagnostic,
 };
 pub use environment::{
-    EffectiveEnvironmentVariable, EnvironmentResolutionError, ResolvedEnvironment, VariableStatus,
-    resolve_environment, resolve_environment_for_request_with_provider,
+    EffectiveEnvironmentVariable, EnvironmentResolutionError, ResolvedEnvironment, SecretRedactor,
+    VariableStatus, resolve_environment, resolve_environment_for_request_with_provider,
     resolve_environment_for_templates_with_provider, resolve_environment_with_overrides,
     resolve_environment_with_provider, validate_environments, variable_status,
 };

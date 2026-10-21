@@ -204,43 +204,81 @@ impl ResolvedEnvironment {
     /// Redacts exact secret values without exposing them to callers.
     #[must_use]
     pub fn redact_secrets(&self, input: &str) -> String {
-        let mut values = self.secrets.values().collect::<Vec<_>>();
-        values.sort_by_key(|value| std::cmp::Reverse(value.expose_for_execution().len()));
-        let mut redacted = input.to_owned();
-        for secret in values {
-            let value = secret.expose_for_execution();
-            if !value.is_empty() {
-                redacted = redacted.replace(value, "[REDACTED]");
-            }
-        }
-        redacted
+        SecretRedactor::from_environments([self]).redact(input)
     }
 
     /// Redacts exact secret byte sequences while preserving unrelated binary response data.
     #[must_use]
     pub fn redact_secret_bytes(&self, input: &[u8]) -> Vec<u8> {
-        let mut values = self.secrets.values().collect::<Vec<_>>();
-        values.sort_by_key(|value| std::cmp::Reverse(value.expose_for_execution().len()));
-        let mut redacted = input.to_vec();
-        for secret in values {
-            let value = secret.expose_for_execution().as_bytes();
-            if value.is_empty() {
-                continue;
-            }
-            let mut output = Vec::with_capacity(redacted.len());
-            let mut remaining = redacted.as_slice();
-            while let Some(start) = remaining
-                .windows(value.len())
-                .position(|bytes| bytes == value)
-            {
-                output.extend_from_slice(&remaining[..start]);
-                output.extend_from_slice(b"[REDACTED]");
-                remaining = &remaining[start + value.len()..];
-            }
-            output.extend_from_slice(remaining);
-            redacted = output;
+        SecretRedactor::from_environments([self]).redact_bytes(input)
+    }
+}
+
+/// Combined, opaque disclosure context for values resolved by separate operations.
+/// Values are deduplicated and matched longest first against original input only.
+#[derive(Debug)]
+pub struct SecretRedactor<'a> {
+    values: Vec<&'a SecretValue>,
+}
+
+impl<'a> SecretRedactor<'a> {
+    #[must_use]
+    pub fn from_environments(
+        environments: impl IntoIterator<Item = &'a ResolvedEnvironment>,
+    ) -> Self {
+        let mut values: Vec<_> = environments
+            .into_iter()
+            .flat_map(|environment| environment.secrets.values())
+            .filter(|value| !value.expose_for_execution().is_empty())
+            .collect();
+        values.sort_by(|a, b| {
+            let a = a.expose_for_execution();
+            let b = b.expose_for_execution();
+            b.len().cmp(&a.len()).then_with(|| a.cmp(b))
+        });
+        values.dedup();
+        Self { values }
+    }
+
+    #[must_use]
+    pub fn redact(&self, input: &str) -> String {
+        String::from_utf8(self.redact_bytes(input.as_bytes()))
+            .expect("replacing UTF-8 secret strings preserves UTF-8")
+    }
+
+    #[must_use]
+    pub fn redact_bytes(&self, input: &[u8]) -> Vec<u8> {
+        if self.values.is_empty() {
+            return input.to_vec();
         }
-        redacted
+        let match_len = |bytes: &[u8]| {
+            self.values
+                .iter()
+                .map(|value| value.expose_for_execution().as_bytes())
+                .find(|value| bytes.starts_with(value))
+                .map(<[u8]>::len)
+        };
+        let mut output = Vec::with_capacity(input.len());
+        let mut remaining = input;
+        while !remaining.is_empty() {
+            if let Some(mut end) = match_len(remaining) {
+                // Include crossing overlaps too: consuming a short match must not
+                // skip a longer secret that begins inside it and expose its tail.
+                let mut offset = 1;
+                while offset < end {
+                    if let Some(length) = match_len(&remaining[offset..]) {
+                        end = end.max(offset + length);
+                    }
+                    offset += 1;
+                }
+                output.extend_from_slice(b"[REDACTED]");
+                remaining = &remaining[end..];
+            } else {
+                output.push(remaining[0]);
+                remaining = &remaining[1..];
+            }
+        }
+        output
     }
 }
 

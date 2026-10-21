@@ -15,8 +15,8 @@ pub use assertions::{AssertionError, AssertionOutcome, AssertionResult, evaluate
 pub use websocket_input::WebSocketInputFormat;
 
 pub use execution::{
-    ExecutedResponse, HttpExecution, NoSecrets, PreparedRequest, RequestResolution,
-    SECRET_DIAGNOSTIC_WITHHELD, copy_as_curl, prepare_request,
+    ExecutedResponse, HttpExecution, HttpExecutionError, NoSecrets, PreparedRequest,
+    RequestResolution, SECRET_DIAGNOSTIC_WITHHELD, copy_as_curl, prepare_request,
 };
 
 pub use execution::{

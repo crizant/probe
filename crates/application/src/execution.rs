@@ -9,7 +9,7 @@ use std::{cell::RefCell, collections::BTreeMap, fmt, future::Future, path::Path}
 use probe_core::{
     AuthenticationKind, AuthenticationValue, Environment, EnvironmentResolutionError,
     PreparedHttpRequest, Request, RequestProtocolError, ResolvedEnvironment, SecretContext,
-    SecretError, SecretProvider, SecretValue, VariableUsage, request_secret_usages,
+    SecretError, SecretProvider, SecretRedactor, SecretValue, VariableUsage, request_secret_usages,
     resolve_environment_for_request_with_provider, resolve_request,
     resolve_request_for_presentation, resolve_request_strict,
 };
@@ -170,14 +170,14 @@ impl<'a> PreparedRequest<'a> {
         cancellation: C,
         progress: P,
         assertions: &[probe_core::Assertion],
-    ) -> Result<(ExecutedResponse, Vec<crate::AssertionResult>), HttpError>
+    ) -> Result<(ExecutedResponse, Vec<crate::AssertionResult>), HttpExecutionError>
     where
         C: Future + Send,
         P: FnMut(HttpProgress) + Send,
     {
         let (execution, resolution, provider) = self
             .into_http_parts()
-            .map_err(|error| HttpError::InvalidRequest(error.to_string()))?;
+            .map_err(HttpExecutionError::Protocol)?;
         let mut options = options;
         if !assertions.is_empty() {
             // Assertion-only secrets are resolved after the exchange; prevent raw
@@ -186,7 +186,8 @@ impl<'a> PreparedRequest<'a> {
         }
         let (mut executed, disclosure) = execution
             .execute_raw(engine, options, output, cancellation, progress)
-            .await?;
+            .await
+            .map_err(HttpExecutionError::Http)?;
         let mut environments = Vec::new();
         let outcomes = crate::assertions::evaluate_with_disclosure(
             assertions,
@@ -195,22 +196,7 @@ impl<'a> PreparedRequest<'a> {
             &provider,
             |environment| environments.push(environment),
         );
-        if environments
-            .iter()
-            .any(ResolvedEnvironment::has_resolved_secrets)
-        {
-            executed
-                .response
-                .url
-                .clone_from(&disclosure.presentation_url);
-            executed.response.url_changed = false;
-        }
-        executed.response = disclosure.redact_response(executed.response);
-        for environment in environments {
-            let url = environment.redact_secrets(&executed.response.url);
-            executed.response =
-                SecretDisclosure::new(environment, Some(&url)).redact_response(executed.response);
-        }
+        executed.response = disclosure.redact_response_with(executed.response, &environments);
         Ok((executed, outcomes))
     }
 
@@ -425,6 +411,31 @@ impl fmt::Debug for HttpExecution {
     }
 }
 
+/// Preparation and transport errors retain their types across assertion execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HttpExecutionError {
+    Protocol(RequestProtocolError),
+    Http(HttpError),
+}
+
+impl fmt::Display for HttpExecutionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Protocol(error) => error.fmt(formatter),
+            Self::Http(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for HttpExecutionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(match self {
+            Self::Protocol(error) => error,
+            Self::Http(error) => error,
+        })
+    }
+}
+
 /// A completed execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutedResponse {
@@ -456,25 +467,40 @@ impl SecretDisclosure {
         self.secrets.is_some()
     }
 
-    fn redact_response(&self, mut response: HttpResponse) -> HttpResponse {
-        let Some(secrets) = &self.secrets else {
+    fn redact_response(&self, response: HttpResponse) -> HttpResponse {
+        self.redact_response_with(response, &[])
+    }
+
+    fn redact_response_with(
+        &self,
+        mut response: HttpResponse,
+        environments: &[ResolvedEnvironment],
+    ) -> HttpResponse {
+        // The request/certificate disclosure and every assertion environment must
+        // participate in one longest-first match against the original bytes.
+        let secrets = SecretRedactor::from_environments(self.secrets.iter().chain(environments));
+        if !self.uses_secrets()
+            && !environments
+                .iter()
+                .any(ResolvedEnvironment::has_resolved_secrets)
+        {
             return response;
-        };
+        }
         // A redirect may encode or transform secret bytes, so only the
         // reference-preserving URL is safe to present.
-        if self.initial_url_uses_secrets {
-            response.initial_url.clone_from(&self.presentation_url);
+        response.initial_url = secrets.redact(if self.initial_url_uses_secrets {
+            &self.presentation_url
         } else {
-            response.initial_url = secrets.redact_secrets(&response.initial_url);
-        }
-        response.url.clone_from(&self.presentation_url);
+            &response.initial_url
+        });
+        response.url = secrets.redact(&self.presentation_url);
         response.url_changed = false;
-        response.reason = secrets.redact_secrets(&response.reason);
+        response.reason = secrets.redact(&response.reason);
         for header in &mut response.headers {
-            header.name = secrets.redact_secrets(&header.name);
-            header.value = secrets.redact_secrets(&header.value);
+            header.name = secrets.redact(&header.name);
+            header.value = secrets.redact(&header.value);
         }
-        response.body = secrets.redact_secret_bytes(&response.body);
+        response.body = secrets.redact_bytes(&response.body);
         response
     }
 
@@ -942,5 +968,98 @@ mod certificate_variable_tests {
                 assert_eq!(execution.client_identity, Ok(None));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod combined_disclosure_tests {
+    use super::*;
+
+    #[test]
+    fn request_certificate_and_assertion_secrets_are_redacted_together() {
+        struct Provider;
+        impl SecretProvider for Provider {
+            fn resolve_secret(
+                &self,
+                context: &SecretContext<'_>,
+            ) -> Result<Option<SecretValue>, SecretError> {
+                Ok(Some(SecretValue::new(
+                    match context.variable_name {
+                        "requestSecret" => "abc",
+                        "certificateSecret" => "abcdef",
+                        "assertionSecret" => "abcdefgh",
+                        _ => panic!("unexpected secret"),
+                    }
+                    .into(),
+                )))
+            }
+        }
+        let loaded = probe_opencollection::load_workspace_from_str(
+            "opencollection: 1.0.0\ninfo:\n  name: Disclosure\nbundled: true\nconfig:\n  environments:\n    - name: local\n      variables:\n        - name: requestSecret\n          secret: true\n        - name: certificateSecret\n          secret: true\n        - name: assertionSecret\n          secret: true\nitems: []\n"
+        ).unwrap();
+        let certificates = [probe_core::ClientCertificate::Pem {
+            domain: "example.test".into(),
+            certificate_file_path: "{{certificateSecret}}".into(),
+            private_key_file_path: "unused-key.pem".into(),
+            passphrase: None,
+            disabled: false,
+        }];
+        let request = Request {
+            method: Some("GET".into()),
+            url: Some("https://example.test".into()),
+            headers: vec![probe_core::Header {
+                name: "X-Token".into(),
+                value: "{{requestSecret}}".into(),
+                disabled: false,
+            }],
+            ..Request::default()
+        };
+        let resolution = RequestResolution {
+            environments: loaded.workspace().environments(),
+            environment: Some("local"),
+            client_certificates: &certificates,
+            ..RequestResolution::default()
+        };
+        let (execution, resolution, provider) = prepare_request(&request, &resolution, &Provider)
+            .unwrap()
+            .into_http_parts()
+            .unwrap();
+        assert!(matches!(execution.client_identity, Ok(Some(_))));
+        let assertions = probe_core::resolve_environment_for_templates_with_provider(
+            ["{{assertionSecret}}"],
+            resolution.environments,
+            resolution.environment,
+            resolution.overrides,
+            &provider,
+            resolution.workspace_identity,
+        )
+        .unwrap();
+        let response = HttpResponse {
+            status: 200,
+            reason: "abcdefgh".into(),
+            initial_url: "https://example.test".into(),
+            url: "https://example.test/abcdefgh".into(),
+            url_changed: true,
+            headers: vec![probe_http::ResponseHeader {
+                name: "x-echo".into(),
+                value: "abcdefgh abcdef abc".into(),
+            }],
+            body: b"abcdefgh abcdef abc".to_vec(),
+            duration: std::time::Duration::ZERO,
+            size: 19,
+            body_complete: true,
+            body_file: None,
+            body_retention_error: None,
+        };
+        let response = execution
+            .disclosure
+            .redact_response_with(response, &[assertions]);
+        assert_eq!(response.body, b"[REDACTED] [REDACTED] [REDACTED]");
+        assert_eq!(
+            response.headers[0].value,
+            "[REDACTED] [REDACTED] [REDACTED]"
+        );
+        assert_eq!(response.reason, "[REDACTED]");
+        assert_eq!(response.url, "https://example.test");
     }
 }

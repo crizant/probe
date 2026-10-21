@@ -262,21 +262,27 @@ fn legacy_expect_migration_also_applies_to_non_run_commands() {
         vec!["request", "get", "missing.yml", "items/0"],
         vec!["collection", "validate", "missing.yml"],
     ] {
-        let output = probe()
-            .args(command)
-            .args(["--expect", "sensitive-value", "--json"])
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2));
-        let text = String::from_utf8(output.stdout).unwrap();
-        assert!(!text.contains("sensitive-value"));
-        let value: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(value["error"]["category"], "invalid_arguments");
-        assert_eq!(
-            value["error"]["message"],
-            "--expect was removed after Probe v1.1.1; migrate to --assert 'response.status equals 200' (repeat --assert for AND checks)"
-        );
-        assert!(output.stderr.is_empty());
+        for legacy in [
+            vec!["--expect", "sensitive-value"],
+            vec!["--expect=sensitive-value"],
+        ] {
+            let output = probe()
+                .args(&command)
+                .args(legacy)
+                .arg("--json")
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(2));
+            let text = String::from_utf8(output.stdout).unwrap();
+            assert!(!text.contains("sensitive-value"));
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["error"]["category"], "invalid_arguments");
+            assert_eq!(
+                value["error"]["message"],
+                "--expect was removed after Probe v1.1.1; migrate to --assert 'response.status equals 200' (repeat --assert for AND checks)"
+            );
+            assert!(output.stderr.is_empty());
+        }
     }
 }
 
@@ -579,4 +585,116 @@ fn disabled_only_assertions_never_resolve_values_or_parse_the_body() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains("sensitive-expression"));
     server.join().unwrap();
     cleanup(path);
+}
+
+#[test]
+fn no_assertions_alone_omits_the_human_assertion_summary() {
+    let (url, server) = serve_once(br#"{"name":"John Doe"}"#.to_vec(), "application/json");
+    let path = workspace(&url, "http", ASSERTIONS, true);
+    let output = run(&path, true, &["--no-assertions"]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let human = String::from_utf8(output.stdout).unwrap();
+    assert!(human.contains("200"));
+    assert!(human.contains("John Doe"));
+    assert!(!human.contains("Assertions:"));
+    server.join().unwrap();
+    cleanup(path);
+}
+
+#[test]
+fn overlapping_assertion_and_request_secrets_never_leave_echoed_fragments_in_output() {
+    // Exercise both declaration orders, and request-plus-assertion disclosure.
+    for request_uses_short in [false, true] {
+        for short_first in [false, true] {
+            for mode in ["--json", "human", "--show-headers", "failure"] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let server = thread::spawn(move || {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut head = Vec::new();
+                    while !head.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        stream.read_exact(&mut byte).unwrap();
+                        head.push(byte[0]);
+                    }
+                    let body = br#"{"echo":"abcdef abc"}"#;
+                    write!(stream, "HTTP/1.1 200 abcdef\r\nX-Echo: abcdef abc\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                    stream.write_all(body).unwrap();
+                });
+                let path = workspace(&url, "http", "", true);
+                let mut source = fs::read_to_string(&path).unwrap();
+                source = source.replace("        - name: expectedStatus", "        - name: short\n          secret: true\n        - name: long\n          secret: true\n        - name: expectedStatus");
+                if request_uses_short {
+                    source.push_str(
+                        "      headers:\n        - name: X-Token\n          value: '{{short}}'\n",
+                    );
+                }
+                let names = if short_first {
+                    ["short", "long"]
+                } else {
+                    ["long", "short"]
+                };
+                source.push_str("    runtime:\n      assertions:\n");
+                for name in names {
+                    source.push_str(&format!("        - expression: response.body.echo\n          operator: contains\n          value: '{{{{{name}}}}}'\n"));
+                }
+                fs::write(&path, source).unwrap();
+                let mut command = probe();
+                command
+                    .args(["request", "run"])
+                    .arg(&path)
+                    .arg("items/0")
+                    .args(["--environment", "local", "--secret-provider", "env"])
+                    .env("short", "abc")
+                    .env("long", "abcdef");
+                match mode {
+                    "human" => {}
+                    "failure" => {
+                        command.args(["--assert", "response.status equals 201"]);
+                    }
+                    flag => {
+                        command.arg(flag);
+                    }
+                }
+                let output = command.output().unwrap();
+                assert_eq!(
+                    output.status.code(),
+                    Some(if mode == "failure" { 9 } else { 0 }),
+                    "{output:?}"
+                );
+                for bytes in [&output.stdout, &output.stderr] {
+                    let text = String::from_utf8_lossy(bytes);
+                    for fragment in ["abcdef", "abc", "def"] {
+                        assert!(
+                            !text.contains(fragment),
+                            "leaked {fragment} in {mode}: {text}"
+                        );
+                    }
+                }
+                if mode == "failure" {
+                    assert!(String::from_utf8_lossy(&output.stderr).contains("assertion_failed"));
+                } else {
+                    assert!(output.stderr.is_empty());
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    assert!(text.contains("[REDACTED] [REDACTED]"), "{text}");
+                    if mode == "--json" {
+                        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+                        assert!(
+                            value["assertions"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .all(|result| result["outcome"] == "passed")
+                        );
+                    }
+                    if mode == "--show-headers" {
+                        assert!(text.contains("x-echo"));
+                    }
+                }
+                server.join().unwrap();
+                cleanup(path);
+            }
+        }
+    }
 }

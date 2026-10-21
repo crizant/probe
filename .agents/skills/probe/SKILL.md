@@ -19,7 +19,7 @@ When modifying an existing request:
 4. Run `probe collection validate <path> --json`.
 5. When runtime resolution matters, run the request with `--dry-run --json`.
 6. Execute the request only when execution is appropriate.
-7. Use repeatable `--assert` for HTTP/GraphQL response assertions; persisted collection assertions run automatically. For WebSocket sessions, bound execution with `--max-messages` and/or `--timeout`.
+7. Consult the [CLI reference](references/cli.md) for response assertions and bounded WebSocket execution.
 
 Do not manually edit OpenCollection YAML unless Probe cannot perform the required operation.
 
@@ -181,24 +181,9 @@ Execute with:
 probe request run <path> <selector> --json
 ```
 
-When verifying expected HTTP status:
-
-```bash
-probe request run <path> <selector> \
-  --assert 'response.status equals 200' \
-  --json
-```
-
-All active collection and CLI assertions must pass. `--no-assertions` skips only
-collection declarations; explicit `--assert` checks stay enabled. Disabled collection
-assertions do not affect success. Use the eight operators and typed-value rules in
-the CLI reference. Assertion failures or errors exit 9 with `assertion_failed`;
-JSON results identify source and zero-based index without operand values.
-`--assert` is rejected with `--dry-run` or WebSocket; dry runs never evaluate assertions.
-
-Breaking change from Probe v1.1.1: `--expect`, its `status=200|201` shorthand,
-`expectations` JSON field, and `expectation_failed` category are removed. Repeated
-`--assert` flags mean AND. This is not a backward-compatible 1.x change.
+For response assertions, protocol restrictions, output contracts, exit codes, and
+migration guidance, consult the [CLI reference](references/cli.md). `docs/CLI.md`
+is its canonical source.
 
 Do not execute requests unnecessarily when inspection, validation, or a dry run is sufficient.
 
@@ -311,13 +296,5 @@ Skip unnecessary steps when the task does not require them.
 The goal is to use Probe as the authoritative interface for OpenCollection operations, while keeping changes deterministic, inspectable, and safe.
 ## WebSocket execution
 
-Use `probe request run <path> <selector>` for native WebSocket requests. Human
-output streams interactively (`>` actual outbound messages, `<` inbound messages).
-For agent execution, prefer `--max-messages 1 --timeout 10 --json`: live WebSocket
-`--json` is NDJSON, one versioned SessionEvent per line, and terminal errors retain
-nonzero exit status. HTTP/GraphQL and dry-run JSON remain single objects.
-See [docs/CLI.md](../../../docs/CLI.md) for runtime message input and error rules.
-`--max-messages` counts inbound data only. `--timeout` is the CLI live-run bound,
-separate from persisted connection timeout. `--assert`, `--output`, and
-`--show-headers` are HTTP/GraphQL-only. Configured binary messages lack an encoding
-contract and cannot execute; received binary frames are supported as base64.
+Consult the [CLI reference](references/cli.md) for bounded WebSocket execution,
+message formats, streaming output, and supported options.

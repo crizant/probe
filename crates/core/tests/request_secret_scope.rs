@@ -324,3 +324,39 @@ fn execution_templates_share_request_reachability_and_interpolation_semantics() 
         .is_err()
     );
 }
+
+#[test]
+fn redaction_combines_overlapping_values_without_rescanning_replacement_markers() {
+    use probe_core::{SecretRedactor, resolve_environment_for_templates_with_provider};
+    let environments = environment();
+    let provider = Provider {
+        calls: RefCell::new(Vec::new()),
+        fail: false,
+    };
+    let resolved: Vec<_> = ["abc", "abcdef", "REDACTED", "é", "xabc", "abcdefgh"]
+        .into_iter()
+        .map(|value| {
+            resolve_environment_for_templates_with_provider(
+                ["{{token}}"],
+                &environments,
+                Some("production"),
+                &[("token".into(), value.into())],
+                &provider,
+                None,
+            )
+            .unwrap()
+        })
+        .collect();
+    let redactor = SecretRedactor::from_environments(resolved.iter().chain(resolved.iter()));
+    assert_eq!(
+        redactor.redact("abcdef abc REDACTED é"),
+        "[REDACTED] [REDACTED] [REDACTED] [REDACTED]"
+    );
+    assert_eq!(redactor.redact("xabcdefgh"), "[REDACTED]");
+    assert_eq!(
+        redactor.redact_bytes(b"\xffabcdef\xfeabc"),
+        b"\xff[REDACTED]\xfe[REDACTED]"
+    );
+    assert!(!format!("{redactor:?}").contains("abcdef"));
+    assert!(provider.calls.borrow().is_empty());
+}

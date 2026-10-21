@@ -1348,6 +1348,9 @@ fn push_positional(
     argument: &str,
     expected: usize,
 ) -> Result<(), CliError> {
+    if argument.starts_with("--expect=") {
+        return Err(legacy_expect());
+    }
     if is_known_option(argument) {
         return Err(unexpected_option(argument));
     }
