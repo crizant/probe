@@ -87,13 +87,7 @@ impl ProbeApp {
                                 move |enabled, _, cx| {
                                     let _ = toggle.update(cx, |view, cx| {
                                         view.apply_environment_manager_draft(cx, |dialog| {
-                                            match &mut dialog.draft_mut().client_certificates[index]
-                                            {
-                                                ClientCertificate::Pem { disabled, .. }
-                                                | ClientCertificate::Pkcs12 { disabled, .. } => {
-                                                    *disabled = !enabled
-                                                }
-                                            }
+                                            dialog.set_certificate_enabled(index, enabled);
                                         })
                                     });
                                 },
@@ -193,10 +187,7 @@ impl ProbeApp {
                                         let _ = up.update(cx, |view, cx| {
                                             view.apply_environment_manager_draft(cx, |dialog| {
                                                 if index > 0 {
-                                                    dialog
-                                                        .draft_mut()
-                                                        .client_certificates
-                                                        .swap(index, index - 1);
+                                                    dialog.swap_certificates(index, index - 1);
                                                 }
                                             })
                                         });
@@ -214,11 +205,7 @@ impl ProbeApp {
                                     move |_, _, cx| {
                                         let _ = down.update(cx, |view, cx| {
                                             view.apply_environment_manager_draft(cx, |dialog| {
-                                                let certificates =
-                                                    &mut dialog.draft_mut().client_certificates;
-                                                if index + 1 < certificates.len() {
-                                                    certificates.swap(index, index + 1);
-                                                }
+                                                dialog.swap_certificates(index, index + 1);
                                             })
                                         });
                                     },
@@ -251,10 +238,7 @@ impl ProbeApp {
                                     move |_, _, cx| {
                                         let _ = delete.update(cx, |view, cx| {
                                             view.apply_environment_manager_draft(cx, |dialog| {
-                                                dialog
-                                                    .draft_mut()
-                                                    .client_certificates
-                                                    .remove(index);
+                                                dialog.remove_certificate(index);
                                             })
                                         });
                                     },

@@ -104,14 +104,62 @@ impl EnvironmentManagerDialog {
 
     /// Invalidate before exposing mutable access, including edits outside the app adapter.
     pub(crate) fn draft_mut(&mut self) -> &mut Environment {
-        self.effective_rows.take();
-        self.certificate_metadata = None;
-        self.certificate_metadata_refresh_pending = false;
-        self.certificate_generation = std::rc::Rc::new(());
-        if let Some(editor) = self.certificate_editor.as_mut() {
-            editor.invalidate_inspection();
-        }
+        self.invalidate_derived_environment_state();
         &mut self.draft
+    }
+
+    /// `draft_mut` clears previews and bumps the generation. Callers reject an
+    /// unused index before this runs, then realign any cached rows for the edit.
+    fn edit_client_certificates(
+        &mut self,
+        update: impl FnOnce(
+            &mut Vec<probe_core::ClientCertificate>,
+            Option<&mut Vec<probe_http::CertificateInspection>>,
+        ),
+    ) {
+        let mut metadata = self.certificate_metadata.take();
+        update(&mut self.draft_mut().client_certificates, metadata.as_mut());
+        self.certificate_metadata = metadata;
+    }
+
+    pub(crate) fn remove_certificate(&mut self, index: usize) {
+        if index >= self.draft.client_certificates.len() {
+            return;
+        }
+        self.edit_client_certificates(|certificates, metadata| {
+            certificates.remove(index);
+            if let Some(rows) = metadata
+                && index < rows.len()
+            {
+                rows.remove(index);
+            }
+        });
+    }
+
+    pub(crate) fn swap_certificates(&mut self, first: usize, second: usize) {
+        let count = self.draft.client_certificates.len();
+        if first >= count || second >= count || first == second {
+            return;
+        }
+        self.edit_client_certificates(|certificates, metadata| {
+            certificates.swap(first, second);
+            if let Some(rows) = metadata
+                && first < rows.len()
+                && second < rows.len()
+            {
+                rows.swap(first, second);
+            }
+        });
+    }
+
+    pub(crate) fn set_certificate_enabled(&mut self, index: usize, enabled: bool) {
+        if index >= self.draft.client_certificates.len() {
+            return;
+        }
+        self.edit_client_certificates(|certificates, _metadata| match &mut certificates[index] {
+            probe_core::ClientCertificate::Pem { disabled, .. }
+            | probe_core::ClientCertificate::Pkcs12 { disabled, .. } => *disabled = !enabled,
+        });
     }
 
     pub(crate) fn effective_rows(
@@ -135,6 +183,10 @@ impl EnvironmentManagerDialog {
 
     /// Inherited rows depend on the workspace even when the direct draft is retained.
     pub(crate) fn rebind_workspace(&mut self) {
+        self.invalidate_derived_environment_state();
+    }
+
+    fn invalidate_derived_environment_state(&mut self) {
         self.effective_rows.take();
         self.certificate_metadata = None;
         self.certificate_metadata_refresh_pending = false;

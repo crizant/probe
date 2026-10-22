@@ -1184,3 +1184,80 @@ fn cached_fingerprint(dialog: &crate::app::EnvironmentManagerDialog) -> Option<&
         .as_ref()
         .map(|metadata| metadata.fingerprint.as_str())
 }
+
+#[gpui_kit::test]
+fn certificate_list_mutations_keep_metadata_with_surviving_rows(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-delete-metadata");
+    workspace.open_manager(cx, "base");
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/mtls");
+    workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .client_certificates = ["client.pem", "ec-client.pem", "server.pem"]
+            .into_iter()
+            .map(|filename| ClientCertificate::Pem {
+                domain: filename.into(),
+                certificate_file_path: fixture.join(filename).to_str().unwrap().into(),
+                private_key_file_path: "not-read-for-preview.pem".into(),
+                passphrase: None,
+                disabled: false,
+            })
+            .collect();
+    });
+    click(&workspace, cx, "environment-tab-2");
+    let labels = |dialog: &crate::app::EnvironmentManagerDialog| {
+        dialog
+            .certificate_metadata
+            .as_ref()
+            .expect("metadata stays cached")
+            .iter()
+            .map(|row| {
+                let metadata = row.metadata.as_ref().expect("public fixture metadata");
+                (metadata.subject.clone(), metadata.expires.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let original = workspace.update(cx, |view, _, _| {
+        labels(view.environment_manager_dialog.as_ref().unwrap())
+    });
+    assert_eq!(original.len(), 3);
+    workspace.update(cx, |view, _, cx| {
+        let generation = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_generation
+            .clone();
+        view.apply_environment_manager_draft(cx, |dialog| dialog.remove_certificate(0));
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(
+            labels(dialog),
+            original[1..],
+            "deletion must preserve labels before background work runs"
+        );
+        assert!(
+            !std::rc::Rc::ptr_eq(&generation, &dialog.certificate_generation),
+            "reject pending results for the previous row order"
+        );
+        view.apply_environment_manager_draft(cx, |dialog| dialog.swap_certificates(0, 1));
+        assert_eq!(
+            labels(view.environment_manager_dialog.as_ref().unwrap()),
+            vec![original[2].clone(), original[1].clone()]
+        );
+        view.apply_environment_manager_draft(cx, |dialog| dialog.set_certificate_enabled(0, false));
+        assert_eq!(
+            labels(view.environment_manager_dialog.as_ref().unwrap()),
+            vec![original[2].clone(), original[1].clone()]
+        );
+    });
+    cx.run_until_parked();
+    click(&workspace, cx, "certificate-delete-0");
+    workspace.update(cx, |view, _, _| {
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(labels(dialog), vec![original[1].clone()]);
+        assert!(matches!(&dialog.draft().client_certificates[0], ClientCertificate::Pem { domain, .. } if domain == "ec-client.pem"));
+    });
+}

@@ -373,6 +373,28 @@ impl ProbeApp {
 }
 
 impl ProbeApp {
+    /// Environments for inspection, with the unsaved draft standing in for its saved copy.
+    fn certificate_inspection_context(
+        &self,
+        draft: &probe_core::Environment,
+    ) -> (Vec<probe_core::Environment>, probe_http::ExecutionOptions) {
+        let mut environments = self
+            .loaded_workspace
+            .as_ref()
+            .map(|loaded| loaded.workspace().environments().to_vec())
+            .unwrap_or_default();
+        environments.retain(|environment| environment.name != draft.name);
+        environments.push(draft.clone());
+        let options = probe_http::ExecutionOptions {
+            base_directory: self
+                .workspace_path
+                .as_deref()
+                .and_then(workspace_base_directory),
+            ..Default::default()
+        };
+        (environments, options)
+    }
+
     pub(super) fn load_certificate_metadata(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.environment_manager_dialog.as_mut() else {
             return;
@@ -387,23 +409,10 @@ impl ProbeApp {
         dialog.certificate_metadata_refresh_pending = true;
         // Keep the last safe metadata visible until its replacement is ready.
         dialog.certificate_metadata.get_or_insert_with(Vec::new);
-        let mut environments = self
-            .loaded_workspace
-            .as_ref()
-            .map(|loaded| loaded.workspace().environments().to_vec())
-            .unwrap_or_default();
-        environments.retain(|env| env.name != draft.name);
-        environments.push(draft.clone());
-        let workspace_path = self.workspace_path.clone();
+        let (environments, options) = self.certificate_inspection_context(&draft);
         cx.spawn(async move |view, cx| {
             let results = cx
                 .background_spawn(async move {
-                    let options = probe_http::ExecutionOptions {
-                        base_directory: workspace_path
-                            .as_deref()
-                            .and_then(workspace_base_directory),
-                        ..Default::default()
-                    };
                     draft
                         .client_certificates
                         .iter()
@@ -466,27 +475,14 @@ impl ProbeApp {
         editor.inspecting = true;
         editor.inspection_generation = Rc::new(());
         let generation = editor.inspection_generation.clone();
-        let mut environments = self
-            .loaded_workspace
-            .as_ref()
-            .map(|loaded| loaded.workspace().environments().to_vec())
-            .unwrap_or_default();
-        environments.retain(|env| env.name != draft.name);
-        environments.push(draft.clone());
+        let (environments, options) = self.certificate_inspection_context(&draft);
         let workspace = self.workspace_path.clone().unwrap_or_default();
         let store = self.credential_store.clone();
-        let workspace_path = self.workspace_path.clone();
         let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_changed = changed.clone();
         cx.spawn(async move |view, cx| {
             let (result, watcher) = cx
                 .background_spawn(async move {
-                    let options = probe_http::ExecutionOptions {
-                        base_directory: workspace_path
-                            .as_deref()
-                            .and_then(workspace_base_directory),
-                        ..Default::default()
-                    };
                     let provider = crate::credentials::NativeSecretProvider {
                         store: store.as_ref(),
                         workspace: &workspace,
