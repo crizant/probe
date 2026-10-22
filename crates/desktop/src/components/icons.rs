@@ -20,6 +20,7 @@ static DOWNLOAD_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondat
 static CLOSE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuX));
 static CLEAR_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuEraser));
 static TRASH_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuTrash2));
+static COPY_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuCopy));
 static LOCATE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLocateFixed));
 static SIDEBAR_COLLAPSE_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuPanelLeftClose));
@@ -386,7 +387,7 @@ pub(crate) fn assertion_status_icon(
         AssertionOutcome::Error(_) => ("assertion-error", &SEVERITY_TRIANGLE_SVG),
         AssertionOutcome::Disabled => ("assertion-disabled", &SEVERITY_MINUS_SVG),
     };
-    library_icon(name, svg, theme.metrics.icon_small)
+    library_icon(name, svg, theme.metrics.icon_standard)
 }
 
 pub(crate) fn disconnect_severity_mark(
@@ -402,6 +403,11 @@ pub(crate) fn disconnect_severity_mark(
     };
     library_icon(name, svg, theme.metrics.icon_small)
         .text_color(disconnect_severity_color(theme, severity))
+}
+
+pub(crate) fn copy_icon(theme: Theme) -> gpui_kit::Div {
+    library_icon("lucide-copy", &COPY_SVG, theme.metrics.icon_standard)
+        .text_color(theme.colors.text.secondary)
 }
 
 pub(crate) fn locate_icon(theme: Theme) -> gpui_kit::Div {

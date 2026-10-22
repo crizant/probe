@@ -120,6 +120,8 @@ fn unavailable_variable_popup_does_not_focus_a_value_input(cx: &mut TestAppConte
 
 struct PlaceholderHarness {
     input: Entity<InputState>,
+    value: SharedString,
+    disabled: bool,
     placeholder: SharedString,
 }
 
@@ -128,11 +130,11 @@ impl Render for PlaceholderHarness {
         let mut input = super::text_input_base(
             Theme::light(),
             "placeholder-input",
-            "",
+            self.value.clone(),
             self.placeholder.clone(),
         );
         input.shared_input = Some(self.input.clone());
-        div().size_full().child(input)
+        div().size_full().child(input.disabled(self.disabled))
     }
 }
 
@@ -141,6 +143,8 @@ fn input_placeholder_updates_when_label_or_shared_state_changes(cx: &mut TestApp
     cx.update(Theme::init);
     let window = cx.open_window(size(px(320.0), px(180.0)), |window, cx| {
         PlaceholderHarness {
+            value: SharedString::default(),
+            disabled: false,
             input: cx.new(|cx| InputState::new(window, cx).placeholder("Name")),
             placeholder: "Name".into(),
         }
@@ -206,6 +210,8 @@ fn unchanged_placeholder_redraw_does_not_notify_input_state(cx: &mut TestAppCont
 
     let window = cx.open_window(size(px(320.0), px(180.0)), |window, cx| {
         PlaceholderHarness {
+            value: SharedString::default(),
+            disabled: false,
             input: cx.new(|cx| InputState::new(window, cx).placeholder(original)),
             placeholder: label,
         }
@@ -258,6 +264,55 @@ fn unchanged_placeholder_redraw_does_not_notify_input_state(cx: &mut TestAppCont
                 view.input.read(cx).presentation().placeholder().as_ptr(),
                 label_ptr
             );
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn disabled_input_hides_and_restores_controlled_text_while_focused(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(320.0), px(180.0)), |window, cx| {
+        PlaceholderHarness {
+            input: cx.new(|cx| InputState::new(window, cx)),
+            value: "200".into(),
+            placeholder: "Expected Value".into(),
+            disabled: false,
+        }
+    });
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| input.focus(window, cx));
+            view.value = "".into();
+            view.placeholder = "Not used".into();
+            view.disabled = true;
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.simulate_input(window.into(), "must-not-edit");
+    window
+        .update(cx, |view, _, cx| {
+            let input = view.input.read(cx);
+            assert!(input.presentation().is_disabled());
+            assert!(input.value().is_empty());
+            assert_eq!(input.presentation().placeholder().as_ref(), "Not used");
+            view.value = "200".into();
+            view.disabled = false;
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(!view.input.read(cx).presentation().is_disabled());
+            assert_eq!(view.input.read(cx).value().as_ref(), "200");
+        })
+        .unwrap();
+    cx.simulate_input(window.into(), "1");
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.input.read(cx).value().as_ref(), "2001");
         })
         .unwrap();
 }

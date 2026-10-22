@@ -233,15 +233,17 @@ pub(crate) fn icon_button(
 
 pub(crate) fn compact_icon_button(
     theme: Theme,
-    id: &'static str,
+    id: impl Into<ElementId>,
     aria_label: impl Into<SharedString>,
     icon: impl IntoElement,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> gpui_kit::Div {
+    let id = id.into();
+    let debug_id = id.to_string();
     let size = theme.metrics.control_height - 2.0;
     let aria_label = aria_label.into();
     div()
-        .debug_selector(move || id.into())
+        .debug_selector(move || debug_id.clone())
         .size(px(size))
         .flex_none()
         .child(

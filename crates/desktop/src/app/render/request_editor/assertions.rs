@@ -26,19 +26,6 @@ impl ProbeApp {
             let enabled = assertion.disabled != Some(true);
             let description =
                 documentation_text(assertion.description.as_ref()).unwrap_or_default();
-            let show_description =
-                !description.is_empty() || self.request_editor.description_is_open(key, index);
-            let description_view = cx.weak_entity();
-            let latest = match self.execution.response(key) {
-                Some(ResponseState::Complete {
-                    assertions,
-                    assertion_declarations,
-                    ..
-                }) if assertion_declarations.get(index) == Some(assertion) => {
-                    assertions.iter().find(|result| result.index == index)
-                }
-                _ => None,
-            };
             let controls = components::editor_key_value_row(theme)
                 .child(
                     div()
@@ -92,7 +79,7 @@ impl ProbeApp {
                             AssertionField::Value,
                             assertion.value.as_deref().unwrap_or_default(),
                             if matches!(assertion.operator.as_str(), "isNull" | "isNotNull") {
-                                "Not Used"
+                                "Not used"
                             } else {
                                 "Expected Value"
                             },
@@ -101,40 +88,6 @@ impl ProbeApp {
                             cx,
                         )),
                 )
-                .when_some(latest, |row, result| {
-                    let color = match result.outcome {
-                        probe_application::AssertionOutcome::Passed => theme.colors.status.success,
-                        probe_application::AssertionOutcome::Failed => theme.colors.status.error,
-                        probe_application::AssertionOutcome::Error(_) => {
-                            theme.colors.status.warning
-                        }
-                        probe_application::AssertionOutcome::Disabled => theme.colors.text.muted,
-                    };
-                    row.child(
-                        components::assertion_status_icon(theme, &result.outcome)
-                            .id(("assertion-latest", index))
-                            .debug_selector(move || format!("assertion-latest-{index}"))
-                            .text_color(color),
-                    )
-                })
-                .when(!show_description, |row| {
-                    row.child(
-                        components::editor_action_button(
-                            theme,
-                            ("assertion-add-description", index),
-                            "…",
-                            false,
-                            move |_, _, cx| {
-                                let _ = description_view.update(cx, |view, cx| {
-                                    view.request_editor.show_assertion_description(key, index);
-                                    cx.notify();
-                                });
-                            },
-                        )
-                        .accessibility_label("Add Description")
-                        .debug_selector(move || format!("assertion-add-description-{index}")),
-                    )
-                })
                 .child(
                     div()
                         .id(("assertion-enabled-control", index))
@@ -170,40 +123,40 @@ impl ProbeApp {
                                     |request| AssertionEdit::Remove(index).apply(request),
                                     cx,
                                 );
-                                view.request_editor.assertion_removed(key, index);
+                                view.request_editor.assertion_removed();
                                 view.focus_handle.focus(window, cx);
                             });
                         },
                     )
                     .debug_selector(move || format!("assertion-delete-{index}")),
                 );
-            let row =
-                div()
-                    .id(("assertion-row", index))
-                    .debug_selector(move || format!("assertion-row-{index}"))
-                    .flex()
-                    .flex_col()
-                    .gap(px(theme.metrics.spacing_2))
-                    .child(controls)
-                    .when(show_description, |row| {
-                        row.child(
-                            components::editor_key_value_row(theme)
-                                .pl(px(theme.metrics.spacing_2))
-                                .text_color(theme.colors.text.muted)
-                                .child(div().flex_1().min_w(px(0.0)).child(
-                                    self.assertion_text_field(
-                                        key,
-                                        index,
-                                        AssertionField::Description,
-                                        description,
-                                        "Description",
-                                        theme,
-                                        list_scroll,
-                                        cx,
-                                    ),
+            let row = div()
+                .id(("assertion-row", index))
+                .debug_selector(move || format!("assertion-row-{index}"))
+                .flex()
+                .flex_col()
+                .gap(px(theme.metrics.spacing_2))
+                .child(controls)
+                .child(
+                    components::editor_key_value_row(theme)
+                        .pl(px(theme.metrics.spacing_2))
+                        .text_color(theme.colors.text.muted)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .child(self.assertion_text_field(
+                                    key,
+                                    index,
+                                    AssertionField::Description,
+                                    description,
+                                    "Description",
+                                    theme,
+                                    list_scroll,
+                                    cx,
                                 )),
-                        )
-                    });
+                        ),
+                );
             rows = rows.child(row);
         }
         let view = cx.weak_entity();
@@ -250,14 +203,15 @@ impl ProbeApp {
                 components::variable_text_input(
                     theme,
                     (field.id(), index),
-                    value.to_owned(),
+                    if unary {
+                        String::new()
+                    } else {
+                        value.to_owned()
+                    },
                     placeholder,
                     self.variable_context(cx),
                     move |value, _, cx| {
                         let _ = view.update(cx, |view, cx| {
-                            if matches!(field, AssertionField::Description) {
-                                view.request_editor.show_assertion_description(key, index);
-                            }
                             view.edit_request(
                                 key,
                                 |request| {
