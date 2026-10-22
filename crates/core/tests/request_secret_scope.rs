@@ -440,6 +440,72 @@ fn json_secret_strings_redact_decoded_and_escaped_forms() {
 }
 
 #[test]
+fn json_escaped_secret_characters_redact_without_leaving_escape_bytes() {
+    use probe_core::{SecretRedactor, SecretValue};
+    // Isolate each character so another character cannot trigger its escaping.
+    for (secret, escaped) in [
+        ("\"", r#"\""#),
+        ("\\", r"\\"),
+        ("\n", r"\n"),
+        ("\0", r"\u0000"),
+        ("\x1f", r"\u001f"),
+    ] {
+        let values = [SecretValue::new(secret.into())];
+        let output = format!("before:{escaped}:after");
+        let expected = "before:[REDACTED]:after";
+        let raw = SecretRedactor::from_environments([]).with_values(&values);
+        assert_ne!(raw.redact(&output), expected, "{escaped}");
+        assert_eq!(
+            raw.with_json_literals().redact(&output),
+            expected,
+            "{escaped}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_secret_characters_keep_the_raw_form_without_decoding_unicode_escapes() {
+    use probe_core::{SecretRedactor, SecretValue};
+    // Space is the first byte outside JSON's control-character escape range.
+    for (secret, unicode_escape) in [
+        (" ", r"\u0020"),
+        ("plain-token", r"\u0070lain-token"),
+        ("é", r"\u00e9"),
+    ] {
+        let values = [SecretValue::new(secret.into())];
+        let output = format!("before:{secret}:after");
+        let raw = SecretRedactor::from_environments([]).with_values(&values);
+        assert_eq!(raw.redact(&output), "before:[REDACTED]:after");
+        let literals = raw.with_json_literals();
+        assert_eq!(literals.redact(&output), "before:[REDACTED]:after");
+        assert_eq!(literals.redact(unicode_escape), unicode_escape);
+    }
+}
+
+#[test]
+fn json_secret_normalization_redacts_whole_values_only_when_they_match() {
+    use probe_core::{SecretRedactor, SecretValue};
+    let normalized = r#"{"token":"private-token"}"#;
+    for secret in [normalized, r#"{ "token": "private-token" }"#] {
+        let values = [SecretValue::new(secret.into())];
+        let raw = SecretRedactor::from_environments([]).with_values(&values);
+        if secret == normalized {
+            assert_eq!(raw.redact(normalized), "[REDACTED]");
+        } else {
+            assert_eq!(raw.redact(normalized), normalized);
+        }
+        let literals = raw.with_json_literals();
+        assert_eq!(literals.redact(secret), "[REDACTED]");
+        assert_eq!(literals.redact(normalized), "[REDACTED]");
+        // A different object still redacts its secret string, not its public fields.
+        assert_eq!(
+            literals.redact(r#"{"token":"private-token","enabled":false}"#),
+            r#"{"token":"[REDACTED]","enabled":false}"#
+        );
+    }
+}
+
+#[test]
 fn explicit_short_numeric_secrets_still_redact_matching_substrings() {
     use probe_core::{SecretRedactor, SecretValue};
     let values = [SecretValue::new("1".into())];

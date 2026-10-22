@@ -2,6 +2,7 @@ use super::*;
 use crate::app::documentation::documentation_text;
 use crate::request_editor::{AssertionEdit, AssertionField};
 use probe_application::{AssertionError, AssertionOutcome, AssertionResult};
+use probe_core::RequestKey;
 
 fn click(visual: &mut VisualTestContext, selector: &'static str) {
     let bounds = visual
@@ -32,10 +33,9 @@ fn double_click(visual: &mut VisualTestContext, selector: &'static str) {
     visual.run_until_parked();
 }
 
-#[gpui_kit::test]
-fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
+fn setup_assertion_editor(
     cx: &mut TestAppContext,
-) {
+) -> (gpui_kit::WindowHandle<ProbeApp>, RequestKey, RequestKey) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1500.0), px(1000.0)), ProbeApp::new);
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -53,70 +53,48 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
         })
         .unwrap();
     cx.run_until_parked();
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    click(&mut visual, "request-tab-assertions");
-    click(&mut visual, "add-assertion");
-    click(&mut visual, "assertion-expression-0");
-    cx.simulate_keystrokes(
-        window.into(),
-        if cfg!(target_os = "macos") {
-            "cmd-a"
-        } else {
-            "ctrl-a"
-        },
-    );
-    cx.simulate_input(window.into(), "response.body.{{editable}}");
-    visual.run_until_parked();
-    click(&mut visual, "assertion-operator-trigger");
-    cx.simulate_keystrokes(window.into(), "down enter");
-    visual.run_until_parked();
-    click(&mut visual, "assertion-enabled-0");
-    window
-        .update(cx, |view, _, _| {
-            assert_eq!(
-                view.active_request()
-                    .unwrap()
-                    .runtime
-                    .assertions
-                    .as_ref()
-                    .unwrap()[0]
-                    .disabled,
-                Some(true)
-            );
-        })
-        .unwrap();
-    click(&mut visual, "assertion-enabled-0");
-    window
-        .update(cx, |view, _, _| {
-            assert_eq!(
-                view.active_request()
-                    .unwrap()
-                    .runtime
-                    .assertions
-                    .as_ref()
-                    .unwrap()[0]
-                    .disabled,
-                Some(false)
-            );
-        })
-        .unwrap();
-    click(&mut visual, "assertion-enabled-0");
-    click(&mut visual, "add-assertion");
-    window
-        .update(cx, |view, _, _| {
-            let request = view.active_request().unwrap();
-            let rows = request.runtime.assertions.as_ref().unwrap();
-            assert_eq!(rows.len(), 2);
-            assert_eq!(rows[0].expression, "response.body.{{editable}}");
-            assert_eq!(rows[0].disabled, Some(true));
-            assert_eq!(rows[0].operator, "notEquals");
-            assert!(view.persistence.is_dirty(http, request));
-        })
-        .unwrap();
-    click(&mut visual, "assertion-delete-1");
+    (window, http, graphql)
+}
+
+fn command_key(cx: &mut TestAppContext, window: gpui_kit::WindowHandle<ProbeApp>, key: &str) {
+    let modifier = if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    };
+    cx.simulate_keystrokes(window.into(), &format!("{modifier}-{key}"));
+}
+
+fn replace_focused_expression(
+    cx: &mut TestAppContext,
+    window: gpui_kit::WindowHandle<ProbeApp>,
+    text: &str,
+) {
+    command_key(cx, window, "a");
+    cx.simulate_input(window.into(), text);
+}
+
+fn complete_assertion_snapshot(
+    window: gpui_kit::WindowHandle<ProbeApp>,
+    http: RequestKey,
+    cx: &mut TestAppContext,
+) {
     window
         .update(cx, |view, _, cx| {
             let (cancel, _) = oneshot::channel();
+            view.edit_request(
+                http,
+                |request| {
+                    request.runtime.assertions = Some(vec![probe_core::Assertion {
+                        expression: "response.body.{{editable}}".into(),
+                        operator: "notEquals".into(),
+                        value: Some("200".into()),
+                        disabled: Some(true),
+                        description: None,
+                    }]);
+                },
+                cx,
+            );
             for _ in 0..3 {
                 view.edit_request(http, |r| AssertionEdit::Add.apply(r), cx);
             }
@@ -169,7 +147,87 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
             );
         })
         .unwrap();
+}
+
+#[gpui_kit::test]
+fn assertion_controls_edit_http_drafts(cx: &mut TestAppContext) {
+    let (window, http, _) = setup_assertion_editor(cx);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    click(&mut visual, "request-tab-assertions");
+    click(&mut visual, "add-assertion");
+    click(&mut visual, "assertion-expression-0");
+    replace_focused_expression(cx, window, "response.body.{{editable}}");
     visual.run_until_parked();
+    click(&mut visual, "assertion-operator-trigger");
+    cx.simulate_keystrokes(window.into(), "down enter");
+    visual.run_until_parked();
+    click(&mut visual, "assertion-enabled-0");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.active_request()
+                    .unwrap()
+                    .runtime
+                    .assertions
+                    .as_ref()
+                    .unwrap()[0]
+                    .disabled,
+                Some(true)
+            );
+        })
+        .unwrap();
+    click(&mut visual, "assertion-enabled-0");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.active_request()
+                    .unwrap()
+                    .runtime
+                    .assertions
+                    .as_ref()
+                    .unwrap()[0]
+                    .disabled,
+                Some(false)
+            );
+        })
+        .unwrap();
+    click(&mut visual, "assertion-enabled-0");
+    click(&mut visual, "add-assertion");
+    window
+        .update(cx, |view, _, _| {
+            let request = view.active_request().unwrap();
+            let rows = request.runtime.assertions.as_ref().unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0].expression, "response.body.{{editable}}");
+            assert_eq!(rows[0].disabled, Some(true));
+            assert_eq!(rows[0].operator, "notEquals");
+            assert!(view.persistence.is_dirty(http, request));
+        })
+        .unwrap();
+    click(&mut visual, "assertion-delete-1");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.active_request()
+                    .unwrap()
+                    .runtime
+                    .assertions
+                    .as_ref()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn assertion_results_render_outcomes_and_keep_response_tabs_usable(cx: &mut TestAppContext) {
+    let (window, http, _) = setup_assertion_editor(cx);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    complete_assertion_snapshot(window, http, cx);
+    visual.run_until_parked();
+    click(&mut visual, "request-tab-assertions");
     click(&mut visual, "response-tab-assertions");
     for selector in [
         "assertion-summary",
@@ -183,16 +241,35 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
     assert!(visual.debug_bounds("assertion-failure-count-1").is_some());
     assert!(visual.debug_bounds("assertion-actual-1").is_some());
     assert!(visual.debug_bounds("assertion-latest-3").is_some());
+    // Existing response remains usable despite failed/error outcomes and truncation.
+    for theme in [
+        crate::user_config::ThemeMode::Light,
+        crate::user_config::ThemeMode::Dark,
+    ] {
+        window
+            .update(cx, |view, _, cx| {
+                view.user_config.theme = theme;
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("response-assertions").is_some());
+        click(&mut visual, "response-tab-headers");
+        click(&mut visual, "response-tab-assertions");
+    }
+    click(&mut visual, "response-tab-raw");
+    click(&mut visual, "response-tab-headers");
+}
+
+#[gpui_kit::test]
+fn double_clicking_assertion_result_focuses_its_expression(cx: &mut TestAppContext) {
+    let (window, http, _) = setup_assertion_editor(cx);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    complete_assertion_snapshot(window, http, cx);
+    visual.run_until_parked();
+    click(&mut visual, "response-tab-assertions");
     double_click(&mut visual, "assertion-result-3");
-    cx.simulate_keystrokes(
-        window.into(),
-        if cfg!(target_os = "macos") {
-            "cmd-a"
-        } else {
-            "ctrl-a"
-        },
-    );
-    cx.simulate_input(window.into(), "response.body.doubleClicked");
+    replace_focused_expression(cx, window, "response.body.doubleClicked");
     visual.run_until_parked();
     window
         .update(cx, |view, _, _| {
@@ -209,15 +286,17 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
         })
         .unwrap();
     assert!(visual.debug_bounds("assertion-latest-3").is_none());
+}
+
+#[gpui_kit::test]
+fn assertion_result_keyboard_copies_navigates_and_focuses_expression(cx: &mut TestAppContext) {
+    let (window, http, _) = setup_assertion_editor(cx);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    complete_assertion_snapshot(window, http, cx);
+    visual.run_until_parked();
+    click(&mut visual, "response-tab-assertions");
     click(&mut visual, "assertion-result-1");
-    cx.simulate_keystrokes(
-        window.into(),
-        if cfg!(target_os = "macos") {
-            "cmd-c"
-        } else {
-            "ctrl-c"
-        },
-    );
+    command_key(cx, window, "c");
     visual.run_until_parked();
     assert!(
         cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
@@ -232,18 +311,10 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
         .unwrap();
     cx.simulate_keystrokes(window.into(), "up enter");
     visual.run_until_parked();
-    cx.simulate_keystrokes(
-        window.into(),
-        if cfg!(target_os = "macos") {
-            "cmd-a"
-        } else {
-            "ctrl-a"
-        },
-    );
-    cx.simulate_input(window.into(), "response.body.afterJump");
+    replace_focused_expression(cx, window, "response.body.afterJump");
     visual.run_until_parked();
     window
-        .update(cx, |view, _, cx| {
+        .update(cx, |view, _, _| {
             assert_eq!(view.request_editor.section(http), EditorSection::Assertions);
             assert_eq!(
                 view.active_request()
@@ -255,6 +326,16 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
                     .expression,
                 "response.body.afterJump"
             );
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn assertion_execution_keeps_immutable_declaration_snapshot(cx: &mut TestAppContext) {
+    let (window, http, _) = setup_assertion_editor(cx);
+    complete_assertion_snapshot(window, http, cx);
+    window
+        .update(cx, |view, _, cx| {
             view.edit_request(http, |r| AssertionEdit::Remove(0).apply(r), cx);
         })
         .unwrap();
@@ -287,24 +368,12 @@ fn assertion_controls_edit_http_and_graphql_drafts_and_keep_execution_snapshots(
             );
         })
         .unwrap();
-    // Existing response remains usable despite failed/error outcomes and truncation.
-    for theme in [
-        crate::user_config::ThemeMode::Light,
-        crate::user_config::ThemeMode::Dark,
-    ] {
-        window
-            .update(cx, |view, _, cx| {
-                view.user_config.theme = theme;
-                cx.notify();
-            })
-            .unwrap();
-        visual.run_until_parked();
-        assert!(visual.debug_bounds("response-assertions").is_some());
-        click(&mut visual, "response-tab-headers");
-        click(&mut visual, "response-tab-assertions");
-    }
-    click(&mut visual, "response-tab-raw");
-    click(&mut visual, "response-tab-headers");
+}
+
+#[gpui_kit::test]
+fn assertion_controls_edit_graphql_drafts(cx: &mut TestAppContext) {
+    let (window, _, graphql) = setup_assertion_editor(cx);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
     window
         .update(cx, |view, _, cx| {
             view.select_request(graphql, cx);
