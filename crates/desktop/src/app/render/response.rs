@@ -505,7 +505,9 @@ impl ProbeApp {
             .border_l_2()
             .border_color(transparent_black())
             // Match the result row's padding, status icon, and gap before its expression.
-            .pl(px(theme.metrics.spacing_2 * 2.0 + theme.metrics.icon_small))
+            .pl(px(
+                theme.metrics.spacing_2 * 2.0 + theme.metrics.icon_standard
+            ))
             .pr(px(theme.metrics.spacing_2))
             .py(px(theme.metrics.spacing_1))
             .flex()
@@ -672,7 +674,7 @@ impl ProbeApp {
                         div()
                             .flex_none()
                             .flex()
-                            .gap(px(theme.metrics.spacing_2))
+                            .gap(px(theme.metrics.spacing_1))
                             .child(
                                 components::compact_icon_button(
                                     theme,

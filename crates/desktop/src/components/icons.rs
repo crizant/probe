@@ -387,7 +387,7 @@ pub(crate) fn assertion_status_icon(
         AssertionOutcome::Error(_) => ("assertion-error", &SEVERITY_TRIANGLE_SVG),
         AssertionOutcome::Disabled => ("assertion-disabled", &SEVERITY_MINUS_SVG),
     };
-    library_icon(name, svg, theme.metrics.icon_small)
+    library_icon(name, svg, theme.metrics.icon_standard)
 }
 
 pub(crate) fn disconnect_severity_mark(
