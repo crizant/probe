@@ -318,7 +318,7 @@ Failed or errored assertions use `assertion_failed` and exit 9. Success JSON add
 envelope with `error.details.assertions` and no top-level response. `source` is
 `collection` or `cli`; `index` is the zero-based declaration position within that
 source, including disabled collection declarations. Outcomes are `passed`, `failed`,
-`disabled`, or `error`; errors include only a safe `category`. Assertion diagnostics
+`disabled`, or `error`; errors include only a safe `category`. JSON assertion diagnostics
 omit expressions, descriptions, and expected operands. JSON results may include
 redacted, truncated actual observations, never resolved secrets.
 Human output shows counts of passed, failed, errored, and disabled assertions.
@@ -829,7 +829,9 @@ the counts line with each failed or errored assertion, identified by source and
 1-based index. Each shows its original expression, operator, and expected value,
 with secrets redacted (including decoded literal secrets). Unsupported expressions
 and operators, and literals that cannot be checked safely after decoding, use
-`[REDACTED]`.
+`[REDACTED]`. Unary operators omit their ignored expected value. The complete
+check is capped after redaction at 1024 Unicode characters, followed by
+`… [truncated]`, independently of the actual-value limit.
 Failed checks show the already redacted actual display text, including truncation
 markers; errored checks show
 the shared value-free diagnostic. Successful human output separates the response

@@ -934,3 +934,40 @@ fn human_checks_preserve_safe_source_and_redact_literals_using_later_disclosure(
     server.join().unwrap();
     cleanup(path);
 }
+
+#[test]
+fn human_diagnostics_omit_unary_values_and_bound_complete_checks() {
+    let (url, server) = serve_once(b"0".to_vec(), "application/json");
+    let long_value = "é".repeat(2048);
+    let assertions = format!(
+        "runtime:\n  assertions:\n    - expression: response.status\n      operator: isNull\n      value: private-ignored-literal\n    - expression: response.body\n      operator: equals\n      value: {long_value}\n    - expression: response.body.missing\n      operator: equals\n      value: {long_value}\n"
+    );
+    let path = workspace(&url, "http", &assertions, true);
+    let output = run(&path, true, &[]);
+    assert_eq!(output.status.code(), Some(9));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("Assertions: 0 passed, 2 failed, 1 errors, 0 disabled"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("response.status isNull\n    Got: 200"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("private-ignored-literal"), "{stderr}");
+    for expression in ["response.body", "response.body.missing"] {
+        let prefix = format!("{expression} equals ");
+        let expected = format!(
+            "    {prefix}{}… [truncated]\n",
+            "é".repeat(1024 - prefix.chars().count())
+        );
+        assert!(stderr.contains(&expected), "{stderr}");
+    }
+    assert!(
+        stderr.contains("Reason: operator does not support these operand types"),
+        "{stderr}"
+    );
+    server.join().unwrap();
+    cleanup(path);
+}

@@ -17,7 +17,7 @@ pub struct AssertionResult {
     /// Zero-based position in the supplied assertion list.
     pub index: usize,
     pub outcome: AssertionOutcome,
-    /// Redacted original check, present only for failures and evaluation errors.
+    /// Redacted, bounded original check, present only for failures and evaluation errors.
     pub diagnostic: Option<String>,
     /// Safe display text, absent for disabled declarations and evaluation errors.
     pub actual: Option<String>,
@@ -27,6 +27,19 @@ pub struct AssertionResult {
 
 /// Maximum Unicode characters retained before the explicit truncation marker.
 pub const MAX_ASSERTION_ACTUAL_CHARS: usize = 512;
+
+/// Independent limit for the complete redacted check, before the truncation marker.
+const MAX_ASSERTION_DIAGNOSTIC_CHARS: usize = 1024;
+
+fn truncate_display(text: &mut String, limit: usize) -> bool {
+    if let Some((offset, _)) = text.char_indices().nth(limit) {
+        text.truncate(offset);
+        text.push_str("… [truncated]");
+        true
+    } else {
+        false
+    }
+}
 
 // Never Debug/serialize raw observations. They stay inside the execution boundary
 // until every assertion has disclosed its secrets (including later declarations).
@@ -106,14 +119,9 @@ impl PendingAssertionResult {
                 safe_value(&value, redactor)
             }
         });
-        let mut actual_truncated = false;
-        if let Some(text) = &mut actual
-            && let Some((offset, _)) = text.char_indices().nth(MAX_ASSERTION_ACTUAL_CHARS)
-        {
-            text.truncate(offset);
-            text.push_str("… [truncated]");
-            actual_truncated = true;
-        }
+        let actual_truncated = actual
+            .as_mut()
+            .is_some_and(|text| truncate_display(text, MAX_ASSERTION_ACTUAL_CHARS));
         let diagnostic = matches!(
             self.outcome,
             AssertionOutcome::Failed | AssertionOutcome::Error(_)
@@ -132,7 +140,9 @@ impl PendingAssertionResult {
                     redactor.redact(&assertion.operator)
                 },
             );
-            if let Some(value) = &assertion.value {
+            if !matches!(assertion.operator.as_str(), "isNull" | "isNotNull")
+                && let Some(value) = &assertion.value
+            {
                 // Preserve source spelling, but also check decoded literals so
                 // JSON escapes cannot conceal a secret from the matcher.
                 let sensitive_literal = match parse_expected(value) {
@@ -154,6 +164,7 @@ impl PendingAssertionResult {
                     text.push_str(&redactor.redact(value));
                 }
             }
+            truncate_display(&mut text, MAX_ASSERTION_DIAGNOSTIC_CHARS);
             text
         });
         AssertionResult {
