@@ -413,6 +413,8 @@ impl ProbeApp {
         let container = Self::response_tab_content_spacing(theme)
             .id("response-assertions")
             .debug_selector(|| "response-assertions".into())
+            .w_full()
+            .min_w(px(0.0))
             .flex_1()
             .min_h(px(0.0))
             .flex()
@@ -447,12 +449,10 @@ impl ProbeApp {
         }
         let [_, _, _, skipped] = counts(assertions);
         let rows = ordered(assertions);
-        let selected = self
-            .response_viewer
-            .assertion_selection(key)
-            .or_else(|| rows.first().map(|result| result.index));
         let mut content = div()
             .id("assertion-result-list")
+            .w_full()
+            .min_w(px(0.0))
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
@@ -478,21 +478,11 @@ impl ProbeApp {
                 key,
                 result,
                 declarations.get(result.index),
-                selected,
                 theme,
                 cx,
             ));
         }
-        container
-            .track_focus(&self.assertion_results_focus)
-            .tab_stop(true)
-            .child(content)
-            .on_key_down(
-                cx.listener(move |view, event: &gpui_kit::KeyDownEvent, _, cx| {
-                    view.handle_assertion_result_key(key, event, cx);
-                }),
-            )
-            .into_any_element()
+        container.child(content).into_any_element()
     }
 
     fn render_assertion_summary(
@@ -512,7 +502,10 @@ impl ProbeApp {
         let mut summary_line = div()
             .id("assertion-summary")
             .debug_selector(|| "assertion-summary".into())
+            .px(px(theme.metrics.spacing_2))
+            .py(px(theme.metrics.spacing_1))
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(theme.metrics.spacing_1))
             .line_height(relative(1.25));
@@ -539,7 +532,6 @@ impl ProbeApp {
         key: RequestKey,
         result: &probe_application::AssertionResult,
         declaration: Option<&probe_core::Assertion>,
-        selected: Option<usize>,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
@@ -565,70 +557,83 @@ impl ProbeApp {
             div()
                 .font_family(theme.typography.monospace_family)
                 .min_w(px(0.0))
-                .overflow_hidden()
-                .text_ellipsis()
+                .whitespace_normal()
                 .child(text)
         };
-        let mut primary = div()
-            .min_h(px(theme.metrics.tree_row_height))
-            .px(px(theme.metrics.spacing_1))
-            .flex()
-            .items_center()
-            .gap(px(theme.metrics.spacing_2))
-            .line_height(relative(1.25))
-            .child(components::assertion_status_icon(theme, &result.outcome).text_color(color));
+        let expression = declaration
+            .map(|row| row.expression.clone())
+            .unwrap_or_default();
+        let mut comparison = declaration
+            .map(|row| row.operator.clone())
+            .unwrap_or_default();
+        if let Some(value) = declaration
+            .filter(|row| !matches!(row.operator.as_str(), "isNull" | "isNotNull"))
+            .and_then(|row| row.value.as_deref())
+            .filter(|value| !value.is_empty())
+        {
+            comparison.push(' ');
+            comparison.push_str(value);
+        }
+        if failed && let Some(actual) = &result.actual {
+            comparison.push_str(" · got ");
+            comparison.push_str(&crate::response_viewer::assertions::single_line_actual(
+                actual,
+            ));
+        }
+        let mut details = div().flex_1().min_w(px(0.0)).flex().flex_col();
         if let Some(description) = description {
-            primary = primary.child(
-                div()
+            details = details.child(div().whitespace_normal().child(description.to_owned()));
+        }
+        let primary = div()
+            .flex()
+            .items_start()
+            .gap(px(theme.metrics.spacing_2))
+            .child(
+                mono(expression)
                     .flex_1()
-                    .min_w(px(0.0))
-                    .flex()
-                    .flex_col()
-                    .child(components::truncated_label(description.to_owned()))
-                    .child(
-                        mono(
-                            declaration
-                                .map(|row| row.expression.clone())
-                                .unwrap_or_default(),
-                        )
-                        .text_color(theme.colors.text.muted),
-                    ),
-            );
-        } else {
-            primary = primary.child(
-                mono(
-                    declaration
-                        .map(|row| row.expression.clone())
-                        .unwrap_or_default(),
-                )
-                .flex_1(),
+                    .when(description.is_some(), |text| {
+                        text.text_color(theme.colors.text.muted)
+                    }),
+            )
+            .child(
+                mono(comparison)
+                    .id(("assertion-comparison", index))
+                    .flex_1()
+                    .when(failed && result.actual.is_some(), |text| {
+                        text.debug_selector(move || format!("assertion-actual-{index}"))
+                    }),
+            )
+            .when(disabled, |line| {
+                line.child(div().flex_none().child("Skipped"))
+            });
+        details = details.child(primary);
+        if let AssertionOutcome::Error(error) = result.outcome {
+            details = details.child(
+                div()
+                    .id(("assertion-error", index))
+                    .debug_selector(move || format!("assertion-error-{index}"))
+                    .whitespace_normal()
+                    .text_color(theme.colors.text.secondary)
+                    .child(error.to_string()),
             );
         }
-        primary = primary
-            .child(
-                div().text_color(theme.colors.text.muted).child(
-                    declaration
-                        .map(|row| row.operator.clone())
-                        .unwrap_or_default(),
-                ),
-            )
-            .child(
-                mono(
-                    declaration
-                        .filter(|row| !matches!(row.operator.as_str(), "isNull" | "isNotNull"))
-                        .and_then(|row| row.value.clone())
-                        .unwrap_or_default(),
-                )
-                .flex_1(),
-            )
-            .when(disabled, |line| line.child(div().child("Skipped")));
-        let view = cx.weak_entity();
-        let mut row = div()
+        let jump_view = cx.weak_entity();
+        let copy_view = cx.weak_entity();
+        let line_height = theme.typography.body_size * 1.25;
+        div()
             .id(("assertion-result", index))
             .debug_selector(move || format!("assertion-result-{index}"))
+            .w_full()
+            .min_w(px(0.0))
+            .min_h(px(theme.metrics.tree_row_height))
+            .flex_none()
+            .px(px(theme.metrics.spacing_2))
+            .py(px(theme.metrics.spacing_1))
             .flex()
             .flex_col()
-            .line_height(relative(1.25))
+            .justify_center()
+            .text_size(px(theme.typography.body_size))
+            .line_height(px(line_height))
             .text_color(text_color)
             .border_l_2()
             .border_color(if failed {
@@ -636,89 +641,68 @@ impl ProbeApp {
             } else {
                 transparent_black().into()
             })
-            .when(selected == Some(index), |row| {
-                row.bg(theme.colors.selection.inactive_background)
+            .when(failed, |row| {
+                row.bg(theme.colors.status.error.opacity(0.06))
             })
-            .cursor(CursorStyle::PointingHand)
-            .child(primary)
-            .on_click(move |event, window, cx| {
-                let _ = view.update(cx, |view, cx| {
-                    view.response_viewer.select_assertion(key, index);
-                    view.assertion_results_focus.focus(window, cx);
-                    if event.click_count() > 1 {
-                        view.jump_to_assertion(key, index, cx);
-                    }
-                    cx.notify();
-                });
-            });
-        if failed && let Some(actual) = &result.actual {
-            row = row.child(
-                mono(format!(
-                    "got {}",
-                    crate::response_viewer::assertions::single_line_actual(actual)
-                ))
-                .id(("assertion-actual", index))
-                .debug_selector(move || format!("assertion-actual-{index}"))
-                .pl(px(theme.metrics.spacing_3)),
-            );
-        }
-        if let AssertionOutcome::Error(error) = result.outcome {
-            row = row.child(
+            .child(
                 div()
-                    .id(("assertion-error", index))
-                    .debug_selector(move || format!("assertion-error-{index}"))
-                    .pl(px(theme.metrics.spacing_3))
-                    .text_color(theme.colors.text.secondary)
-                    .line_height(relative(1.25))
-                    .child(error.to_string()),
-            );
-        }
-        row
-    }
-
-    fn handle_assertion_result_key(
-        &mut self,
-        key: RequestKey,
-        event: &gpui_kit::KeyDownEvent,
-        cx: &mut Context<Self>,
-    ) {
-        use crate::response_viewer::assertions::ordered;
-        let indices = match self.execution.response(key) {
-            Some(ResponseState::Complete { assertions, .. }) => ordered(assertions)
-                .iter()
-                .map(|r| r.index)
-                .collect::<Vec<_>>(),
-            _ => return,
-        };
-        let selected = self
-            .response_viewer
-            .assertion_selection(key)
-            .or_else(|| indices.first().copied());
-        match event.keystroke.key.as_str() {
-            "up" | "down" => self.response_viewer.move_assertion(
-                key,
-                &indices,
-                if event.keystroke.key == "up" { -1 } else { 1 },
-            ),
-            "enter" => {
-                if let Some(index) = selected {
-                    self.jump_to_assertion(key, index, cx);
-                }
-            }
-            "c" if if cfg!(target_os = "macos") {
-                event.keystroke.modifiers.platform
-            } else {
-                event.keystroke.modifiers.control
-            } =>
-            {
-                if let Some(index) = selected {
-                    self.copy_assertion_result(key, index, cx);
-                }
-            }
-            _ => return,
-        }
-        cx.stop_propagation();
-        cx.notify();
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_start()
+                    .gap(px(theme.metrics.spacing_2))
+                    .child(
+                        div()
+                            .flex_none()
+                            .h(px(line_height))
+                            .flex()
+                            .items_center()
+                            .child(
+                                components::assertion_status_icon(theme, &result.outcome)
+                                    .text_color(color),
+                            ),
+                    )
+                    .child(details)
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .gap(px(theme.metrics.spacing_2))
+                            .child(
+                                components::icon_button(
+                                    theme,
+                                    ("assertion-copy", index),
+                                    "Copy result",
+                                    components::copy_icon(theme)
+                                        .text_color(theme.colors.text.muted),
+                                    move |_, _, cx| {
+                                        let _ = copy_view.update(cx, |view, cx| {
+                                            view.copy_assertion_result(key, index, cx);
+                                        });
+                                    },
+                                )
+                                .debug_selector(move || format!("assertion-copy-{index}"))
+                                .size(px(line_height))
+                                .flex_none(),
+                            )
+                            .child(
+                                components::icon_button(
+                                    theme,
+                                    ("assertion-jump", index),
+                                    "Go to assertion",
+                                    components::locate_icon(theme)
+                                        .text_color(theme.colors.text.muted),
+                                    move |_, _, cx| {
+                                        let _ = jump_view.update(cx, |view, cx| {
+                                            view.jump_to_assertion(key, index, cx);
+                                        });
+                                    },
+                                )
+                                .debug_selector(move || format!("assertion-jump-{index}"))
+                                .size(px(line_height))
+                                .flex_none(),
+                            ),
+                    ),
+            )
     }
 
     pub(super) fn render_raw_response_tabs(

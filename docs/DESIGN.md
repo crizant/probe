@@ -252,20 +252,24 @@ tokens.
 HTTP and GraphQL Request Editors expose a scrollable Assertions list using the
 shared key/value row builders, keyboard-accessible enable switches, variable-aware
 expression/value inputs, and an operator menu. Title Case Add Assertion and Remove
-Assertion controls preserve persisted order. Empty descriptions have a compact
-Add Description affordance; editing preserves structured descriptions and unused
-unary values. Matching results from the latest send appear as row indicators.
+Assertion controls preserve persisted order. Every assertion has a compact, indented
+Description input on its second line, including when empty; editing preserves
+structured descriptions and unused unary values. Assertion outcomes appear only
+in the response viewer.
 
 The response Assertions tab has a failure count in its label and one inline
 summary. Failed comparisons precede evaluation errors, passed checks, and skipped
 (disabled) checks, with stable order within each group. Rows show the original,
 uninterpolated declaration text; a description becomes the primary label when
-present. Failed rows have a semantic error border and a secondary monospace line
-with redacted, truncated actual values. Errors use warning icons and shared,
-value-free reasons. Status icons and written skipped/error information accompany
-semantic colours. Empty/all-disabled states use shared placeholders; request
-failures report that assertions were not evaluated. Up/Down selects results,
-Cmd/Ctrl+C copies a row, and Enter or double-click opens its editor declaration.
+present. Rows share padding and a minimum height. Failed rows have a semantic error
+border and subtle highlighting, with redacted actual values inline after the comparison.
+Descriptions, declarations, values, and error reasons wrap to fit the pane. Errors
+use warning icons and shared, value-free reasons. Status icons and written
+skipped/error information accompany semantic colours. Empty/all-disabled states use shared placeholders; request
+failures report that assertions were not evaluated. Muted icon buttons at the
+right of each row open its editor declaration or copy its result, with tooltips
+and keyboard focus. Rows have no selection state.
+Status icons align with the first text line, including in wrapped rows.
 
 Response access remains available after assertion failures. Both surfaces use
 existing theme tokens and controls; text buttons and tabs retain an explicit

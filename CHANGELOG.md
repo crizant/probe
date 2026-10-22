@@ -30,10 +30,12 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 - Desktop assertion results now group failed checks first and show an inline
   summary, a failure count in the tab, descriptions, safe actual values, and
-  distinct skipped and evaluation-error states. Keyboard selection, copy, and
-  jump-to-editor actions make failures easier to inspect. Empty descriptions use
-  a compact reveal control, unary expected values stay disabled, and editor rows
-  show matching outcomes from the latest send.
+  distinct skipped and evaluation-error states. Keyboard-accessible copy and
+  jump-to-editor buttons on each result replace row selection. Description inputs are
+  always visible, and result rows share compact padding with inline actual values
+  and wrapping for long text. Unary expected values stay disabled. Assertion
+  outcomes appear in the response viewer, keeping the request editor focused on
+  definitions and enable switches.
 - Shared assertion results and CLI JSON now include redacted actual display values
   and truncation metadata as additive JSON fields. Values are redacted before
   truncation; existing CLI JSON fields, quiet diagnostics, flags, and exit codes

@@ -1,6 +1,6 @@
 use std::{
     cell::Cell,
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, HashMap},
 };
 
 use probe_core::{
@@ -305,7 +305,6 @@ const fn hex(byte: u8) -> Option<u8> {
 #[derive(Debug, Default)]
 pub(crate) struct RequestEditorState {
     sections: HashMap<RequestKey, EditorSection>,
-    assertion_descriptions: HashMap<RequestKey, BTreeSet<usize>>,
     assertion_focus: Cell<Option<(RequestKey, usize)>>,
     body_drafts: BTreeMap<(RequestKey, BodyEditorKind), RequestBody>,
 }
@@ -313,22 +312,10 @@ pub(crate) struct RequestEditorState {
 impl RequestEditorState {
     pub(crate) fn clear(&mut self) {
         self.sections.clear();
-        self.assertion_descriptions.clear();
         self.assertion_focus.set(None);
         self.body_drafts.clear();
     }
 
-    pub(crate) fn show_assertion_description(&mut self, key: RequestKey, index: usize) {
-        self.assertion_descriptions
-            .entry(key)
-            .or_default()
-            .insert(index);
-    }
-    pub(crate) fn description_is_open(&self, key: RequestKey, index: usize) -> bool {
-        self.assertion_descriptions
-            .get(&key)
-            .is_some_and(|rows| rows.contains(&index))
-    }
     pub(crate) fn focus_assertion(&mut self, key: RequestKey, index: usize) {
         self.set_section(key, EditorSection::Assertions);
         self.assertion_focus.set(Some((key, index)));
@@ -340,21 +327,7 @@ impl RequestEditorState {
         self.assertion_focus.set(None);
         true
     }
-    pub(crate) fn assertion_removed(&mut self, key: RequestKey, index: usize) {
-        if let Some(rows) = self.assertion_descriptions.get_mut(&key) {
-            *rows = rows
-                .iter()
-                .filter_map(|row| {
-                    if *row < index {
-                        Some(*row)
-                    } else if *row > index {
-                        Some(*row - 1)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-        }
+    pub(crate) fn assertion_removed(&mut self) {
         self.assertion_focus.set(None);
     }
 
@@ -368,7 +341,6 @@ impl RequestEditorState {
 
     pub(crate) fn remove(&mut self, key: RequestKey) {
         self.sections.remove(&key);
-        self.assertion_descriptions.remove(&key);
         if self
             .assertion_focus
             .get()
@@ -397,10 +369,6 @@ impl RequestEditorState {
     }
 
     pub(crate) fn remap_requests(&mut self, keys: &BTreeMap<RequestKey, RequestKey>) {
-        self.assertion_descriptions = std::mem::take(&mut self.assertion_descriptions)
-            .into_iter()
-            .filter_map(|(key, rows)| keys.get(&key).map(|new| (*new, rows)))
-            .collect();
         self.assertion_focus.set(
             self.assertion_focus
                 .get()
@@ -1158,21 +1126,19 @@ mod tests {
     }
 
     #[test]
-    fn assertion_reveal_and_focus_follow_remapping_and_close() {
+    fn assertion_focus_follows_remapping_and_close() {
         let old = request_key();
         let new = replacement_request_key();
         let mut state = RequestEditorState::default();
-        state.show_assertion_description(old, 2);
-        state.assertion_removed(old, 1);
-        assert!(state.description_is_open(old, 1));
+        state.focus_assertion(old, 2);
+        state.assertion_removed();
+        assert!(!state.take_assertion_focus(old, 2));
         state.focus_assertion(old, 1);
         state.remap_requests(&BTreeMap::from([(old, new)]));
         assert_eq!(state.section(new), EditorSection::Assertions);
-        assert!(state.description_is_open(new, 1));
         assert!(state.take_assertion_focus(new, 1));
         assert!(!state.take_assertion_focus(new, 1));
         state.remove(new);
-        assert!(!state.description_is_open(new, 1));
         state.focus_assertion(new, 0);
         state.clear();
         assert!(!state.take_assertion_focus(new, 0));

@@ -262,7 +262,6 @@ impl EnvironmentDialogError {
 pub(crate) struct ProbeApp {
     focus_handle: FocusHandle,
     tree_focus_handle: FocusHandle,
-    assertion_results_focus: FocusHandle,
     structure_dialog_focus: FocusHandle,
     save_folder_dialog_focus: FocusHandle,
     create_environment_dialog_focus: FocusHandle,
@@ -401,7 +400,6 @@ impl ProbeApp {
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
         let tree_focus_handle = cx.focus_handle();
-        let assertion_results_focus = cx.focus_handle();
         let structure_dialog_focus = cx.focus_handle();
         let save_folder_dialog_focus = cx.focus_handle();
         let create_environment_dialog_focus = cx.focus_handle();
@@ -418,7 +416,6 @@ impl ProbeApp {
         Self {
             focus_handle,
             tree_focus_handle,
-            assertion_results_focus,
             structure_dialog_focus,
             save_folder_dialog_focus,
             create_environment_dialog_focus,

@@ -159,7 +159,6 @@ mod tests {
 #[cfg(test)]
 mod interaction_tests {
     use super::*;
-    use crate::response_viewer::ResponseViewerState;
     #[test]
     fn copied_rows_omit_unused_or_absent_expected_values() {
         let mut declaration = Assertion {
@@ -197,33 +196,7 @@ mod interaction_tests {
     }
 
     #[test]
-    fn keyboard_selection_clamps_in_display_order_and_copy_includes_only_failed_actuals() {
-        let workspace = probe_core::Workspace::from_collection(probe_core::Collection {
-            items: vec![probe_core::CollectionItem::Request(
-                probe_core::Request::default(),
-            )],
-            ..Default::default()
-        });
-        let probe_core::WorkspaceItemRef::Request(key) = workspace.root_items()[0] else {
-            panic!("request")
-        };
-        let mut state = ResponseViewerState::default();
-        state.move_assertion(key, &[2, 0, 1], 1);
-        assert_eq!(state.assertion_selection(key), Some(0));
-        state.move_assertion(key, &[2, 0, 1], 1);
-        assert_eq!(state.assertion_selection(key), Some(1));
-        state.move_assertion(key, &[2, 0, 1], 1);
-        assert_eq!(state.assertion_selection(key), Some(1));
-        state.move_assertion(key, &[2, 0, 1], -1);
-        assert_eq!(state.assertion_selection(key), Some(0));
-        state.move_assertion(key, &[2, 0, 1], isize::MAX);
-        assert_eq!(state.assertion_selection(key), Some(1));
-        state.move_assertion(key, &[2, 0, 1], isize::MIN);
-        assert_eq!(state.assertion_selection(key), Some(2));
-        state.move_assertion(key, &[], 1);
-        assert_eq!(state.assertion_selection(key), Some(2));
-        state.remove(key);
-        assert_eq!(state.assertion_selection(key), None);
+    fn copy_includes_only_failed_actuals() {
         let declaration = Assertion {
             expression: "response.status".into(),
             operator: "equals".into(),

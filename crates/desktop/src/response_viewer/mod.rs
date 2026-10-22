@@ -171,7 +171,6 @@ pub(crate) struct ResponseViewerState {
 struct ResponseSelection {
     tab: ResponseViewerTab,
     raw_view: RawBodyView,
-    assertion_index: Option<usize>,
     assertion_scroll: ScrollHandle,
 }
 
@@ -240,7 +239,6 @@ impl ResponseViewerState {
         self.documents.remove(&key);
         self.image_scrolls.remove(&key);
         if let Some(selection) = self.selections.get_mut(&key) {
-            selection.assertion_index = None;
             selection.assertion_scroll = ScrollHandle::new();
         }
     }
@@ -309,38 +307,6 @@ impl ResponseViewerState {
         self.selections
             .get(&key)
             .map(|selection| &selection.assertion_scroll)
-    }
-
-    pub(crate) fn assertion_selection(&self, key: probe_core::RequestKey) -> Option<usize> {
-        self.selections
-            .get(&key)
-            .and_then(|selection| selection.assertion_index)
-    }
-
-    pub(crate) fn select_assertion(&mut self, key: probe_core::RequestKey, index: usize) {
-        self.selections.entry(key).or_default().assertion_index = Some(index);
-    }
-
-    pub(crate) fn move_assertion(
-        &mut self,
-        key: probe_core::RequestKey,
-        rows: &[usize],
-        delta: isize,
-    ) {
-        if rows.is_empty() {
-            return;
-        }
-        let current = self
-            .assertion_selection(key)
-            .and_then(|index| rows.iter().position(|row| *row == index));
-        let position = current
-            .unwrap_or(0)
-            .saturating_add_signed(delta)
-            .min(rows.len() - 1);
-        self.select_assertion(key, rows[position]);
-        if let Some(scroll) = self.assertion_scroll(key) {
-            scroll.scroll_to_item(position + 1);
-        }
     }
 
     pub(crate) fn set_tab(&mut self, key: probe_core::RequestKey, tab: ResponseViewerTab) {

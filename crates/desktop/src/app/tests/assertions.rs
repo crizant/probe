@@ -12,27 +12,6 @@ fn click(visual: &mut VisualTestContext, selector: &'static str) {
     visual.run_until_parked();
 }
 
-fn double_click(visual: &mut VisualTestContext, selector: &'static str) {
-    let position = visual
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("missing {selector}"))
-        .center();
-    visual.simulate_event(gpui_kit::MouseDownEvent {
-        button: MouseButton::Left,
-        position,
-        modifiers: Modifiers::default(),
-        click_count: 2,
-        first_mouse: false,
-    });
-    visual.simulate_event(gpui_kit::MouseUpEvent {
-        button: MouseButton::Left,
-        position,
-        modifiers: Modifiers::default(),
-        click_count: 2,
-    });
-    visual.run_until_parked();
-}
-
 fn setup_assertion_editor(
     cx: &mut TestAppContext,
 ) -> (gpui_kit::WindowHandle<ProbeApp>, RequestKey, RequestKey) {
@@ -155,6 +134,10 @@ fn assertion_controls_edit_http_drafts(cx: &mut TestAppContext) {
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     click(&mut visual, "request-tab-assertions");
     click(&mut visual, "add-assertion");
+    assert!(visual.debug_bounds("assertion-description-0").is_some());
+    click(&mut visual, "assertion-description-0");
+    cx.simulate_input(window.into(), "Checks the response body");
+    visual.run_until_parked();
     click(&mut visual, "assertion-expression-0");
     replace_focused_expression(cx, window, "response.body.{{editable}}");
     visual.run_until_parked();
@@ -199,11 +182,17 @@ fn assertion_controls_edit_http_drafts(cx: &mut TestAppContext) {
             let rows = request.runtime.assertions.as_ref().unwrap();
             assert_eq!(rows.len(), 2);
             assert_eq!(rows[0].expression, "response.body.{{editable}}");
+            assert_eq!(
+                documentation_text(rows[0].description.as_ref()),
+                Some("Checks the response body")
+            );
+            assert_eq!(rows[1].description, None);
             assert_eq!(rows[0].disabled, Some(true));
             assert_eq!(rows[0].operator, "notEquals");
             assert!(view.persistence.is_dirty(http, request));
         })
         .unwrap();
+    assert!(visual.debug_bounds("assertion-description-1").is_some());
     click(&mut visual, "assertion-delete-1");
     window
         .update(cx, |view, _, _| {
@@ -235,12 +224,16 @@ fn assertion_results_render_outcomes_and_keep_response_tabs_usable(cx: &mut Test
         "assertion-result-1",
         "assertion-result-2",
         "assertion-result-3",
+        "assertion-jump-0",
+        "assertion-copy-0",
+        "assertion-jump-2",
+        "assertion-copy-3",
     ] {
         assert!(visual.debug_bounds(selector).is_some());
     }
     assert!(visual.debug_bounds("assertion-failure-count-1").is_some());
     assert!(visual.debug_bounds("assertion-actual-1").is_some());
-    assert!(visual.debug_bounds("assertion-latest-3").is_some());
+    assert!(visual.debug_bounds("assertion-enabled-3").is_some());
     // Existing response remains usable despite failed/error outcomes and truncation.
     for theme in [
         crate::user_config::ThemeMode::Light,
@@ -262,14 +255,14 @@ fn assertion_results_render_outcomes_and_keep_response_tabs_usable(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn double_clicking_assertion_result_focuses_its_expression(cx: &mut TestAppContext) {
+fn assertion_jump_button_focuses_its_expression(cx: &mut TestAppContext) {
     let (window, http, _) = setup_assertion_editor(cx);
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     complete_assertion_snapshot(window, http, cx);
     visual.run_until_parked();
     click(&mut visual, "response-tab-assertions");
-    double_click(&mut visual, "assertion-result-3");
-    replace_focused_expression(cx, window, "response.body.doubleClicked");
+    click(&mut visual, "assertion-jump-3");
+    replace_focused_expression(cx, window, "response.body.buttonJump");
     visual.run_until_parked();
     window
         .update(cx, |view, _, _| {
@@ -281,35 +274,36 @@ fn double_clicking_assertion_result_focuses_its_expression(cx: &mut TestAppConte
                     .as_ref()
                     .unwrap()[3]
                     .expression,
-                "response.body.doubleClicked"
+                "response.body.buttonJump"
             )
         })
         .unwrap();
-    assert!(visual.debug_bounds("assertion-latest-3").is_none());
 }
 
 #[gpui_kit::test]
-fn assertion_result_keyboard_copies_navigates_and_focuses_expression(cx: &mut TestAppContext) {
+fn assertion_result_buttons_copy_and_support_keyboard_jump(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
     let (window, http, _) = setup_assertion_editor(cx);
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     complete_assertion_snapshot(window, http, cx);
     visual.run_until_parked();
     click(&mut visual, "response-tab-assertions");
-    click(&mut visual, "assertion-result-1");
-    command_key(cx, window, "c");
+    click(&mut visual, "assertion-copy-1");
     visual.run_until_parked();
     assert!(
         cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
             .unwrap()
             .contains("got 401")
     );
-    cx.simulate_keystrokes(window.into(), "down");
-    window
-        .update(cx, |view, _, _| {
-            assert_eq!(view.response_viewer.assertion_selection(http), Some(2))
-        })
-        .unwrap();
-    cx.simulate_keystrokes(window.into(), "up enter");
+    cx.simulate_keystrokes(window.into(), "tab");
+    visual.run_until_parked();
+    let keystroke = gpui_kit::Keystroke::parse("enter").unwrap();
+    visual.simulate_event(gpui_kit::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    visual.simulate_event(gpui_kit::KeyUpEvent { keystroke });
     visual.run_until_parked();
     replace_focused_expression(cx, window, "response.body.afterJump");
     visual.run_until_parked();
@@ -580,8 +574,6 @@ fn assertion_empty_skipped_and_failed_request_states_keep_editor_access(cx: &mut
         })
         .unwrap();
     click(&mut visual, "add-assertion");
-    assert!(visual.debug_bounds("assertion-description-0").is_none());
-    click(&mut visual, "assertion-add-description-0");
     assert!(visual.debug_bounds("assertion-description-0").is_some());
     window
         .update(cx, |view, _, cx| {
@@ -699,7 +691,6 @@ fn clearing_an_existing_description_keeps_the_field_and_keyboard_focus(cx: &mut 
                     .unwrap_or_default()
                     .is_empty()
             );
-            assert!(view.request_editor.description_is_open(key, 0));
         })
         .unwrap();
     // No extra click: typing must continue in the same field after it was cleared.
