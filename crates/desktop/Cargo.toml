@@ -56,6 +56,7 @@ sha2 = "0.11.0"
 keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
 
 [dev-dependencies]
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
 # Local in-process test peer only; production streaming uses probe-application.
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 futures-util = "0.3.34"

@@ -5084,3 +5084,79 @@ fn send_request_shortcut_from_body_editor_preserves_multiline_body(cx: &mut Test
         .unwrap();
     cx.run_until_parked();
 }
+
+#[gpui_kit::test]
+fn certificate_overrides_follow_reloaded_tabs_without_persistence_or_dirty_state(
+    cx: &mut TestAppContext,
+) {
+    use probe_application::CertificateOverride;
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = writable_environment_fixture("reload-certificate-override");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let original = fs::read(&fixture).unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            let key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
+            view.select_request(key, cx);
+            view.shell
+                .set_certificate_override(key, CertificateOverride::NoCertificate);
+            assert!(
+                !view.persistence.is_dirty(
+                    key,
+                    view.loaded_workspace
+                        .as_ref()
+                        .unwrap()
+                        .workspace()
+                        .request(key)
+                        .unwrap()
+                )
+            );
+            let old = view.loaded_workspace.as_ref().unwrap();
+            let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+            let selectors = old
+                .requests()
+                .iter()
+                .map(|request| (request.selector().to_owned(), request.selector().to_owned()))
+                .collect();
+            let remaps = request_key_remaps(old, &fresh, &selectors);
+            let new_key = remaps[&key];
+            let baselines = fresh
+                .requests()
+                .iter()
+                .map(|located| {
+                    (
+                        located.key(),
+                        fresh.workspace().request(located.key()).unwrap().clone(),
+                    )
+                })
+                .collect();
+            view.install_reloaded_workspace(fresh, baselines, &remaps, &BTreeMap::new());
+            assert_eq!(
+                view.shell.certificate_override(new_key),
+                &CertificateOverride::NoCertificate
+            );
+            assert_eq!(
+                view.shell.certificate_override(key),
+                &CertificateOverride::Automatic
+            );
+            view.close_tab_now(new_key, cx);
+            view.select_request(new_key, cx);
+            assert_eq!(
+                view.shell.certificate_override(new_key),
+                &CertificateOverride::Automatic
+            );
+            view.shell
+                .set_certificate_override(new_key, CertificateOverride::NoCertificate);
+            view.close_workspace_now(cx);
+            assert_eq!(
+                view.shell.certificate_override(new_key),
+                &CertificateOverride::Automatic
+            );
+        })
+        .unwrap();
+    assert_eq!(fs::read(&fixture).unwrap(), original);
+    fs::remove_file(fixture).unwrap();
+}

@@ -8,8 +8,8 @@
 mod assertions;
 mod client_certificate;
 pub use client_certificate::{
-    CertificatePreview, inspect_certificate, inspect_certificate_observing,
-    preview_client_certificate,
+    CertificateOverride, CertificatePreview, CertificateRef, certificate_candidates,
+    inspect_certificate, inspect_certificate_observing, preview_client_certificate,
 };
 mod execution;
 mod websocket_input;

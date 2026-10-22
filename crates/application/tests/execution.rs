@@ -1498,3 +1498,97 @@ async fn rejecting_secret_output_also_applies_after_plain_http_conversion() {
     );
     assert!(!output.exists());
 }
+
+#[tokio::test]
+async fn manual_certificate_failures_never_fall_back_or_connect_and_keep_diagnostics_safe() {
+    use probe_application::{CertificateOverride, CertificateRef, HttpExecutionError};
+    use probe_core::ClientCertificate;
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/mtls");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let pem = |cert: &str, key: &str, password: Option<&str>| ClientCertificate::Pem {
+        domain: "127.0.0.1".into(),
+        disabled: false,
+        certificate_file_path: cert.into(),
+        private_key_file_path: key.into(),
+        passphrase: password.map(str::to_owned),
+    };
+    let valid = pem("client.pem", "client-key.pem", None);
+    let cases = [
+        pem("private-path-marker.pem", "client-key.pem", None),
+        pem(
+            "client.pem",
+            "client-encrypted-key.pem",
+            Some("wrong-password-marker"),
+        ),
+        ClientCertificate::Pkcs12 {
+            domain: "127.0.0.1".into(),
+            disabled: false,
+            pkcs12_file_path: "client-protected.p12".into(),
+            passphrase: Some("wrong-password-marker".into()),
+        },
+        ClientCertificate::Pkcs12 {
+            domain: "127.0.0.1".into(),
+            disabled: false,
+            pkcs12_file_path: "private-path-marker.p12".into(),
+            passphrase: None,
+        },
+    ];
+    for selected in cases {
+        for present in [true, false] {
+            let mut certificates = vec![valid.clone()];
+            if present {
+                certificates.push(selected.clone());
+            }
+            let selection = CertificateOverride::Selected(CertificateRef {
+                certificate: selected.clone(),
+                environment: None,
+            });
+            let request = Request {
+                method: Some("GET".into()),
+                url: Some(format!("https://127.0.0.1:{port}")),
+                settings: probe_core::RequestSettings {
+                    timeout: Some(Duration::from_millis(100)),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let prepared = prepare_request(
+                &request,
+                &RequestResolution {
+                    client_certificates: &certificates,
+                    certificate_override: Some(&selection),
+                    ..Default::default()
+                },
+                &NoSecrets,
+            )
+            .unwrap();
+            let error = prepared
+                .execute_with_assertions(
+                    &HttpEngine::new().unwrap(),
+                    ExecutionOptions {
+                        base_directory: Some(fixture.clone()),
+                        ..Default::default()
+                    },
+                    None,
+                    std::future::pending::<()>(),
+                    |_| {},
+                    &[],
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                HttpExecutionError::Http(HttpError::ClientConfiguration(_) | HttpError::Pkcs12(_))
+            ));
+            let text = format!("{error:?}");
+            assert!(!text.contains("private-path-marker"));
+            assert!(!text.contains("wrong-password-marker"));
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+    }
+}

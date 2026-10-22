@@ -1381,6 +1381,7 @@ fn active_certificate_popover_opens_environment_management_without_secret_reads(
     }
     let mut visual = workspace.visual(cx);
     let popup = visual.debug_bounds("active-certificate-details").unwrap();
+
     for selector in [
         "active-certificate-value-File",
         "active-certificate-value-Source",
@@ -1393,6 +1394,77 @@ fn active_certificate_popover_opens_environment_management_without_secret_reads(
         );
     }
 
+    click(&workspace, cx, "active-certificate-selector-trigger");
+    assert_eq!(
+        workspace.store.get_calls(),
+        0,
+        "opening choices must not unlock secrets"
+    );
+    click(&workspace, cx, "active-certificate-selector-item-2");
+    workspace.update(cx, |view, _, _| {
+        let key = view.shell.active_tab().unwrap();
+        assert!(matches!(view.shell.certificate_override(key), probe_application::CertificateOverride::Selected(reference) if reference.environment.as_deref() == Some(environment.as_str())));
+    });
+    let original_url = workspace.update(cx, |view, _, cx| {
+        let key = view.shell.active_tab().unwrap();
+        let url = view.active_request().unwrap().url.clone();
+        view.edit_request(
+            key,
+            |request| request.url = Some("https://{{certPassword}}/".into()),
+            cx,
+        );
+        url
+    });
+    click(&workspace, cx, "active-certificate-indicator");
+    secret_execution::park_until(
+        cx,
+        |cx| {
+            workspace
+                .visual(cx)
+                .debug_bounds("active-certificate-selection-unknown")
+                .is_some()
+        },
+        "unknown certificate selection without unlocking host secrets",
+    );
+    assert_visible(&workspace, cx, "active-certificate-manage", false);
+    assert_eq!(workspace.store.get_calls(), 0);
+    workspace.update(cx, |view, _, cx| {
+        let key = view.shell.active_tab().unwrap();
+        view.edit_request(key, |request| request.url = original_url, cx);
+    });
+    click(&workspace, cx, "active-certificate-indicator");
+    click(&workspace, cx, "reset-active-certificate");
+    secret_execution::park_until(
+        cx,
+        |cx| {
+            workspace
+                .visual(cx)
+                .debug_bounds("active-certificate-manage")
+                .is_some()
+        },
+        "automatic details after manual selection",
+    );
+    click(&workspace, cx, "active-certificate-selector-trigger");
+    click(&workspace, cx, "active-certificate-selector-item-1");
+    workspace.update(cx, |view, _, _| {
+        let key = view.shell.active_tab().unwrap();
+        assert_eq!(
+            view.shell.certificate_override(key),
+            &probe_application::CertificateOverride::NoCertificate
+        );
+    });
+    assert_visible(&workspace, cx, "active-certificate-indicator", true);
+    click(&workspace, cx, "reset-active-certificate");
+    secret_execution::park_until(
+        cx,
+        |cx| {
+            workspace
+                .visual(cx)
+                .debug_bounds("active-certificate-manage")
+                .is_some()
+        },
+        "automatic certificate details after reset",
+    );
     click(&workspace, cx, "active-certificate-manage");
     workspace.update(cx, |view, _, _| {
         let dialog = view.environment_manager_dialog.as_ref().unwrap();

@@ -520,6 +520,7 @@ impl ExecutionService {
             let resolution = RequestResolution {
                 environments: &input.environments,
                 client_certificates: &input.client_certificates,
+                certificate_override: Some(&input.certificate_override),
                 environment: input.environment.as_deref(),
                 ..RequestResolution::default()
             };
@@ -568,6 +569,7 @@ impl ExecutionService {
 
 /// Request and environment inputs owned by one desktop execution.
 pub(crate) struct ExecutionInput {
+    pub(crate) certificate_override: probe_application::CertificateOverride,
     pub(crate) request: Request,
     pub(crate) environments: Vec<Environment>,
     pub(crate) client_certificates: Vec<probe_core::ClientCertificate>,
@@ -1260,6 +1262,7 @@ mod tests {
             .expect("execution service should start");
         let (result, _, _) = service.execute(
             ExecutionInput {
+                certificate_override: probe_application::CertificateOverride::Automatic,
                 request: Request {
                     method: Some("GET".to_owned()),
                     url: Some("http://127.0.0.1:1/phase-12".to_owned()),
@@ -1362,6 +1365,7 @@ mod tests {
 
     fn native_input(request: Request, workspace: PathBuf) -> ExecutionInput {
         ExecutionInput {
+            certificate_override: probe_application::CertificateOverride::Automatic,
             request,
             environments: native_test_environment(),
             client_certificates: Vec::new(),
@@ -1562,6 +1566,7 @@ mod tests {
             let (_cancel, cancellation) = oneshot::channel();
             let (receiver, mut progress, _) = service.execute(
                 ExecutionInput {
+                    certificate_override: probe_application::CertificateOverride::Automatic,
                     request: Request {
                         url: Some(format!("http://{address}/")),
                         method: Some("GET".into()),
@@ -1648,6 +1653,7 @@ mod tests {
             let (_cancel, cancellation) = oneshot::channel();
             let (receiver, _, _) = service.execute(
                 ExecutionInput {
+                    certificate_override: probe_application::CertificateOverride::Automatic,
                     request: Request {
                         url: Some("https://127.0.0.1:1/".into()),
                         method: Some("GET".into()),
@@ -1742,6 +1748,14 @@ mod tests {
                         private_key_file_path: "unused-key.pem".into(),
                         passphrase: Some("{{token}}".into()),
                     }];
+                }
+                if source == "certificate" {
+                    input.certificate_override = probe_application::CertificateOverride::Selected(
+                        probe_application::CertificateRef {
+                            certificate: input.client_certificates[0].clone(),
+                            environment: None,
+                        },
+                    );
                 }
                 let output = directory.path().join("response.bin");
                 let (_cancel, cancellation) = oneshot::channel();
@@ -2045,7 +2059,8 @@ mod tests {
         service.runtime.as_ref().unwrap().block_on(async {
             tokio::time::timeout(Duration::from_secs(5), async {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let input = || ExecutionInput { request: Request { url: Some(format!("ws://{}", listener.local_addr().unwrap())), kind: probe_core::RequestKind::WebSocket { message: None }, ..Request::default() }, environments: vec![], client_certificates: vec![], environment: None, credential_workspace: None };
+                let input = || ExecutionInput {
+ certificate_override: probe_application::CertificateOverride::Automatic, request: Request { url: Some(format!("ws://{}", listener.local_addr().unwrap())), kind: probe_core::RequestKind::WebSocket { message: None }, ..Request::default() }, environments: vec![], client_certificates: vec![], environment: None, credential_workspace: None };
                 let (cancel, cancellation) = oneshot::channel();
                 let (mut events, _) = service.connect_websocket(input(), cancellation);
                 let (_stream, _) = listener.accept().await.unwrap();
@@ -2105,5 +2120,141 @@ mod tests {
             body_file_path_for_storage(std::path::Path::new("/etc/hosts"), Some(workspace),),
             "/etc/hosts"
         );
+    }
+}
+
+#[cfg(test)]
+mod certificate_override_mtls_tests {
+    use super::*;
+    use probe_application::{CertificateOverride, CertificateRef};
+    mod peer {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/mtls.rs"
+        ));
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        ignore = "test CA injection requires Linux SSL_CERT_FILE"
+    )]
+    fn worker_uses_certificate_override_for_http_graphql_and_direct_save() {
+        // A subprocess supplies test CA trust without mutating process-global
+        // environment variables or the operating system trust store.
+        const CHILD: &str = "PROBE_CERT_OVERRIDE_MTLS_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let directory = tempfile::TempDir::new().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "execution::certificate_override_mtls_tests::worker_uses_certificate_override_for_http_graphql_and_direct_save", "--nocapture"])
+                .env(CHILD, "1").env("SSL_CERT_FILE", peer::tls_fixture("ca.pem"))
+                .env("SSL_CERT_DIR", directory.path()).output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success()
+                    && stdout.lines().any(|line| {
+                        line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;")
+                    }),
+                "mTLS subprocess must pass exactly one test (status: {}):\nstdout:\n{stdout}\nstderr:\n{stderr}",
+                output.status,
+            );
+            return;
+        }
+        for graphql in [false, true] {
+            for save in [false, true] {
+                for mode in ["pem", "pkcs12", "none"] {
+                    let directory = tempfile::TempDir::new().unwrap();
+                    let (port, server) = peer::mtls_server(r#"{"ok":true}"#, true);
+                    let selected = if mode == "pkcs12" {
+                        probe_core::ClientCertificate::Pkcs12 {
+                            domain: "localhost".into(),
+                            disabled: false,
+                            pkcs12_file_path: peer::tls_fixture("client-protected.p12")
+                                .display()
+                                .to_string(),
+                            passphrase: Some("probe-test-only-password".into()),
+                        }
+                    } else {
+                        probe_core::ClientCertificate::Pem {
+                            domain: "localhost".into(),
+                            disabled: false,
+                            certificate_file_path: peer::tls_fixture("client.pem")
+                                .display()
+                                .to_string(),
+                            private_key_file_path: peer::tls_fixture("client-key.pem")
+                                .display()
+                                .to_string(),
+                            passphrase: None,
+                        }
+                    };
+                    // Automatic would fail loading this declaration. A manual
+                    // choice must bypass both its files and unreachable secrets.
+                    let broken = probe_core::ClientCertificate::Pem {
+                        domain: "localhost".into(),
+                        disabled: false,
+                        certificate_file_path: "missing.pem".into(),
+                        private_key_file_path: "{{unreachable}}".into(),
+                        passphrase: None,
+                    };
+                    let selection = if mode == "none" {
+                        CertificateOverride::NoCertificate
+                    } else {
+                        CertificateOverride::Selected(CertificateRef {
+                            certificate: selected.clone(),
+                            environment: None,
+                        })
+                    };
+                    let request = Request {
+                        method: Some("POST".into()),
+                        url: Some(format!("https://localhost:{port}")),
+                        kind: if graphql {
+                            probe_core::RequestKind::Graphql {
+                                body: Some(probe_core::GraphqlBody::Single(
+                                    probe_core::GraphqlOperation {
+                                        query: Some("query { ok }".into()),
+                                        ..Default::default()
+                                    },
+                                )),
+                            }
+                        } else {
+                            Default::default()
+                        },
+                        ..Default::default()
+                    };
+                    let service = ExecutionService::with_credentials(Arc::new(
+                        crate::credentials::NativeCredentialStore,
+                    ))
+                    .unwrap();
+                    let (_cancel, cancellation) = oneshot::channel();
+                    let output = save.then(|| directory.path().join("body.json"));
+                    let (receiver, _, _) = service.execute(
+                        ExecutionInput {
+                            certificate_override: selection,
+                            request,
+                            client_certificates: vec![broken, selected],
+                            environments: vec![],
+                            environment: None,
+                            credential_workspace: None,
+                        },
+                        ExecutionOptions::default(),
+                        output.clone(),
+                        cancellation,
+                    );
+                    let (response, _, _) = service
+                        .runtime
+                        .as_ref()
+                        .unwrap()
+                        .block_on(receiver)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(response.status, 200);
+                    assert_eq!(server.join().unwrap(), mode != "none");
+                    if let Some(path) = output {
+                        assert_eq!(std::fs::read(path).unwrap(), br#"{"ok":true}"#);
+                    }
+                }
+            }
+        }
     }
 }

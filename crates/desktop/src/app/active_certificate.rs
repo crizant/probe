@@ -1,7 +1,7 @@
-//! Read-only next-request certificate preview. Never uses the native secret provider.
+//! Transient next-request certificate selection and preview. Never uses the native secret provider.
 use super::*;
 use crate::components::IconButtonHint;
-use probe_application::CertificatePreview;
+use probe_application::{CertificateOverride, CertificatePreview, CertificateRef};
 
 #[derive(Clone, PartialEq)]
 struct Inputs {
@@ -11,6 +11,7 @@ struct Inputs {
     environments: Vec<probe_core::Environment>,
     certificates: Vec<probe_core::ClientCertificate>,
     selected: Option<String>,
+    selection: CertificateOverride,
 }
 
 impl Inputs {
@@ -35,12 +36,140 @@ impl Inputs {
     }
 }
 
+#[derive(Clone)]
+struct Candidate {
+    reference: CertificateRef,
+    inspection: probe_http::CertificateInspection,
+    source: Option<PublicFileRevision>,
+}
+
+/// Public files only. Stat on the worker instead of reopening/parsing unchanged
+/// certificates. Unix change time/inode also detect replacement or restored mtime.
+#[derive(Clone, PartialEq)]
+struct PublicFileRevision {
+    path: PathBuf,
+    modified: std::time::SystemTime,
+    created: Option<std::time::SystemTime>,
+    length: u64,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+impl PublicFileRevision {
+    fn read(path: PathBuf) -> Option<Self> {
+        let metadata = std::fs::metadata(&path).ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        Some(Self {
+            path,
+            modified: metadata.modified().ok()?,
+            created: metadata.created().ok(),
+            length: metadata.len(),
+            #[cfg(unix)]
+            identity: {
+                use std::os::unix::fs::MetadataExt;
+                (
+                    metadata.dev(),
+                    metadata.ino(),
+                    metadata.ctime(),
+                    metadata.ctime_nsec(),
+                )
+            },
+        })
+    }
+}
+
+fn certificate_file(certificate: &probe_core::ClientCertificate) -> (&str, &'static str) {
+    match certificate {
+        probe_core::ClientCertificate::Pem {
+            certificate_file_path,
+            ..
+        } => (certificate_file_path, "PEM"),
+        probe_core::ClientCertificate::Pkcs12 {
+            pkcs12_file_path, ..
+        } => (pkcs12_file_path, "PKCS#12"),
+    }
+}
+
+fn public_source_revision(
+    inputs: &Inputs,
+    certificate: &probe_core::ClientCertificate,
+) -> Option<PublicFileRevision> {
+    let (path, _) = certificate_file(certificate);
+    let environment = probe_core::resolve_environment_for_templates_with_provider(
+        [path],
+        &inputs.environments,
+        inputs.selected.as_deref(),
+        &[],
+        &probe_application::NoSecrets,
+        None,
+    )
+    .ok()?;
+    let path = PathBuf::from(environment.interpolate_strict(path).ok()?);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        inputs
+            .workspace
+            .as_deref()
+            .and_then(workspace_base_directory)?
+            .join(path)
+    };
+    PublicFileRevision::read(path)
+}
+
+fn inspect_candidates(
+    inputs: &Inputs,
+    references: Vec<CertificateRef>,
+    previous: &[Candidate],
+    mut inspect: impl FnMut(&probe_core::ClientCertificate) -> probe_http::CertificateInspection,
+) -> Vec<Candidate> {
+    references
+        .into_iter()
+        .enumerate()
+        .map(|(index, reference)| {
+            let source = public_source_revision(inputs, &reference.certificate);
+            if let Some(cached) = previous.get(index)
+                && cached.reference == reference
+                && source.is_some()
+                && cached.source == source
+            {
+                return cached.clone();
+            }
+            let mut inspection = inspect(&reference.certificate);
+            // A concurrent write must not label partially read/old bytes as current.
+            // Unstatable sources stay uncached and are retried on the next refresh.
+            let stable = source
+                .as_ref()
+                .filter(|before| {
+                    PublicFileRevision::read(before.path.clone()).as_ref() == Some(before)
+                })
+                .cloned();
+            if source.is_some() && stable.is_none() {
+                inspection = probe_http::CertificateInspection {
+                    metadata: None,
+                    validation: Err(probe_http::HttpError::ClientConfiguration(
+                        "Certificate changed during inspection; metadata will be refreshed.".into(),
+                    )),
+                };
+            }
+            Candidate {
+                reference,
+                inspection,
+                source: stable,
+            }
+        })
+        .collect()
+}
+
 #[derive(Default)]
 pub(super) struct ActiveCertificate {
     inputs: Option<Arc<Inputs>>,
     generation: Rc<()>,
     result: Option<CertificatePreview>,
     inspection: Option<probe_http::CertificateInspection>,
+    candidates: Vec<Candidate>,
     pending: bool,
     visible_while_refreshing: bool,
     open: bool,
@@ -64,7 +193,10 @@ impl ActiveCertificate {
                         && before.selected == after.selected
                 });
         let visible = same_target
-            && (self.visible_while_refreshing
+            && (inputs
+                .as_ref()
+                .is_some_and(|inputs| inputs.selection != CertificateOverride::Automatic)
+                || self.visible_while_refreshing
                 || self
                     .result
                     .as_ref()
@@ -92,6 +224,97 @@ impl ActiveCertificate {
         self.inspection = inspection;
         true
     }
+}
+
+fn candidate_filename(candidate: &Candidate) -> &str {
+    let (path, _) = certificate_file(&candidate.reference.certificate);
+    candidate
+        .source
+        .as_ref()
+        .and_then(|source| source.path.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or_else(|| path.rsplit(['/', '\\']).next().unwrap_or(path))
+}
+
+fn certificate_options(
+    candidates: &[Candidate],
+    now: std::time::SystemTime,
+) -> Vec<(CertificateOverride, String)> {
+    let labels: Vec<_> = candidates
+        .iter()
+        .map(|candidate| {
+            let (_, kind) = certificate_file(&candidate.reference.certificate);
+            let filename = candidate_filename(candidate);
+            let subject = candidate.inspection.metadata.as_ref().map(|metadata| {
+                let mut text: String = metadata.subject.chars().take(24).collect();
+                if metadata.subject.chars().count() > 24 {
+                    text.push('…');
+                }
+                text
+            });
+            let name = subject.filter(|subject| subject != filename).map_or_else(
+                || filename.to_owned(),
+                |subject| format!("{filename} · {subject}"),
+            );
+            let source = candidate
+                .reference
+                .environment
+                .as_deref()
+                .unwrap_or("Collection");
+            format!("{name} · {kind} · {source}")
+        })
+        .collect();
+    let mut counts = std::collections::HashMap::new();
+    for label in &labels {
+        *counts.entry(label.as_str()).or_insert(0) += 1;
+    }
+    let mut seen = std::collections::HashSet::new();
+    candidates
+        .iter()
+        .zip(&labels)
+        .enumerate()
+        .map(|(index, (candidate, label))| {
+            let mut label = label.clone();
+            let filename = candidate_filename(candidate);
+            if counts[label.as_str()] > 1 {
+                let suffix = candidate
+                    .inspection
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| {
+                        let hex: String = metadata
+                            .fingerprint
+                            .chars()
+                            .filter(|ch| ch.is_ascii_hexdigit())
+                            .collect();
+                        hex[hex.len().saturating_sub(8)..].to_owned()
+                    })
+                    .unwrap_or_else(|| {
+                        certificate_file(&candidate.reference.certificate)
+                            .0
+                            .to_owned()
+                    });
+                label.insert_str(filename.len(), &format!(" [{suffix}]"));
+            }
+            if !seen.insert(label.clone()) {
+                // Presentation-only ordinal for identical public identities. Selection
+                // still retains the complete declaration and scope, never this index.
+                label.insert_str(filename.len(), &format!(" #{}", index + 1));
+            }
+            if let Some(warning) = candidate
+                .inspection
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.validity_warning(now))
+            {
+                label.push_str(&format!(" · {warning}"));
+            }
+            (
+                CertificateOverride::Selected(candidate.reference.clone()),
+                label,
+            )
+        })
+        .collect()
 }
 
 fn certificate_detail(
@@ -150,7 +373,9 @@ impl ProbeApp {
         }
         let workspace = loaded.workspace();
         let selected = self.shell.selected_environment();
-        if workspace.client_certificates().is_empty()
+        if self.shell.certificate_override(self.shell.active_tab()?)
+            == &CertificateOverride::Automatic
+            && workspace.client_certificates().is_empty()
             && selected
                 .and_then(|name| {
                     workspace
@@ -174,6 +399,10 @@ impl ProbeApp {
             environments: loaded.workspace().environments().to_vec(),
             certificates: loaded.workspace().client_certificates().to_vec(),
             selected: self.shell.selected_environment().map(str::to_owned),
+            selection: self
+                .shell
+                .certificate_override(self.shell.active_tab()?)
+                .clone(),
         })
     }
 
@@ -185,14 +414,15 @@ impl ProbeApp {
         ) else {
             return false;
         };
-        inputs.matches(
-            self.workspace_path.as_deref(),
-            key,
-            request,
-            loaded.workspace().environments(),
-            loaded.workspace().client_certificates(),
-            self.shell.selected_environment(),
-        )
+        inputs.selection == *self.shell.certificate_override(key)
+            && inputs.matches(
+                self.workspace_path.as_deref(),
+                key,
+                request,
+                loaded.workspace().environments(),
+                loaded.workspace().client_certificates(),
+                self.shell.selected_environment(),
+            )
     }
 
     pub(super) fn refresh_active_certificate(&mut self, cx: &mut Context<Self>) {
@@ -213,43 +443,63 @@ impl ProbeApp {
         };
         self.active_certificate.pending = true;
         let generation = self.active_certificate.generation.clone();
+        let previous = self.active_certificate.candidates.clone();
         cx.spawn(async move |view, cx| {
             let worker_inputs = inputs.clone();
-            let (result, inspection) = cx
+            let (result, inspection, candidates) = cx
                 .background_spawn(async move {
                     let inputs = worker_inputs;
-                    let result = probe_application::preview_client_certificate(
-                        &inputs.request,
-                        &probe_application::RequestResolution {
-                            environments: &inputs.environments,
-                            environment: inputs.selected.as_deref(),
-                            client_certificates: &inputs.certificates,
-                            ..Default::default()
-                        },
+                    let resolution = probe_application::RequestResolution {
+                        environments: &inputs.environments,
+                        environment: inputs.selected.as_deref(),
+                        client_certificates: &inputs.certificates,
+                        certificate_override: Some(&inputs.selection),
+                        ..Default::default()
+                    };
+                    let result =
+                        probe_application::preview_client_certificate(&inputs.request, &resolution);
+                    let inspect = |certificate: &probe_core::ClientCertificate| {
+                        probe_application::inspect_certificate(
+                            certificate,
+                            &inputs.environments,
+                            inputs.selected.as_deref(),
+                            &probe_application::NoSecrets,
+                            &probe_http::ExecutionOptions {
+                                base_directory: inputs
+                                    .workspace
+                                    .as_deref()
+                                    .and_then(workspace_base_directory),
+                                ..Default::default()
+                            },
+                            true,
+                        )
+                    };
+                    let candidates = inspect_candidates(
+                        &inputs,
+                        probe_application::certificate_candidates(&inputs.request, &resolution),
+                        &previous,
+                        inspect,
                     );
-                    let inspection =
-                        if let CertificatePreview::Selected { certificate, .. } = &result {
-                            Some(probe_application::inspect_certificate(
-                                certificate,
-                                &inputs.environments,
-                                inputs.selected.as_deref(),
-                                &probe_application::NoSecrets,
-                                &probe_http::ExecutionOptions {
-                                    base_directory: inputs
-                                        .workspace
-                                        .as_deref()
-                                        .and_then(workspace_base_directory),
-                                    ..Default::default()
-                                },
-                                true,
-                            ))
-                        } else {
-                            None
-                        };
-                    (result, inspection)
+                    let inspection = if let CertificatePreview::Selected {
+                        certificate,
+                        environment,
+                        ..
+                    } = &result
+                    {
+                        candidates
+                            .iter()
+                            .find(|candidate| {
+                                &candidate.reference.certificate == certificate
+                                    && &candidate.reference.environment == environment
+                            })
+                            .map(|candidate| candidate.inspection.clone())
+                    } else {
+                        None
+                    };
+                    (result, inspection, candidates)
                 })
                 .await;
-            let refresh = matches!(result, CertificatePreview::Selected { .. });
+            let refresh = !matches!(result, CertificatePreview::Hidden);
             let accepted = view
                 .update(cx, |view, cx| {
                     let current_matches = view.certificate_preview_matches(&inputs);
@@ -261,6 +511,7 @@ impl ProbeApp {
                     ) {
                         return false;
                     }
+                    view.active_certificate.candidates = candidates;
                     cx.notify();
                     true
                 })
@@ -286,15 +537,24 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let state = &self.active_certificate;
+        let selection = self
+            .shell
+            .active_tab()
+            .map(|key| self.shell.certificate_override(key))
+            .unwrap_or(&CertificateOverride::Automatic);
+        let overridden = selection != &CertificateOverride::Automatic;
         let loading = state.result.is_none();
-        if loading && !state.visible_while_refreshing {
+        if loading && !state.visible_while_refreshing && !overridden {
             return div().into_any_element();
         }
-        let result = state
-            .result
-            .as_ref()
-            .unwrap_or(&CertificatePreview::Unknown);
-        if matches!(result, CertificatePreview::Hidden) {
+        let result = state.result.as_ref().unwrap_or(
+            if matches!(selection, CertificateOverride::NoCertificate) {
+                &CertificatePreview::NoCertificate
+            } else {
+                &CertificatePreview::Unknown
+            },
+        );
+        if matches!(result, CertificatePreview::Hidden) && !overridden {
             return div().into_any_element();
         }
         let metadata = state
@@ -327,10 +587,91 @@ impl ProbeApp {
                         div()
                             .flex_none()
                             .text_color(theme.colors.text.secondary)
-                            .child("Automatic"),
+                            .child(match selection {
+                                CertificateOverride::Automatic => "Automatic",
+                                CertificateOverride::NoCertificate => "No Certificate",
+                                CertificateOverride::Selected(_) => "Manual",
+                            }),
                     ),
             );
+        let mut options = vec![
+            (
+                CertificateOverride::Automatic,
+                "Automatic (default)".to_owned(),
+            ),
+            (
+                CertificateOverride::NoCertificate,
+                "No Certificate".to_owned(),
+            ),
+        ];
+        options.extend(certificate_options(
+            &state.candidates,
+            std::time::SystemTime::now(),
+        ));
+        // Keep an invalid choice visible without making it another selectable identity.
+        let value = options
+            .iter()
+            .any(|(value, _)| value == selection)
+            .then(|| selection.clone());
+        if let Some(key) = self.shell.active_tab() {
+            let change = cx.weak_entity();
+            popup = popup
+                .child(
+                    div()
+                        .text_color(theme.colors.text.secondary)
+                        .child("Select Certificate"),
+                )
+                .child(
+                    components::dropdown(
+                        theme,
+                        "active-certificate-selector",
+                        "Select Certificate",
+                        value,
+                        options,
+                        314.0,
+                        move |selection, _, cx| {
+                            let Some(selection) = selection.cloned() else {
+                                return;
+                            };
+                            let _ = change.update(cx, |view, cx| {
+                                view.shell.set_certificate_override(key, selection);
+                                view.refresh_active_certificate(cx);
+                                view.active_certificate.open = true;
+                                cx.notify();
+                            });
+                        },
+                    )
+                    .option_hints()
+                    .placeholder(if loading {
+                        "Updating selection…"
+                    } else if matches!(result, CertificatePreview::Unknown) {
+                        "Selection unknown"
+                    } else {
+                        "Invalid selection"
+                    }),
+                );
+            if overridden {
+                popup = popup.child(components::text_button(
+                    theme,
+                    "reset-active-certificate",
+                    "Reset to Automatic",
+                    cx.listener(move |view, _, _, cx| {
+                        view.shell
+                            .set_certificate_override(key, CertificateOverride::Automatic);
+                        view.refresh_active_certificate(cx);
+                        view.active_certificate.open = true;
+                        cx.notify();
+                    }),
+                ));
+            }
+        }
         match result {
+            CertificatePreview::NoCertificate => {
+                popup = popup.child("No client certificate will be sent for this request.");
+            }
+            CertificatePreview::Invalid => {
+                popup = popup.child(div().text_color(theme.colors.status.warning).child("Selected certificate is unavailable or no longer matches this HTTPS target. Reset to Automatic or select another certificate."));
+            }
             CertificatePreview::Selected {
                 certificate,
                 environment,
@@ -412,16 +753,35 @@ impl ProbeApp {
             _ if loading => {
                 popup = popup.child("Updating certificate selection and public metadata…");
             }
+            CertificatePreview::Unknown => {
+                popup = popup.child(div()
+                    .id("active-certificate-selection-unknown")
+                    .debug_selector(|| "active-certificate-selection-unknown".into())
+                    .child("Certificate selection cannot be confirmed without resolving URL or domain variables. It will be validated when this request is sent."));
+            }
             _ => {
                 popup = popup.child("Selection unavailable. Check the request URL and certificate domain variables.");
             }
         };
-        let color = if warning.is_some() {
+        let color = if warning.is_some() || matches!(result, CertificatePreview::Invalid) {
             theme.colors.status.warning
+        } else if matches!(selection, CertificateOverride::NoCertificate) {
+            theme.colors.text.muted
         } else if loading || matches!(result, CertificatePreview::Selected { .. }) {
             theme.colors.text.secondary
         } else {
             theme.colors.text.muted
+        };
+        let indicator_label = if matches!(result, CertificatePreview::Invalid) {
+            "Invalid client certificate override"
+        } else if matches!(result, CertificatePreview::Unknown) && !loading {
+            "Client certificate selection unknown; validated when sent"
+        } else {
+            match selection {
+                CertificateOverride::Automatic => "Client certificate details",
+                CertificateOverride::NoCertificate => "Client certificate: No Certificate override",
+                CertificateOverride::Selected(_) => "Client certificate: manual override",
+            }
         };
         let change = cx.weak_entity();
         Popover::new("active-certificate-popover")
@@ -435,7 +795,7 @@ impl ProbeApp {
             .trigger(
                 Button::new("active-certificate-indicator")
                     .debug_selector(|| "active-certificate-indicator".into())
-                    .accessibility_label("Client certificate details")
+                    .accessibility_label(indicator_label)
                     .ml(px(theme.metrics.spacing_1))
                     .flex_none()
                     .w(px(theme.metrics.control_height))
@@ -451,10 +811,18 @@ impl ProbeApp {
                     .focus_visible(move |button| {
                         button.border_1().border_color(theme.colors.borders.focused)
                     })
-                    .hint(theme, "Client certificate details")
+                    .hint(theme, indicator_label)
                     .child(components::certificate_icon(theme).text_color(color))
+                    .when(overridden, |button| {
+                        button.child(match selection {
+                            CertificateOverride::NoCertificate => "−",
+                            _ if matches!(result, CertificatePreview::Invalid) => "!",
+                            _ if matches!(result, CertificatePreview::Unknown) => "?",
+                            _ => "•",
+                        })
+                    })
                     .when(
-                        !loading && matches!(result, CertificatePreview::Unknown),
+                        !loading && !overridden && matches!(result, CertificatePreview::Unknown),
                         |button| button.child("?"),
                     ),
             )
@@ -481,6 +849,7 @@ mod tests {
             certificates: loaded.workspace().client_certificates().to_vec(),
             environments: vec![],
             selected: None,
+            selection: CertificateOverride::Automatic,
         };
         let mut state = ActiveCertificate {
             inputs: Some(Arc::new(inputs.clone())),
@@ -534,6 +903,18 @@ mod tests {
         );
         assert!(state.inspection.is_none());
         assert!(!state.accept(&generation, false, CertificatePreview::Unmatched, None));
+        let mut overridden = saved;
+        overridden.selection = CertificateOverride::NoCertificate;
+        let previous_generation = state.generation.clone();
+        state.set_inputs(Some(Arc::new(overridden)));
+        assert!(state.inspection.is_none());
+        assert!(state.candidates.is_empty());
+        assert!(!state.accept(
+            &previous_generation,
+            true,
+            CertificatePreview::Unmatched,
+            None
+        ));
         state.set_inputs(Some(Arc::new(changes[0].clone())));
         assert!(
             !state.visible_while_refreshing,
@@ -668,5 +1049,260 @@ mod tests {
             metadata.validity_warning(metadata.not_after + std::time::Duration::from_secs(1)),
             Some("Certificate has expired.")
         );
+    }
+    fn public_pem(path: &str) -> probe_core::ClientCertificate {
+        probe_core::ClientCertificate::Pem {
+            domain: "localhost:8443".into(),
+            certificate_file_path: path.into(),
+            private_key_file_path: "must-not-be-read.pem".into(),
+            passphrase: Some("{{unavailable}}".into()),
+            disabled: false,
+        }
+    }
+
+    fn inspect_public(
+        certificate: &probe_core::ClientCertificate,
+        inputs: &Inputs,
+    ) -> probe_http::CertificateInspection {
+        probe_application::inspect_certificate(
+            certificate,
+            &inputs.environments,
+            inputs.selected.as_deref(),
+            &probe_application::NoSecrets,
+            &probe_http::ExecutionOptions {
+                base_directory: inputs
+                    .workspace
+                    .as_deref()
+                    .and_then(workspace_base_directory),
+                ..Default::default()
+            },
+            true,
+        )
+    }
+
+    #[test]
+    fn periodic_metadata_reuses_unchanged_public_files_and_refreshes_external_and_config_changes() {
+        use std::cell::Cell;
+        let directory = tempfile::tempdir().unwrap();
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/mtls");
+        let first = directory.path().join("first.pem");
+        let second = directory.path().join("second.pem");
+        std::fs::copy(fixtures.join("client.pem"), &first).unwrap();
+        std::fs::copy(&first, &second).unwrap();
+        let mut loaded = probe_opencollection::load_workspace_from_str(include_str!(
+            "../../../../tests/fixtures/opencollection/mtls-variables.yml"
+        ))
+        .unwrap();
+        loaded
+            .set_environment_variable("parent", "certPath", "first.pem".into())
+            .unwrap();
+        let mut inputs = Inputs {
+            workspace: Some(directory.path().join("collection.yml")),
+            key: loaded.requests()[0].key(),
+            request: Request {
+                url: Some("https://localhost:8443".into()),
+                ..Default::default()
+            },
+            environments: loaded.workspace().environments().to_vec(),
+            certificates: vec![public_pem("{{certPath}}"), public_pem("second.pem")],
+            selected: Some("child".into()),
+            selection: CertificateOverride::Automatic,
+        };
+        let references = inputs
+            .certificates
+            .iter()
+            .map(|certificate| CertificateRef {
+                certificate: certificate.clone(),
+                environment: None,
+            })
+            .collect::<Vec<_>>();
+        let reads = Cell::new(0);
+        let refresh = |inputs: &Inputs, previous: &[Candidate]| {
+            inspect_candidates(inputs, references.clone(), previous, |certificate| {
+                reads.set(reads.get() + 1);
+                inspect_public(certificate, inputs)
+            })
+        };
+        let initial = refresh(&inputs, &[]);
+        assert_eq!(reads.get(), 2);
+        assert!(
+            certificate_options(&initial, std::time::SystemTime::now())[0]
+                .1
+                .starts_with("first.pem ·"),
+            "labels use the safely resolved filename, not its variable template"
+        );
+        let original = initial[0]
+            .inspection
+            .metadata
+            .as_ref()
+            .unwrap()
+            .fingerprint
+            .clone();
+        let unchanged = refresh(&inputs, &initial);
+        assert_eq!(
+            reads.get(),
+            2,
+            "unchanged files must not be reopened or parsed"
+        );
+        std::fs::copy(fixtures.join("wrong-client.pem"), &first).unwrap();
+        let changed = refresh(&inputs, &unchanged);
+        assert_eq!(reads.get(), 3, "only the changed public file is inspected");
+        assert_ne!(
+            changed[0].inspection.metadata.as_ref().unwrap().fingerprint,
+            original
+        );
+        assert_eq!(
+            changed[1].inspection.metadata.as_ref().unwrap().fingerprint,
+            original
+        );
+        // Replacement with identical bytes and restored mtime is still a new file.
+        let replacement = directory.path().join("replacement.pem");
+        std::fs::copy(&first, &replacement).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(changed[0].source.as_ref().unwrap().modified),
+            )
+            .unwrap();
+        std::fs::rename(replacement, &first).unwrap();
+        let replaced = refresh(&inputs, &changed);
+        assert_eq!(reads.get(), 4);
+        // The declaration is unchanged, but its public path variable now points elsewhere.
+        loaded
+            .set_environment_variable("parent", "certPath", "second.pem".into())
+            .unwrap();
+        inputs.environments = loaded.workspace().environments().to_vec();
+        let configured = refresh(&inputs, &replaced);
+        assert_eq!(reads.get(), 5);
+        assert_eq!(
+            configured[0]
+                .inspection
+                .metadata
+                .as_ref()
+                .unwrap()
+                .fingerprint,
+            original
+        );
+        std::fs::remove_file(&second).unwrap();
+        let removed = refresh(&inputs, &configured);
+        assert_eq!(reads.get(), 7);
+        assert!(
+            removed
+                .iter()
+                .all(|candidate| candidate.inspection.metadata.is_none())
+        );
+        std::fs::copy(fixtures.join("client.pem"), &second).unwrap();
+        let restored = refresh(&inputs, &removed);
+        assert_eq!(reads.get(), 9);
+        assert!(
+            restored
+                .iter()
+                .all(|candidate| candidate.inspection.metadata.is_some())
+        );
+        let raced = inspect_candidates(&inputs, references[..1].to_vec(), &[], |certificate| {
+            let inspection = inspect_public(certificate, &inputs);
+            std::fs::copy(fixtures.join("wrong-client.pem"), &second).unwrap();
+            inspection
+        });
+        assert!(raced[0].source.is_none());
+        assert!(
+            raced[0].inspection.metadata.is_none(),
+            "a concurrent replacement cannot retain stale metadata"
+        );
+        let retried = refresh(&inputs, &raced);
+        assert!(retried[0].inspection.metadata.is_some());
+        assert_ne!(
+            retried[0].inspection.metadata.as_ref().unwrap().fingerprint,
+            original
+        );
+    }
+
+    #[test]
+    fn option_labels_include_files_and_disambiguate_duplicate_subjects_without_losing_warnings() {
+        let loaded = probe_opencollection::load_workspace_from_str(include_str!(
+            "../../../../tests/fixtures/opencollection/mtls-execution.yml"
+        ))
+        .unwrap();
+        let inputs = Inputs {
+            workspace: Some(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../tests/fixtures/mtls/collection.yml"),
+            ),
+            key: loaded.requests()[0].key(),
+            request: Request::default(),
+            environments: vec![],
+            certificates: vec![],
+            selected: None,
+            selection: CertificateOverride::Automatic,
+        };
+        let mut first = Candidate {
+            reference: CertificateRef {
+                certificate: public_pem("one/client.pem"),
+                environment: Some("Development".into()),
+            },
+            inspection: inspect_public(&public_pem("client.pem"), &inputs),
+            source: None,
+        };
+        let mut second = Candidate {
+            reference: CertificateRef {
+                certificate: public_pem("two/client.pem"),
+                environment: Some("Development".into()),
+            },
+            inspection: inspect_public(&public_pem("wrong-client.pem"), &inputs),
+            source: None,
+        };
+        for candidate in [&mut first, &mut second] {
+            let metadata = candidate.inspection.metadata.as_mut().unwrap();
+            metadata.subject = "Identical Subject".into();
+            metadata.not_before = std::time::SystemTime::UNIX_EPOCH;
+            metadata.not_after = std::time::SystemTime::UNIX_EPOCH;
+        }
+        second.inspection.metadata.as_mut().unwrap().not_after =
+            std::time::SystemTime::now() + std::time::Duration::from_secs(365 * 86400);
+        let labels = certificate_options(
+            &[first.clone(), second.clone()],
+            std::time::SystemTime::now(),
+        );
+        assert_ne!(labels[0].1, labels[1].1);
+        for (selection, label) in &labels {
+            assert!(matches!(selection, CertificateOverride::Selected(_)));
+            for value in ["client.pem", "Identical Subject", "PEM", "Development"] {
+                assert!(label.contains(value), "missing {value}: {label}");
+            }
+            assert!(!label.contains("must-not-be-read"));
+        }
+        assert!(labels[0].1.contains("expired"));
+        assert!(!labels[1].1.contains("expired"));
+        assert!(
+            labels
+                .iter()
+                .all(|(_, label)| label.starts_with("client.pem [")),
+            "disambiguation must stay near the filename, independent of expiry warnings"
+        );
+        // Different filenames already identify certificates sharing one Subject.
+        second.reference.certificate = public_pem("other.pem");
+        let filenames = certificate_options(
+            &[first.clone(), second.clone()],
+            std::time::SystemTime::now(),
+        );
+        assert!(filenames[1].1.starts_with("other.pem"));
+        assert!(
+            !filenames[0].1.contains('['),
+            "fingerprints are only needed for ambiguous labels"
+        );
+        let duplicates = certificate_options(&[first.clone(), first], std::time::SystemTime::now());
+        assert_ne!(duplicates[0].1, duplicates[1].1);
+        assert_eq!(
+            duplicates[0].0, duplicates[1].0,
+            "display ordinals never replace declaration identity"
+        );
+        second.inspection.metadata = None;
+        let unavailable = certificate_options(&[second], std::time::SystemTime::now());
+        assert!(unavailable[0].1.contains("other.pem"));
+        assert!(!unavailable[0].1.contains("Identical Subject"));
     }
 }

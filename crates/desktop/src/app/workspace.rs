@@ -927,6 +927,7 @@ impl ProbeApp {
         self.persistence.reset(baselines);
         self.loaded_workspace = Some(workspace);
         self.session.presence.clear_identity_cache();
+        let certificate_overrides = self.shell.take_certificate_overrides();
         self.shell.reset_for_workspace();
         self.execution.remap_requests(&remaps);
         self.websocket.remap_requests(&remaps);
@@ -970,6 +971,11 @@ impl ProbeApp {
             _ => {}
         }
         self.restore_shell_selectors(selector_remaps, &remaps, selectors);
+        for (old_key, selection) in certificate_overrides {
+            if let Some(key) = remaps.get(&old_key) {
+                self.shell.set_certificate_override(*key, selection);
+            }
+        }
         remaps
     }
 
