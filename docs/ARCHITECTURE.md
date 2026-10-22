@@ -903,7 +903,8 @@ material, with secret-derived metadata redacted in the application boundary.
 Dates are presented separately from key validity and never gate Save or execution.
 Input generations discard stale completions; source-directory observation clears
 editor results when a resolved certificate or private-key path changes, including
-atomic replacement. Other files in those directories do not.
+atomic replacement, and when the watcher reports an error. Other files in those
+directories do not.
 Collection-level certificate UI remains deferred.
 
 ## OpenCollection Validation

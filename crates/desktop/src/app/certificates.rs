@@ -583,14 +583,15 @@ impl ProbeApp {
     }
 }
 
-/// Parent directories stay watched so an atomic replace is visible. Only events
-/// that name a resolved certificate or private-key path invalidate inspection.
+/// Parent directories stay watched so an atomic replace is visible. A named
+/// certificate or private-key path invalidates inspection. A watcher error does
+/// too, because a missed change would leave a stale success on screen.
 fn inspection_source_changed(
     event: &notify::Result<notify::Event>,
     sources: &[std::path::PathBuf],
 ) -> bool {
     let Ok(event) = event else {
-        return false;
+        return true;
     };
     if matches!(event.kind, notify::EventKind::Access(_)) {
         return false;
@@ -667,7 +668,7 @@ mod tests {
                 .add_path(PathBuf::from("/certs/client.pem"))
         ));
         assert!(!changed(Event::new(EventKind::Modify(ModifyKind::Any))));
-        assert!(!inspection_source_changed(
+        assert!(inspection_source_changed(
             &Err(notify::Error::new(notify::ErrorKind::Generic(
                 "watch failed".into(),
             ))),
