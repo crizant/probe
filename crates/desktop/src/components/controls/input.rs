@@ -181,6 +181,7 @@ pub(crate) struct ProbeTextInput {
     pub(in crate::components) on_focus: Option<FocusChangeHandler>,
     pub(in crate::components) autofocus: bool,
     pub(in crate::components) readonly: bool,
+    disabled: bool,
     persistent_field: Option<Entity<FieldInput>>,
     on_field_focus: Option<FieldFocusHandler>,
     pub(in crate::components) shared_input: Option<Entity<InputState>>,
@@ -242,6 +243,7 @@ impl RenderOnce for ProbeTextInput {
                 });
             }
             if self.focus_on_render
+                && !self.disabled
                 && !field
                     .read(cx)
                     .state
@@ -281,11 +283,13 @@ impl RenderOnce for ProbeTextInput {
             applied.1 = placeholder.clone();
             true
         });
-        let focused = state.read(cx).focus_handle(cx).is_focused(window);
+        let focused = !self.disabled && state.read(cx).focus_handle(cx).is_focused(window);
         let context_focus = state.read(cx).focus_handle(cx);
         let open_context_menu = context_menu.clone();
         state.update(cx, |input, cx| {
             input.set_editor_style(editor_paint_style(self.theme));
+            let disabled_changed = input.presentation().is_disabled() != self.disabled;
+            input.set_disabled(self.disabled, cx);
             input.set_readonly(self.readonly, cx);
             if placeholder_changed {
                 input.set_placeholder(placeholder, window, cx);
@@ -299,7 +303,7 @@ impl RenderOnce for ProbeTextInput {
                     cx.notify();
                 });
             }));
-            if !focused && input.value() != self.value {
+            if (disabled_changed || !focused) && input.value() != self.value {
                 input.set_value(self.value.clone(), window, cx);
             }
         });
@@ -345,25 +349,35 @@ impl RenderOnce for ProbeTextInput {
                 })
             })
             .focused(focused)
+            .disabled(self.disabled)
             .styles(move |styles| {
-                styles.focused(move |input| {
-                    if self.flat {
-                        input.bg(hover_fill(theme.colors.surfaces.sidebar))
-                    } else if self.quiet_focus {
-                        input.border_color(theme.colors.borders.strong)
-                    } else {
-                        input.border_color(theme.colors.borders.focused)
-                    }
-                })
+                styles
+                    .focused(move |input| {
+                        if self.flat {
+                            input.bg(hover_fill(theme.colors.surfaces.sidebar))
+                        } else if self.quiet_focus {
+                            input.border_color(theme.colors.borders.strong)
+                        } else {
+                            input.border_color(theme.colors.borders.focused)
+                        }
+                    })
+                    .disabled(move |input| {
+                        input
+                            .bg(theme.colors.actions.disabled)
+                            .border_color(theme.colors.borders.subtle)
+                            .text_color(theme.colors.actions.disabled_foreground)
+                    })
             })
             .when_some(self.debug_selector, |input, selector| {
                 input.debug_selector(move || selector.into())
             })
-            .on_mouse_down(MouseButton::Left, {
-                let state = state.clone();
-                move |_, window, cx| {
-                    state.update(cx, |input, cx| input.focus(window, cx));
-                }
+            .when(!self.disabled, |input| {
+                input.on_mouse_down(MouseButton::Left, {
+                    let state = state.clone();
+                    move |_, window, cx| {
+                        state.update(cx, |input, cx| input.focus(window, cx));
+                    }
+                })
             })
             .when_some(self.leading_icon, |input, icon| input.child(icon))
             .child(Input::new(&state));
@@ -422,6 +436,7 @@ pub(in crate::components) fn text_input_base(
         on_focus: None,
         autofocus: false,
         readonly: false,
+        disabled: false,
         shared_input: None,
         persistent_field: None,
         on_field_focus: None,
@@ -860,7 +875,7 @@ impl ProbeTextInput {
     }
 
     pub(crate) fn disabled(mut self, disabled: bool) -> Self {
-        self.readonly = disabled;
+        self.disabled = disabled;
         self.autofocus &= !disabled;
         self
     }

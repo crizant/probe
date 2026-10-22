@@ -254,7 +254,9 @@ shared key/value row builders, keyboard-accessible enable switches, variable-awa
 expression/value inputs, and an operator menu. Title Case Add Assertion and Remove
 Assertion controls preserve persisted order. Every assertion has a compact, indented
 Description input on its second line, including when empty; editing preserves
-structured descriptions and unused unary values. Assertion outcomes appear only
+structured descriptions and unused unary values. The expected-value field is empty
+and disabled for `isNull` and `isNotNull`, showing “Not used”; switching back to a
+comparison restores its previous value. Assertion outcomes appear only
 in the response viewer.
 
 The response Assertions tab has a failure count in its label and one inline

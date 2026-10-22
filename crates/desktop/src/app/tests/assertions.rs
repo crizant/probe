@@ -588,9 +588,58 @@ fn assertion_empty_skipped_and_failed_request_states_keep_editor_access(cx: &mut
         })
         .unwrap();
     visual.run_until_parked();
-    click(&mut visual, "assertion-value-0");
-    cx.simulate_input(window.into(), "must-not-edit-unary-value");
+    for operator in ["isNull", "isNotNull"] {
+        window
+            .update(cx, |view, _, cx| {
+                view.edit_request(
+                    key,
+                    |r| {
+                        AssertionEdit::Text(0, AssertionField::Operator, operator.into()).apply(r);
+                    },
+                    cx,
+                );
+            })
+            .unwrap();
+        visual.run_until_parked();
+        click(&mut visual, "assertion-value-0");
+        cx.simulate_input(window.into(), "must-not-edit-unary-value");
+        visual.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(
+                    view.active_request()
+                        .unwrap()
+                        .runtime
+                        .assertions
+                        .as_ref()
+                        .unwrap()[0]
+                        .value
+                        .as_deref(),
+                    Some("200")
+                );
+            })
+            .unwrap();
+    }
+    window
+        .update(cx, |view, _, cx| {
+            view.edit_request(
+                key,
+                |r| {
+                    AssertionEdit::Text(0, AssertionField::Operator, "equals".into()).apply(r);
+                },
+                cx,
+            );
+        })
+        .unwrap();
     visual.run_until_parked();
+    click(&mut visual, "assertion-value-0");
+    command_key(cx, window, "a");
+    command_key(cx, window, "c");
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .as_deref(),
+        Some("200")
+    );
     window
         .update(cx, |view, _, cx| {
             let declarations = view

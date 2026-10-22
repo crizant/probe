@@ -79,7 +79,7 @@ impl ProbeApp {
                             AssertionField::Value,
                             assertion.value.as_deref().unwrap_or_default(),
                             if matches!(assertion.operator.as_str(), "isNull" | "isNotNull") {
-                                "Not Used"
+                                "Not used"
                             } else {
                                 "Expected Value"
                             },
@@ -203,7 +203,11 @@ impl ProbeApp {
                 components::variable_text_input(
                     theme,
                     (field.id(), index),
-                    value.to_owned(),
+                    if unary {
+                        String::new()
+                    } else {
+                        value.to_owned()
+                    },
                     placeholder,
                     self.variable_context(cx),
                     move |value, _, cx| {

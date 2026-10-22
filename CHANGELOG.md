@@ -33,7 +33,8 @@ Release dates use Australia/Brisbane time (UTC+10).
   distinct skipped and evaluation-error states. Keyboard-accessible copy and
   jump-to-editor buttons on each result replace row selection. Description inputs are
   always visible, and result rows share compact padding with inline actual values
-  and wrapping for long text. Unary expected values stay disabled. Assertion
+  and wrapping for long text. Unary expected-value fields are empty and disabled,
+  with their previous values restored when switching back to comparisons. Assertion
   outcomes appear in the response viewer, keeping the request editor focused on
   definitions and enable switches.
 - Shared assertion results and CLI JSON now include redacted actual display values
