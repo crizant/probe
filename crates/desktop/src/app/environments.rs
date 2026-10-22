@@ -181,6 +181,7 @@ impl ProbeApp {
     pub(super) fn sync_environment_manager_after_reload(
         &mut self,
         previous: Option<(EnvironmentManagerDialog, Option<Environment>)>,
+        certificate_inputs_unchanged: bool,
         cx: &mut Context<Self>,
     ) {
         let Some((mut dialog, previous_original)) = previous else {
@@ -224,8 +225,11 @@ impl ProbeApp {
             .as_ref()
             .is_none_or(|original| original != &disk);
         if !dirty {
-            self.environment_manager_dialog =
-                Some(EnvironmentManagerDialog::with_tab(&disk, dialog.tab));
+            self.environment_manager_dialog = Some(if certificate_inputs_unchanged {
+                dialog.refreshed(&disk)
+            } else {
+                EnvironmentManagerDialog::with_tab(&disk, dialog.tab)
+            });
             return;
         }
         if environment_changed_on_disk {
@@ -239,7 +243,11 @@ impl ProbeApp {
             );
             return;
         }
+        let metadata = certificate_inputs_unchanged
+            .then(|| dialog.certificate_metadata.take())
+            .flatten();
         dialog.rebind_workspace();
+        dialog.certificate_metadata = metadata;
         self.environment_manager_dialog = Some(dialog);
     }
 
@@ -500,13 +508,9 @@ impl ProbeApp {
                                     view.close_environment_manager_dialog(window, cx);
                                 } else {
                                     view.environment_manager_dialog =
-                                        Some(EnvironmentManagerDialog::with_tab(
-                                            &environment,
-                                            view.environment_manager_dialog
-                                                .as_ref()
-                                                .map_or(EnvironmentTab::default(), |dialog| {
-                                                    dialog.tab
-                                                }),
+                                        Some(view.environment_manager_dialog.as_ref().map_or_else(
+                                            || EnvironmentManagerDialog::new(&environment),
+                                            |dialog| dialog.refreshed(&environment),
                                         ));
                                     view.sync_secret_statuses_from_presence();
                                 }

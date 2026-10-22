@@ -685,6 +685,7 @@ impl ProbeApp {
                 dialog.active_field = None;
             }
         }
+        self.load_certificate_metadata(cx);
         let Some(loaded) = self.loaded_workspace.as_ref() else {
             return div().into_any_element();
         };

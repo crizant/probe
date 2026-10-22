@@ -40,6 +40,13 @@ pub(crate) fn identity_from_pkcs12(
     data: &[u8],
     password: Option<&str>,
 ) -> Result<reqwest::Identity, HttpError> {
+    inspect_pkcs12(data, password).map(|(identity, _)| identity)
+}
+
+pub(crate) fn inspect_pkcs12(
+    data: &[u8],
+    password: Option<&str>,
+) -> Result<(reqwest::Identity, CertificateDer<'static>), HttpError> {
     let pfx = Pfx::from_der(data).map_err(|_| error(INVALID))?;
     if pfx.auth_safe.content_type != DATA {
         return Err(error(INVALID));
@@ -84,16 +91,7 @@ pub(crate) fn identity_from_pkcs12(
                     )?);
                 }
                 pkcs12::PKCS_12_CERT_BAG_OID => {
-                    let cert = bag
-                        .bag_value
-                        .decode_as::<CertBag>()
-                        .map_err(|_| error(INVALID))?;
-                    if cert.cert_id != pkcs12::PKCS_12_X509_CERT_OID {
-                        return Err(error(UNSUPPORTED));
-                    }
-                    let cert = CertificateDer::from(cert.cert_value.as_bytes().to_vec());
-                    rustls::server::ParsedCertificate::try_from(&cert)
-                        .map_err(|_| error(INVALID))?;
+                    let cert = public_certificate(bag)?;
                     certs.push(cert);
                 }
                 // Reject rather than ignore bags that might conceal identities (e.g.
@@ -105,6 +103,61 @@ pub(crate) fn identity_from_pkcs12(
     certs.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
     certs.dedup();
     select_identity(&keys, certs)
+}
+
+fn public_certificate(bag: &SafeBagRef<'_>) -> Result<CertificateDer<'static>, HttpError> {
+    let cert = bag
+        .bag_value
+        .decode_as::<CertBag>()
+        .map_err(|_| error(INVALID))?;
+    if cert.cert_id != pkcs12::PKCS_12_X509_CERT_OID {
+        return Err(error(UNSUPPORTED));
+    }
+    let cert = CertificateDer::from(cert.cert_value.as_bytes().to_vec());
+    rustls::server::ParsedCertificate::try_from(&cert).map_err(|_| error(INVALID))?;
+    Ok(cert)
+}
+
+/// Reads only cleartext certificate bags. Never verifies a MAC, decrypts a safe,
+/// parses a private key or guesses which of several certificates is the leaf.
+pub(crate) fn public_certificate_from_pkcs12(
+    data: &[u8],
+) -> Result<CertificateDer<'static>, HttpError> {
+    let pfx = Pfx::from_der(data).map_err(|_| error(INVALID))?;
+    if pfx.auth_safe.content_type != DATA {
+        return Err(error(INVALID));
+    }
+    let safe = pfx
+        .auth_safe
+        .content
+        .decode_as::<&OctetStringRef>()
+        .map_err(|_| error(INVALID))?;
+    let safes = AuthenticatedSafe::from_der(safe.as_bytes()).map_err(|_| error(INVALID))?;
+    let mut certificates = Vec::new();
+    for safe in safes {
+        if safe.content_type != DATA {
+            return Err(error(UNSUPPORTED));
+        }
+        let contents = safe
+            .content
+            .decode_as::<&OctetStringRef>()
+            .map_err(|_| error(INVALID))?;
+        for bag in
+            Vec::<SafeBagRef<'_>>::from_der(contents.as_bytes()).map_err(|_| error(INVALID))?
+        {
+            if bag.bag_id == pkcs12::PKCS_12_CERT_BAG_OID {
+                certificates.push(public_certificate(&bag)?);
+            }
+        }
+    }
+    certificates.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
+    certificates.dedup();
+    if certificates.len() != 1 {
+        return Err(error(AMBIGUOUS));
+    }
+    certificates
+        .pop()
+        .ok_or_else(|| error(Pkcs12Error::NoIdentity))
 }
 
 fn decode_safe(safe: ContentInfo, password: Option<&str>) -> Result<Zeroizing<Vec<u8>>, HttpError> {
@@ -217,7 +270,7 @@ fn verify_mac(mac: &MacData, data: &[u8], password: &str) -> Result<(), HttpErro
 fn select_identity(
     keys: &[Zeroizing<Vec<u8>>],
     certs: Vec<CertificateDer<'static>>,
-) -> Result<reqwest::Identity, HttpError> {
+) -> Result<(reqwest::Identity, CertificateDer<'static>), HttpError> {
     let mut selected: Option<(usize, usize)> = None;
     let mut public_key = None;
     for (key_index, key) in keys.iter().enumerate() {
@@ -267,7 +320,9 @@ fn select_identity(
         &key.to_pem("PRIVATE KEY", pkcs8::der::pem::LineEnding::LF)
             .map_err(|_| error(INVALID))?,
     );
-    reqwest::Identity::from_pem(pem.as_bytes()).map_err(|_| error(INVALID))
+    reqwest::Identity::from_pem(pem.as_bytes())
+        .map(|identity| (identity, certs[leaf].clone()))
+        .map_err(|_| error(INVALID))
 }
 
 fn certificate_chain<'a>(

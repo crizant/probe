@@ -855,7 +855,7 @@ trust, validity, and usage validation.
 Intermediate/root certificates alone do not make an archive ambiguous. Multi-identity
 selection is deferred to a later desktop UI change.
 
-Container reads, MAC verification and decryption occur only during execution, with
+Container MAC verification and decryption occur only during execution or explicit local inspection, with
 CPU work on a blocking worker. Container, decrypted key/safe, MAC key and assembled
 PEM buffers are zeroizing and never written to disk. RustCrypto's owned ASN.1
 structures and rustls/reqwest may retain additional non-zeroizing memory copies;
@@ -890,6 +890,19 @@ including an untouched explicit empty value. Literal passphrases remain in YAML;
 the editor does not write to the credential store. Changes use the existing
 `Environment` draft and `prepare_environment_replace_with_description` path,
 including dirty-state protection and external reload/conflict handling.
+The list reads public PEM and unambiguous cleartext PKCS#12 metadata on a
+background worker without resolving secrets or decrypting bags. It refreshes while
+visible, retaining metadata across saves and unchanged reloads. Changes to public
+certificate sources or variable resolution inputs invalidate previews. The existing
+editor's Inspect action resolves current unsaved fields through core's template
+resolver and the native secret provider, then calls shared `probe-http` inspection.
+Inspection reuses transport PEM/PKCS#12 decryption and key matching, including
+multi-identity rejection; it sends no request and performs no persistence. Public
+metadata and fixed validation diagnostics are returned separately from identity
+material, with secret-derived metadata redacted in the application boundary.
+Dates are presented separately from key validity and never gate Save or execution.
+Input generations discard stale completions; source-directory observation clears
+editor results after file changes, including replacement of a certificate or key.
 Collection-level certificate UI remains deferred.
 
 ## OpenCollection Validation

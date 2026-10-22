@@ -6,6 +6,8 @@ mod cache;
 mod engine;
 mod error;
 mod identity;
+mod inspection;
+pub use inspection::{CertificateInspection, CertificateMetadata};
 mod pkcs12;
 mod request;
 mod response;

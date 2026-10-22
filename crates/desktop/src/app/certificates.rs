@@ -14,6 +14,10 @@ pub(crate) enum EnvironmentTab {
 /// Input entities live only as long as the form, including its masked passphrase.
 #[derive(Clone)]
 pub(crate) struct CertificateEditor {
+    pub(crate) inspection: Option<probe_http::CertificateInspection>,
+    pub(crate) inspection_watcher: Option<Rc<notify::RecommendedWatcher>>,
+    pub(crate) inspecting: bool,
+    pub(crate) inspection_generation: Rc<()>,
     pub(crate) index: Option<usize>,
     pub(crate) focus: FocusHandle,
     pub(crate) restore_focus: FocusHandle,
@@ -38,6 +42,28 @@ impl std::fmt::Debug for CertificateEditor {
 }
 
 impl CertificateEditor {
+    pub(crate) fn invalidate_inspection(&mut self) {
+        self.inspection = None;
+        self.inspection_watcher = None;
+        self.inspecting = false;
+        self.inspection_generation = Rc::new(());
+    }
+
+    pub(crate) fn accept_inspection(
+        &mut self,
+        generation: &Rc<()>,
+        result: probe_http::CertificateInspection,
+        watcher: Option<notify::RecommendedWatcher>,
+    ) -> bool {
+        if !Rc::ptr_eq(&self.inspection_generation, generation) {
+            return false;
+        }
+        self.inspecting = false;
+        self.inspection = Some(result);
+        self.inspection_watcher = watcher.map(Rc::new);
+        true
+    }
+
     pub(crate) fn missing_required_field(&self, cx: &App) -> Option<&'static str> {
         let required: &[(usize, &str)] = if self.pkcs12 {
             &[(0, "Domain"), (3, "PKCS#12 File")]
@@ -179,6 +205,9 @@ impl ProbeApp {
                                 .and_then(|dialog| dialog.certificate_editor.as_mut())
                                 && editor.inputs.get(index) == Some(input)
                             {
+                                if matches!(event, InputEvent::Change) {
+                                    editor.invalidate_inspection();
+                                }
                                 editor.show_validation_feedback = true;
                                 if index == 4 && !input.read(cx).value().is_empty() {
                                     editor.preserve_empty_passphrase = false;
@@ -196,6 +225,10 @@ impl ProbeApp {
         dialog.active_field = None;
         dialog.tab = EnvironmentTab::ClientCertificates;
         dialog.certificate_editor = Some(CertificateEditor {
+            inspection: None,
+            inspection_watcher: None,
+            inspecting: false,
+            inspection_generation: Rc::new(()),
             index,
             focus: cx.focus_handle(),
             restore_focus,
@@ -247,6 +280,17 @@ impl ProbeApp {
             return;
         };
         let index = editor.index;
+        if index.and_then(|index| dialog.draft().client_certificates.get(index))
+            == Some(&certificate)
+        {
+            self.cancel_certificate_editor(window, cx);
+            return;
+        }
+        // Domain, key and passphrase edits do not change the public certificate.
+        let metadata = index
+            .and_then(|index| dialog.draft().client_certificates.get(index))
+            .filter(|current| same_public_certificate_source(current, &certificate))
+            .and_then(|_| dialog.certificate_metadata.clone());
         let certificates = &mut dialog.draft_mut().client_certificates;
         if let Some(index) = index {
             let Some(current) = certificates.get_mut(index) else {
@@ -256,6 +300,7 @@ impl ProbeApp {
         } else {
             certificates.push(certificate);
         }
+        dialog.certificate_metadata = metadata;
         self.cancel_certificate_editor(window, cx);
     }
 
@@ -299,6 +344,13 @@ impl ProbeApp {
                                 .and_then(|dialog| dialog.certificate_editor.as_ref())
                                 .is_some_and(|editor| editor.inputs.get(field) == Some(&input));
                             if current {
+                                if let Some(editor) = view
+                                    .environment_manager_dialog
+                                    .as_mut()
+                                    .and_then(|dialog| dialog.certificate_editor.as_mut())
+                                {
+                                    editor.invalidate_inspection();
+                                }
                                 input.update(cx, |input, cx| input.set_value(value, window, cx));
                                 cx.notify();
                             }
@@ -317,5 +369,231 @@ impl ProbeApp {
                 }
             })
             .detach();
+    }
+}
+
+impl ProbeApp {
+    pub(super) fn load_certificate_metadata(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.environment_manager_dialog.as_mut() else {
+            return;
+        };
+        if dialog.tab != EnvironmentTab::ClientCertificates
+            || dialog.certificate_metadata_refresh_pending
+        {
+            return;
+        }
+        let draft = dialog.draft().clone();
+        let generation = dialog.certificate_generation.clone();
+        dialog.certificate_metadata_refresh_pending = true;
+        // Keep the last safe metadata visible until its replacement is ready.
+        dialog.certificate_metadata.get_or_insert_with(Vec::new);
+        let mut environments = self
+            .loaded_workspace
+            .as_ref()
+            .map(|loaded| loaded.workspace().environments().to_vec())
+            .unwrap_or_default();
+        environments.retain(|env| env.name != draft.name);
+        environments.push(draft.clone());
+        let workspace_path = self.workspace_path.clone();
+        cx.spawn(async move |view, cx| {
+            let results = cx
+                .background_spawn(async move {
+                    let options = probe_http::ExecutionOptions {
+                        base_directory: workspace_path
+                            .as_deref()
+                            .and_then(workspace_base_directory),
+                        ..Default::default()
+                    };
+                    draft
+                        .client_certificates
+                        .iter()
+                        .map(|cert| {
+                            probe_application::inspect_certificate(
+                                cert,
+                                &environments,
+                                Some(&draft.name),
+                                &probe_application::NoSecrets,
+                                &options,
+                                true,
+                            )
+                        })
+                        .collect()
+                })
+                .await;
+            let accepted = view
+                .update(cx, |view, cx| {
+                    if let Some(dialog) = view.environment_manager_dialog.as_mut()
+                        && Rc::ptr_eq(&dialog.certificate_generation, &generation)
+                    {
+                        dialog.certificate_metadata = Some(results);
+                        cx.notify();
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+            if accepted {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(3))
+                    .await;
+                let _ = view.update(cx, |view, cx| {
+                    if let Some(dialog) = view.environment_manager_dialog.as_mut()
+                        && Rc::ptr_eq(&dialog.certificate_generation, &generation)
+                    {
+                        dialog.certificate_metadata_refresh_pending = false;
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn inspect_certificate_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.environment_manager_dialog.as_mut() else {
+            return;
+        };
+        let draft = dialog.draft().clone();
+        let Some(editor) = dialog.certificate_editor.as_mut() else {
+            return;
+        };
+        let Some(certificate) = editor.certificate(cx) else {
+            return;
+        };
+        editor.inspection = None;
+        editor.inspection_watcher = None;
+        editor.inspecting = true;
+        editor.inspection_generation = Rc::new(());
+        let generation = editor.inspection_generation.clone();
+        let mut environments = self
+            .loaded_workspace
+            .as_ref()
+            .map(|loaded| loaded.workspace().environments().to_vec())
+            .unwrap_or_default();
+        environments.retain(|env| env.name != draft.name);
+        environments.push(draft.clone());
+        let workspace = self.workspace_path.clone().unwrap_or_default();
+        let store = self.credential_store.clone();
+        let workspace_path = self.workspace_path.clone();
+        let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_changed = changed.clone();
+        cx.spawn(async move |view, cx| {
+            let (result, watcher) = cx
+                .background_spawn(async move {
+                    let options = probe_http::ExecutionOptions {
+                        base_directory: workspace_path
+                            .as_deref()
+                            .and_then(workspace_base_directory),
+                        ..Default::default()
+                    };
+                    let provider = crate::credentials::NativeSecretProvider {
+                        store: store.as_ref(),
+                        workspace: &workspace,
+                    };
+                    let mut watcher = None;
+                    let result = probe_application::inspect_certificate_observing(
+                        &certificate,
+                        &environments,
+                        Some(&draft.name),
+                        &provider,
+                        &options,
+                        false,
+                        |identity| {
+                            use notify::Watcher;
+                            if let Ok(paths) = identity.source_paths(&options) {
+                                let flag = worker_changed.clone();
+                                if let Ok(mut observer) = notify::recommended_watcher(
+                                    move |event: notify::Result<notify::Event>| {
+                                        if event.is_err()
+                                            || event.is_ok_and(|event| {
+                                                !matches!(event.kind, notify::EventKind::Access(_))
+                                            })
+                                        {
+                                            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                        }
+                                    },
+                                ) {
+                                    for path in paths {
+                                        if let Some(parent) = path.parent() {
+                                            let _ = observer
+                                                .watch(parent, notify::RecursiveMode::NonRecursive);
+                                        }
+                                    }
+                                    watcher = Some(observer);
+                                }
+                            }
+                        },
+                    );
+                    (result, watcher)
+                })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                if let Some(editor) = view
+                    .environment_manager_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.certificate_editor.as_mut())
+                    && editor.accept_inspection(&generation, result, watcher)
+                {
+                    cx.notify();
+                }
+            });
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(500))
+                    .await;
+                let keep_watching = view
+                    .update(cx, |view, cx| {
+                        let Some(editor) = view
+                            .environment_manager_dialog
+                            .as_mut()
+                            .and_then(|dialog| dialog.certificate_editor.as_mut())
+                        else {
+                            return false;
+                        };
+                        if !Rc::ptr_eq(&editor.inspection_generation, &generation) {
+                            return false;
+                        }
+                        if changed.load(std::sync::atomic::Ordering::Relaxed) {
+                            editor.invalidate_inspection();
+                            cx.notify();
+                            return false;
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_watching {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+}
+
+fn same_public_certificate_source(before: &ClientCertificate, after: &ClientCertificate) -> bool {
+    match (before, after) {
+        (
+            ClientCertificate::Pem {
+                certificate_file_path: before,
+                ..
+            },
+            ClientCertificate::Pem {
+                certificate_file_path: after,
+                ..
+            },
+        ) => before == after,
+        (
+            ClientCertificate::Pkcs12 {
+                pkcs12_file_path: before,
+                ..
+            },
+            ClientCertificate::Pkcs12 {
+                pkcs12_file_path: after,
+                ..
+            },
+        ) => before == after,
+        _ => false,
     }
 }

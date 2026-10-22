@@ -19,6 +19,9 @@ pub(crate) struct EnvironmentManagerDialog {
     pub(crate) tab: super::EnvironmentTab,
     pub(crate) certificate_editor: Option<super::CertificateEditor>,
     pub(crate) certificates_scroll: gpui_kit::ScrollHandle,
+    pub(crate) certificate_metadata: Option<Vec<probe_http::CertificateInspection>>,
+    pub(crate) certificate_metadata_refresh_pending: bool,
+    pub(crate) certificate_generation: std::rc::Rc<()>,
     draft: Environment,
     pub(crate) secret_statuses: BTreeMap<String, SecretUiStatus>,
     pub(crate) variable_row_ids: Vec<u64>,
@@ -64,6 +67,9 @@ impl EnvironmentManagerDialog {
             tab: super::EnvironmentTab::default(),
             certificate_editor: None,
             certificates_scroll: gpui_kit::ScrollHandle::new(),
+            certificate_metadata: None,
+            certificate_metadata_refresh_pending: false,
+            certificate_generation: std::rc::Rc::new(()),
             draft: environment.clone(),
             secret_statuses: BTreeMap::new(),
             variable_row_ids: (0..next_variable_row_id).collect(),
@@ -82,6 +88,16 @@ impl EnvironmentManagerDialog {
         }
     }
 
+    /// Rebuild row state after an acknowledged save or unchanged reload.
+    /// The caller must also ensure inherited resolution inputs are unchanged.
+    pub(crate) fn refreshed(&self, environment: &Environment) -> Self {
+        let mut refreshed = Self::with_tab(environment, self.tab);
+        if self.draft() == environment {
+            refreshed.certificate_metadata = self.certificate_metadata.clone();
+        }
+        refreshed
+    }
+
     pub(crate) fn draft(&self) -> &Environment {
         &self.draft
     }
@@ -89,6 +105,12 @@ impl EnvironmentManagerDialog {
     /// Invalidate before exposing mutable access, including edits outside the app adapter.
     pub(crate) fn draft_mut(&mut self) -> &mut Environment {
         self.effective_rows.take();
+        self.certificate_metadata = None;
+        self.certificate_metadata_refresh_pending = false;
+        self.certificate_generation = std::rc::Rc::new(());
+        if let Some(editor) = self.certificate_editor.as_mut() {
+            editor.invalidate_inspection();
+        }
         &mut self.draft
     }
 
@@ -114,6 +136,12 @@ impl EnvironmentManagerDialog {
     /// Inherited rows depend on the workspace even when the direct draft is retained.
     pub(crate) fn rebind_workspace(&mut self) {
         self.effective_rows.take();
+        self.certificate_metadata = None;
+        self.certificate_metadata_refresh_pending = false;
+        self.certificate_generation = std::rc::Rc::new(());
+        if let Some(editor) = self.certificate_editor.as_mut() {
+            editor.invalidate_inspection();
+        }
     }
 
     #[cfg(test)]
