@@ -96,24 +96,28 @@ fn complete_assertion_snapshot(
                     response,
                     vec![
                         AssertionResult {
+                            diagnostic: None,
                             actual: None,
                             actual_truncated: false,
                             index: 0,
                             outcome: AssertionOutcome::Passed,
                         },
                         AssertionResult {
+                            diagnostic: None,
                             actual: Some("401".into()),
                             actual_truncated: false,
                             index: 1,
                             outcome: AssertionOutcome::Failed,
                         },
                         AssertionResult {
+                            diagnostic: None,
                             actual: None,
                             actual_truncated: false,
                             index: 2,
                             outcome: AssertionOutcome::Error(AssertionError::BodyUnavailable),
                         },
                         AssertionResult {
+                            diagnostic: None,
                             actual: None,
                             actual_truncated: false,
                             index: 3,
@@ -658,6 +662,7 @@ fn assertion_empty_skipped_and_failed_request_states_keep_editor_access(cx: &mut
                 Ok((
                     super::workspace::tab_response(),
                     vec![AssertionResult {
+                        diagnostic: None,
                         index: 0,
                         outcome: AssertionOutcome::Disabled,
                         actual: None,
@@ -792,6 +797,7 @@ fn result_jump_follows_the_original_declaration_and_ignores_removed_rows(cx: &mu
                 Ok((
                     super::workspace::tab_response(),
                     vec![AssertionResult {
+                        diagnostic: None,
                         index: 1,
                         outcome: AssertionOutcome::Failed,
                         actual: Some("0".into()),

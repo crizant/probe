@@ -1338,7 +1338,10 @@ fn structured_actuals_redact_whole_values_when_serialized_secrets_match() {
                 expression: "response.body".into(),
             }),
         }
-        .redact(&redactor);
+        .redact(
+            &redactor,
+            &[assertion("response.body", "equals", Some("null"))],
+        );
         assert_eq!(result.actual.as_deref(), Some("[REDACTED]"));
         assert!(!result.actual_truncated);
     }
@@ -1364,7 +1367,10 @@ fn structured_actuals_redact_decoded_strings_and_arrays_preserving_json_types() 
             expression: "response.body".into(),
         }),
     }
-    .redact(&redactor);
+    .redact(
+        &redactor,
+        &[assertion("response.body", "equals", Some("null"))],
+    );
     let actual: Value = serde_json::from_str(result.actual.as_deref().unwrap()).unwrap();
     assert_eq!(
         actual,
@@ -1376,4 +1382,30 @@ fn structured_actuals_redact_decoded_strings_and_arrays_preserving_json_types() 
         })
     );
     assert!(!result.actual_truncated);
+}
+
+#[test]
+fn diagnostic_literals_fail_closed_when_their_encoding_cannot_be_checked() {
+    let secrets = [SecretValue::new("private".into())];
+    let redactor = probe_core::SecretRedactor::from_environments([]).with_values(&secrets);
+    for (value, expected) in [
+        (r#"["\u0070rivate"]"#, "[REDACTED]"),
+        (r#""\u0070rivate"#, "[REDACTED]"),
+        (r#""\u0070rivate{{alias}}"#, "[REDACTED]"),
+        ("{{alias}}", "{{alias}}"),
+        (" 2e2 ", " 2e2 "),
+        (r#""safe value""#, r#""safe value""#),
+    ] {
+        let declarations = [assertion("response.status", "equals", Some(value))];
+        let result = PendingAssertionResult {
+            index: 0,
+            outcome: AssertionOutcome::Error(AssertionError::InvalidExpectedValue),
+            actual: None,
+        }
+        .redact(&redactor, &declarations);
+        assert_eq!(
+            result.diagnostic,
+            Some(format!("response.status equals {expected}"))
+        );
+    }
 }

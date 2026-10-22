@@ -24,7 +24,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 ### Changed
 
 - CLI assertion failures now identify each failed or errored check by source and
-  index, with redacted actual values or safe error diagnostics. Successful human
+  index, with expressions, operators, redacted expected and actual values, or safe
+  error diagnostics. Successful human
   output separates the response body and assertion summary with a blank line.
   JSON and quiet output are unchanged.
 

@@ -826,15 +826,19 @@ JSON spelling. Structured values are JSON display text and may be fully redacted
 After redaction, values longer than 512 Unicode characters end with
 `… [truncated]` and set `actualTruncated: true`. Human failure diagnostics follow
 the counts line with each failed or errored assertion, identified by source and
-1-based index. Failed checks show the already
-redacted actual display text, including truncation markers; errored checks show
+1-based index. Each shows its original expression, operator, and expected value,
+with secrets redacted (including decoded literal secrets). Unsupported expressions
+and operators, and literals that cannot be checked safely after decoding, use
+`[REDACTED]`.
+Failed checks show the already redacted actual display text, including truncation
+markers; errored checks show
 the shared value-free diagnostic. Successful human output separates the response
 body and assertion summary with one blank line. Quiet stderr and JSON error
 messages retain the single counts line. Existing JSON fields, exit codes, flags,
 outcome names, and error categories are unchanged. `BodyUnavailable` still emits
 the `body_unavailable` category.
-Expressions, descriptions, and expected values remain absent from CLI result
-diagnostics.
+Descriptions remain absent from CLI result diagnostics. Expressions and expected
+values are included only in human failure diagnostics.
 
 Structured errors use:
 

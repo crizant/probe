@@ -225,7 +225,7 @@ fn human_and_quiet_summaries_keep_failures_and_exit_codes() {
                     if quiet {
                         "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n"
                     } else {
-                        "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n\n  ✗ CLI assertion #1 — Failed\n    Got: 200\n"
+                        "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n\n  ✗ CLI assertion #1 — Failed\n    response.status equals 201\n    Got: 200\n"
                     }
                 );
             } else if quiet {
@@ -270,10 +270,12 @@ fn human_and_quiet_mixed_summaries_count_disabled_assertions_and_errors() {
                 concat!(
                     "error[assertion_failed]: Assertions: 2 passed, 2 failed, 2 errors, 2 disabled\n",
                     "\n  ! Collection assertion #4 — Error\n",
+                    "    response.status equals {{alias}}\n",
                     "    Reason: assertion variable resolution failed or a value is unavailable\n",
-                    "\n  ✗ Collection assertion #6 — Failed\n    Got: John Doe\n",
-                    "\n  ✗ CLI assertion #1 — Failed\n    Got: 200\n",
+                    "\n  ✗ Collection assertion #6 — Failed\n    response.body.name equals SECRET_EXPECTED\n    Got: John Doe\n",
+                    "\n  ✗ CLI assertion #1 — Failed\n    response.status equals 201\n    Got: 200\n",
                     "\n  ! CLI assertion #2 — Error\n",
+                    "    response.body.missing isNull\n",
                     "    Reason: response property or array index does not exist\n",
                 )
             }
@@ -794,6 +796,7 @@ fn human_failure_actual_escapes_terminal_controls_and_preserves_unicode() {
                 concat!(
                     "error[assertion_failed]: Assertions: 0 passed, 1 failed, 0 errors, 0 disabled\n",
                     "\n  ✗ CLI assertion #1 — Failed\n",
+                    "    response.body equals short\n",
                     "    Got: Jane\\nforged line\\roverwrite\\u{1b}[31mé界🙂\\u{1b}[0m\n",
                 )
             );
@@ -846,9 +849,88 @@ fn failed_human_actuals_use_secrets_disclosed_by_later_assertions() {
         String::from_utf8(output.stderr).unwrap(),
         concat!(
             "error[assertion_failed]: Assertions: 1 passed, 1 failed, 0 errors, 0 disabled\n",
-            "\n  ✗ Collection assertion #1 — Failed\n    Got: [REDACTED]\n",
+            "\n  ✗ Collection assertion #1 — Failed\n    response.body.token equals SECRET_EXPECTED\n    Got: [REDACTED]\n",
         )
     );
+    server.join().unwrap();
+    cleanup(path);
+}
+
+#[test]
+fn human_checks_preserve_safe_source_and_redact_literals_using_later_disclosure() {
+    let (url, server) = serve_once(
+        format!(r#"{{"token":"{SECRET}","other":"ordinary"}}"#).into_bytes(),
+        "application/json",
+    );
+    let mut assertions = String::from("runtime:\n  assertions:\n");
+    for (expression, operator, value) in [
+        ("response.body.other", "equals", SECRET),
+        (
+            "response.body.other",
+            "equals",
+            r#""\u0050R3_SECRET_MARKER""#,
+        ),
+        ("response.body.other", "equals", "{{alias}}"),
+        ("response.PR3_SECRET_MARKER", "equals", SECRET),
+        ("response.status", SECRET, SECRET),
+        ("response.body.other", "equals", r#""safe value""#),
+        ("response.body.token", "equals", "{{alias}}"),
+    ] {
+        assertions.push_str(&format!(
+            "    - expression: {}\n      operator: {}\n      value: {}\n",
+            serde_json::to_string(expression).unwrap(),
+            serde_json::to_string(operator).unwrap(),
+            serde_json::to_string(value).unwrap(),
+        ));
+    }
+    let path = workspace(&url, "http", &assertions, true);
+    let output = probe()
+        .args(["request", "run"])
+        .arg(&path)
+        .arg("items/0")
+        .args(["--environment", "local", "--secret-provider", "env"])
+        .env(SECRET, SECRET)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(9));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("Assertions: 1 passed, 4 failed, 2 errors, 0 disabled"),
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr
+            .matches("response.body.other equals [REDACTED]")
+            .count(),
+        2,
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("response.body.other equals {{alias}}\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr
+            .contains("[REDACTED] equals [REDACTED]\n    Reason: unsupported assertion expression"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "response.status [REDACTED] [REDACTED]\n    Reason: unsupported assertion operator"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(concat!(
+            r#"response.body.other equals \"safe value\""#,
+            "\n    Got: ordinary"
+        )),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(SECRET), "{stderr}");
+    assert!(!stderr.contains("\\u0050"), "{stderr}");
+    assert!(!stderr.contains("assertion #7"), "{stderr}");
     server.join().unwrap();
     cleanup(path);
 }

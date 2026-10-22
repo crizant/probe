@@ -241,7 +241,7 @@ impl<'a> PreparedRequest<'a> {
                 .with_json_literals();
         let outcomes = outcomes
             .into_iter()
-            .map(|result| result.redact(&redactor))
+            .map(|result| result.redact(&redactor, assertions))
             .collect();
         executed.response = disclosure.redact_response_using(executed.response, &redactor);
         Ok((executed, outcomes))
