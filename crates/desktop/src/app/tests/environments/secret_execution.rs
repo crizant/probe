@@ -1,7 +1,7 @@
 use super::*;
 use probe_core::VariableStatus::{Resolved, SecretWithoutValue};
 
-fn park_until(
+pub(super) fn park_until(
     cx: &mut TestAppContext,
     mut ready: impl FnMut(&mut TestAppContext) -> bool,
     waiting_for: &str,

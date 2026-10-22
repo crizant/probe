@@ -110,15 +110,15 @@ impl EnvironmentManagerDialog {
 
     /// `draft_mut` clears previews and bumps the generation. Callers reject an
     /// unused index before this runs, then realign any cached rows for the edit.
-    fn edit_client_certificates(
+    pub(crate) fn edit_client_certificates(
         &mut self,
         update: impl FnOnce(
             &mut Vec<probe_core::ClientCertificate>,
-            Option<&mut Vec<probe_http::CertificateInspection>>,
+            &mut Option<Vec<probe_http::CertificateInspection>>,
         ),
     ) {
         let mut metadata = self.certificate_metadata.take();
-        update(&mut self.draft_mut().client_certificates, metadata.as_mut());
+        update(&mut self.draft_mut().client_certificates, &mut metadata);
         self.certificate_metadata = metadata;
     }
 

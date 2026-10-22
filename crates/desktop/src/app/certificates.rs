@@ -304,6 +304,9 @@ impl ProbeApp {
             return;
         };
         let index = editor.index;
+        if index.is_some_and(|index| index >= dialog.draft().client_certificates.len()) {
+            return;
+        }
         if index.and_then(|index| dialog.draft().client_certificates.get(index))
             == Some(&certificate)
         {
@@ -311,20 +314,19 @@ impl ProbeApp {
             return;
         }
         // Domain, key and passphrase edits do not change the public certificate.
-        let metadata = index
+        let preserve_metadata = index
             .and_then(|index| dialog.draft().client_certificates.get(index))
-            .filter(|current| same_public_certificate_source(current, &certificate))
-            .and_then(|_| dialog.certificate_metadata.clone());
-        let certificates = &mut dialog.draft_mut().client_certificates;
-        if let Some(index) = index {
-            let Some(current) = certificates.get_mut(index) else {
-                return;
-            };
-            *current = certificate;
-        } else {
-            certificates.push(certificate);
-        }
-        dialog.certificate_metadata = metadata;
+            .is_some_and(|current| same_public_certificate_source(current, &certificate));
+        dialog.edit_client_certificates(|certificates, metadata| {
+            if let Some(index) = index {
+                certificates[index] = certificate;
+            } else {
+                certificates.push(certificate);
+            }
+            if !preserve_metadata {
+                *metadata = None;
+            }
+        });
         self.cancel_certificate_editor(window, cx);
     }
 
@@ -362,19 +364,13 @@ impl ProbeApp {
                         let value = body_file_path_for_storage(path, workspace_path.as_deref());
                         let _ = view.update_in(cx, |view, window, cx| {
                             // Ignore a picker result if the form was cancelled or replaced during reload.
-                            let current = view
+                            if let Some(editor) = view
                                 .environment_manager_dialog
-                                .as_ref()
-                                .and_then(|dialog| dialog.certificate_editor.as_ref())
-                                .is_some_and(|editor| editor.inputs.get(field) == Some(&input));
-                            if current {
-                                if let Some(editor) = view
-                                    .environment_manager_dialog
-                                    .as_mut()
-                                    .and_then(|dialog| dialog.certificate_editor.as_mut())
-                                {
-                                    editor.invalidate_inspection();
-                                }
+                                .as_mut()
+                                .and_then(|dialog| dialog.certificate_editor.as_mut())
+                                && editor.inputs.get(field) == Some(&input)
+                            {
+                                editor.invalidate_inspection();
                                 input.update(cx, |input, cx| input.set_value(value, window, cx));
                                 cx.notify();
                             }
@@ -494,17 +490,13 @@ impl ProbeApp {
         let Some(certificate) = editor.inspection_certificate(cx) else {
             return;
         };
-        editor.inspection = None;
-        editor.inspection_watcher = None;
-        editor.monitoring_unavailable = false;
+        editor.invalidate_inspection();
         editor.inspecting = true;
-        editor.inspection_generation = Rc::new(());
         let generation = editor.inspection_generation.clone();
         let (environments, options) = self.certificate_inspection_context(&draft);
         let workspace = self.workspace_path.clone().unwrap_or_default();
         let store = self.credential_store.clone();
-        let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let worker_changed = changed.clone();
+        let (changed, change) = tokio::sync::oneshot::channel();
         cx.spawn(async move |view, cx| {
             let (result, watcher, monitoring_unavailable) = cx
                 .background_spawn(async move {
@@ -524,18 +516,17 @@ impl ProbeApp {
                         |identity| {
                             let paths = identity.source_paths(&options);
                             let sources = paths.as_ref().ok().cloned().unwrap_or_default();
-                            let flag = worker_changed.clone();
+                            let mut changed = Some(changed);
                             // A failed registration drops this watcher. A partial watch is not kept.
                             match start_source_monitor(
                                 paths.map_err(|_| ()),
                                 || {
                                     notify::recommended_watcher(
                                         move |event: notify::Result<notify::Event>| {
-                                            if inspection_source_changed(&event, &sources) {
-                                                flag.store(
-                                                    true,
-                                                    std::sync::atomic::Ordering::Relaxed,
-                                                );
+                                            if inspection_source_changed(&event, &sources)
+                                                && let Some(changed) = changed.take()
+                                            {
+                                                let _ = changed.send(());
                                             }
                                         },
                                     )
@@ -556,6 +547,7 @@ impl ProbeApp {
                     (result, watcher, monitoring_unavailable)
                 })
                 .await;
+            let monitoring = watcher.is_some();
             let _ = view.update(cx, |view, cx| {
                 if let Some(editor) = view
                     .environment_manager_dialog
@@ -571,33 +563,19 @@ impl ProbeApp {
                     cx.notify();
                 }
             });
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(500))
-                    .await;
-                let keep_watching = view
-                    .update(cx, |view, cx| {
-                        let Some(editor) = view
-                            .environment_manager_dialog
-                            .as_mut()
-                            .and_then(|dialog| dialog.certificate_editor.as_mut())
-                        else {
-                            return false;
-                        };
-                        if !Rc::ptr_eq(&editor.inspection_generation, &generation) {
-                            return false;
-                        }
-                        if changed.load(std::sync::atomic::Ordering::Relaxed) {
-                            editor.invalidate_inspection();
-                            cx.notify();
-                            return false;
-                        }
-                        true
-                    })
-                    .unwrap_or(false);
-                if !keep_watching {
-                    break;
-                }
+            // Dropping the watcher closes the channel; no polling task survives the form.
+            if monitoring && change.await.is_ok() {
+                let _ = view.update(cx, |view, cx| {
+                    if let Some(editor) = view
+                        .environment_manager_dialog
+                        .as_mut()
+                        .and_then(|dialog| dialog.certificate_editor.as_mut())
+                        && Rc::ptr_eq(&editor.inspection_generation, &generation)
+                    {
+                        editor.invalidate_inspection();
+                        cx.notify();
+                    }
+                });
             }
         })
         .detach();
@@ -635,34 +613,25 @@ fn start_source_monitor<W>(
     create: impl FnOnce() -> Result<W, ()>,
     mut watch: impl FnMut(&mut W, &std::path::Path) -> Result<(), ()>,
 ) -> Result<W, ()> {
-    let parents = distinct_certificate_parents(&paths?)?;
-    let mut watcher = create()?;
-    for parent in &parents {
-        watch(&mut watcher, parent)?;
-    }
-    Ok(watcher)
-}
-
-fn distinct_certificate_parents(
-    paths: &[std::path::PathBuf],
-) -> Result<Vec<std::path::PathBuf>, ()> {
+    let paths = paths?;
     if paths.is_empty() {
         return Err(());
     }
     let mut parents = Vec::new();
-    for path in paths {
-        let Some(parent) = path.parent() else {
-            return Err(());
-        };
-        if parent.as_os_str().is_empty() {
-            return Err(());
+    for path in &paths {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or(())?;
+        if !parents.contains(&parent) {
+            parents.push(parent);
         }
-        if parents.iter().any(|seen| seen == parent) {
-            continue;
-        }
-        parents.push(parent.to_path_buf());
     }
-    Ok(parents)
+    let mut watcher = create()?;
+    for parent in parents {
+        watch(&mut watcher, parent)?;
+    }
+    Ok(watcher)
 }
 
 fn same_public_certificate_source(before: &ClientCertificate, after: &ClientCertificate) -> bool {
@@ -750,44 +719,24 @@ mod tests {
     #[test]
     fn watcher_setup_failure_does_not_start_monitoring() {
         let created = std::cell::Cell::new(false);
-        assert!(
-            start_source_monitor(
-                Err(()),
-                || {
-                    created.set(true);
-                    Err(())
-                },
-                |_: &mut (), _| Ok(()),
-            )
-            .is_err()
-        );
-        assert!(!created.get());
-
-        assert!(
-            start_source_monitor(
-                Ok(Vec::new()),
-                || {
-                    created.set(true);
-                    Err(())
-                },
-                |_: &mut (), _| Ok(()),
-            )
-            .is_err()
-        );
-        assert!(!created.get());
-
-        assert!(
-            start_source_monitor(
-                Ok(vec![PathBuf::from("client.pem")]),
-                || {
-                    created.set(true);
-                    Err(())
-                },
-                |_: &mut (), _| Ok(()),
-            )
-            .is_err()
-        );
-        assert!(!created.get());
+        for paths in [
+            Err(()),
+            Ok(Vec::new()),
+            Ok(vec![PathBuf::from("client.pem")]),
+        ] {
+            assert!(
+                start_source_monitor(
+                    paths,
+                    || {
+                        created.set(true);
+                        Err(())
+                    },
+                    |_: &mut (), _| Ok(()),
+                )
+                .is_err()
+            );
+            assert!(!created.get());
+        }
 
         assert!(
             start_source_monitor(

@@ -899,6 +899,37 @@ fn certificate_list_scrollbar_reaches_overflow_rows(cx: &mut TestAppContext) {
     });
 }
 
+fn editor(view: &mut ProbeApp) -> &mut crate::app::CertificateEditor {
+    view.environment_manager_dialog
+        .as_mut()
+        .unwrap()
+        .certificate_editor
+        .as_mut()
+        .unwrap()
+}
+
+fn fixture_path(filename: &str) -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/mtls")
+        .join(filename)
+        .to_str()
+        .unwrap()
+        .into()
+}
+
+fn assert_visible(
+    workspace: &EnvironmentWorkspace,
+    cx: &mut TestAppContext,
+    selector: &'static str,
+    visible: bool,
+) {
+    assert_eq!(
+        workspace.visual(cx).debug_bounds(selector).is_some(),
+        visible,
+        "{selector}"
+    );
+}
+
 #[gpui_kit::test]
 fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-inspection-state");
@@ -915,13 +946,7 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
         )),
     };
     let generation = workspace.update(cx, |view, _, cx| {
-        let editor = view
-            .environment_manager_dialog
-            .as_mut()
-            .unwrap()
-            .certificate_editor
-            .as_mut()
-            .unwrap();
+        let editor = editor(view);
         let generation = editor.inspection_generation.clone();
         editor.inspecting = true;
         assert!(editor.accept_inspection(&generation, failure(), None, true));
@@ -930,35 +955,13 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
         cx.notify();
         generation
     });
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("certificate-validation-failure")
-            .is_some()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("certificate-validation-success")
-            .is_none()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("certificate-monitoring-warning")
-            .is_some()
-    );
+    assert_visible(&workspace, cx, "certificate-validation-failure", true);
+    assert_visible(&workspace, cx, "certificate-validation-success", false);
+    assert_visible(&workspace, cx, "certificate-monitoring-warning", true);
     workspace.update(cx, |view, window, cx| {
-        view.environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap()
-            .inputs[1]
-            .update(cx, |input, cx| {
-                input.replace_all("edited-unsaved.pem", window, cx)
-            });
+        editor(view).inputs[1].update(cx, |input, cx| {
+            input.replace_all("edited-unsaved.pem", window, cx)
+        });
     });
     cx.run_until_parked();
     workspace.update(cx, |view, _, cx| {
@@ -987,16 +990,7 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
     assert!(certificates(&workspace, cx).iter().any(|cert| matches!(cert, ClientCertificate::Pem { certificate_file_path, .. } if certificate_file_path == "edited-unsaved.pem")));
     click(&workspace, cx, "certificate-add");
     workspace.update(cx, |view, _, _| {
-        assert!(
-            !view
-                .environment_manager_dialog
-                .as_mut()
-                .unwrap()
-                .certificate_editor
-                .as_mut()
-                .unwrap()
-                .accept_inspection(&generation, failure(), None, false)
-        );
+        assert!(!editor(view).accept_inspection(&generation, failure(), None, false));
     });
     click(&workspace, cx, "certificate-cancel");
 }
@@ -1007,32 +1001,17 @@ fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppCo
     workspace.open_manager(cx, "base");
     click(&workspace, cx, "environment-tab-2");
     click(&workspace, cx, "certificate-add");
-    let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/mtls");
     fill(&workspace, cx, 0, "localhost");
-    fill(
-        &workspace,
-        cx,
-        1,
-        fixture.join("client.pem").to_str().unwrap(),
-    );
-    fill(
-        &workspace,
-        cx,
-        2,
-        fixture.join("client-encrypted-key.pem").to_str().unwrap(),
-    );
+    let directory = tempfile::tempdir().unwrap();
+    let certificate = directory.path().canonicalize().unwrap().join("client.pem");
+    fs::copy(fixture_path("client.pem"), &certificate).unwrap();
+    fill(&workspace, cx, 1, certificate.to_str().unwrap());
+    fill(&workspace, cx, 2, &fixture_path("client-encrypted-key.pem"));
     fill(&workspace, cx, 4, "probe-test-only-password");
     let before = certificates(&workspace, cx);
     click(&workspace, cx, "certificate-inspect");
     workspace.update(cx, |view, _, _| {
-        let editor = view
-            .environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap();
+        let editor = editor(view);
         let result = editor
             .inspection
             .as_ref()
@@ -1043,24 +1022,9 @@ fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppCo
             "Probe test-only client"
         );
     });
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("certificate-validation-success")
-            .is_some()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("certificate-validation-failure")
-            .is_none()
-    );
-    assert!(
-        workspace
-            .visual(cx)
-            .debug_bounds("certificate-monitoring-warning")
-            .is_none()
-    );
+    assert_visible(&workspace, cx, "certificate-validation-success", true);
+    assert_visible(&workspace, cx, "certificate-validation-failure", false);
+    assert_visible(&workspace, cx, "certificate-monitoring-warning", false);
     assert_eq!(
         certificates(&workspace, cx),
         before,
@@ -1068,13 +1032,7 @@ fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppCo
     );
     click(&workspace, cx, "certificate-copy-fingerprint");
     workspace.update(cx, |view, _, cx| {
-        let editor = view
-            .environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap();
+        let editor = editor(view);
         let expected = &editor
             .inspection
             .as_ref()
@@ -1088,6 +1046,25 @@ fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppCo
             Some(expected.as_str())
         );
     });
+    // A real source event must wake the inspection task and clear its result.
+    fs::copy(fixture_path("client.pem"), &certificate).unwrap();
+    super::secret_execution::park_until(
+        cx,
+        |cx| workspace.update(cx, |view, _, _| editor(view).inspection.is_none()),
+        "certificate source invalidation",
+    );
+    assert_visible(&workspace, cx, "certificate-validation-success", false);
+    click(&workspace, cx, "certificate-inspect");
+    workspace.update(cx, |view, _, cx| {
+        let editor = editor(view);
+        let result = editor.inspection.clone().unwrap();
+        let generation = editor.inspection_generation.clone();
+        assert!(editor.accept_inspection(&generation, result, None, true));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_visible(&workspace, cx, "certificate-validation-success", true);
+    assert_visible(&workspace, cx, "certificate-monitoring-warning", true);
     click(&workspace, cx, "certificate-cancel");
     assert_eq!(certificates(&workspace, cx), before);
 }
@@ -1098,41 +1075,17 @@ fn inspect_allows_missing_domain_while_save_requires_it(cx: &mut TestAppContext)
     workspace.open_manager(cx, "base");
     click(&workspace, cx, "environment-tab-2");
     click(&workspace, cx, "certificate-add");
-    let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/mtls");
-    fill(
-        &workspace,
-        cx,
-        1,
-        fixture.join("client.pem").to_str().unwrap(),
-    );
-    fill(
-        &workspace,
-        cx,
-        2,
-        fixture.join("client-key.pem").to_str().unwrap(),
-    );
+    fill(&workspace, cx, 1, &fixture_path("client.pem"));
+    fill(&workspace, cx, 2, &fixture_path("client-key.pem"));
     workspace.update(cx, |view, _, cx| {
-        let editor = view
-            .environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap();
+        let editor = editor(view);
         assert_eq!(editor.missing_required_field(cx), Some("Domain"));
         assert!(editor.missing_inspection_field(cx).is_none());
         assert!(editor.certificate(cx).is_none());
     });
     click(&workspace, cx, "certificate-inspect");
     workspace.update(cx, |view, window, cx| {
-        let result = view
-            .environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap()
+        let result = editor(view)
             .inspection
             .as_ref()
             .expect("inspect runs without a domain");
@@ -1155,42 +1108,19 @@ fn inspect_allows_missing_domain_while_save_requires_it(cx: &mut TestAppContext)
     });
     click(&workspace, cx, "certificate-type-1");
     workspace.update(cx, |view, _, cx| {
-        let editor = view
-            .environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap();
+        let editor = editor(view);
         assert_eq!(editor.missing_required_field(cx), Some("Domain"));
         assert_eq!(editor.missing_inspection_field(cx), Some("PKCS#12 File"));
     });
-    fill(
-        &workspace,
-        cx,
-        3,
-        fixture.join("client-unencrypted.p12").to_str().unwrap(),
-    );
+    fill(&workspace, cx, 3, &fixture_path("client-unencrypted.p12"));
     workspace.update(cx, |view, _, cx| {
-        let editor = view
-            .environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap();
+        let editor = editor(view);
         assert_eq!(editor.missing_required_field(cx), Some("Domain"));
         assert!(editor.missing_inspection_field(cx).is_none());
     });
     click(&workspace, cx, "certificate-inspect");
     workspace.update(cx, |view, _, cx| {
-        let editor = view
-            .environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap();
+        let editor = editor(view);
         let result = editor
             .inspection
             .as_ref()
@@ -1204,8 +1134,6 @@ fn inspect_allows_missing_domain_while_save_requires_it(cx: &mut TestAppContext)
 fn certificate_metadata_survives_refresh_saves_and_unchanged_reload(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-refresh");
     workspace.open_manager(cx, "base");
-    let certificate_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/mtls/client.pem");
     workspace.update(cx, |view, _, _| {
         view.environment_manager_dialog
             .as_mut()
@@ -1214,7 +1142,7 @@ fn certificate_metadata_survives_refresh_saves_and_unchanged_reload(cx: &mut Tes
             .client_certificates
             .push(ClientCertificate::Pem {
                 domain: "localhost".into(),
-                certificate_file_path: certificate_path.to_str().unwrap().into(),
+                certificate_file_path: fixture_path("client.pem"),
                 private_key_file_path: "not-read-for-public-metadata.pem".into(),
                 passphrase: None,
                 disabled: false,
@@ -1272,16 +1200,9 @@ fn certificate_metadata_survives_refresh_saves_and_unchanged_reload(cx: &mut Tes
         );
 
         view.open_certificate_editor(Some(index), window, cx);
-        view.environment_manager_dialog
-            .as_ref()
-            .unwrap()
-            .certificate_editor
-            .as_ref()
-            .unwrap()
-            .inputs[4]
-            .update(cx, |input, cx| {
-                input.set_value("unused-passphrase", window, cx)
-            });
+        editor(view).inputs[4].update(cx, |input, cx| {
+            input.set_value("unused-passphrase", window, cx)
+        });
         view.save_certificate_editor(window, cx);
         let dialog = view.environment_manager_dialog.as_ref().unwrap();
         assert_eq!(
@@ -1339,8 +1260,6 @@ fn cached_fingerprint(dialog: &crate::app::EnvironmentManagerDialog) -> Option<&
 fn certificate_list_mutations_keep_metadata_with_surviving_rows(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-delete-metadata");
     workspace.open_manager(cx, "base");
-    let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/mtls");
     workspace.update(cx, |view, _, _| {
         view.environment_manager_dialog
             .as_mut()
@@ -1350,7 +1269,7 @@ fn certificate_list_mutations_keep_metadata_with_surviving_rows(cx: &mut TestApp
             .into_iter()
             .map(|filename| ClientCertificate::Pem {
                 domain: filename.into(),
-                certificate_file_path: fixture.join(filename).to_str().unwrap().into(),
+                certificate_file_path: fixture_path(filename),
                 private_key_file_path: "not-read-for-preview.pem".into(),
                 passphrase: None,
                 disabled: false,
