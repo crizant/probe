@@ -502,7 +502,11 @@ impl ProbeApp {
         let mut summary_line = div()
             .id("assertion-summary")
             .debug_selector(|| "assertion-summary".into())
-            .px(px(theme.metrics.spacing_2))
+            .border_l_2()
+            .border_color(transparent_black())
+            // Match the result row's padding, status icon, and gap before its expression.
+            .pl(px(theme.metrics.spacing_2 * 2.0 + theme.metrics.icon_small))
+            .pr(px(theme.metrics.spacing_2))
             .py(px(theme.metrics.spacing_1))
             .flex()
             .flex_wrap()
