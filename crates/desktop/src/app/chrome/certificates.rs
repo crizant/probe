@@ -121,6 +121,9 @@ impl ProbeApp {
                                     )
                                     .child(
                                         components::truncated_label(domain.clone())
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_size(px(theme.typography.body_size))
+                                            .text_color(theme.colors.text.primary)
                                             .flex_1()
                                             .min_w(px(0.0)),
                                     ),
@@ -131,17 +134,11 @@ impl ProbeApp {
                                     .as_ref()
                                     .and_then(|rows| rows.get(index))
                                     .and_then(|row| row.metadata.as_ref());
+                                let warning = metadata.and_then(|metadata| {
+                                    metadata.validity_warning(std::time::SystemTime::now())
+                                });
                                 let label = metadata
-                                    .map(|m| {
-                                        format!(
-                                            "{} · Expires {}{}",
-                                            m.subject,
-                                            m.expires,
-                                            m.validity_warning(std::time::SystemTime::now())
-                                                .map(|w| format!(" · {w}"))
-                                                .unwrap_or_default()
-                                        )
-                                    })
+                                    .map(|m| format!("{} · Expires {}", m.subject, m.expires))
                                     .unwrap_or_else(|| {
                                         if dialog
                                             .certificate_metadata
@@ -153,18 +150,30 @@ impl ProbeApp {
                                             "Loading certificate metadata…".into()
                                         }
                                     });
-                                components::truncated_label(label)
-                                    .text_size(px(theme.typography.caption_size))
-                                    .text_color(
-                                        if metadata.is_some_and(|m| {
-                                            m.validity_warning(std::time::SystemTime::now())
-                                                .is_some()
-                                        }) {
-                                            theme.colors.status.warning
-                                        } else {
-                                            theme.colors.text.muted
-                                        },
+                                div()
+                                    .min_w(px(0.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(theme.metrics.spacing_1))
+                                    .child(
+                                        components::truncated_label(label)
+                                            .text_size(px(theme.typography.caption_size))
+                                            .text_color(theme.colors.text.secondary),
                                     )
+                                    .when_some(warning, |summary, warning| {
+                                        summary.child(
+                                            div()
+                                                .id(("certificate-validity-warning", index))
+                                                .debug_selector(move || {
+                                                    format!("certificate-validity-warning-{index}")
+                                                })
+                                                .whitespace_normal()
+                                                .text_size(px(theme.typography.caption_size))
+                                                .text_color(theme.colors.status.warning)
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(warning),
+                                        )
+                                    })
                             })
                             .child(
                                 components::truncated_label(summary)

@@ -300,6 +300,7 @@ impl ProbeApp {
                                         },
                                     )),
                             )
+                            .child(self.render_active_certificate(theme, cx))
                             .when(websocket, |bar| {
                                 let state = self
                                     .websocket

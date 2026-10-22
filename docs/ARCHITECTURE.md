@@ -908,7 +908,13 @@ a rescan. Other files in those directories do not. If source paths cannot be
 resolved, the watcher cannot be created, or a parent directory cannot be
 registered, the completed local result stays visible with a warning that file
 changes cannot be monitored.
-Collection-level certificate UI remains deferred.
+The HTTPS request editor previews automatic selection through the same application
+selector used by execution. Preview resolution uses `NoSecrets`; unavailable URL or
+domain inputs produce an unknown state. Public inspection runs on a background
+worker, refreshing selected metadata every three seconds. Input snapshots and
+generations reject results after request, tab, environment, or workspace changes.
+The read-only popover can open environment certificate management; collection
+certificate management remains deferred.
 
 ## OpenCollection Validation
 

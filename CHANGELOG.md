@@ -8,6 +8,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
+- HTTPS request editors show the automatically selected client certificate, its
+  public metadata and expiry warnings in a read-only popover, without unlocking
+  protected certificates or querying secrets.
+
 - Environment Manager client certificates now show public subject and expiry
   metadata, with expiry warnings. The certificate editor can inspect current PEM
   and PKCS#12 fields, copy SHA-256 fingerprints, and validate local key matches
