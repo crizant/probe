@@ -924,8 +924,9 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
             .unwrap();
         let generation = editor.inspection_generation.clone();
         editor.inspecting = true;
-        assert!(editor.accept_inspection(&generation, failure(), None));
+        assert!(editor.accept_inspection(&generation, failure(), None, true));
         assert!(editor.inspection.is_some());
+        assert!(editor.monitoring_unavailable);
         cx.notify();
         generation
     });
@@ -940,6 +941,12 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
             .visual(cx)
             .debug_bounds("certificate-validation-success")
             .is_none()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-monitoring-warning")
+            .is_some()
     );
     workspace.update(cx, |view, window, cx| {
         view.environment_manager_dialog
@@ -958,19 +965,23 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
         let dialog = view.environment_manager_dialog.as_mut().unwrap();
         let editor = dialog.certificate_editor.as_mut().unwrap();
         assert!(editor.inspection.is_none());
-        assert!(!editor.accept_inspection(&generation, failure(), None));
+        assert!(!editor.monitoring_unavailable);
+        assert!(!editor.accept_inspection(&generation, failure(), None, false));
+        assert!(!editor.monitoring_unavailable);
         let current = editor.inspection_generation.clone();
-        assert!(editor.accept_inspection(&current, failure(), None));
+        assert!(editor.accept_inspection(&current, failure(), None, false));
+        assert!(!editor.monitoring_unavailable);
         let draft = editor.certificate(cx).unwrap();
         assert!(matches!(draft, ClientCertificate::Pem { certificate_file_path, .. } if certificate_file_path == "edited-unsaved.pem"));
         let old_cache = dialog.certificate_generation.clone();
         dialog.draft_mut().color = Some("blue".into());
         assert!(!std::rc::Rc::ptr_eq(&old_cache, &dialog.certificate_generation));
         assert!(dialog.certificate_metadata.is_none());
-        assert!(!dialog.certificate_editor.as_mut().unwrap().accept_inspection(&current, failure(), None));
+        assert!(!dialog.certificate_editor.as_mut().unwrap().accept_inspection(&current, failure(), None, true));
+        assert!(!dialog.certificate_editor.as_ref().unwrap().monitoring_unavailable);
         let editor = dialog.certificate_editor.as_mut().unwrap();
         let current = editor.inspection_generation.clone();
-        editor.accept_inspection(&current, failure(), None);
+        editor.accept_inspection(&current, failure(), None, false);
     });
     click(&workspace, cx, "certificate-save");
     assert!(certificates(&workspace, cx).iter().any(|cert| matches!(cert, ClientCertificate::Pem { certificate_file_path, .. } if certificate_file_path == "edited-unsaved.pem")));
@@ -984,7 +995,7 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
                 .certificate_editor
                 .as_mut()
                 .unwrap()
-                .accept_inspection(&generation, failure(), None)
+                .accept_inspection(&generation, failure(), None, false)
         );
     });
     click(&workspace, cx, "certificate-cancel");
@@ -1042,6 +1053,12 @@ fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppCo
         workspace
             .visual(cx)
             .debug_bounds("certificate-validation-failure")
+            .is_none()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-monitoring-warning")
             .is_none()
     );
     assert_eq!(

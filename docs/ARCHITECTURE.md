@@ -901,10 +901,13 @@ multi-identity rejection; it sends no request and performs no persistence. Publi
 metadata and fixed validation diagnostics are returned separately from identity
 material, with secret-derived metadata redacted in the application boundary.
 Dates are presented separately from key validity and never gate Save or execution.
-Input generations discard stale completions; source-directory observation clears
+Input generations discard stale completions. Source-directory observation clears
 editor results when a resolved certificate or private-key path changes, including
-atomic replacement, and when the watcher reports an error. Other files in those
-directories do not.
+atomic replacement, when the watcher reports an error, and when an event requires
+a rescan. Other files in those directories do not. If source paths cannot be
+resolved, the watcher cannot be created, or a parent directory cannot be
+registered, the completed local result stays visible with a warning that file
+changes cannot be monitored.
 Collection-level certificate UI remains deferred.
 
 ## OpenCollection Validation

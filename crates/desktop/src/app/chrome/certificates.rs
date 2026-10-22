@@ -627,16 +627,26 @@ impl ProbeApp {
                     .debug_selector(move || marker.into()),
             );
         }
-        form = form.child(
-            details.child(
-                status_line.child(
-                    components::dialog_description(theme, status)
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .text_color(color),
-                ),
+        details = details.child(
+            status_line.child(
+                components::dialog_description(theme, status)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_color(color),
             ),
         );
+        if editor.monitoring_unavailable {
+            details = details.child(
+                components::dialog_description(
+                    theme,
+                    "File changes cannot be monitored. Inspect again if the certificate or private key changes.",
+                )
+                .text_color(theme.colors.status.warning)
+                .id("certificate-monitoring-warning")
+                .debug_selector(|| "certificate-monitoring-warning".into()),
+            );
+        }
+        form = form.child(details);
         let cancel = cx.weak_entity();
         let save = cx.weak_entity();
         let form = form.child(

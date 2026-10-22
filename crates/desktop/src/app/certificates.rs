@@ -16,6 +16,8 @@ pub(crate) enum EnvironmentTab {
 pub(crate) struct CertificateEditor {
     pub(crate) inspection: Option<probe_http::CertificateInspection>,
     pub(crate) inspection_watcher: Option<Rc<notify::RecommendedWatcher>>,
+    /// The local result is still shown. File changes will not refresh it.
+    pub(crate) monitoring_unavailable: bool,
     pub(crate) inspecting: bool,
     pub(crate) inspection_generation: Rc<()>,
     pub(crate) index: Option<usize>,
@@ -45,6 +47,7 @@ impl CertificateEditor {
     pub(crate) fn invalidate_inspection(&mut self) {
         self.inspection = None;
         self.inspection_watcher = None;
+        self.monitoring_unavailable = false;
         self.inspecting = false;
         self.inspection_generation = Rc::new(());
     }
@@ -54,6 +57,7 @@ impl CertificateEditor {
         generation: &Rc<()>,
         result: probe_http::CertificateInspection,
         watcher: Option<notify::RecommendedWatcher>,
+        monitoring_unavailable: bool,
     ) -> bool {
         if !Rc::ptr_eq(&self.inspection_generation, generation) {
             return false;
@@ -61,6 +65,7 @@ impl CertificateEditor {
         self.inspecting = false;
         self.inspection = Some(result);
         self.inspection_watcher = watcher.map(Rc::new);
+        self.monitoring_unavailable = monitoring_unavailable;
         true
     }
 
@@ -245,6 +250,7 @@ impl ProbeApp {
         dialog.certificate_editor = Some(CertificateEditor {
             inspection: None,
             inspection_watcher: None,
+            monitoring_unavailable: false,
             inspecting: false,
             inspection_generation: Rc::new(()),
             index,
@@ -490,6 +496,7 @@ impl ProbeApp {
         };
         editor.inspection = None;
         editor.inspection_watcher = None;
+        editor.monitoring_unavailable = false;
         editor.inspecting = true;
         editor.inspection_generation = Rc::new(());
         let generation = editor.inspection_generation.clone();
@@ -499,13 +506,14 @@ impl ProbeApp {
         let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_changed = changed.clone();
         cx.spawn(async move |view, cx| {
-            let (result, watcher) = cx
+            let (result, watcher, monitoring_unavailable) = cx
                 .background_spawn(async move {
                     let provider = crate::credentials::NativeSecretProvider {
                         store: store.as_ref(),
                         workspace: &workspace,
                     };
                     let mut watcher = None;
+                    let mut monitoring_unavailable = false;
                     let result = probe_application::inspect_certificate_observing(
                         &certificate,
                         &environments,
@@ -514,29 +522,38 @@ impl ProbeApp {
                         &options,
                         false,
                         |identity| {
-                            use notify::Watcher;
-                            if let Ok(paths) = identity.source_paths(&options) {
-                                let flag = worker_changed.clone();
-                                let sources = paths.clone();
-                                if let Ok(mut observer) = notify::recommended_watcher(
-                                    move |event: notify::Result<notify::Event>| {
-                                        if inspection_source_changed(&event, &sources) {
-                                            flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                                        }
-                                    },
-                                ) {
-                                    for path in paths {
-                                        if let Some(parent) = path.parent() {
-                                            let _ = observer
-                                                .watch(parent, notify::RecursiveMode::NonRecursive);
-                                        }
-                                    }
-                                    watcher = Some(observer);
-                                }
+                            let paths = identity.source_paths(&options);
+                            let sources = paths.as_ref().ok().cloned().unwrap_or_default();
+                            let flag = worker_changed.clone();
+                            // A failed registration drops this watcher. A partial watch is not kept.
+                            match start_source_monitor(
+                                paths.map_err(|_| ()),
+                                || {
+                                    notify::recommended_watcher(
+                                        move |event: notify::Result<notify::Event>| {
+                                            if inspection_source_changed(&event, &sources) {
+                                                flag.store(
+                                                    true,
+                                                    std::sync::atomic::Ordering::Relaxed,
+                                                );
+                                            }
+                                        },
+                                    )
+                                    .map_err(|_| ())
+                                },
+                                |observer, parent| {
+                                    use notify::Watcher;
+                                    observer
+                                        .watch(parent, notify::RecursiveMode::NonRecursive)
+                                        .map_err(|_| ())
+                                },
+                            ) {
+                                Ok(observer) => watcher = Some(observer),
+                                Err(()) => monitoring_unavailable = true,
                             }
                         },
                     );
-                    (result, watcher)
+                    (result, watcher, monitoring_unavailable)
                 })
                 .await;
             let _ = view.update(cx, |view, cx| {
@@ -544,7 +561,12 @@ impl ProbeApp {
                     .environment_manager_dialog
                     .as_mut()
                     .and_then(|dialog| dialog.certificate_editor.as_mut())
-                    && editor.accept_inspection(&generation, result, watcher)
+                    && editor.accept_inspection(
+                        &generation,
+                        result,
+                        watcher,
+                        monitoring_unavailable,
+                    )
                 {
                     cx.notify();
                 }
@@ -584,8 +606,9 @@ impl ProbeApp {
 }
 
 /// Parent directories stay watched so an atomic replace is visible. A named
-/// certificate or private-key path invalidates inspection. A watcher error does
-/// too, because a missed change would leave a stale success on screen.
+/// certificate or private-key path invalidates inspection. A watcher error or
+/// rescan does too, because a missed change would leave a stale success on
+/// screen. Access events that do not request a rescan do not.
 fn inspection_source_changed(
     event: &notify::Result<notify::Event>,
     sources: &[std::path::PathBuf],
@@ -593,6 +616,9 @@ fn inspection_source_changed(
     let Ok(event) = event else {
         return true;
     };
+    if event.need_rescan() {
+        return true;
+    }
     if matches!(event.kind, notify::EventKind::Access(_)) {
         return false;
     }
@@ -600,6 +626,43 @@ fn inspection_source_changed(
         .paths
         .iter()
         .any(|path| sources.iter().any(|source| source == path))
+}
+
+/// Deduplicate parent directories, then register every one. Creation, path
+/// resolution, or any registration failure drops the watcher.
+fn start_source_monitor<W>(
+    paths: Result<Vec<std::path::PathBuf>, ()>,
+    create: impl FnOnce() -> Result<W, ()>,
+    mut watch: impl FnMut(&mut W, &std::path::Path) -> Result<(), ()>,
+) -> Result<W, ()> {
+    let parents = distinct_certificate_parents(&paths?)?;
+    let mut watcher = create()?;
+    for parent in &parents {
+        watch(&mut watcher, parent)?;
+    }
+    Ok(watcher)
+}
+
+fn distinct_certificate_parents(
+    paths: &[std::path::PathBuf],
+) -> Result<Vec<std::path::PathBuf>, ()> {
+    if paths.is_empty() {
+        return Err(());
+    }
+    let mut parents = Vec::new();
+    for path in paths {
+        let Some(parent) = path.parent() else {
+            return Err(());
+        };
+        if parent.as_os_str().is_empty() {
+            return Err(());
+        }
+        if parents.iter().any(|seen| seen == parent) {
+            continue;
+        }
+        parents.push(parent.to_path_buf());
+    }
+    Ok(parents)
 }
 
 fn same_public_certificate_source(before: &ClientCertificate, after: &ClientCertificate) -> bool {
@@ -637,7 +700,7 @@ mod tests {
         event::{AccessKind, AccessMode, DataChange, ModifyKind, RenameMode},
     };
 
-    use super::inspection_source_changed;
+    use super::{inspection_source_changed, start_source_monitor};
 
     fn sources() -> Vec<PathBuf> {
         vec![
@@ -674,5 +737,91 @@ mod tests {
             ))),
             &sources
         ));
+        assert!(changed(
+            Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)))
+                .add_path(PathBuf::from("/certs/other.pem"))
+                .set_flag(notify::event::Flag::Rescan)
+        ));
+        assert!(changed(
+            Event::new(EventKind::Modify(ModifyKind::Any)).set_flag(notify::event::Flag::Rescan)
+        ));
+    }
+
+    #[test]
+    fn watcher_setup_failure_does_not_start_monitoring() {
+        let created = std::cell::Cell::new(false);
+        assert!(
+            start_source_monitor(
+                Err(()),
+                || {
+                    created.set(true);
+                    Err(())
+                },
+                |_: &mut (), _| Ok(()),
+            )
+            .is_err()
+        );
+        assert!(!created.get());
+
+        assert!(
+            start_source_monitor(
+                Ok(Vec::new()),
+                || {
+                    created.set(true);
+                    Err(())
+                },
+                |_: &mut (), _| Ok(()),
+            )
+            .is_err()
+        );
+        assert!(!created.get());
+
+        assert!(
+            start_source_monitor(
+                Ok(vec![PathBuf::from("client.pem")]),
+                || {
+                    created.set(true);
+                    Err(())
+                },
+                |_: &mut (), _| Ok(()),
+            )
+            .is_err()
+        );
+        assert!(!created.get());
+
+        assert!(
+            start_source_monitor(
+                Ok(vec![PathBuf::from("/certs/client.pem")]),
+                || Err(()),
+                |_: &mut (), _| Ok(()),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn partial_directory_registration_is_rejected() {
+        let mut watched = Vec::new();
+        let result = start_source_monitor(
+            Ok(vec![
+                PathBuf::from("/certs/client.pem"),
+                PathBuf::from("/certs/client-key.pem"),
+                PathBuf::from("/keys/client-key.pem"),
+            ]),
+            || Ok(()),
+            |_, parent| {
+                watched.push(parent.to_path_buf());
+                if parent.ends_with("keys") {
+                    Err(())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            watched,
+            vec![PathBuf::from("/certs"), PathBuf::from("/keys")]
+        );
     }
 }
