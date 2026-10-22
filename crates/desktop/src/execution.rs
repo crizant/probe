@@ -2145,11 +2145,20 @@ mod certificate_override_mtls_tests {
         const CHILD: &str = "PROBE_CERT_OVERRIDE_MTLS_CHILD";
         if std::env::var_os(CHILD).is_none() {
             let directory = tempfile::TempDir::new().unwrap();
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "execution::certificate_override_mtls_tests::worker_uses_certificate_override_for_http_graphql_and_direct_save", "--nocapture"])
                 .env(CHILD, "1").env("SSL_CERT_FILE", peer::tls_fixture("ca.pem"))
-                .env("SSL_CERT_DIR", directory.path()).status().unwrap();
-            assert!(status.success());
+                .env("SSL_CERT_DIR", directory.path()).output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success()
+                    && stdout.lines().any(|line| {
+                        line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;")
+                    }),
+                "mTLS subprocess must pass exactly one test (status: {}):\nstdout:\n{stdout}\nstderr:\n{stderr}",
+                output.status,
+            );
             return;
         }
         for graphql in [false, true] {
