@@ -113,6 +113,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(index, outcome)| AssertionResult {
+                diagnostic: None,
                 index,
                 outcome,
                 actual: None,
@@ -169,6 +170,7 @@ mod interaction_tests {
             description: None,
         };
         let mut result = AssertionResult {
+            diagnostic: None,
             index: 0,
             outcome: AssertionOutcome::Passed,
             actual: Some("null".into()),
@@ -205,6 +207,7 @@ mod interaction_tests {
             description: None,
         };
         let mut result = AssertionResult {
+            diagnostic: None,
             index: 0,
             outcome: AssertionOutcome::Failed,
             actual: Some("401".into()),

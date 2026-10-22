@@ -17,6 +17,8 @@ pub struct AssertionResult {
     /// Zero-based position in the supplied assertion list.
     pub index: usize,
     pub outcome: AssertionOutcome,
+    /// Redacted, bounded original check, present only for failures and evaluation errors.
+    pub diagnostic: Option<String>,
     /// Safe display text, absent for disabled declarations and evaluation errors.
     pub actual: Option<String>,
     /// Whether the redacted display value exceeded the display limit.
@@ -25,6 +27,19 @@ pub struct AssertionResult {
 
 /// Maximum Unicode characters retained before the explicit truncation marker.
 pub const MAX_ASSERTION_ACTUAL_CHARS: usize = 512;
+
+/// Independent limit for the complete redacted check, before the truncation marker.
+const MAX_ASSERTION_DIAGNOSTIC_CHARS: usize = 1024;
+
+fn truncate_display(text: &mut String, limit: usize) -> bool {
+    if let Some((offset, _)) = text.char_indices().nth(limit) {
+        text.truncate(offset);
+        text.push_str("… [truncated]");
+        true
+    } else {
+        false
+    }
+}
 
 // Never Debug/serialize raw observations. They stay inside the execution boundary
 // until every assertion has disclosed its secrets (including later declarations).
@@ -45,7 +60,12 @@ enum ObservedActual {
 }
 
 impl PendingAssertionResult {
-    pub(crate) fn redact(self, redactor: &probe_core::SecretRedactor<'_>) -> AssertionResult {
+    pub(crate) fn redact(
+        self,
+        redactor: &probe_core::SecretRedactor<'_>,
+        assertions: &[Assertion],
+    ) -> AssertionResult {
+        let assertion = &assertions[self.index];
         fn safe_value(value: &Value, redactor: &probe_core::SecretRedactor<'_>) -> String {
             match value {
                 Value::String(text) => redactor.redact(text),
@@ -99,17 +119,58 @@ impl PendingAssertionResult {
                 safe_value(&value, redactor)
             }
         });
-        let mut actual_truncated = false;
-        if let Some(text) = &mut actual
-            && let Some((offset, _)) = text.char_indices().nth(MAX_ASSERTION_ACTUAL_CHARS)
-        {
-            text.truncate(offset);
-            text.push_str("… [truncated]");
-            actual_truncated = true;
-        }
+        let actual_truncated = actual
+            .as_mut()
+            .is_some_and(|text| truncate_display(text, MAX_ASSERTION_ACTUAL_CHARS));
+        let diagnostic = matches!(
+            self.outcome,
+            AssertionOutcome::Failed | AssertionOutcome::Error(_)
+        )
+        .then(|| {
+            let mut text = format!(
+                "{} {}",
+                if parse_expression(&assertion.expression).is_err() {
+                    "[REDACTED]".into()
+                } else {
+                    redactor.redact(&assertion.expression)
+                },
+                if Operator::parse(&assertion.operator).is_err() {
+                    "[REDACTED]".into()
+                } else {
+                    redactor.redact(&assertion.operator)
+                },
+            );
+            if !matches!(assertion.operator.as_str(), "isNull" | "isNotNull")
+                && let Some(value) = &assertion.value
+            {
+                // Preserve source spelling, but also check decoded literals so
+                // JSON escapes cannot conceal a secret from the matcher.
+                let sensitive_literal = match parse_expected(value) {
+                    Ok(literal) => {
+                        safe_value(&literal, redactor)
+                            != match &literal {
+                                Value::String(text) => text.clone(),
+                                _ => literal.to_string(),
+                            }
+                    }
+                    // Unparsed literals cannot be checked after decoding. Plain
+                    // templates can retain their unresolved source spelling.
+                    Err(_) => !value.contains("{{") || value.contains('\\'),
+                };
+                text.push(' ');
+                if sensitive_literal {
+                    text.push_str("[REDACTED]");
+                } else {
+                    text.push_str(&redactor.redact(value));
+                }
+            }
+            truncate_display(&mut text, MAX_ASSERTION_DIAGNOSTIC_CHARS);
+            text
+        });
         AssertionResult {
             index: self.index,
             outcome: self.outcome,
+            diagnostic,
             actual,
             actual_truncated,
         }
@@ -189,7 +250,7 @@ pub fn evaluate_assertions(
         .with_json_literals();
     pending
         .into_iter()
-        .map(|result| result.redact(&redactor))
+        .map(|result| result.redact(&redactor, assertions))
         .collect()
 }
 

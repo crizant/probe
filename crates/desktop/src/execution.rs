@@ -922,6 +922,7 @@ mod tests {
         outcome: probe_application::AssertionOutcome,
     ) -> Vec<probe_application::AssertionResult> {
         vec![probe_application::AssertionResult {
+            diagnostic: None,
             actual: None,
             actual_truncated: false,
             index: 0,

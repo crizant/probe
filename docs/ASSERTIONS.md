@@ -132,8 +132,14 @@ Missing, disabled, malformed, unavailable, or provider-failed references return
 cannot establish a pass. This assertion-specific rule does not alter the existing
 strict/non-strict request-sending behavior.
 
-Error diagnostics contain no expressions, descriptions, expected operands,
-variable names, provider diagnostics, parser details, or response content.
+Evaluator error messages contain no expressions, descriptions, expected operands,
+variable names, provider diagnostics, parser details, or response content. Failed
+and errored results also carry a redacted original check for human CLI diagnostics.
+Unsupported expressions and operators are replaced with `[REDACTED]`; known
+literals are checked after decoding while safe source spelling is preserved.
+Unary checks omit ignored expected values. Complete checks are capped after
+redaction at 1024 Unicode characters with an explicit truncation marker,
+independently of the 512-character actual-value limit.
 Actual observations remain private until the entire batch has resolved its
 reachable secrets. They share the execution's unified `SecretRedactor`, including
 request/certificate secrets and assertion secrets discovered later in the batch.

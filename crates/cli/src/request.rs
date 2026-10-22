@@ -1,7 +1,8 @@
 use std::{borrow::Cow, fmt::Write, io::Read, path::PathBuf};
 
 use probe_application::{
-    AssertionError, AssertionOutcome, NoSecrets, RequestResolution, prepare_request,
+    AssertionError, AssertionOutcome, AssertionResult, NoSecrets, RequestResolution,
+    prepare_request,
 };
 use probe_core::{
     Assertion, FieldPatch, Request, RequestUpdate, RequestVariableInfo, SecretContext, SecretError,
@@ -375,14 +376,12 @@ pub(crate) fn run(
             } else {
                 result.index - collection.len()
             },
-            outcome: result.outcome,
-            actual: result.actual,
-            actual_truncated: result.actual_truncated,
+            evaluation: result,
         })
         .collect();
     if outcomes.iter().any(|result| {
         matches!(
-            result.outcome,
+            result.evaluation.outcome,
             AssertionOutcome::Failed | AssertionOutcome::Error(_)
         )
     }) {
@@ -469,24 +468,22 @@ fn selected_request<'a>(
 pub(crate) struct RunAssertionResult {
     pub(crate) source: &'static str,
     pub(crate) index: usize,
-    pub(crate) outcome: AssertionOutcome,
-    pub(crate) actual: Option<String>,
-    pub(crate) actual_truncated: bool,
+    pub(crate) evaluation: AssertionResult,
 }
 
 pub(crate) fn assertion_json(result: &RunAssertionResult) -> serde_json::Value {
-    let outcome = match result.outcome {
+    let outcome = match result.evaluation.outcome {
         AssertionOutcome::Passed => "passed",
         AssertionOutcome::Failed => "failed",
         AssertionOutcome::Disabled => "disabled",
         AssertionOutcome::Error(_) => "error",
     };
     let mut json = json!({ "source": result.source, "index": result.index, "outcome": outcome });
-    if let Some(actual) = &result.actual {
+    if let Some(actual) = &result.evaluation.actual {
         json["actual"] = json!(actual);
-        json["actualTruncated"] = json!(result.actual_truncated);
+        json["actualTruncated"] = json!(result.evaluation.actual_truncated);
     }
-    if let AssertionOutcome::Error(error) = result.outcome {
+    if let AssertionOutcome::Error(error) = result.evaluation.outcome {
         let category = match error {
             AssertionError::UnsupportedExpression => "unsupported_expression",
             AssertionError::UnsupportedOperator => "unsupported_operator",
@@ -509,7 +506,7 @@ pub(crate) fn assertion_summary(results: &[RunAssertionResult]) -> String {
     let mut disabled = 0;
     let mut errors = 0;
     for result in results {
-        match result.outcome {
+        match result.evaluation.outcome {
             AssertionOutcome::Passed => passed += 1,
             AssertionOutcome::Failed => failed += 1,
             AssertionOutcome::Disabled => disabled += 1,
@@ -521,7 +518,7 @@ pub(crate) fn assertion_summary(results: &[RunAssertionResult]) -> String {
 
 fn append_assertion_failures(human: &mut String, results: &[RunAssertionResult]) {
     for result in results {
-        let (marker, label) = match result.outcome {
+        let (marker, label) = match result.evaluation.outcome {
             AssertionOutcome::Failed => ("✗", "Failed"),
             AssertionOutcome::Error(_) => ("!", "Error"),
             AssertionOutcome::Passed | AssertionOutcome::Disabled => continue,
@@ -537,9 +534,13 @@ fn append_assertion_failures(human: &mut String, results: &[RunAssertionResult])
             result.index + 1
         )
         .expect("writing to a String cannot fail");
-        match result.outcome {
+        if let Some(diagnostic) = &result.evaluation.diagnostic {
+            write!(human, "\n    {}", diagnostic.escape_debug())
+                .expect("writing to a String cannot fail");
+        }
+        match result.evaluation.outcome {
             AssertionOutcome::Failed => {
-                if let Some(actual) = &result.actual {
+                if let Some(actual) = &result.evaluation.actual {
                     write!(human, "\n    Got: {}", actual.escape_debug())
                         .expect("writing to a String cannot fail");
                 }

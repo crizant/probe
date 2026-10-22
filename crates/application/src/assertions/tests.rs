@@ -678,6 +678,32 @@ fn disabled_and_unary_assertions_do_not_resolve_ignored_values() {
             AssertionOutcome::Passed
         ]
     );
+    for (expression, operator, expected_outcome) in [
+        ("response.status", "isNull", AssertionOutcome::Failed),
+        ("response.body", "isNotNull", AssertionOutcome::Failed),
+        (
+            "response.body.missing",
+            "isNull",
+            AssertionOutcome::Error(AssertionError::IncompatibleOperands),
+        ),
+        (
+            "response.body.missing",
+            "isNotNull",
+            AssertionOutcome::Error(AssertionError::IncompatibleOperands),
+        ),
+    ] {
+        for ignored_value in ["200", "private-ignored-literal", "{{token}}"] {
+            let result = evaluate_assertions(
+                &[assertion(expression, operator, Some(ignored_value))],
+                &response(b"null"),
+                &RequestResolution::default(),
+                &provider,
+            )
+            .remove(0);
+            assert_eq!(result.outcome, expected_outcome);
+            assert_eq!(result.diagnostic, Some(format!("{expression} {operator}")));
+        }
+    }
     assert_eq!(provider.calls.get(), 0);
     assert!(
         evaluate_assertions(
@@ -1338,7 +1364,10 @@ fn structured_actuals_redact_whole_values_when_serialized_secrets_match() {
                 expression: "response.body".into(),
             }),
         }
-        .redact(&redactor);
+        .redact(
+            &redactor,
+            &[assertion("response.body", "equals", Some("null"))],
+        );
         assert_eq!(result.actual.as_deref(), Some("[REDACTED]"));
         assert!(!result.actual_truncated);
     }
@@ -1364,7 +1393,10 @@ fn structured_actuals_redact_decoded_strings_and_arrays_preserving_json_types() 
             expression: "response.body".into(),
         }),
     }
-    .redact(&redactor);
+    .redact(
+        &redactor,
+        &[assertion("response.body", "equals", Some("null"))],
+    );
     let actual: Value = serde_json::from_str(result.actual.as_deref().unwrap()).unwrap();
     assert_eq!(
         actual,
@@ -1376,4 +1408,82 @@ fn structured_actuals_redact_decoded_strings_and_arrays_preserving_json_types() 
         })
     );
     assert!(!result.actual_truncated);
+}
+
+#[test]
+fn diagnostic_literals_fail_closed_when_their_encoding_cannot_be_checked() {
+    let secrets = [SecretValue::new("private".into())];
+    let redactor = probe_core::SecretRedactor::from_environments([]).with_values(&secrets);
+    for (value, expected) in [
+        (r#"["\u0070rivate"]"#, "[REDACTED]"),
+        (r#""\u0070rivate"#, "[REDACTED]"),
+        (r#""\u0070rivate{{alias}}"#, "[REDACTED]"),
+        ("{{alias}}", "{{alias}}"),
+        (" 2e2 ", " 2e2 "),
+        (r#""safe value""#, r#""safe value""#),
+    ] {
+        let declarations = [assertion("response.status", "equals", Some(value))];
+        let result = PendingAssertionResult {
+            index: 0,
+            outcome: AssertionOutcome::Error(AssertionError::InvalidExpectedValue),
+            actual: None,
+        }
+        .redact(&redactor, &declarations);
+        assert_eq!(
+            result.diagnostic,
+            Some(format!("response.status equals {expected}"))
+        );
+    }
+}
+
+#[test]
+fn diagnostics_are_bounded_by_unicode_characters_after_redaction() {
+    for expression in ["response.body", "response.body.missing"] {
+        let prefix = format!("{expression} equals ");
+        for length in [
+            MAX_ASSERTION_DIAGNOSTIC_CHARS - 1,
+            MAX_ASSERTION_DIAGNOSTIC_CHARS,
+            MAX_ASSERTION_DIAGNOSTIC_CHARS + 1,
+            MAX_ASSERTION_DIAGNOSTIC_CHARS * 2,
+        ] {
+            let value = "é".repeat(length - prefix.chars().count());
+            let result = evaluate_assertions(
+                &[assertion(expression, "equals", Some(&value))],
+                &response(b"0"),
+                &RequestResolution::default(),
+                &NoSecrets,
+            )
+            .remove(0);
+            let original = format!("{prefix}{value}");
+            let expected = if length > MAX_ASSERTION_DIAGNOSTIC_CHARS {
+                format!(
+                    "{}… [truncated]",
+                    original
+                        .chars()
+                        .take(MAX_ASSERTION_DIAGNOSTIC_CHARS)
+                        .collect::<String>()
+                )
+            } else {
+                original
+            };
+            assert_eq!(result.diagnostic, Some(expected));
+        }
+    }
+    // A secret longer than the limit must be redacted before any prefix is retained.
+    let secret = "s".repeat(MAX_ASSERTION_DIAGNOSTIC_CHARS * 2);
+    let secrets = [SecretValue::new(secret.clone())];
+    let redactor = probe_core::SecretRedactor::from_environments([]).with_values(&secrets);
+    let result = PendingAssertionResult {
+        index: 0,
+        outcome: AssertionOutcome::Failed,
+        actual: None,
+    }
+    .redact(
+        &redactor,
+        &[assertion("response.body", "equals", Some(&secret))],
+    );
+    assert_eq!(
+        result.diagnostic.as_deref(),
+        Some("response.body equals [REDACTED]")
+    );
 }
