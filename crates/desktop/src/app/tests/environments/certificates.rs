@@ -997,6 +997,8 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
 
 #[gpui_kit::test]
 fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppContext) {
+    // Watcher notifications and teardown wake GPUI from an OS thread.
+    cx.executor().allow_parking();
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-inspect-unsaved");
     workspace.open_manager(cx, "base");
     click(&workspace, cx, "environment-tab-2");
@@ -1071,6 +1073,8 @@ fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn inspect_allows_missing_domain_while_save_requires_it(cx: &mut TestAppContext) {
+    // Watcher notifications and teardown wake GPUI from an OS thread.
+    cx.executor().allow_parking();
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-inspect-without-domain");
     workspace.open_manager(cx, "base");
     click(&workspace, cx, "environment-tab-2");
