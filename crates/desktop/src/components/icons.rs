@@ -8,6 +8,9 @@ pub(super) static CHEVRON_RIGHT_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuChevronRight));
 pub(super) static CHECK_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuCheck));
+static CIRCLE_CHECK_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuCircleCheck));
+static CIRCLE_X_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuCircleX));
 static FOLDER_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuFolder));
 static LIBRARY_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLibrary));
 static FOLDER_OPEN_SVG: LazyLock<Vec<u8>> =
@@ -413,6 +416,15 @@ pub(crate) fn disconnect_severity_mark(
     };
     library_icon(name, svg, theme.metrics.icon_small)
         .text_color(disconnect_severity_color(theme, severity))
+}
+
+pub(crate) fn certificate_validation_icon(succeeded: bool) -> gpui_kit::Div {
+    let (name, svg) = if succeeded {
+        ("lucide-circle-check", &CIRCLE_CHECK_SVG)
+    } else {
+        ("lucide-circle-x", &CIRCLE_X_SVG)
+    };
+    library_icon(name, svg, 14.0)
 }
 
 pub(crate) fn edit_icon(theme: Theme) -> gpui_kit::Div {

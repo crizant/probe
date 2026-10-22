@@ -914,7 +914,7 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
             "cannot read client certificate file".into(),
         )),
     };
-    let generation = workspace.update(cx, |view, _, _| {
+    let generation = workspace.update(cx, |view, _, cx| {
         let editor = view
             .environment_manager_dialog
             .as_mut()
@@ -926,8 +926,21 @@ fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut
         editor.inspecting = true;
         assert!(editor.accept_inspection(&generation, failure(), None));
         assert!(editor.inspection.is_some());
+        cx.notify();
         generation
     });
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-validation-failure")
+            .is_some()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-validation-success")
+            .is_none()
+    );
     workspace.update(cx, |view, window, cx| {
         view.environment_manager_dialog
             .as_ref()
@@ -1019,6 +1032,18 @@ fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppCo
             "Probe test-only client"
         );
     });
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-validation-success")
+            .is_some()
+    );
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-validation-failure")
+            .is_none()
+    );
     assert_eq!(
         certificates(&workspace, cx),
         before,

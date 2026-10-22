@@ -593,22 +593,50 @@ impl ProbeApp {
                 );
             }
         }
-        let (status, color) = if editor.inspecting {
-            ("Inspecting…".to_string(), theme.colors.text.muted)
+        let (status, color, succeeded) = if editor.inspecting {
+            ("Inspecting…".to_string(), theme.colors.text.muted, None)
         } else if let Some(result) = &editor.inspection {
             match &result.validation {
-                    Ok(()) => ("Certificate and private key validated successfully. Local validation does not establish server trust.".into(), theme.colors.status.success),
-                    Err(error) => (error.to_string(), theme.colors.status.error),
-                }
+                Ok(()) => (
+                    "Certificate and private key validated successfully.".into(),
+                    theme.colors.status.success,
+                    Some(true),
+                ),
+                Err(error) => (error.to_string(), theme.colors.status.error, Some(false)),
+            }
         } else {
             (
                 "Not inspected. Inspect reads current fields and may unlock configured secrets."
                     .into(),
                 theme.colors.text.muted,
+                None,
             )
         };
-        form = form
-            .child(details.child(components::dialog_description(theme, status).text_color(color)));
+        let mut status_line = div().flex().items_start().gap(px(theme.metrics.spacing_1));
+        if let Some(succeeded) = succeeded {
+            let marker = if succeeded {
+                "certificate-validation-success"
+            } else {
+                "certificate-validation-failure"
+            };
+            status_line = status_line.child(
+                components::certificate_validation_icon(succeeded)
+                    .mt(px(2.0))
+                    .text_color(color)
+                    .id(marker)
+                    .debug_selector(move || marker.into()),
+            );
+        }
+        form = form.child(
+            details.child(
+                status_line.child(
+                    components::dialog_description(theme, status)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_color(color),
+                ),
+            ),
+        );
         let cancel = cx.weak_entity();
         let save = cx.weak_entity();
         let form = form.child(
