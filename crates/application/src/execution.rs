@@ -29,6 +29,8 @@ pub const SECRET_DIAGNOSTIC_WITHHELD: &str =
 /// may supply a declared secret.
 #[derive(Clone, Copy, Default)]
 pub struct RequestResolution<'a> {
+    /// Optional transient selection; absent preserves automatic selection.
+    pub certificate_override: Option<&'a crate::CertificateOverride>,
     /// Certificates declared at collection scope, in source order.
     pub client_certificates: &'a [probe_core::ClientCertificate],
     pub environments: &'a [Environment],
@@ -1145,7 +1147,12 @@ mod combined_disclosure_tests {
             }],
             ..Request::default()
         };
+        let selection = crate::CertificateOverride::Selected(crate::CertificateRef {
+            certificate: certificates[0].clone(),
+            environment: None,
+        });
         let resolution = RequestResolution {
+            certificate_override: Some(&selection),
             environments: loaded.workspace().environments(),
             environment: Some("local"),
             client_certificates: &certificates,

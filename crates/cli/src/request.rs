@@ -301,6 +301,7 @@ pub(crate) fn run(
         WorkspaceInput::Stdin => Some("-"),
     };
     let resolution = RequestResolution {
+        certificate_override: None,
         environments: loaded.workspace().environments(),
         client_certificates: loaded.workspace().client_certificates(),
         environment: options.environment,

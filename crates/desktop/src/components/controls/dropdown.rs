@@ -272,6 +272,7 @@ pub(crate) fn dropdown<T: Clone + Eq + 'static>(
         width,
         actions: Vec::new(),
         disabled: false,
+        placeholder: "None",
         on_value_change: Rc::new(on_value_change),
     }
 }
@@ -294,6 +295,7 @@ pub(crate) fn dropdown_with_option_colors<T: Clone + Eq + 'static>(
         width,
         actions: Vec::new(),
         disabled: false,
+        placeholder: "None",
         on_value_change: Rc::new(on_value_change),
     }
 }
@@ -308,10 +310,16 @@ pub(crate) struct ProbeDropdown<T: Clone + Eq + 'static> {
     width: f32,
     actions: Vec<DropdownAction>,
     disabled: bool,
+    placeholder: &'static str,
     on_value_change: DropdownChangeHandler<T>,
 }
 
 impl<T: Clone + Eq + 'static> ProbeDropdown<T> {
+    pub(crate) fn placeholder(mut self, label: &'static str) -> Self {
+        self.placeholder = label;
+        self
+    }
+
     pub(crate) fn with_action(
         mut self,
         label: impl Into<String>,
@@ -335,13 +343,20 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
         let theme = self.theme;
         let DropdownSelection {
             index: selected_index,
-            label: selected_label,
+            label: mut selected_label,
             color: selected_color,
         } = dropdown_selection(
             self.value.as_ref(),
             &self.options,
             theme.colors.text.primary,
         );
+        if !self
+            .options
+            .iter()
+            .any(|(value, _, _)| Some(value) == self.value.as_ref())
+        {
+            selected_label = self.placeholder.to_owned();
+        }
         let state =
             window.use_keyed_state(ElementId::from(format!("{}-state", self.id)), cx, |_, _| {
                 DropdownState {

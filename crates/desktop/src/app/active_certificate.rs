@@ -1,7 +1,7 @@
-//! Read-only next-request certificate preview. Never uses the native secret provider.
+//! Transient next-request certificate selection and preview. Never uses the native secret provider.
 use super::*;
 use crate::components::IconButtonHint;
-use probe_application::CertificatePreview;
+use probe_application::{CertificateOverride, CertificatePreview, CertificateRef};
 
 #[derive(Clone, PartialEq)]
 struct Inputs {
@@ -11,6 +11,7 @@ struct Inputs {
     environments: Vec<probe_core::Environment>,
     certificates: Vec<probe_core::ClientCertificate>,
     selected: Option<String>,
+    selection: CertificateOverride,
 }
 
 impl Inputs {
@@ -41,6 +42,7 @@ pub(super) struct ActiveCertificate {
     generation: Rc<()>,
     result: Option<CertificatePreview>,
     inspection: Option<probe_http::CertificateInspection>,
+    candidates: Vec<(CertificateRef, probe_http::CertificateInspection)>,
     pending: bool,
     visible_while_refreshing: bool,
     open: bool,
@@ -64,7 +66,10 @@ impl ActiveCertificate {
                         && before.selected == after.selected
                 });
         let visible = same_target
-            && (self.visible_while_refreshing
+            && (inputs
+                .as_ref()
+                .is_some_and(|inputs| inputs.selection != CertificateOverride::Automatic)
+                || self.visible_while_refreshing
                 || self
                     .result
                     .as_ref()
@@ -150,7 +155,9 @@ impl ProbeApp {
         }
         let workspace = loaded.workspace();
         let selected = self.shell.selected_environment();
-        if workspace.client_certificates().is_empty()
+        if self.shell.certificate_override(self.shell.active_tab()?)
+            == &CertificateOverride::Automatic
+            && workspace.client_certificates().is_empty()
             && selected
                 .and_then(|name| {
                     workspace
@@ -174,6 +181,10 @@ impl ProbeApp {
             environments: loaded.workspace().environments().to_vec(),
             certificates: loaded.workspace().client_certificates().to_vec(),
             selected: self.shell.selected_environment().map(str::to_owned),
+            selection: self
+                .shell
+                .certificate_override(self.shell.active_tab()?)
+                .clone(),
         })
     }
 
@@ -185,14 +196,15 @@ impl ProbeApp {
         ) else {
             return false;
         };
-        inputs.matches(
-            self.workspace_path.as_deref(),
-            key,
-            request,
-            loaded.workspace().environments(),
-            loaded.workspace().client_certificates(),
-            self.shell.selected_environment(),
-        )
+        inputs.selection == *self.shell.certificate_override(key)
+            && inputs.matches(
+                self.workspace_path.as_deref(),
+                key,
+                request,
+                loaded.workspace().environments(),
+                loaded.workspace().client_certificates(),
+                self.shell.selected_environment(),
+            )
     }
 
     pub(super) fn refresh_active_certificate(&mut self, cx: &mut Context<Self>) {
@@ -215,41 +227,62 @@ impl ProbeApp {
         let generation = self.active_certificate.generation.clone();
         cx.spawn(async move |view, cx| {
             let worker_inputs = inputs.clone();
-            let (result, inspection) = cx
+            let (result, inspection, candidates) = cx
                 .background_spawn(async move {
                     let inputs = worker_inputs;
-                    let result = probe_application::preview_client_certificate(
-                        &inputs.request,
-                        &probe_application::RequestResolution {
-                            environments: &inputs.environments,
-                            environment: inputs.selected.as_deref(),
-                            client_certificates: &inputs.certificates,
-                            ..Default::default()
-                        },
-                    );
-                    let inspection =
-                        if let CertificatePreview::Selected { certificate, .. } = &result {
-                            Some(probe_application::inspect_certificate(
-                                certificate,
-                                &inputs.environments,
-                                inputs.selected.as_deref(),
-                                &probe_application::NoSecrets,
-                                &probe_http::ExecutionOptions {
-                                    base_directory: inputs
-                                        .workspace
-                                        .as_deref()
-                                        .and_then(workspace_base_directory),
-                                    ..Default::default()
-                                },
-                                true,
-                            ))
-                        } else {
-                            None
-                        };
-                    (result, inspection)
+                    let resolution = probe_application::RequestResolution {
+                        environments: &inputs.environments,
+                        environment: inputs.selected.as_deref(),
+                        client_certificates: &inputs.certificates,
+                        certificate_override: Some(&inputs.selection),
+                        ..Default::default()
+                    };
+                    let result =
+                        probe_application::preview_client_certificate(&inputs.request, &resolution);
+                    let inspect = |certificate: &probe_core::ClientCertificate| {
+                        probe_application::inspect_certificate(
+                            certificate,
+                            &inputs.environments,
+                            inputs.selected.as_deref(),
+                            &probe_application::NoSecrets,
+                            &probe_http::ExecutionOptions {
+                                base_directory: inputs
+                                    .workspace
+                                    .as_deref()
+                                    .and_then(workspace_base_directory),
+                                ..Default::default()
+                            },
+                            true,
+                        )
+                    };
+                    let candidates: Vec<_> =
+                        probe_application::certificate_candidates(&inputs.request, &resolution)
+                            .into_iter()
+                            .map(|reference| {
+                                let inspection = inspect(&reference.certificate);
+                                (reference, inspection)
+                            })
+                            .collect();
+                    let inspection = if let CertificatePreview::Selected {
+                        certificate,
+                        environment,
+                        ..
+                    } = &result
+                    {
+                        candidates
+                            .iter()
+                            .find(|(reference, _)| {
+                                &reference.certificate == certificate
+                                    && &reference.environment == environment
+                            })
+                            .map(|(_, inspection)| inspection.clone())
+                    } else {
+                        None
+                    };
+                    (result, inspection, candidates)
                 })
                 .await;
-            let refresh = matches!(result, CertificatePreview::Selected { .. });
+            let refresh = !matches!(result, CertificatePreview::Hidden);
             let accepted = view
                 .update(cx, |view, cx| {
                     let current_matches = view.certificate_preview_matches(&inputs);
@@ -261,6 +294,7 @@ impl ProbeApp {
                     ) {
                         return false;
                     }
+                    view.active_certificate.candidates = candidates;
                     cx.notify();
                     true
                 })
@@ -286,15 +320,24 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let state = &self.active_certificate;
+        let selection = self
+            .shell
+            .active_tab()
+            .map(|key| self.shell.certificate_override(key))
+            .unwrap_or(&CertificateOverride::Automatic);
+        let overridden = selection != &CertificateOverride::Automatic;
         let loading = state.result.is_none();
-        if loading && !state.visible_while_refreshing {
+        if loading && !state.visible_while_refreshing && !overridden {
             return div().into_any_element();
         }
-        let result = state
-            .result
-            .as_ref()
-            .unwrap_or(&CertificatePreview::Unknown);
-        if matches!(result, CertificatePreview::Hidden) {
+        let result = state.result.as_ref().unwrap_or(
+            if matches!(selection, CertificateOverride::NoCertificate) {
+                &CertificatePreview::NoCertificate
+            } else {
+                &CertificatePreview::Unknown
+            },
+        );
+        if matches!(result, CertificatePreview::Hidden) && !overridden {
             return div().into_any_element();
         }
         let metadata = state
@@ -327,10 +370,112 @@ impl ProbeApp {
                         div()
                             .flex_none()
                             .text_color(theme.colors.text.secondary)
-                            .child("Automatic"),
+                            .child(match selection {
+                                CertificateOverride::Automatic => "Automatic",
+                                CertificateOverride::NoCertificate => "No Certificate",
+                                CertificateOverride::Selected(_) => "Manual",
+                            }),
                     ),
             );
+        let mut options = vec![
+            (
+                CertificateOverride::Automatic,
+                "Automatic (default)".to_owned(),
+            ),
+            (
+                CertificateOverride::NoCertificate,
+                "No Certificate".to_owned(),
+            ),
+        ];
+        for (reference, inspection) in &state.candidates {
+            let (path, kind) = match &reference.certificate {
+                probe_core::ClientCertificate::Pem {
+                    certificate_file_path,
+                    ..
+                } => (certificate_file_path, "PEM"),
+                probe_core::ClientCertificate::Pkcs12 {
+                    pkcs12_file_path, ..
+                } => (pkcs12_file_path, "PKCS#12"),
+            };
+            let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+            let name = inspection
+                .metadata
+                .as_ref()
+                .map_or(filename, |metadata| metadata.subject.as_str());
+            let source = reference.environment.as_deref().unwrap_or("Collection");
+            let warning = inspection
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.validity_warning(std::time::SystemTime::now()));
+            options.push((
+                CertificateOverride::Selected(reference.clone()),
+                format!(
+                    "{name} · {kind} · {source}{}",
+                    warning.map_or(String::new(), |warning| format!(" · {warning}"))
+                ),
+            ));
+        }
+        // Keep an invalid choice visible without making it another selectable identity.
+        let value = options
+            .iter()
+            .any(|(value, _)| value == selection)
+            .then(|| selection.clone());
+        if let Some(key) = self.shell.active_tab() {
+            let change = cx.weak_entity();
+            popup = popup
+                .child(
+                    div()
+                        .text_color(theme.colors.text.secondary)
+                        .child("Select Certificate"),
+                )
+                .child(
+                    components::dropdown(
+                        theme,
+                        "active-certificate-selector",
+                        "Select Certificate",
+                        value,
+                        options,
+                        314.0,
+                        move |selection, _, cx| {
+                            let Some(selection) = selection.cloned() else {
+                                return;
+                            };
+                            let _ = change.update(cx, |view, cx| {
+                                view.shell.set_certificate_override(key, selection);
+                                view.refresh_active_certificate(cx);
+                                view.active_certificate.open = true;
+                                cx.notify();
+                            });
+                        },
+                    )
+                    .placeholder(if loading {
+                        "Updating selection…"
+                    } else {
+                        "Invalid selection"
+                    }),
+                );
+            if overridden {
+                popup = popup.child(components::text_button(
+                    theme,
+                    "reset-active-certificate",
+                    "Reset to Automatic",
+                    cx.listener(move |view, _, _, cx| {
+                        view.shell
+                            .set_certificate_override(key, CertificateOverride::Automatic);
+                        view.refresh_active_certificate(cx);
+                        view.active_certificate.open = true;
+                        cx.notify();
+                    }),
+                ));
+            }
+        }
         match result {
+            CertificatePreview::NoCertificate => {
+                popup = popup.child("No client certificate will be sent for this request.");
+            }
+            CertificatePreview::Invalid => {
+                popup = popup.child(div().text_color(theme.colors.status.warning).child("Selected certificate is unavailable or no longer matches this HTTPS target. Reset to Automatic or select another certificate."));
+            }
             CertificatePreview::Selected {
                 certificate,
                 environment,
@@ -416,12 +561,23 @@ impl ProbeApp {
                 popup = popup.child("Selection unavailable. Check the request URL and certificate domain variables.");
             }
         };
-        let color = if warning.is_some() {
+        let color = if warning.is_some() || matches!(result, CertificatePreview::Invalid) {
             theme.colors.status.warning
+        } else if matches!(selection, CertificateOverride::NoCertificate) {
+            theme.colors.text.muted
         } else if loading || matches!(result, CertificatePreview::Selected { .. }) {
             theme.colors.text.secondary
         } else {
             theme.colors.text.muted
+        };
+        let indicator_label = if matches!(result, CertificatePreview::Invalid) {
+            "Invalid client certificate override"
+        } else {
+            match selection {
+                CertificateOverride::Automatic => "Client certificate details",
+                CertificateOverride::NoCertificate => "Client certificate: No Certificate override",
+                CertificateOverride::Selected(_) => "Client certificate: manual override",
+            }
         };
         let change = cx.weak_entity();
         Popover::new("active-certificate-popover")
@@ -435,7 +591,7 @@ impl ProbeApp {
             .trigger(
                 Button::new("active-certificate-indicator")
                     .debug_selector(|| "active-certificate-indicator".into())
-                    .accessibility_label("Client certificate details")
+                    .accessibility_label(indicator_label)
                     .ml(px(theme.metrics.spacing_1))
                     .flex_none()
                     .w(px(theme.metrics.control_height))
@@ -451,8 +607,15 @@ impl ProbeApp {
                     .focus_visible(move |button| {
                         button.border_1().border_color(theme.colors.borders.focused)
                     })
-                    .hint(theme, "Client certificate details")
+                    .hint(theme, indicator_label)
                     .child(components::certificate_icon(theme).text_color(color))
+                    .when(overridden, |button| {
+                        button.child(match selection {
+                            CertificateOverride::NoCertificate => "−",
+                            _ if matches!(result, CertificatePreview::Invalid) => "!",
+                            _ => "•",
+                        })
+                    })
                     .when(
                         !loading && matches!(result, CertificatePreview::Unknown),
                         |button| button.child("?"),
@@ -481,6 +644,7 @@ mod tests {
             certificates: loaded.workspace().client_certificates().to_vec(),
             environments: vec![],
             selected: None,
+            selection: CertificateOverride::Automatic,
         };
         let mut state = ActiveCertificate {
             inputs: Some(Arc::new(inputs.clone())),
@@ -534,6 +698,18 @@ mod tests {
         );
         assert!(state.inspection.is_none());
         assert!(!state.accept(&generation, false, CertificatePreview::Unmatched, None));
+        let mut overridden = saved;
+        overridden.selection = CertificateOverride::NoCertificate;
+        let previous_generation = state.generation.clone();
+        state.set_inputs(Some(Arc::new(overridden)));
+        assert!(state.inspection.is_none());
+        assert!(state.candidates.is_empty());
+        assert!(!state.accept(
+            &previous_generation,
+            true,
+            CertificatePreview::Unmatched,
+            None
+        ));
         state.set_inputs(Some(Arc::new(changes[0].clone())));
         assert!(
             !state.visible_while_refreshing,

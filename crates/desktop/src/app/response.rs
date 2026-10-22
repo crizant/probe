@@ -84,6 +84,7 @@ impl ProbeApp {
             return;
         }
         let input = ExecutionInput {
+            certificate_override: self.shell.certificate_override(key).clone(),
             request,
             environments: loaded.workspace().environments().to_vec(),
             client_certificates: loaded.workspace().client_certificates().to_vec(),

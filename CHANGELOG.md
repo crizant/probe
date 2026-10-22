@@ -8,9 +8,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
-- HTTPS request editors show the automatically selected client certificate, its
-  public metadata and expiry warnings in a read-only popover, without unlocking
-  protected certificates or querying secrets.
+- HTTP and GraphQL request tabs can temporarily select a matching client
+  certificate or send without one from the URL-bar certificate popover. Choices
+  stay in memory, preserve per-tab selection, and are revalidated before sending.
+  The popover shows public metadata and expiry warnings without querying secrets.
 
 - Environment Manager client certificates now show public subject and expiry
   metadata, with expiry warnings. The certificate editor can inspect current PEM

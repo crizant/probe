@@ -31,6 +31,7 @@ impl ProbeApp {
             return;
         };
         let input = ExecutionInput {
+            certificate_override: probe_application::CertificateOverride::Automatic,
             request,
             environments: loaded
                 .workspace()

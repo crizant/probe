@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use probe_application::CertificateOverride;
+use std::collections::{HashMap, HashSet};
 
 use probe_core::{FolderKey, RequestKey};
 
@@ -55,6 +56,7 @@ impl From<OverviewTab> for OpenTab {
 #[derive(Debug)]
 pub(crate) struct ShellState {
     open_tabs: Vec<OpenTab>,
+    certificate_overrides: HashMap<RequestKey, CertificateOverride>,
     active: Option<OpenTab>,
     collapsed_folders: HashSet<FolderKey>,
     selected_environment: Option<String>,
@@ -70,6 +72,7 @@ impl Default for ShellState {
     fn default() -> Self {
         Self {
             open_tabs: Vec::new(),
+            certificate_overrides: HashMap::new(),
             active: None,
             collapsed_folders: HashSet::new(),
             selected_environment: None,
@@ -90,6 +93,33 @@ fn max_response_height(window_height: f32) -> f32 {
 }
 
 impl ShellState {
+    pub(crate) fn certificate_override(&self, key: RequestKey) -> &CertificateOverride {
+        self.certificate_overrides
+            .get(&key)
+            .unwrap_or(&CertificateOverride::Automatic)
+    }
+
+    pub(crate) fn set_certificate_override(
+        &mut self,
+        key: RequestKey,
+        selection: CertificateOverride,
+    ) {
+        if !self.open_tabs.contains(&key.into()) {
+            return;
+        }
+        if selection == CertificateOverride::Automatic {
+            self.certificate_overrides.remove(&key);
+        } else {
+            self.certificate_overrides.insert(key, selection);
+        }
+    }
+
+    pub(crate) fn take_certificate_overrides(
+        &mut self,
+    ) -> HashMap<RequestKey, CertificateOverride> {
+        std::mem::take(&mut self.certificate_overrides)
+    }
+
     pub(crate) fn open_tabs(&self) -> &[OpenTab] {
         &self.open_tabs
     }
@@ -151,6 +181,9 @@ impl ShellState {
             return;
         };
         self.open_tabs.remove(index);
+        if let OpenTab::Request(key) = tab {
+            self.certificate_overrides.remove(&key);
+        }
         if self.active == Some(tab) {
             self.active = self
                 .open_tabs
@@ -177,6 +210,8 @@ impl ShellState {
         if self.active.is_none() {
             self.active = self.open_tabs.last().copied();
         }
+        self.certificate_overrides
+            .retain(|key, _| self.open_tabs.contains(&(*key).into()));
     }
 
     pub(crate) fn open_request(&mut self, key: RequestKey) {
@@ -284,6 +319,7 @@ impl ShellState {
     }
 
     pub(crate) fn reset_for_workspace(&mut self) {
+        self.certificate_overrides.clear();
         self.open_tabs.clear();
         self.active = None;
         self.collapsed_folders.clear();
@@ -419,5 +455,66 @@ mod tests {
         assert_eq!(state.selected_environment(), Some("development"));
         state.reset_for_workspace();
         assert_eq!(state.selected_environment(), Some("development"));
+    }
+}
+
+#[cfg(test)]
+mod certificate_override_tests {
+    use super::*;
+    use probe_core::{Collection, CollectionItem, Request, Workspace};
+
+    #[test]
+    fn certificate_choices_are_independent_and_die_with_tabs_or_workspace() {
+        let workspace = Workspace::from_collection(Collection {
+            items: vec![
+                CollectionItem::Request(Request::default()),
+                CollectionItem::Request(Request::default()),
+            ],
+            ..Default::default()
+        });
+        let [
+            probe_core::WorkspaceItemRef::Request(first),
+            probe_core::WorkspaceItemRef::Request(second),
+        ] = workspace.root_items()
+        else {
+            panic!("expected two requests")
+        };
+        let (first, second) = (*first, *second);
+        let mut shell = ShellState::default();
+        shell.open_request(first);
+        shell.set_certificate_override(first, CertificateOverride::NoCertificate);
+        shell.open_request(second);
+        assert_eq!(
+            shell.certificate_override(second),
+            &CertificateOverride::Automatic
+        );
+        assert_eq!(
+            shell.certificate_override(first),
+            &CertificateOverride::NoCertificate
+        );
+        shell.activate(first.into());
+        assert_eq!(
+            shell.certificate_override(first),
+            &CertificateOverride::NoCertificate
+        );
+        shell.close(first.into());
+        shell.open_request(first);
+        assert_eq!(
+            shell.certificate_override(first),
+            &CertificateOverride::Automatic
+        );
+        shell.set_certificate_override(second, CertificateOverride::NoCertificate);
+        shell.restore_tabs([first.into()], Some(first.into()));
+        assert_eq!(
+            shell.certificate_override(second),
+            &CertificateOverride::Automatic
+        );
+        shell.set_certificate_override(first, CertificateOverride::NoCertificate);
+        shell.reset_for_workspace();
+        shell.open_request(first);
+        assert_eq!(
+            shell.certificate_override(first),
+            &CertificateOverride::Automatic
+        );
     }
 }
