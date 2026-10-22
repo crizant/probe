@@ -7,6 +7,7 @@
 
 mod assertions;
 mod client_certificate;
+pub use client_certificate::{inspect_certificate, inspect_certificate_observing};
 mod execution;
 mod websocket_input;
 

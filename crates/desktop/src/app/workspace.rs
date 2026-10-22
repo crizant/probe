@@ -1130,6 +1130,8 @@ impl ProbeApp {
         let key_remaps =
             request_key_remaps(old, &reconciled.workspace, &reconciled.selector_remaps);
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
+        let certificate_inputs_unchanged =
+            old.workspace().environments() == reconciled.workspace.workspace().environments();
         self.install_reloaded_workspace(
             reconciled.workspace,
             reconciled.baselines,
@@ -1139,7 +1141,11 @@ impl ProbeApp {
         self.remap_structure_dialog(&reconciled.selector_remaps);
         // The new-environment dialog is only a typed name. A refresh replaces
         // stored documents, and the next submit uses that refreshed workspace.
-        self.sync_environment_manager_after_reload(environment_manager_reload, cx);
+        self.sync_environment_manager_after_reload(
+            environment_manager_reload,
+            certificate_inputs_unchanged,
+            cx,
+        );
         // A dirty draft name is not the stored credential's environment. Recomputing
         // labels from it would mark a stored secret unknown, and reverting the name
         // does not sync again.

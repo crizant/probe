@@ -6,6 +6,14 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Environment Manager client certificates now show public subject and expiry
+  metadata, with expiry warnings. The certificate editor can inspect current PEM
+  and PKCS#12 fields, copy SHA-256 fingerprints, and validate local key matches
+  without sending a request. Protected certificates unlock only when Inspect is
+  clicked; inspection and expiry never prevent saving.
+
 ## [2.0.0] - 2026-10-22
 
 ### Added

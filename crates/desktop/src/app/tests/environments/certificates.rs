@@ -898,3 +898,439 @@ fn certificate_list_scrollbar_reaches_overflow_rows(cx: &mut TestAppContext) {
         );
     });
 }
+
+fn editor(view: &mut ProbeApp) -> &mut crate::app::CertificateEditor {
+    view.environment_manager_dialog
+        .as_mut()
+        .unwrap()
+        .certificate_editor
+        .as_mut()
+        .unwrap()
+}
+
+fn fixture_path(filename: &str) -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/mtls")
+        .join(filename)
+        .to_str()
+        .unwrap()
+        .into()
+}
+
+fn assert_visible(
+    workspace: &EnvironmentWorkspace,
+    cx: &mut TestAppContext,
+    selector: &'static str,
+    visible: bool,
+) {
+    assert_eq!(
+        workspace.visual(cx).debug_bounds(selector).is_some(),
+        visible,
+        "{selector}"
+    );
+}
+
+#[gpui_kit::test]
+fn inspection_generations_reject_stale_results_and_save_ignores_failure(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-inspection-state");
+    workspace.open_manager(cx, "base");
+    click(&workspace, cx, "environment-tab-2");
+    click(&workspace, cx, "certificate-add");
+    fill(&workspace, cx, 0, "localhost");
+    fill(&workspace, cx, 1, "missing.pem");
+    fill(&workspace, cx, 2, "missing-key.pem");
+    let failure = || probe_http::CertificateInspection {
+        metadata: None,
+        validation: Err(probe_http::HttpError::ClientConfiguration(
+            "cannot read client certificate file".into(),
+        )),
+    };
+    let generation = workspace.update(cx, |view, _, cx| {
+        let editor = editor(view);
+        let generation = editor.inspection_generation.clone();
+        editor.inspecting = true;
+        assert!(editor.accept_inspection(&generation, failure(), None, true));
+        assert!(editor.inspection.is_some());
+        assert!(editor.monitoring_unavailable);
+        cx.notify();
+        generation
+    });
+    assert_visible(&workspace, cx, "certificate-validation-failure", true);
+    assert_visible(&workspace, cx, "certificate-validation-success", false);
+    assert_visible(&workspace, cx, "certificate-monitoring-warning", true);
+    workspace.update(cx, |view, window, cx| {
+        editor(view).inputs[1].update(cx, |input, cx| {
+            input.replace_all("edited-unsaved.pem", window, cx)
+        });
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, cx| {
+        let dialog = view.environment_manager_dialog.as_mut().unwrap();
+        let editor = dialog.certificate_editor.as_mut().unwrap();
+        assert!(editor.inspection.is_none());
+        assert!(!editor.monitoring_unavailable);
+        assert!(!editor.accept_inspection(&generation, failure(), None, false));
+        assert!(!editor.monitoring_unavailable);
+        let current = editor.inspection_generation.clone();
+        assert!(editor.accept_inspection(&current, failure(), None, false));
+        assert!(!editor.monitoring_unavailable);
+        let draft = editor.certificate(cx).unwrap();
+        assert!(matches!(draft, ClientCertificate::Pem { certificate_file_path, .. } if certificate_file_path == "edited-unsaved.pem"));
+        let old_cache = dialog.certificate_generation.clone();
+        dialog.draft_mut().color = Some("blue".into());
+        assert!(!std::rc::Rc::ptr_eq(&old_cache, &dialog.certificate_generation));
+        assert!(dialog.certificate_metadata.is_none());
+        assert!(!dialog.certificate_editor.as_mut().unwrap().accept_inspection(&current, failure(), None, true));
+        assert!(!dialog.certificate_editor.as_ref().unwrap().monitoring_unavailable);
+        let editor = dialog.certificate_editor.as_mut().unwrap();
+        let current = editor.inspection_generation.clone();
+        editor.accept_inspection(&current, failure(), None, false);
+    });
+    click(&workspace, cx, "certificate-save");
+    assert!(certificates(&workspace, cx).iter().any(|cert| matches!(cert, ClientCertificate::Pem { certificate_file_path, .. } if certificate_file_path == "edited-unsaved.pem")));
+    click(&workspace, cx, "certificate-add");
+    workspace.update(cx, |view, _, _| {
+        assert!(!editor(view).accept_inspection(&generation, failure(), None, false));
+    });
+    click(&workspace, cx, "certificate-cancel");
+}
+
+#[gpui_kit::test]
+fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppContext) {
+    // Watcher notifications and teardown wake GPUI from an OS thread.
+    cx.executor().allow_parking();
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-inspect-unsaved");
+    workspace.open_manager(cx, "base");
+    click(&workspace, cx, "environment-tab-2");
+    click(&workspace, cx, "certificate-add");
+    fill(&workspace, cx, 0, "localhost");
+    let directory = tempfile::tempdir().unwrap();
+    let certificate = directory.path().canonicalize().unwrap().join("client.pem");
+    fs::copy(fixture_path("client.pem"), &certificate).unwrap();
+    fill(&workspace, cx, 1, certificate.to_str().unwrap());
+    fill(&workspace, cx, 2, &fixture_path("client-encrypted-key.pem"));
+    fill(&workspace, cx, 4, "probe-test-only-password");
+    let before = certificates(&workspace, cx);
+    click(&workspace, cx, "certificate-inspect");
+    workspace.update(cx, |view, _, _| {
+        let editor = editor(view);
+        let result = editor
+            .inspection
+            .as_ref()
+            .expect("background inspection completed");
+        assert!(result.validation.is_ok());
+        assert_eq!(
+            result.metadata.as_ref().unwrap().subject,
+            "Probe test-only client"
+        );
+    });
+    assert_visible(&workspace, cx, "certificate-validation-success", true);
+    assert_visible(&workspace, cx, "certificate-validation-failure", false);
+    assert_visible(&workspace, cx, "certificate-monitoring-warning", false);
+    assert_eq!(
+        certificates(&workspace, cx),
+        before,
+        "inspection leaves the draft unchanged"
+    );
+    click(&workspace, cx, "certificate-copy-fingerprint");
+    workspace.update(cx, |view, _, cx| {
+        let editor = editor(view);
+        let expected = &editor
+            .inspection
+            .as_ref()
+            .unwrap()
+            .metadata
+            .as_ref()
+            .unwrap()
+            .fingerprint;
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(expected.as_str())
+        );
+    });
+    // A real source event must wake the inspection task and clear its result.
+    fs::copy(fixture_path("client.pem"), &certificate).unwrap();
+    super::secret_execution::park_until(
+        cx,
+        |cx| workspace.update(cx, |view, _, _| editor(view).inspection.is_none()),
+        "certificate source invalidation",
+    );
+    assert_visible(&workspace, cx, "certificate-validation-success", false);
+    click(&workspace, cx, "certificate-inspect");
+    workspace.update(cx, |view, _, cx| {
+        let editor = editor(view);
+        let result = editor.inspection.clone().unwrap();
+        let generation = editor.inspection_generation.clone();
+        assert!(editor.accept_inspection(&generation, result, None, true));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_visible(&workspace, cx, "certificate-validation-success", true);
+    assert_visible(&workspace, cx, "certificate-monitoring-warning", true);
+    click(&workspace, cx, "certificate-cancel");
+    assert_eq!(certificates(&workspace, cx), before);
+}
+
+#[gpui_kit::test]
+fn inspect_allows_missing_domain_while_save_requires_it(cx: &mut TestAppContext) {
+    // Watcher notifications and teardown wake GPUI from an OS thread.
+    cx.executor().allow_parking();
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-inspect-without-domain");
+    workspace.open_manager(cx, "base");
+    click(&workspace, cx, "environment-tab-2");
+    click(&workspace, cx, "certificate-add");
+    fill(&workspace, cx, 1, &fixture_path("client.pem"));
+    fill(&workspace, cx, 2, &fixture_path("client-key.pem"));
+    workspace.update(cx, |view, _, cx| {
+        let editor = editor(view);
+        assert_eq!(editor.missing_required_field(cx), Some("Domain"));
+        assert!(editor.missing_inspection_field(cx).is_none());
+        assert!(editor.certificate(cx).is_none());
+    });
+    click(&workspace, cx, "certificate-inspect");
+    workspace.update(cx, |view, window, cx| {
+        let result = editor(view)
+            .inspection
+            .as_ref()
+            .expect("inspect runs without a domain");
+        assert!(result.validation.is_ok());
+        assert_eq!(
+            result.metadata.as_ref().unwrap().subject,
+            "Probe test-only client"
+        );
+        view.save_certificate_editor(window, cx);
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert!(dialog.draft().client_certificates.is_empty());
+        assert_eq!(
+            dialog
+                .certificate_editor
+                .as_ref()
+                .unwrap()
+                .missing_required_field(cx),
+            Some("Domain")
+        );
+    });
+    click(&workspace, cx, "certificate-type-1");
+    workspace.update(cx, |view, _, cx| {
+        let editor = editor(view);
+        assert_eq!(editor.missing_required_field(cx), Some("Domain"));
+        assert_eq!(editor.missing_inspection_field(cx), Some("PKCS#12 File"));
+    });
+    fill(&workspace, cx, 3, &fixture_path("client-unencrypted.p12"));
+    workspace.update(cx, |view, _, cx| {
+        let editor = editor(view);
+        assert_eq!(editor.missing_required_field(cx), Some("Domain"));
+        assert!(editor.missing_inspection_field(cx).is_none());
+    });
+    click(&workspace, cx, "certificate-inspect");
+    workspace.update(cx, |view, _, cx| {
+        let editor = editor(view);
+        let result = editor
+            .inspection
+            .as_ref()
+            .expect("pkcs12 inspect runs without a domain");
+        assert!(result.validation.is_ok());
+        assert!(editor.certificate(cx).is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn certificate_metadata_survives_refresh_saves_and_unchanged_reload(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-refresh");
+    workspace.open_manager(cx, "base");
+    workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .client_certificates
+            .push(ClientCertificate::Pem {
+                domain: "localhost".into(),
+                certificate_file_path: fixture_path("client.pem"),
+                private_key_file_path: "not-read-for-public-metadata.pem".into(),
+                passphrase: None,
+                disabled: false,
+            });
+    });
+    click(&workspace, cx, "environment-tab-2");
+    let fingerprint = workspace.update(cx, |view, _, cx| {
+        let dialog = view.environment_manager_dialog.as_mut().unwrap();
+        let fingerprint = dialog
+            .certificate_metadata
+            .as_ref()
+            .unwrap()
+            .last()
+            .unwrap()
+            .metadata
+            .as_ref()
+            .unwrap()
+            .fingerprint
+            .clone();
+        // Start the next refresh, checking before its background work can finish.
+        dialog.certificate_metadata_refresh_pending = false;
+        view.load_certificate_metadata(cx);
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert!(dialog.certificate_metadata_refresh_pending);
+        assert_eq!(
+            dialog
+                .certificate_metadata
+                .as_ref()
+                .unwrap()
+                .last()
+                .unwrap()
+                .metadata
+                .as_ref()
+                .unwrap()
+                .fingerprint,
+            fingerprint
+        );
+        fingerprint
+    });
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        let index = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .draft()
+            .client_certificates
+            .len()
+            - 1;
+        view.open_certificate_editor(Some(index), window, cx);
+        view.save_certificate_editor(window, cx);
+        assert_eq!(
+            cached_fingerprint(view.environment_manager_dialog.as_ref().unwrap()),
+            Some(fingerprint.as_str())
+        );
+
+        view.open_certificate_editor(Some(index), window, cx);
+        editor(view).inputs[4].update(cx, |input, cx| {
+            input.set_value("unused-passphrase", window, cx)
+        });
+        view.save_certificate_editor(window, cx);
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(
+            cached_fingerprint(dialog),
+            Some(fingerprint.as_str()),
+            "key configuration does not invalidate public metadata"
+        );
+        let refreshed = dialog.refreshed(dialog.draft());
+        assert_eq!(
+            cached_fingerprint(&refreshed),
+            Some(fingerprint.as_str()),
+            "save completion must not introduce a loading frame"
+        );
+        assert!(!std::rc::Rc::ptr_eq(
+            &dialog.certificate_generation,
+            &refreshed.certificate_generation
+        ));
+        let mut changed = dialog.draft().clone();
+        changed.variables.clear();
+        changed.extends = Some("different-parent".into());
+        assert!(
+            dialog.refreshed(&changed).certificate_metadata.is_none(),
+            "changed resolution inputs invalidate metadata"
+        );
+        view.save_environment_manager_dialog(window, cx);
+    });
+    cx.run_until_parked();
+    let fresh = probe_opencollection::load_workspace(&workspace.path).unwrap();
+    workspace.update(cx, |view, window, cx| {
+        assert_eq!(
+            cached_fingerprint(view.environment_manager_dialog.as_ref().unwrap()),
+            Some(fingerprint.as_str())
+        );
+        view.reconcile_filesystem_workspace(fresh, Default::default(), window, cx);
+        assert_eq!(
+            cached_fingerprint(view.environment_manager_dialog.as_ref().unwrap()),
+            Some(fingerprint.as_str()),
+            "an unchanged watcher reload must not clear metadata"
+        );
+    });
+    cx.run_until_parked();
+}
+
+fn cached_fingerprint(dialog: &crate::app::EnvironmentManagerDialog) -> Option<&str> {
+    dialog
+        .certificate_metadata
+        .as_ref()?
+        .last()?
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.fingerprint.as_str())
+}
+
+#[gpui_kit::test]
+fn certificate_list_mutations_keep_metadata_with_surviving_rows(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-delete-metadata");
+    workspace.open_manager(cx, "base");
+    workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_mut()
+            .unwrap()
+            .draft_mut()
+            .client_certificates = ["client.pem", "ec-client.pem", "server.pem"]
+            .into_iter()
+            .map(|filename| ClientCertificate::Pem {
+                domain: filename.into(),
+                certificate_file_path: fixture_path(filename),
+                private_key_file_path: "not-read-for-preview.pem".into(),
+                passphrase: None,
+                disabled: false,
+            })
+            .collect();
+    });
+    click(&workspace, cx, "environment-tab-2");
+    let labels = |dialog: &crate::app::EnvironmentManagerDialog| {
+        dialog
+            .certificate_metadata
+            .as_ref()
+            .expect("metadata stays cached")
+            .iter()
+            .map(|row| {
+                let metadata = row.metadata.as_ref().expect("public fixture metadata");
+                (metadata.subject.clone(), metadata.expires.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let original = workspace.update(cx, |view, _, _| {
+        labels(view.environment_manager_dialog.as_ref().unwrap())
+    });
+    assert_eq!(original.len(), 3);
+    workspace.update(cx, |view, _, cx| {
+        let generation = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_generation
+            .clone();
+        view.apply_environment_manager_draft(cx, |dialog| dialog.remove_certificate(0));
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(
+            labels(dialog),
+            original[1..],
+            "deletion must preserve labels before background work runs"
+        );
+        assert!(
+            !std::rc::Rc::ptr_eq(&generation, &dialog.certificate_generation),
+            "reject pending results for the previous row order"
+        );
+        view.apply_environment_manager_draft(cx, |dialog| dialog.swap_certificates(0, 1));
+        assert_eq!(
+            labels(view.environment_manager_dialog.as_ref().unwrap()),
+            vec![original[2].clone(), original[1].clone()]
+        );
+        view.apply_environment_manager_draft(cx, |dialog| dialog.set_certificate_enabled(0, false));
+        assert_eq!(
+            labels(view.environment_manager_dialog.as_ref().unwrap()),
+            vec![original[2].clone(), original[1].clone()]
+        );
+    });
+    cx.run_until_parked();
+    click(&workspace, cx, "certificate-delete-0");
+    workspace.update(cx, |view, _, _| {
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(labels(dialog), vec![original[1].clone()]);
+        assert!(matches!(&dialog.draft().client_certificates[0], ClientCertificate::Pem { domain, .. } if domain == "ec-client.pem"));
+    });
+}

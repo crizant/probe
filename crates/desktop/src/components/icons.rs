@@ -8,6 +8,9 @@ pub(super) static CHEVRON_RIGHT_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuChevronRight));
 pub(super) static CHECK_SVG: LazyLock<Vec<u8>> =
     LazyLock::new(|| icon_svg_bytes(icondata::LuCheck));
+static CIRCLE_CHECK_SVG: LazyLock<Vec<u8>> =
+    LazyLock::new(|| icon_svg_bytes(icondata::LuCircleCheck));
+static CIRCLE_X_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuCircleX));
 static FOLDER_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuFolder));
 static LIBRARY_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLibrary));
 static FOLDER_OPEN_SVG: LazyLock<Vec<u8>> =
@@ -20,6 +23,7 @@ static DOWNLOAD_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondat
 static CLOSE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuX));
 static CLEAR_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuEraser));
 static TRASH_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuTrash2));
+static EDIT_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuPencil));
 static COPY_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuCopy));
 static LOCATE_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuLocateFixed));
 static SIDEBAR_COLLAPSE_SVG: LazyLock<Vec<u8>> =
@@ -262,6 +266,15 @@ pub(crate) fn chevron_icon(theme: Theme, expanded: bool) -> gpui_kit::Div {
     icon.text_color(theme.colors.text.muted)
 }
 
+pub(crate) fn reorder_icon(theme: Theme, up: bool) -> gpui_kit::Div {
+    let (name, svg) = if up {
+        ("lucide-chevron-up", &CHEVRON_UP_SVG)
+    } else {
+        ("lucide-chevron-down", &CHEVRON_DOWN_SVG)
+    };
+    library_icon(name, svg, 14.0).text_color(theme.colors.text.secondary)
+}
+
 pub(crate) fn eye_icon(theme: Theme, revealed: bool) -> gpui_kit::Div {
     let (key, data) = if revealed {
         ("lucide-eye-off", &EYE_OFF_SVG)
@@ -403,6 +416,23 @@ pub(crate) fn disconnect_severity_mark(
     };
     library_icon(name, svg, theme.metrics.icon_small)
         .text_color(disconnect_severity_color(theme, severity))
+}
+
+pub(crate) fn certificate_validation_icon(succeeded: bool) -> gpui_kit::Div {
+    let (name, svg) = if succeeded {
+        ("lucide-circle-check", &CIRCLE_CHECK_SVG)
+    } else {
+        ("lucide-circle-x", &CIRCLE_X_SVG)
+    };
+    library_icon(name, svg, 14.0)
+}
+
+pub(crate) fn edit_icon(theme: Theme) -> gpui_kit::Div {
+    library_icon("lucide-pencil", &EDIT_SVG, 14.0).text_color(theme.colors.text.secondary)
+}
+
+pub(crate) fn field_copy_icon(theme: Theme) -> gpui_kit::Div {
+    library_icon("lucide-copy", &COPY_SVG, 14.0).text_color(theme.colors.text.secondary)
 }
 
 pub(crate) fn copy_icon(theme: Theme) -> gpui_kit::Div {

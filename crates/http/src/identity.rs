@@ -16,12 +16,12 @@ use crate::{ExecutionOptions, HttpError};
 #[derive(Clone, Eq, PartialEq)]
 pub struct ClientIdentity {
     domain: String,
-    material: IdentityMaterial,
-    passphrase: Option<Zeroizing<String>>,
+    pub(crate) material: IdentityMaterial,
+    pub(crate) passphrase: Option<Zeroizing<String>>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
-enum IdentityMaterial {
+pub(crate) enum IdentityMaterial {
     Pem { certificate: String, key: String },
     Pkcs12 { path: String },
 }
@@ -60,6 +60,18 @@ impl ClientIdentity {
             domain,
             material: IdentityMaterial::Pkcs12 { path },
             passphrase: passphrase.map(Zeroizing::new),
+        }
+    }
+
+    /// Resolved identity sources for background file-change observation. These may
+    /// contain secret-derived paths; never retain them in presentation state.
+    pub fn source_paths(&self, options: &ExecutionOptions) -> Result<Vec<PathBuf>, HttpError> {
+        match &self.material {
+            IdentityMaterial::Pem { certificate, key } => Ok(vec![
+                resolve_path(certificate, options)?,
+                resolve_path(key, options)?,
+            ]),
+            IdentityMaterial::Pkcs12 { path } => Ok(vec![resolve_path(path, options)?]),
         }
     }
 
@@ -125,7 +137,7 @@ fn configuration(message: &'static str) -> HttpError {
     HttpError::ClientConfiguration(message.into())
 }
 
-fn resolve_path(path: &str, options: &ExecutionOptions) -> Result<PathBuf, HttpError> {
+pub(crate) fn resolve_path(path: &str, options: &ExecutionOptions) -> Result<PathBuf, HttpError> {
     let path = Path::new(path);
     if path.is_absolute() {
         return Ok(path.to_owned());
@@ -138,7 +150,7 @@ fn resolve_path(path: &str, options: &ExecutionOptions) -> Result<PathBuf, HttpE
     Ok(base.join(path))
 }
 
-fn identity_from_pem(
+pub(crate) fn identity_from_pem(
     cert: &[u8],
     key: &[u8],
     passphrase: Option<&str>,
@@ -333,6 +345,17 @@ mod tests {
             None,
         );
         assert!(identity.load(&options).await.is_ok());
+        assert_eq!(
+            identity.source_paths(&options).unwrap(),
+            vec![fixture("client.pem"), fixture("client-key.pem")]
+        );
+        assert!(identity.source_paths(&ExecutionOptions::default()).is_err());
+        assert_eq!(
+            ClientIdentity::pkcs12(String::new(), "client-protected.p12".into(), None)
+                .source_paths(&options)
+                .unwrap(),
+            vec![fixture("client-protected.p12")]
+        );
         assert_eq!(
             identity.load(&ExecutionOptions::default()).await.err(),
             Some(configuration(
