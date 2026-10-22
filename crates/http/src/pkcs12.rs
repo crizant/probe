@@ -152,12 +152,11 @@ pub(crate) fn public_certificate_from_pkcs12(
     }
     certificates.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
     certificates.dedup();
-    if certificates.len() != 1 {
-        return Err(error(AMBIGUOUS));
+    match certificates.len() {
+        0 => Err(error(Pkcs12Error::NoIdentity)),
+        1 => Ok(certificates.remove(0)),
+        _ => Err(error(AMBIGUOUS)),
     }
-    certificates
-        .pop()
-        .ok_or_else(|| error(Pkcs12Error::NoIdentity))
 }
 
 fn decode_safe(safe: ContentInfo, password: Option<&str>) -> Result<Zeroizing<Vec<u8>>, HttpError> {

@@ -500,6 +500,7 @@ impl ProbeApp {
         }
         form = form.child(components::dialog_description(theme, "Domain and file paths are required. Paths and passphrases accept {{variables}}. Prefer {{secretVariable}} for passphrases; literal values are saved in the collection."));
         let missing_field = editor.missing_required_field(cx);
+        let missing_inspection = editor.missing_inspection_field(cx);
         if let Some(field) = missing_field.filter(|_| editor.show_validation_feedback) {
             form = form.child(
                 components::dialog_description(theme, format!("{field} is required."))
@@ -527,7 +528,7 @@ impl ProbeApp {
                             theme,
                             "certificate-inspect",
                             "Inspect",
-                            editor.inspecting || missing_field.is_some(),
+                            editor.inspecting || missing_inspection.is_some(),
                             move |_, _, cx| {
                                 let _ = inspect
                                     .update(cx, |view, cx| view.inspect_certificate_editor(cx));

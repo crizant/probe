@@ -1051,6 +1051,114 @@ fn inspect_reads_unsaved_fields_and_copies_public_fingerprint(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+fn inspect_allows_missing_domain_while_save_requires_it(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "certificate-inspect-without-domain");
+    workspace.open_manager(cx, "base");
+    click(&workspace, cx, "environment-tab-2");
+    click(&workspace, cx, "certificate-add");
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/mtls");
+    fill(
+        &workspace,
+        cx,
+        1,
+        fixture.join("client.pem").to_str().unwrap(),
+    );
+    fill(
+        &workspace,
+        cx,
+        2,
+        fixture.join("client-key.pem").to_str().unwrap(),
+    );
+    workspace.update(cx, |view, _, cx| {
+        let editor = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_editor
+            .as_ref()
+            .unwrap();
+        assert_eq!(editor.missing_required_field(cx), Some("Domain"));
+        assert!(editor.missing_inspection_field(cx).is_none());
+        assert!(editor.certificate(cx).is_none());
+    });
+    click(&workspace, cx, "certificate-inspect");
+    workspace.update(cx, |view, window, cx| {
+        let result = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_editor
+            .as_ref()
+            .unwrap()
+            .inspection
+            .as_ref()
+            .expect("inspect runs without a domain");
+        assert!(result.validation.is_ok());
+        assert_eq!(
+            result.metadata.as_ref().unwrap().subject,
+            "Probe test-only client"
+        );
+        view.save_certificate_editor(window, cx);
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert!(dialog.draft().client_certificates.is_empty());
+        assert_eq!(
+            dialog
+                .certificate_editor
+                .as_ref()
+                .unwrap()
+                .missing_required_field(cx),
+            Some("Domain")
+        );
+    });
+    click(&workspace, cx, "certificate-type-1");
+    workspace.update(cx, |view, _, cx| {
+        let editor = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_editor
+            .as_ref()
+            .unwrap();
+        assert_eq!(editor.missing_required_field(cx), Some("Domain"));
+        assert_eq!(editor.missing_inspection_field(cx), Some("PKCS#12 File"));
+    });
+    fill(
+        &workspace,
+        cx,
+        3,
+        fixture.join("client-unencrypted.p12").to_str().unwrap(),
+    );
+    workspace.update(cx, |view, _, cx| {
+        let editor = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_editor
+            .as_ref()
+            .unwrap();
+        assert_eq!(editor.missing_required_field(cx), Some("Domain"));
+        assert!(editor.missing_inspection_field(cx).is_none());
+    });
+    click(&workspace, cx, "certificate-inspect");
+    workspace.update(cx, |view, _, cx| {
+        let editor = view
+            .environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_editor
+            .as_ref()
+            .unwrap();
+        let result = editor
+            .inspection
+            .as_ref()
+            .expect("pkcs12 inspect runs without a domain");
+        assert!(result.validation.is_ok());
+        assert!(editor.certificate(cx).is_none());
+    });
+}
+
+#[gpui_kit::test]
 fn certificate_metadata_survives_refresh_saves_and_unchanged_reload(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-refresh");
     workspace.open_manager(cx, "base");

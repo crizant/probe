@@ -208,6 +208,19 @@ mod tests {
                 assert!(identity.public_metadata(&options).is_err());
             }
         }
+        let preview = |file: &str| {
+            ClientIdentity::pkcs12(String::new(), file.into(), None)
+                .public_metadata(&options)
+                .unwrap_err()
+        };
+        assert_eq!(
+            preview("client-key-only.p12"),
+            HttpError::Pkcs12(crate::Pkcs12Error::NoIdentity)
+        );
+        assert_eq!(
+            preview("client-cert-only.p12"),
+            HttpError::Pkcs12(crate::Pkcs12Error::MultipleIdentities)
+        );
     }
 
     #[test]

@@ -65,10 +65,20 @@ impl CertificateEditor {
     }
 
     pub(crate) fn missing_required_field(&self, cx: &App) -> Option<&'static str> {
-        let required: &[(usize, &str)] = if self.pkcs12 {
-            &[(0, "Domain"), (3, "PKCS#12 File")]
-        } else {
-            &[(0, "Domain"), (1, "Certificate"), (2, "Private Key")]
+        self.missing_field(cx, true)
+    }
+
+    /// Local inspection reads certificate material only. Domain stays mandatory for Save.
+    pub(crate) fn missing_inspection_field(&self, cx: &App) -> Option<&'static str> {
+        self.missing_field(cx, false)
+    }
+
+    fn missing_field(&self, cx: &App, require_domain: bool) -> Option<&'static str> {
+        let required: &[(usize, &str)] = match (require_domain, self.pkcs12) {
+            (true, true) => &[(0, "Domain"), (3, "PKCS#12 File")],
+            (false, true) => &[(3, "PKCS#12 File")],
+            (true, false) => &[(0, "Domain"), (1, "Certificate"), (2, "Private Key")],
+            (false, false) => &[(1, "Certificate"), (2, "Private Key")],
         };
         required.iter().find_map(|(index, label)| {
             self.inputs[*index]
@@ -81,7 +91,15 @@ impl CertificateEditor {
     }
 
     pub(crate) fn certificate(&self, cx: &App) -> Option<ClientCertificate> {
-        if self.missing_required_field(cx).is_some() {
+        self.certificate_for(cx, true)
+    }
+
+    fn inspection_certificate(&self, cx: &App) -> Option<ClientCertificate> {
+        self.certificate_for(cx, false)
+    }
+
+    fn certificate_for(&self, cx: &App, require_domain: bool) -> Option<ClientCertificate> {
+        if self.missing_field(cx, require_domain).is_some() {
             return None;
         }
         let values: Vec<_> = self
@@ -467,7 +485,7 @@ impl ProbeApp {
         let Some(editor) = dialog.certificate_editor.as_mut() else {
             return;
         };
-        let Some(certificate) = editor.certificate(cx) else {
+        let Some(certificate) = editor.inspection_certificate(cx) else {
             return;
         };
         editor.inspection = None;
@@ -499,13 +517,10 @@ impl ProbeApp {
                             use notify::Watcher;
                             if let Ok(paths) = identity.source_paths(&options) {
                                 let flag = worker_changed.clone();
+                                let sources = paths.clone();
                                 if let Ok(mut observer) = notify::recommended_watcher(
                                     move |event: notify::Result<notify::Event>| {
-                                        if event.is_err()
-                                            || event.is_ok_and(|event| {
-                                                !matches!(event.kind, notify::EventKind::Access(_))
-                                            })
-                                        {
+                                        if inspection_source_changed(&event, &sources) {
                                             flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                         }
                                     },
@@ -568,6 +583,24 @@ impl ProbeApp {
     }
 }
 
+/// Parent directories stay watched so an atomic replace is visible. Only events
+/// that name a resolved certificate or private-key path invalidate inspection.
+fn inspection_source_changed(
+    event: &notify::Result<notify::Event>,
+    sources: &[std::path::PathBuf],
+) -> bool {
+    let Ok(event) = event else {
+        return false;
+    };
+    if matches!(event.kind, notify::EventKind::Access(_)) {
+        return false;
+    }
+    event
+        .paths
+        .iter()
+        .any(|path| sources.iter().any(|source| source == path))
+}
+
 fn same_public_certificate_source(before: &ClientCertificate, after: &ClientCertificate) -> bool {
     match (before, after) {
         (
@@ -591,5 +624,54 @@ fn same_public_certificate_source(before: &ClientCertificate, after: &ClientCert
             },
         ) => before == after,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use notify::{
+        Event, EventKind,
+        event::{AccessKind, AccessMode, DataChange, ModifyKind, RenameMode},
+    };
+
+    use super::inspection_source_changed;
+
+    fn sources() -> Vec<PathBuf> {
+        vec![
+            PathBuf::from("/certs/client.pem"),
+            PathBuf::from("/certs/client-key.pem"),
+        ]
+    }
+
+    #[test]
+    fn only_certificate_and_key_paths_invalidate_inspection() {
+        let sources = sources();
+        let changed = |event: Event| inspection_source_changed(&Ok(event), &sources);
+        assert!(changed(
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                .add_path(PathBuf::from("/certs/client.pem"))
+        ));
+        assert!(changed(
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+                .add_path(PathBuf::from("/certs/.client-key.pem.A2K5AL"))
+                .add_path(PathBuf::from("/certs/client-key.pem"))
+        ));
+        assert!(!changed(
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                .add_path(PathBuf::from("/certs/other.pem"))
+        ));
+        assert!(!changed(
+            Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)))
+                .add_path(PathBuf::from("/certs/client.pem"))
+        ));
+        assert!(!changed(Event::new(EventKind::Modify(ModifyKind::Any))));
+        assert!(!inspection_source_changed(
+            &Err(notify::Error::new(notify::ErrorKind::Generic(
+                "watch failed".into(),
+            ))),
+            &sources
+        ));
     }
 }

@@ -902,7 +902,8 @@ metadata and fixed validation diagnostics are returned separately from identity
 material, with secret-derived metadata redacted in the application boundary.
 Dates are presented separately from key validity and never gate Save or execution.
 Input generations discard stale completions; source-directory observation clears
-editor results after file changes, including replacement of a certificate or key.
+editor results when a resolved certificate or private-key path changes, including
+atomic replacement. Other files in those directories do not.
 Collection-level certificate UI remains deferred.
 
 ## OpenCollection Validation
