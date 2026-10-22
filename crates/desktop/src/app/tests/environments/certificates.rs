@@ -1343,11 +1343,15 @@ fn certificate_list_mutations_keep_metadata_with_surviving_rows(cx: &mut TestApp
 fn active_certificate_popover_opens_environment_management_without_secret_reads(
     cx: &mut TestAppContext,
 ) {
-    let source = include_str!("../../../../../../tests/fixtures/opencollection/mtls-variables.yml");
-    let workspace = EnvironmentWorkspace::writable_source(cx, "active-certificate", source);
+    let environment = format!("Development{}", "a".repeat(80));
+    let hostname = format!("{}.example.com", "a".repeat(63));
+    let source = include_str!("../../../../../../tests/fixtures/opencollection/mtls-variables.yml")
+        .replace("parent", &environment)
+        .replace("api.example.com", &hostname);
+    let workspace = EnvironmentWorkspace::writable_source(cx, "active-certificate", &source);
     workspace.update(cx, |view, _, cx| {
         let key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
-        view.select_environment(Some("parent".into()), cx);
+        view.select_environment(Some(environment.clone()), cx);
         view.select_request(key, cx);
     });
     secret_execution::park_until(
@@ -1362,11 +1366,38 @@ fn active_certificate_popover_opens_environment_management_without_secret_reads(
     );
     click(&workspace, cx, "active-certificate-indicator");
     assert_visible(&workspace, cx, "active-certificate-manage", true);
+    assert_visible(
+        &workspace,
+        cx,
+        "active-certificate-metadata-unavailable",
+        true,
+    );
+    for selector in [
+        "active-certificate-value-Subject",
+        "active-certificate-value-Issuer",
+        "active-certificate-value-Expiry",
+    ] {
+        assert_visible(&workspace, cx, selector, false);
+    }
+    let mut visual = workspace.visual(cx);
+    let popup = visual.debug_bounds("active-certificate-details").unwrap();
+    for selector in [
+        "active-certificate-value-File",
+        "active-certificate-value-Source",
+        "active-certificate-value-Match",
+    ] {
+        let value = visual.debug_bounds(selector).unwrap();
+        assert!(
+            value.left() >= popup.left() && value.right() <= popup.right(),
+            "long metadata stays inside the popover: {selector}"
+        );
+    }
+
     click(&workspace, cx, "active-certificate-manage");
     workspace.update(cx, |view, _, _| {
         let dialog = view.environment_manager_dialog.as_ref().unwrap();
         assert_eq!(dialog.tab, EnvironmentTab::ClientCertificates);
-        assert_eq!(dialog.draft().name, "parent");
+        assert_eq!(dialog.draft().name, environment);
     });
     assert_eq!(workspace.store.get_calls(), 0);
 }

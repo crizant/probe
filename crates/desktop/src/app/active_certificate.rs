@@ -13,9 +13,31 @@ struct Inputs {
     selected: Option<String>,
 }
 
+impl Inputs {
+    /// Compare borrowed live values before allocating another background snapshot.
+    fn matches(
+        &self,
+        workspace: Option<&std::path::Path>,
+        key: RequestKey,
+        request: &Request,
+        environments: &[probe_core::Environment],
+        certificates: &[probe_core::ClientCertificate],
+        selected: Option<&str>,
+    ) -> bool {
+        self.workspace.as_deref() == workspace
+            && self.key == key
+            && !request.kind.is_websocket()
+            && self.selected.as_deref() == selected
+            && self.request.url == request.url
+            && self.request.path_parameters == request.path_parameters
+            && self.environments == environments
+            && self.certificates == certificates
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ActiveCertificate {
-    inputs: Option<Inputs>,
+    inputs: Option<Arc<Inputs>>,
     generation: Rc<()>,
     result: Option<CertificatePreview>,
     inspection: Option<probe_http::CertificateInspection>,
@@ -25,7 +47,7 @@ pub(super) struct ActiveCertificate {
 }
 
 impl ActiveCertificate {
-    fn set_inputs(&mut self, inputs: Option<Inputs>) {
+    fn set_inputs(&mut self, inputs: Option<Arc<Inputs>>) {
         if self.inputs == inputs {
             return;
         }
@@ -58,12 +80,11 @@ impl ActiveCertificate {
     fn accept(
         &mut self,
         generation: &Rc<()>,
-        inputs: &Inputs,
-        current: Option<&Inputs>,
+        current_matches: bool,
         result: CertificatePreview,
         inspection: Option<probe_http::CertificateInspection>,
     ) -> bool {
-        if !Rc::ptr_eq(generation, &self.generation) || current != Some(inputs) {
+        if !Rc::ptr_eq(generation, &self.generation) || !current_matches {
             return false;
         }
         self.visible_while_refreshing = false;
@@ -75,11 +96,13 @@ impl ActiveCertificate {
 
 fn certificate_detail(
     theme: Theme,
-    label: &str,
+    label: &'static str,
     value: &str,
     warning: Option<&'static str>,
 ) -> gpui_kit::Div {
     div()
+        .w_full()
+        .min_w(px(0.0))
         .flex()
         .items_start()
         .gap(px(theme.metrics.spacing_2))
@@ -100,7 +123,12 @@ fn certificate_detail(
                 .gap(px(theme.metrics.spacing_1))
                 .text_size(px(theme.typography.body_size))
                 .text_color(theme.colors.text.primary)
-                .child(value.to_owned())
+                .child(
+                    components::truncated_label(value.to_owned())
+                        .id(label)
+                        .debug_selector(move || format!("active-certificate-value-{label}"))
+                        .w_full(),
+                )
                 .when_some(warning, |value, warning| {
                     value.child(
                         div()
@@ -120,6 +148,20 @@ impl ProbeApp {
         if request.kind.is_websocket() {
             return None;
         }
+        let workspace = loaded.workspace();
+        let selected = self.shell.selected_environment();
+        if workspace.client_certificates().is_empty()
+            && selected
+                .and_then(|name| {
+                    workspace
+                        .environments()
+                        .iter()
+                        .find(|environment| environment.name == name)
+                })
+                .is_none_or(|environment| environment.client_certificates.is_empty())
+        {
+            return None;
+        }
         Some(Inputs {
             workspace: self.workspace_path.clone(),
             key: self.shell.active_tab()?,
@@ -135,15 +177,40 @@ impl ProbeApp {
         })
     }
 
-    pub(super) fn refresh_active_certificate(&mut self, cx: &mut Context<Self>) {
-        let inputs = self.certificate_preview_inputs();
-        self.active_certificate.set_inputs(inputs.clone());
-        let Some(inputs) = inputs else {
-            return;
+    fn certificate_preview_matches(&self, inputs: &Inputs) -> bool {
+        let (Some(loaded), Some(key), Some(request)) = (
+            self.loaded_workspace.as_ref(),
+            self.shell.active_tab(),
+            self.active_request(),
+        ) else {
+            return false;
         };
+        inputs.matches(
+            self.workspace_path.as_deref(),
+            key,
+            request,
+            loaded.workspace().environments(),
+            loaded.workspace().client_certificates(),
+            self.shell.selected_environment(),
+        )
+    }
+
+    pub(super) fn refresh_active_certificate(&mut self, cx: &mut Context<Self>) {
+        if self
+            .active_certificate
+            .inputs
+            .as_deref()
+            .is_none_or(|inputs| !self.certificate_preview_matches(inputs))
+        {
+            let inputs = self.certificate_preview_inputs().map(Arc::new);
+            self.active_certificate.set_inputs(inputs);
+        }
         if self.active_certificate.pending {
             return;
         }
+        let Some(inputs) = self.active_certificate.inputs.clone() else {
+            return;
+        };
         self.active_certificate.pending = true;
         let generation = self.active_certificate.generation.clone();
         cx.spawn(async move |view, cx| {
@@ -185,11 +252,10 @@ impl ProbeApp {
             let refresh = matches!(result, CertificatePreview::Selected { .. });
             let accepted = view
                 .update(cx, |view, cx| {
-                    let current = view.certificate_preview_inputs();
+                    let current_matches = view.certificate_preview_matches(&inputs);
                     if !view.active_certificate.accept(
                         &generation,
-                        &inputs,
-                        current.as_ref(),
+                        current_matches,
                         result,
                         inspection,
                     ) {
@@ -238,6 +304,7 @@ impl ProbeApp {
         let warning =
             metadata.and_then(|metadata| metadata.validity_warning(std::time::SystemTime::now()));
         let mut popup = components::popup_surface(theme, "active-certificate-details", 340.0)
+            .debug_selector(|| "active-certificate-details".into())
             .p(px(theme.metrics.spacing_3))
             .flex()
             .flex_col()
@@ -273,14 +340,6 @@ impl ProbeApp {
                     || "Collection".to_owned(),
                     |name| format!("Environment: {name}"),
                 );
-                let (subject, issuer, expires) =
-                    metadata.map_or(("Unavailable", "Unavailable", "Unavailable"), |metadata| {
-                        (
-                            metadata.subject.as_str(),
-                            metadata.issuer.as_str(),
-                            metadata.expires.as_str(),
-                        )
-                    });
                 let path = match certificate {
                     probe_core::ClientCertificate::Pem {
                         certificate_file_path,
@@ -296,22 +355,29 @@ impl ProbeApp {
                         .text_color(theme.colors.text.secondary)
                         .child("Selected for next request. TLS handshake not yet performed."),
                 );
-                for (label, value, warning) in [
-                    ("Subject", subject, None),
-                    ("Issuer", issuer, None),
-                    ("Expiry", expires, warning),
-                    ("File", filename, None),
-                    ("Source", source.as_str(), None),
-                    ("Match", match_rule.as_str(), None),
-                ] {
-                    popup = popup.child(certificate_detail(theme, label, value, warning));
-                }
-                if metadata.is_none() {
+                if let Some(metadata) = metadata {
+                    for (label, value, warning) in [
+                        ("Subject", metadata.subject.as_str(), None),
+                        ("Issuer", metadata.issuer.as_str(), None),
+                        ("Expiry", metadata.expires.as_str(), warning),
+                    ] {
+                        popup = popup.child(certificate_detail(theme, label, value, warning));
+                    }
+                } else {
                     popup = popup.child(
                         div()
+                            .id("active-certificate-metadata-unavailable")
+                            .debug_selector(|| "active-certificate-metadata-unavailable".into())
                             .text_color(theme.colors.text.muted)
                             .child("Metadata unavailable"),
                     );
+                }
+                for (label, value) in [
+                    ("File", filename),
+                    ("Source", source.as_str()),
+                    ("Match", match_rule.as_str()),
+                ] {
+                    popup = popup.child(certificate_detail(theme, label, value, None));
                 }
                 if environment.is_some() {
                     let manage = cx.weak_entity();
@@ -417,7 +483,7 @@ mod tests {
             selected: None,
         };
         let mut state = ActiveCertificate {
-            inputs: Some(inputs.clone()),
+            inputs: Some(Arc::new(inputs.clone())),
             pending: true,
             ..Default::default()
         };
@@ -430,8 +496,14 @@ mod tests {
         for current in &changes {
             assert!(!state.accept(
                 &generation,
-                &inputs,
-                Some(current),
+                inputs.matches(
+                    current.workspace.as_deref(),
+                    current.key,
+                    &current.request,
+                    &current.environments,
+                    &current.certificates,
+                    current.selected.as_deref()
+                ),
                 CertificatePreview::Unmatched,
                 None
             ));
@@ -439,27 +511,9 @@ mod tests {
         }
         // Even returning to identical inputs cannot resurrect a previous generation.
         let mut replacement = ActiveCertificate::default();
-        assert!(!replacement.accept(
-            &generation,
-            &inputs,
-            Some(&inputs),
-            CertificatePreview::Unmatched,
-            None
-        ));
-        assert!(!state.accept(
-            &generation,
-            &inputs,
-            None,
-            CertificatePreview::Unmatched,
-            None
-        ));
-        assert!(state.accept(
-            &generation,
-            &inputs,
-            Some(&inputs),
-            CertificatePreview::Unmatched,
-            None
-        ));
+        assert!(!replacement.accept(&generation, true, CertificatePreview::Unmatched, None));
+        assert!(!state.accept(&generation, false, CertificatePreview::Unmatched, None));
+        assert!(state.accept(&generation, true, CertificatePreview::Unmatched, None));
         state.result = Some(CertificatePreview::Selected {
             certificate: inputs.certificates[0].clone(),
             environment: None,
@@ -469,7 +523,7 @@ mod tests {
         if let probe_core::ClientCertificate::Pem { passphrase, .. } = &mut saved.certificates[0] {
             *passphrase = Some("updated".into());
         }
-        state.set_inputs(Some(saved.clone()));
+        state.set_inputs(Some(Arc::new(saved.clone())));
         assert!(
             state.visible_while_refreshing,
             "saving certificates keeps the button mounted"
@@ -479,18 +533,94 @@ mod tests {
             "old selection is not displayed while refreshing"
         );
         assert!(state.inspection.is_none());
-        assert!(!state.accept(
-            &generation,
-            &inputs,
-            Some(&saved),
-            CertificatePreview::Unmatched,
-            None
-        ));
-        state.set_inputs(Some(changes[0].clone()));
+        assert!(!state.accept(&generation, false, CertificatePreview::Unmatched, None));
+        state.set_inputs(Some(Arc::new(changes[0].clone())));
         assert!(
             !state.visible_while_refreshing,
             "tab changes never retain another tab's preview"
         );
+    }
+
+    #[gpui_kit::test]
+    fn preview_reuses_snapshots_and_observes_unsaved_variables(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(Theme::init);
+        let window = cx.open_window(gpui_kit::size(px(1180.0), px(780.0)), |window, cx| {
+            ProbeApp::new(window, cx)
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.session_store = None;
+                let loaded = probe_opencollection::load_workspace_from_str(include_str!(
+                    "../../../../tests/fixtures/opencollection/mtls-variables.yml"
+                ))
+                .unwrap();
+                let key = loaded.requests()[0].key();
+                view.set_workspace(PathBuf::from("certificate-preview.yml"), loaded);
+                view.select_request(key, cx);
+                view.select_environment(Some("child".into()), cx);
+                view.refresh_active_certificate(cx);
+                let snapshot = view.active_certificate.inputs.clone().unwrap();
+                let generation = view.active_certificate.generation.clone();
+                view.refresh_active_certificate(cx);
+                assert!(Arc::ptr_eq(
+                    view.active_certificate.inputs.as_ref().unwrap(),
+                    &snapshot
+                ));
+                view.edit_request(
+                    key,
+                    |request| request.metadata.name = Some("Renamed".into()),
+                    cx,
+                );
+                view.refresh_active_certificate(cx);
+                assert!(
+                    Arc::ptr_eq(view.active_certificate.inputs.as_ref().unwrap(), &snapshot),
+                    "unrelated editor changes retain the snapshot"
+                );
+                view.active_certificate.pending = false;
+                view.refresh_active_certificate(cx);
+                assert!(
+                    Arc::ptr_eq(view.active_certificate.inputs.as_ref().unwrap(), &snapshot),
+                    "periodic inspection shares the existing snapshot"
+                );
+
+                view.loaded_workspace
+                    .as_mut()
+                    .unwrap()
+                    .set_environment_variable("parent", "mtlsDomain", "elsewhere.test".into())
+                    .unwrap();
+                let current_matches = view.certificate_preview_matches(&snapshot);
+                assert!(
+                    !current_matches,
+                    "unsaved inherited variables invalidate pending work"
+                );
+                assert!(!view.active_certificate.accept(
+                    &generation,
+                    current_matches,
+                    CertificatePreview::Unmatched,
+                    None
+                ));
+                view.refresh_active_certificate(cx);
+                assert!(!Arc::ptr_eq(
+                    view.active_certificate.inputs.as_ref().unwrap(),
+                    &snapshot
+                ));
+
+                let loaded = probe_opencollection::load_workspace_from_str(include_str!(
+                    "../../../../tests/fixtures/opencollection/phase4-environments.yml"
+                ))
+                .unwrap();
+                let key = loaded.requests()[0].key();
+                view.set_workspace(PathBuf::from("without-certificates.yml"), loaded);
+                view.select_request(key, cx);
+                view.select_environment(Some("base".into()), cx);
+                view.refresh_active_certificate(cx);
+                assert!(view.active_certificate.inputs.is_none());
+                assert!(
+                    !view.active_certificate.pending,
+                    "unconfigured scopes schedule no preview"
+                );
+            })
+            .unwrap();
     }
 
     #[test]
