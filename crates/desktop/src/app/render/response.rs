@@ -624,12 +624,14 @@ impl ProbeApp {
         let jump_view = cx.weak_entity();
         let copy_view = cx.weak_entity();
         let line_height = theme.typography.body_size * 1.25;
+        let action_height = theme.metrics.control_height - 2.0;
+        let details = details.py(px((action_height - line_height).max(0.0) / 2.0));
         div()
             .id(("assertion-result", index))
             .debug_selector(move || format!("assertion-result-{index}"))
             .w_full()
             .min_w(px(0.0))
-            .min_h(px(theme.metrics.tree_row_height))
+            .min_h(px(action_height + theme.metrics.spacing_1 * 2.0))
             .flex_none()
             .px(px(theme.metrics.spacing_2))
             .py(px(theme.metrics.spacing_1))
@@ -657,7 +659,7 @@ impl ProbeApp {
                     .child(
                         div()
                             .flex_none()
-                            .h(px(line_height))
+                            .h(px(action_height))
                             .flex()
                             .items_center()
                             .child(
@@ -672,7 +674,7 @@ impl ProbeApp {
                             .flex()
                             .gap(px(theme.metrics.spacing_2))
                             .child(
-                                components::icon_button(
+                                components::compact_icon_button(
                                     theme,
                                     ("assertion-copy", index),
                                     "Copy result",
@@ -684,12 +686,10 @@ impl ProbeApp {
                                         });
                                     },
                                 )
-                                .debug_selector(move || format!("assertion-copy-{index}"))
-                                .size(px(line_height))
-                                .flex_none(),
+                                .debug_selector(move || format!("assertion-copy-{index}")),
                             )
                             .child(
-                                components::icon_button(
+                                components::compact_icon_button(
                                     theme,
                                     ("assertion-jump", index),
                                     "Go to assertion",
@@ -701,9 +701,7 @@ impl ProbeApp {
                                         });
                                     },
                                 )
-                                .debug_selector(move || format!("assertion-jump-{index}"))
-                                .size(px(line_height))
-                                .flex_none(),
+                                .debug_selector(move || format!("assertion-jump-{index}")),
                             ),
                     ),
             )
