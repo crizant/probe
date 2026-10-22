@@ -40,6 +40,7 @@ use probe_opencollection::{
     CompletedEnvironmentDelete, LoadedWorkspace, StructureOperation, StructureResult,
     create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
 };
+mod active_certificate;
 mod certificates;
 mod chrome;
 use certificates::{CertificateEditor, EnvironmentTab};
@@ -305,6 +306,7 @@ pub(crate) struct ProbeApp {
     tree_auto_scroll: AutoScroll,
     structure_dialog: Option<StructureDialog>,
     create_environment_dialog: Option<String>,
+    active_certificate: active_certificate::ActiveCertificate,
     environment_manager_dialog: Option<EnvironmentManagerDialog>,
     secret_value_dialog: Option<secrets::SecretValueDialog>,
     secret_write_in_progress: bool,
@@ -457,6 +459,7 @@ impl ProbeApp {
             tree_auto_scroll: AutoScroll::default(),
             structure_dialog: None,
             create_environment_dialog: None,
+            active_certificate: Default::default(),
             environment_manager_dialog: None,
             secret_value_dialog: None,
             secret_write_in_progress: false,

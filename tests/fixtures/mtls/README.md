@@ -7,7 +7,7 @@ The current server certificate expires **2027-10-14**. Regenerate the fixtures
 before that date (reminder: September 2027) so macOS coverage and mTLS tests keep
 passing. Its 365-day validity, SANs (`localhost`, `127.0.0.1`), `serverAuth` EKU,
 and critical `CA:FALSE` basic constraint satisfy macOS leaf verification. Other
-fixtures expire in 2126.
+fixtures expire in 2126, except the intentionally expired client described below.
 
 From the repository root, with Python 3 and OpenSSL 3 installed, run exactly:
 
@@ -45,3 +45,22 @@ decoy CA with the same subject DN and different keys. `shared_subject_chain()` i
 the PKCS#12 generator records its commands, discards all CA private keys, and
 packages its public certificates with the existing public client key. Tests permute
 the candidate issuers and perform an mTLS handshake using the resulting chain.
+
+`expired-client.pem` is a self-signed client certificate for manually testing expiry
+warnings in the desktop indicator and certificate inspector. Its CN is
+`Probe test-only expired client`, and its fixed validity is **2020-01-01 through
+2021-01-01 UTC**. Use the existing `client-key.pem` as its matching private key;
+no passphrase is required. Configure its domain to match the HTTPS request you
+want to preview. It is separate from the valid certificates used by handshake tests.
+
+To regenerate only this fixture, use OpenSSL 3.6 (the macOS system LibreSSL does
+not support these date-setting options):
+
+```sh
+openssl x509 -new -key tests/fixtures/mtls/client-key.pem \
+  -subj '/CN=Probe test-only expired client' -set_serial 6 \
+  -not_before 20200101000000Z -not_after 20210101000000Z \
+  -out tests/fixtures/mtls/expired-client.pem
+```
+
+Regenerate it after changing `client-key.pem` so the pair continues to match.

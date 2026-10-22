@@ -556,3 +556,24 @@ pub(crate) fn clear_icon(theme: Theme) -> gpui_kit::Div {
     library_icon("lucide-eraser", &CLEAR_SVG, theme.metrics.icon_standard)
         .text_color(theme.colors.text.secondary)
 }
+
+pub(crate) fn certificate_icon(theme: Theme) -> gpui_kit::Div {
+    static SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuFileKey));
+    library_icon("lucide-file-key", &SVG, theme.metrics.icon_standard)
+}
+
+pub(crate) fn open_dialog_icon(theme: Theme) -> gpui_kit::Div {
+    static SVG: LazyLock<Vec<u8>> =
+        LazyLock::new(|| icon_svg_bytes(icondata::LuSquareArrowOutUpRight));
+    library_icon(
+        "lucide-square-arrow-out-up-right",
+        &SVG,
+        theme.metrics.icon_small,
+    )
+}
+
+pub(crate) fn certificate_details_icon(theme: Theme) -> gpui_kit::Div {
+    static SVG: LazyLock<Vec<u8>> = LazyLock::new(|| icon_svg_bytes(icondata::LuShieldCheck));
+    library_icon("lucide-shield-check", &SVG, theme.metrics.icon_standard)
+        .text_color(theme.colors.text.secondary)
+}

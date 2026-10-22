@@ -1135,7 +1135,9 @@ fn inspect_allows_missing_domain_while_save_requires_it(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
-fn certificate_metadata_survives_refresh_saves_and_unchanged_reload(cx: &mut TestAppContext) {
+fn certificate_metadata_and_expiry_warning_survive_refresh_saves_and_reload(
+    cx: &mut TestAppContext,
+) {
     let workspace = EnvironmentWorkspace::writable(cx, "certificate-refresh");
     workspace.open_manager(cx, "base");
     workspace.update(cx, |view, _, _| {
@@ -1146,13 +1148,14 @@ fn certificate_metadata_survives_refresh_saves_and_unchanged_reload(cx: &mut Tes
             .client_certificates
             .push(ClientCertificate::Pem {
                 domain: "localhost".into(),
-                certificate_file_path: fixture_path("client.pem"),
+                certificate_file_path: fixture_path("expired-client.pem"),
                 private_key_file_path: "not-read-for-public-metadata.pem".into(),
                 passphrase: None,
                 disabled: false,
             });
     });
     click(&workspace, cx, "environment-tab-2");
+    assert_visible(&workspace, cx, "certificate-validity-warning-0", true);
     let fingerprint = workspace.update(cx, |view, _, cx| {
         let dialog = view.environment_manager_dialog.as_mut().unwrap();
         let fingerprint = dialog
@@ -1248,6 +1251,7 @@ fn certificate_metadata_survives_refresh_saves_and_unchanged_reload(cx: &mut Tes
         );
     });
     cx.run_until_parked();
+    assert_visible(&workspace, cx, "certificate-validity-warning-0", true);
 }
 
 fn cached_fingerprint(dialog: &crate::app::EnvironmentManagerDialog) -> Option<&str> {
@@ -1333,4 +1337,36 @@ fn certificate_list_mutations_keep_metadata_with_surviving_rows(cx: &mut TestApp
         assert_eq!(labels(dialog), vec![original[1].clone()]);
         assert!(matches!(&dialog.draft().client_certificates[0], ClientCertificate::Pem { domain, .. } if domain == "ec-client.pem"));
     });
+}
+
+#[gpui_kit::test]
+fn active_certificate_popover_opens_environment_management_without_secret_reads(
+    cx: &mut TestAppContext,
+) {
+    let source = include_str!("../../../../../../tests/fixtures/opencollection/mtls-variables.yml");
+    let workspace = EnvironmentWorkspace::writable_source(cx, "active-certificate", source);
+    workspace.update(cx, |view, _, cx| {
+        let key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
+        view.select_environment(Some("parent".into()), cx);
+        view.select_request(key, cx);
+    });
+    secret_execution::park_until(
+        cx,
+        |cx| {
+            workspace
+                .visual(cx)
+                .debug_bounds("active-certificate-indicator")
+                .is_some()
+        },
+        "active certificate indicator",
+    );
+    click(&workspace, cx, "active-certificate-indicator");
+    assert_visible(&workspace, cx, "active-certificate-manage", true);
+    click(&workspace, cx, "active-certificate-manage");
+    workspace.update(cx, |view, _, _| {
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(dialog.tab, EnvironmentTab::ClientCertificates);
+        assert_eq!(dialog.draft().name, "parent");
+    });
+    assert_eq!(workspace.store.get_calls(), 0);
 }

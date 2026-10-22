@@ -33,7 +33,41 @@ impl<'a> CertificateScopes<'a> {
             return Ok(None);
         };
         let resolved = probe_core::apply_path_parameters(raw_url, &request.path_parameters);
-        let Ok(url) = url::Url::parse(&resolved) else {
+        let Some((_, certificate, domain)) =
+            self.select_declaration(&resolved, &mut interpolate)?
+        else {
+            return Ok(None);
+        };
+        match certificate {
+            probe_core::ClientCertificate::Pem {
+                certificate_file_path,
+                private_key_file_path,
+                passphrase,
+                ..
+            } => Ok(Some(probe_http::ClientIdentity::new(
+                domain,
+                interpolate(certificate_file_path)?,
+                interpolate(private_key_file_path)?,
+                passphrase.as_deref().map(&mut interpolate).transpose()?,
+            ))),
+            probe_core::ClientCertificate::Pkcs12 {
+                pkcs12_file_path,
+                passphrase,
+                ..
+            } => Ok(Some(probe_http::ClientIdentity::pkcs12(
+                domain,
+                interpolate(pkcs12_file_path)?,
+                passphrase.as_deref().map(&mut interpolate).transpose()?,
+            ))),
+        }
+    }
+
+    fn select_declaration(
+        &self,
+        resolved: &str,
+        mut interpolate: impl FnMut(&str) -> Result<String, HttpError>,
+    ) -> Result<Option<(usize, &'a probe_core::ClientCertificate, String)>, HttpError> {
+        let Ok(url) = url::Url::parse(resolved) else {
             return Ok(None);
         };
         if url.scheme() != "https" {
@@ -43,7 +77,7 @@ impl<'a> CertificateScopes<'a> {
             return Ok(None);
         };
         let port = url.port_or_known_default().unwrap_or(443);
-        for certificate in self.environment.iter().chain(self.collection) {
+        for (index, certificate) in self.environment.iter().chain(self.collection).enumerate() {
             let (domain, disabled) = match certificate {
                 probe_core::ClientCertificate::Pem {
                     domain, disabled, ..
@@ -59,28 +93,7 @@ impl<'a> CertificateScopes<'a> {
             if !probe_core::client_certificate_domain_matches(&domain, host, port) {
                 continue;
             }
-            return match certificate {
-                probe_core::ClientCertificate::Pem {
-                    certificate_file_path,
-                    private_key_file_path,
-                    passphrase,
-                    ..
-                } => Ok(Some(probe_http::ClientIdentity::new(
-                    domain,
-                    interpolate(certificate_file_path)?,
-                    interpolate(private_key_file_path)?,
-                    passphrase.as_deref().map(&mut interpolate).transpose()?,
-                ))),
-                probe_core::ClientCertificate::Pkcs12 {
-                    pkcs12_file_path,
-                    passphrase,
-                    ..
-                } => Ok(Some(probe_http::ClientIdentity::pkcs12(
-                    domain,
-                    interpolate(pkcs12_file_path)?,
-                    passphrase.as_deref().map(&mut interpolate).transpose()?,
-                ))),
-            };
+            return Ok(Some((index, certificate, domain)));
         }
         Ok(None)
     }
@@ -390,6 +403,16 @@ mod execution_tests {
         .unwrap();
         let engine = HttpEngine::new().unwrap();
         for item in loaded.requests() {
+            assert!(matches!(
+                preview_client_certificate(
+                    loaded.workspace().request(item.key()).unwrap(),
+                    &RequestResolution {
+                        client_certificates: loaded.workspace().client_certificates(),
+                        ..Default::default()
+                    }
+                ),
+                CertificatePreview::Selected { .. }
+            ));
             let prepared = prepare_request(
                 loaded.workspace().request(item.key()).unwrap(),
                 &RequestResolution {
@@ -695,5 +718,282 @@ mod inspection_tests {
         );
         assert!(missing.validation.is_err());
         assert!(!format!("{missing:?}").contains("password"));
+    }
+}
+
+/// Informational selection only: no credential access or identity material loading.
+#[derive(Clone, Debug)]
+pub enum CertificatePreview {
+    Hidden,
+    Unknown,
+    Unmatched,
+    Selected {
+        certificate: probe_core::ClientCertificate,
+        environment: Option<String>,
+        /// Resolved rule returned by the selector that chose this declaration.
+        match_rule: String,
+    },
+}
+
+pub fn preview_client_certificate(
+    request: &probe_core::Request,
+    resolution: &RequestResolution<'_>,
+) -> CertificatePreview {
+    use CertificatePreview::*;
+    if request.kind.is_websocket() {
+        return Hidden;
+    }
+    let scopes = CertificateScopes::new(resolution);
+    if scopes.environment.is_empty() && scopes.collection.is_empty() {
+        return Hidden;
+    }
+    let raw = request.url.as_deref().unwrap_or_default();
+    if raw
+        .trim()
+        .split_once("://")
+        .is_some_and(|(scheme, _)| !scheme.contains("{{") && !scheme.eq_ignore_ascii_case("https"))
+    {
+        return Hidden;
+    }
+    let resolve = |value: &str| -> Result<String, HttpError> {
+        probe_core::resolve_environment_for_templates_with_provider(
+            [value],
+            resolution.environments,
+            resolution.environment,
+            resolution.overrides,
+            &crate::NoSecrets,
+            None,
+        )
+        .and_then(|env| env.interpolate_strict(value))
+        .map_err(|_| HttpError::ClientConfiguration("Selection unavailable".into()))
+    };
+    // Resolve only fields that participate in the target URL, through the same
+    // request transformer as execution (including parameter names).
+    let target = probe_core::Request {
+        url: request.url.clone(),
+        path_parameters: request
+            .path_parameters
+            .iter()
+            .filter(|parameter| !parameter.disabled)
+            .cloned()
+            .collect(),
+        ..Default::default()
+    };
+    let templates = std::iter::once(raw).chain(
+        target
+            .path_parameters
+            .iter()
+            .flat_map(|parameter| [parameter.name.as_str(), parameter.value.as_str()]),
+    );
+    let Ok(environment) = probe_core::resolve_environment_for_templates_with_provider(
+        templates,
+        resolution.environments,
+        resolution.environment,
+        resolution.overrides,
+        &crate::NoSecrets,
+        None,
+    ) else {
+        return Unknown;
+    };
+    let Ok(target) = probe_core::resolve_request_strict(&target, &environment) else {
+        return Unknown;
+    };
+    let url = probe_core::apply_path_parameters(
+        target.url.as_deref().unwrap_or_default(),
+        &target.path_parameters,
+    );
+    let Ok(parsed) = url::Url::parse(&url) else {
+        return Unknown;
+    };
+    if parsed.scheme() != "https" {
+        return Hidden;
+    }
+    match scopes.select_declaration(&url, resolve) {
+        Ok(Some((index, certificate, match_rule))) => Selected {
+            certificate: certificate.clone(),
+            match_rule,
+            environment: (index < scopes.environment.len())
+                .then(|| resolution.environment.unwrap_or_default().to_owned()),
+        },
+        Ok(None) => Unmatched,
+        Err(_) => Unknown,
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    use probe_core::{ClientCertificate, EnvironmentVariable, Request, SecretVariable};
+
+    fn fixture() -> probe_opencollection::LoadedWorkspace {
+        probe_opencollection::load_workspace_from_str(include_str!(
+            "../../../tests/fixtures/opencollection/mtls-variables.yml"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn preview_uses_execution_precedence_and_ignores_unreachable_material_secrets() {
+        let loaded = fixture();
+        let workspace = loaded.workspace();
+        let request = workspace.request(loaded.requests()[0].key()).unwrap();
+        let resolution = RequestResolution {
+            environments: workspace.environments(),
+            environment: Some("child"),
+            client_certificates: workspace.client_certificates(),
+            ..Default::default()
+        };
+        let CertificatePreview::Selected {
+            certificate,
+            environment,
+            match_rule,
+        } = preview_client_certificate(request, &resolution)
+        else {
+            panic!("collection must win; child does not inherit certificates");
+        };
+        assert!(environment.is_none());
+        assert_eq!(
+            match_rule, "*.example.com",
+            "the resolved rule, not its template, is presented"
+        );
+        assert_eq!(certificate, workspace.client_certificates()[2]);
+        let CertificatePreview::Selected {
+            certificate,
+            environment,
+            match_rule,
+        } = preview_client_certificate(
+            request,
+            &RequestResolution {
+                environment: Some("parent"),
+                ..resolution
+            },
+        )
+        else {
+            panic!("direct environment must win");
+        };
+        assert_eq!(environment.as_deref(), Some("parent"));
+        assert_eq!(match_rule, "api.example.com");
+        assert_eq!(
+            certificate,
+            workspace.environments()[0].client_certificates[0]
+        );
+    }
+
+    #[test]
+    fn preview_distinguishes_hidden_unmatched_and_unknown_and_tracks_input_changes() {
+        let loaded = fixture();
+        let mut environments = loaded.workspace().environments().to_vec();
+        environments[1]
+            .variables
+            .push(EnvironmentVariable::Secret(SecretVariable {
+                name: Some("host".into()),
+                value_type: None,
+                disabled: false,
+            }));
+        let mut request = Request {
+            url: Some("https://{{host}}/:resource".into()),
+            ..Default::default()
+        };
+        let certificates = [ClientCertificate::Pem {
+            domain: "api.example.com".into(),
+            certificate_file_path: "missing.pem".into(),
+            private_key_file_path: "{{unused}}".into(),
+            passphrase: Some("{{unused}}".into()),
+            disabled: false,
+        }];
+        let resolution = RequestResolution {
+            environments: &environments,
+            environment: Some("child"),
+            client_certificates: &certificates,
+            ..Default::default()
+        };
+        assert!(matches!(
+            preview_client_certificate(&request, &resolution),
+            CertificatePreview::Unknown
+        ));
+        request.url = Some("https://{{undefined}}".into());
+        assert!(matches!(
+            preview_client_certificate(&request, &resolution),
+            CertificatePreview::Unknown
+        ));
+        request.url = Some("https://api.example.com/:resource".into());
+        request.path_parameters.push(probe_core::QueryParameter {
+            name: "resource".into(),
+            value: "users".into(),
+            disabled: false,
+        });
+        assert!(matches!(
+            preview_client_certificate(&request, &resolution),
+            CertificatePreview::Selected {
+                environment: None,
+                ..
+            }
+        ));
+        request.path_parameters[0].value = "{{host}}".into();
+        assert!(matches!(
+            preview_client_certificate(&request, &resolution),
+            CertificatePreview::Unknown
+        ));
+        request.path_parameters[0].disabled = true;
+        assert!(matches!(
+            preview_client_certificate(&request, &resolution),
+            CertificatePreview::Selected { .. }
+        ));
+        request.path_parameters.clear();
+        request.url = Some("https://other.test".into());
+        assert!(matches!(
+            preview_client_certificate(&request, &resolution),
+            CertificatePreview::Unmatched
+        ));
+        for url in [
+            "http://api.example.com",
+            "http://{{host}}",
+            "wss://api.example.com",
+        ] {
+            request.url = Some(url.into());
+            assert!(matches!(
+                preview_client_certificate(&request, &resolution),
+                CertificatePreview::Hidden
+            ));
+        }
+        request.url = Some("https://api.example.com".into());
+        assert!(matches!(
+            preview_client_certificate(&request, &RequestResolution::default()),
+            CertificatePreview::Hidden
+        ));
+        request.kind = probe_core::RequestKind::WebSocket { message: None };
+        assert!(matches!(
+            preview_client_certificate(&request, &resolution),
+            CertificatePreview::Hidden
+        ));
+        request.kind = Default::default();
+        let mut secret_domain = certificates.clone();
+        if let ClientCertificate::Pem { domain, .. } = &mut secret_domain[0] {
+            *domain = "{{host}}".into();
+        }
+        assert!(matches!(
+            preview_client_certificate(
+                &request,
+                &RequestResolution {
+                    client_certificates: &secret_domain,
+                    ..resolution
+                }
+            ),
+            CertificatePreview::Unknown
+        ));
+        let mut disabled = certificates.clone();
+        if let ClientCertificate::Pem { disabled, .. } = &mut disabled[0] {
+            *disabled = true;
+        }
+        assert!(matches!(
+            preview_client_certificate(
+                &request,
+                &RequestResolution {
+                    client_certificates: &disabled,
+                    ..resolution
+                }
+            ),
+            CertificatePreview::Unmatched
+        ));
     }
 }
