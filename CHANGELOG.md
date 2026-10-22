@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-22
+
 ### Added
 
 - Desktop HTTP and GraphQL requests now have an Assertions editor with an enable
@@ -645,6 +647,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[2.0.0]: https://github.com/crizant/probe/releases/tag/v2.0.0
 [1.1.1]: https://github.com/crizant/probe/releases/tag/v1.1.1
 [1.1.0]: https://github.com/crizant/probe/releases/tag/v1.1.0
 [1.0.1]: https://github.com/crizant/probe/releases/tag/v1.0.1
