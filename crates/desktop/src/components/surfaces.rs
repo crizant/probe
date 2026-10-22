@@ -752,12 +752,17 @@ pub(super) fn variable_tooltip_popup(
                 text_button(
                     theme,
                     "variable-tooltip-manage-environments",
-                    "Manage environments…",
+                    "Manage environments",
                     move |_, window, cx| {
                         hover.update(cx, |state, cx| state.dismiss(cx));
                         on_manage(window, cx);
                     },
                 )
+                .p(px(0.0))
+                .h_auto()
+                .font_weight(FontWeight::MEDIUM)
+                .gap(px(theme.metrics.spacing_1))
+                .child(open_dialog_icon(theme))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                     cx.stop_propagation();
                 }),
