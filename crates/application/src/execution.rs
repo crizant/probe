@@ -753,6 +753,160 @@ mod certificate_variable_tests {
     }
 
     #[test]
+    fn secret_host_preview_waits_for_execution_and_stale_declarations_are_invalid() {
+        use crate::{
+            CertificateOverride, CertificatePreview, CertificateRef, preview_client_certificate,
+        };
+        use probe_core::{EnvironmentVariable, SecretVariable};
+        struct HostProvider<'a>(&'a str, std::cell::Cell<usize>);
+        impl SecretProvider for HostProvider<'_> {
+            fn resolve_secret(
+                &self,
+                _: &SecretContext<'_>,
+            ) -> Result<Option<SecretValue>, SecretError> {
+                self.1.set(self.1.get() + 1);
+                Ok(Some(SecretValue::new(self.0.into())))
+            }
+        }
+        let loaded = fixture();
+        let mut environments = loaded.workspace().environments().to_vec();
+        environments[1]
+            .variables
+            .push(EnvironmentVariable::Secret(SecretVariable {
+                name: Some("secretHost".into()),
+                value_type: None,
+                disabled: false,
+            }));
+        let certificate = ClientCertificate::Pem {
+            domain: "localhost:8443".into(),
+            certificate_file_path: "missing.pem".into(),
+            private_key_file_path: "key.pem".into(),
+            passphrase: None,
+            disabled: false,
+        };
+        for graphql in [false, true] {
+            let request = Request {
+                method: Some("POST".into()),
+                url: Some("https://{{secretHost}}:8443".into()),
+                kind: if graphql {
+                    probe_core::RequestKind::Graphql {
+                        body: Some(probe_core::GraphqlBody::Single(
+                            probe_core::GraphqlOperation {
+                                query: Some("query { ok }".into()),
+                                ..Default::default()
+                            },
+                        )),
+                    }
+                } else {
+                    Default::default()
+                },
+                ..Default::default()
+            };
+            let certificates = [certificate.clone()];
+            let selection = CertificateOverride::Selected(CertificateRef {
+                certificate: certificate.clone(),
+                environment: None,
+            });
+            let resolution = RequestResolution {
+                environments: &environments,
+                environment: Some("child"),
+                client_certificates: &certificates,
+                certificate_override: Some(&selection),
+                ..Default::default()
+            };
+            for host in ["localhost", "other.test"] {
+                let provider = HostProvider(host, Default::default());
+                assert!(matches!(
+                    preview_client_certificate(&request, &resolution),
+                    CertificatePreview::Unknown
+                ));
+                assert_eq!(provider.1.get(), 0);
+                let execution = prepare_request(&request, &resolution, &provider)
+                    .unwrap()
+                    .into_http()
+                    .unwrap();
+                if host == "localhost" {
+                    assert_eq!(
+                        execution.client_identity,
+                        Ok(Some(probe_http::ClientIdentity::new(
+                            "localhost:8443".into(),
+                            "missing.pem".into(),
+                            "key.pem".into(),
+                            None,
+                        )))
+                    );
+                } else {
+                    assert!(execution.client_identity.is_err());
+                }
+                assert_eq!(provider.1.get(), 1);
+                assert!(execution.uses_secrets());
+            }
+            // Invalid declarations are definitive even when the host is unknown.
+            let mut disabled = certificate.clone();
+            if let ClientCertificate::Pem { disabled, .. } = &mut disabled {
+                *disabled = true;
+            }
+            let mut edited = certificate.clone();
+            if let ClientCertificate::Pem {
+                certificate_file_path,
+                ..
+            } = &mut edited
+            {
+                *certificate_file_path = "replacement.pem".into();
+            }
+            for current in [vec![], vec![disabled], vec![edited]] {
+                assert!(matches!(
+                    preview_client_certificate(
+                        &request,
+                        &RequestResolution {
+                            client_certificates: &current,
+                            ..resolution
+                        }
+                    ),
+                    CertificatePreview::Invalid
+                ));
+            }
+            let mut public_url = request;
+            public_url.url = Some("https://other.test:8443".into());
+            assert!(matches!(
+                preview_client_certificate(&public_url, &resolution),
+                CertificatePreview::Invalid
+            ));
+            public_url.url = Some("malformed URL".into());
+            assert!(matches!(
+                preview_client_certificate(&public_url, &resolution),
+                CertificatePreview::Unknown
+            ));
+        }
+        // A selected rule with a secret-backed domain is equally unknown in preview.
+        let mut secret_domain = certificate;
+        if let ClientCertificate::Pem { domain, .. } = &mut secret_domain {
+            *domain = "{{secretHost}}:8443".into();
+        }
+        let certificates = [secret_domain.clone()];
+        let selection = CertificateOverride::Selected(CertificateRef {
+            certificate: secret_domain,
+            environment: None,
+        });
+        assert!(matches!(
+            preview_client_certificate(
+                &Request {
+                    url: Some("https://localhost:8443".into()),
+                    ..Default::default()
+                },
+                &RequestResolution {
+                    environments: &environments,
+                    environment: Some("child"),
+                    client_certificates: &certificates,
+                    certificate_override: Some(&selection),
+                    ..Default::default()
+                }
+            ),
+            CertificatePreview::Unknown
+        ));
+    }
+
+    #[test]
     fn inherited_nested_variables_resolve_only_selected_certificate_and_join_disclosure() {
         let loaded = fixture();
         let provider = Provider::default();

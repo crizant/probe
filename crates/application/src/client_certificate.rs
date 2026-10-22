@@ -103,7 +103,10 @@ impl<'a> CertificateScopes<'a> {
             return Ok(None);
         }
         let selected = match self.selection {
-            Some(CertificateOverride::Selected(reference)) => Some(reference),
+            Some(CertificateOverride::Selected(reference)) => Some(
+                self.find_declaration(reference)
+                    .ok_or_else(invalid_override)?,
+            ),
             _ => None,
         };
         let no_match = || {
@@ -116,43 +119,73 @@ impl<'a> CertificateScopes<'a> {
         let Ok(url) = url::Url::parse(resolved) else {
             return no_match();
         };
-        if url.scheme() != "https" {
-            return no_match();
-        }
-        let Some(host) = url.host_str() else {
-            return no_match();
-        };
-        let port = url.port_or_known_default().unwrap_or(443);
-        for (index, certificate) in self.environment.iter().chain(self.collection).enumerate() {
-            if let Some(reference) = selected {
-                let environment = (index < self.environment.len())
-                    .then_some(self.selected_environment)
-                    .flatten();
-                if reference.environment.as_deref() != environment
-                    || &reference.certificate != certificate
-                {
-                    continue;
-                }
-            }
-            let (domain, disabled) = match certificate {
-                probe_core::ClientCertificate::Pem {
-                    domain, disabled, ..
-                }
-                | probe_core::ClientCertificate::Pkcs12 {
-                    domain, disabled, ..
-                } => (domain, disabled),
+        if let Some((index, certificate)) = selected {
+            return match matching_domain(certificate, &url, &mut interpolate)? {
+                Some(domain) => Ok(Some((index, certificate, domain))),
+                None => no_match(),
             };
-            if *disabled {
-                continue;
-            }
-            let domain = interpolate(domain)?;
-            if !probe_core::client_certificate_domain_matches(&domain, host, port) {
-                continue;
-            }
-            return Ok(Some((index, certificate, domain)));
         }
-        no_match()
+        for (index, certificate) in self.environment.iter().chain(self.collection).enumerate() {
+            if let Some(domain) = matching_domain(certificate, &url, &mut interpolate)? {
+                return Ok(Some((index, certificate, domain)));
+            }
+        }
+        Ok(None)
     }
+
+    fn find_declaration(
+        &self,
+        reference: &CertificateRef,
+    ) -> Option<(usize, &'a probe_core::ClientCertificate)> {
+        let (certificates, offset) = match reference.environment.as_deref() {
+            None => (self.collection, self.environment.len()),
+            Some(name) if Some(name) == self.selected_environment => (self.environment, 0),
+            _ => return None,
+        };
+        certificates
+            .iter()
+            .enumerate()
+            .find_map(|(index, certificate)| {
+                (certificate == &reference.certificate && enabled_domain(certificate).is_some())
+                    .then_some((index + offset, certificate))
+            })
+    }
+}
+
+fn enabled_domain(certificate: &probe_core::ClientCertificate) -> Option<&str> {
+    match certificate {
+        probe_core::ClientCertificate::Pem {
+            domain, disabled, ..
+        }
+        | probe_core::ClientCertificate::Pkcs12 {
+            domain, disabled, ..
+        } => (!disabled).then_some(domain),
+    }
+}
+
+/// Shared by execution, preview and candidate enumeration. The resolver controls
+/// whether secrets may be accessed; matching itself never reads identity material.
+fn matching_domain(
+    certificate: &probe_core::ClientCertificate,
+    url: &url::Url,
+    mut interpolate: impl FnMut(&str) -> Result<String, HttpError>,
+) -> Result<Option<String>, HttpError> {
+    if url.scheme() != "https" {
+        return Ok(None);
+    }
+    let Some(host) = url.host_str() else {
+        return Ok(None);
+    };
+    let Some(domain) = enabled_domain(certificate) else {
+        return Ok(None);
+    };
+    let domain = interpolate(domain)?;
+    Ok(probe_core::client_certificate_domain_matches(
+        &domain,
+        host,
+        url.port_or_known_default().unwrap_or(443),
+    )
+    .then_some(domain))
 }
 
 #[cfg(test)]
@@ -797,26 +830,63 @@ pub fn preview_client_certificate(
     request: &probe_core::Request,
     resolution: &RequestResolution<'_>,
 ) -> CertificatePreview {
-    let preview = preview_selection(request, resolution);
-    match resolution.certificate_override {
-        Some(CertificateOverride::NoCertificate) if !request.kind.is_websocket() => {
-            CertificatePreview::NoCertificate
+    use CertificatePreview::*;
+    if request.kind.is_websocket() {
+        return Hidden;
+    }
+    if matches!(
+        resolution.certificate_override,
+        Some(CertificateOverride::NoCertificate)
+    ) {
+        return NoCertificate;
+    }
+    let scopes = CertificateScopes::new(resolution);
+    let selected = match resolution.certificate_override {
+        Some(CertificateOverride::Selected(reference)) => {
+            let Some(declaration) = scopes.find_declaration(reference) else {
+                return Invalid;
+            };
+            Some(declaration)
         }
-        Some(CertificateOverride::Selected(_))
-            if !matches!(preview, CertificatePreview::Selected { .. }) =>
-        {
-            CertificatePreview::Invalid
+        _ if scopes.environment.is_empty() && scopes.collection.is_empty() => return Hidden,
+        _ => None,
+    };
+    let url = match preview_target(request, resolution) {
+        Ok(Some(url)) => url,
+        Ok(None) => return if selected.is_some() { Invalid } else { Hidden },
+        Err(()) => return Unknown,
+    };
+    let resolve = |value: &str| resolve_preview_value(value, resolution);
+    let declaration = if let Some((index, certificate)) = selected {
+        match matching_domain(certificate, &url, resolve) {
+            Ok(Some(domain)) => Ok(Some((index, certificate, domain))),
+            Ok(None) => return Invalid,
+            Err(_) => return Unknown,
         }
-        _ => preview,
+    } else {
+        scopes.select_declaration(url.as_str(), resolve)
+    };
+    match declaration {
+        Ok(Some((index, certificate, match_rule))) => Selected {
+            certificate: certificate.clone(),
+            match_rule,
+            environment: (index < scopes.environment.len())
+                .then(|| resolution.environment.unwrap_or_default().to_owned()),
+        },
+        Ok(None) => Unmatched,
+        Err(_) => Unknown,
     }
 }
 
-/// Eligible declarations, using the same selector and safe resolver as preview.
-/// Unresolvable domains are omitted; this never accesses credentials or keys.
+/// Enumerate in source order, resolving the target once and each enabled domain
+/// at most once. Unknown domains are omitted without credential or key access.
 pub fn certificate_candidates(
     request: &probe_core::Request,
     resolution: &RequestResolution<'_>,
 ) -> Vec<CertificateRef> {
+    let Ok(Some(url)) = preview_target(request, resolution) else {
+        return Vec::new();
+    };
     let scopes = CertificateScopes::new(resolution);
     scopes
         .environment
@@ -824,38 +894,43 @@ pub fn certificate_candidates(
         .chain(scopes.collection)
         .enumerate()
         .filter_map(|(index, certificate)| {
-            let reference = CertificateRef {
+            matching_domain(certificate, &url, |value| {
+                resolve_preview_value(value, resolution)
+            })
+            .ok()
+            .flatten()
+            .map(|_| CertificateRef {
                 certificate: certificate.clone(),
                 environment: (index < scopes.environment.len())
                     .then(|| resolution.environment.unwrap_or_default().to_owned()),
-            };
-            let selection = CertificateOverride::Selected(reference.clone());
-            matches!(
-                preview_selection(
-                    request,
-                    &RequestResolution {
-                        certificate_override: Some(&selection),
-                        ..*resolution
-                    }
-                ),
-                CertificatePreview::Selected { .. }
-            )
-            .then_some(reference)
+            })
         })
         .collect()
 }
 
-fn preview_selection(
+fn resolve_preview_value(
+    value: &str,
+    resolution: &RequestResolution<'_>,
+) -> Result<String, HttpError> {
+    probe_core::resolve_environment_for_templates_with_provider(
+        [value],
+        resolution.environments,
+        resolution.environment,
+        resolution.overrides,
+        &crate::NoSecrets,
+        None,
+    )
+    .and_then(|environment| environment.interpolate_strict(value))
+    .map_err(|_| HttpError::ClientConfiguration("Selection unavailable".into()))
+}
+
+// None is a known non-HTTPS target; Err means public resolution is unavailable.
+fn preview_target(
     request: &probe_core::Request,
     resolution: &RequestResolution<'_>,
-) -> CertificatePreview {
-    use CertificatePreview::*;
+) -> Result<Option<url::Url>, ()> {
     if request.kind.is_websocket() {
-        return Hidden;
-    }
-    let scopes = CertificateScopes::new(resolution);
-    if scopes.environment.is_empty() && scopes.collection.is_empty() {
-        return Hidden;
+        return Ok(None);
     }
     let raw = request.url.as_deref().unwrap_or_default();
     if raw
@@ -863,20 +938,8 @@ fn preview_selection(
         .split_once("://")
         .is_some_and(|(scheme, _)| !scheme.contains("{{") && !scheme.eq_ignore_ascii_case("https"))
     {
-        return Hidden;
+        return Ok(None);
     }
-    let resolve = |value: &str| -> Result<String, HttpError> {
-        probe_core::resolve_environment_for_templates_with_provider(
-            [value],
-            resolution.environments,
-            resolution.environment,
-            resolution.overrides,
-            &crate::NoSecrets,
-            None,
-        )
-        .and_then(|env| env.interpolate_strict(value))
-        .map_err(|_| HttpError::ClientConfiguration("Selection unavailable".into()))
-    };
     // Resolve only fields that participate in the target URL, through the same
     // request transformer as execution (including parameter names).
     let target = probe_core::Request {
@@ -903,31 +966,22 @@ fn preview_selection(
         &crate::NoSecrets,
         None,
     ) else {
-        return Unknown;
+        return Err(());
     };
     let Ok(target) = probe_core::resolve_request_strict(&target, &environment) else {
-        return Unknown;
+        return Err(());
     };
     let url = probe_core::apply_path_parameters(
         target.url.as_deref().unwrap_or_default(),
         &target.path_parameters,
     );
     let Ok(parsed) = url::Url::parse(&url) else {
-        return Unknown;
+        return Err(());
     };
     if parsed.scheme() != "https" {
-        return Hidden;
+        return Ok(None);
     }
-    match scopes.select_declaration(&url, resolve) {
-        Ok(Some((index, certificate, match_rule))) => Selected {
-            certificate: certificate.clone(),
-            match_rule,
-            environment: (index < scopes.environment.len())
-                .then(|| resolution.environment.unwrap_or_default().to_owned()),
-        },
-        Ok(None) => Unmatched,
-        Err(_) => Unknown,
-    }
+    Ok(Some(parsed))
 }
 
 #[cfg(test)]
@@ -1207,9 +1261,11 @@ mod override_tests {
         ] {
             assert!(check(&certificates, &selection, url).is_err());
         }
+        // An identical declaration in the current environment cannot stand in
+        // for one selected from a different environment.
         let changed_environment = CertificateOverride::Selected(CertificateRef {
             environment: Some("child".into()),
-            ..reference.clone()
+            certificate: environments[0].client_certificates[0].clone(),
         });
         assert!(check(&certificates, &changed_environment, url).is_err());
         certificates.remove(0);
