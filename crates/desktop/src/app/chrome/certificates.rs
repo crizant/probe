@@ -598,7 +598,7 @@ impl ProbeApp {
         } else if let Some(result) = &editor.inspection {
             match &result.validation {
                 Ok(()) => (
-                    "Certificate and private key validated successfully.".into(),
+                    "Certificate and private key match.".into(),
                     theme.colors.status.success,
                     Some(true),
                 ),
