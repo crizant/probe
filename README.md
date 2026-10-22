@@ -96,7 +96,13 @@ Probe does not require installation and can be run directly from the extracted f
 
 ### Linux
 
-Download the Linux `.rpm` or `.tar.gz` assets from the release.
+Download the Linux `.deb`, `.rpm`, or `.tar.gz` assets from the release.
+
+On Debian and Ubuntu, install either or both x86_64 DEB packages with APT:
+
+```bash
+sudo apt install ./probe-cli-*-linux-x64.deb ./probe-desktop-*-linux-x64.deb
+```
 
 The RPM assets are upstream x86_64 packages for current Fedora, RHEL 10 and
 newer, and current openSUSE Tumbleweed and Leap 15.6 or newer. Install either
