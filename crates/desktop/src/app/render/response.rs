@@ -501,10 +501,8 @@ impl ProbeApp {
         theme: Theme,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         use crate::response_viewer::assertions::{counts, summary};
-        let [failed, errors, _, skipped] = counts(assertions);
-        let summary_color = if skipped == assertions.len() {
-            theme.colors.text.muted
-        } else if failed > 0 {
+        let [failed, errors, ..] = counts(assertions);
+        let summary_color = if failed > 0 {
             theme.colors.status.error
         } else if errors > 0 {
             theme.colors.status.warning
