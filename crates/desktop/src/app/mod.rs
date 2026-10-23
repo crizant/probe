@@ -306,6 +306,7 @@ pub(crate) struct ProbeApp {
     tree_list_bounds: Option<Bounds<Pixels>>,
     tree_row_height: f32,
     tree_auto_scroll: AutoScroll,
+    // Keep has_active_modal() in sync when adding modal dialog state.
     structure_dialog: Option<StructureDialog>,
     create_environment_dialog: Option<String>,
     active_certificate: active_certificate::ActiveCertificate,
@@ -362,6 +363,15 @@ pub(crate) struct ProbeApp {
 }
 
 impl ProbeApp {
+    /// Whether a modal currently blocks workspace actions.
+    fn has_active_modal(&self) -> bool {
+        self.application_dialog.is_some()
+            || self.structure_dialog.is_some()
+            || self.create_environment_dialog.is_some()
+            || self.environment_manager_dialog.is_some()
+            || self.secret_value_dialog.is_some()
+    }
+
     #[cfg(test)]
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::with_user_config(UserConfig::default(), window, cx)

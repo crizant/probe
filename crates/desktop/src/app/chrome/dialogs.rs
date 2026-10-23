@@ -22,6 +22,10 @@ impl ProbeApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Div {
+        let settings_theme = match self.application_dialog {
+            Some(ApplicationDialog::Settings { theme }) => Some(theme),
+            _ => None,
+        };
         let mut actions = components::dialog_actions(theme);
         for spec in specs.iter().copied() {
             let view = cx.weak_entity();
@@ -30,10 +34,7 @@ impl ProbeApp {
                     components::shortcut_label_for_action_in_context(
                         window,
                         &SubmitApplicationDialog,
-                        if matches!(
-                            self.application_dialog,
-                            Some(ApplicationDialog::Settings { .. })
-                        ) {
+                        if settings_theme.is_some() {
                             "SettingsDialog"
                         } else {
                             "ApplicationDialog"
@@ -59,8 +60,11 @@ impl ProbeApp {
                 },
                 spec.style,
                 shortcut_hint,
-                matches!(self.application_dialog, Some(ApplicationDialog::Settings { theme })
-                    if self.saving_user_config || (spec.action == ApplicationDialogAction::Save && theme == self.user_config.theme)),
+                settings_theme.is_some_and(|mode| {
+                    self.saving_user_config
+                        || (spec.action == ApplicationDialogAction::Save
+                            && mode == self.user_config.theme)
+                }),
                 move |_, window, cx| {
                     let _ = view.update(cx, |view, cx| {
                         view.handle_application_dialog_action(spec.action, window, cx);
@@ -69,13 +73,9 @@ impl ProbeApp {
             ));
         }
         actions
-            .when(
-                matches!(
-                    self.application_dialog,
-                    Some(ApplicationDialog::Settings { .. })
-                ),
-                |actions| actions.mt(px(theme.metrics.spacing_4 * 1.5)),
-            )
+            .when(settings_theme.is_some(), |actions| {
+                actions.mt(px(theme.metrics.spacing_4 * 1.5))
+            })
             .when(
                 matches!(self.application_dialog, Some(ApplicationDialog::About)),
                 |actions| actions.mt(px(theme.metrics.spacing_4 + theme.metrics.spacing_1)),

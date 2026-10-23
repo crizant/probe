@@ -105,12 +105,7 @@ impl Render for ProbeApp {
                 view.save_active_editor(window, cx);
             }))
             .on_action(cx.listener(|view, _: &SendRequest, _, cx| {
-                if view.application_dialog.is_some()
-                    || view.structure_dialog.is_some()
-                    || view.environment_manager_dialog.is_some()
-                    || view.create_environment_dialog.is_some()
-                    || view.secret_value_dialog.is_some()
-                {
+                if view.has_active_modal() {
                     return;
                 }
                 let Some(key) = view.shell.active_tab() else {
@@ -191,12 +186,7 @@ impl Render for ProbeApp {
                 }
             }))
             .on_action(cx.listener(|view, _: &OpenSettings, window, cx| {
-                if view.application_dialog.is_none()
-                    && view.structure_dialog.is_none()
-                    && view.create_environment_dialog.is_none()
-                    && view.environment_manager_dialog.is_none()
-                    && view.secret_value_dialog.is_none()
-                {
+                if !view.has_active_modal() {
                     view.show_application_dialog(
                         ApplicationDialog::Settings {
                             theme: view.user_config.theme,

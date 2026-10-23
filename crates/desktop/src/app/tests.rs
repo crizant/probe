@@ -648,13 +648,21 @@ fn find_shortcut() -> &'static str {
     "ctrl-f"
 }
 
+pub(super) fn settings_shortcut() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd-,"
+    } else {
+        "ctrl-,"
+    }
+}
+
 #[cfg(target_os = "macos")]
-fn send_shortcut() -> &'static str {
+pub(super) fn send_shortcut() -> &'static str {
     "cmd-enter"
 }
 
 #[cfg(not(target_os = "macos"))]
-fn send_shortcut() -> &'static str {
+pub(super) fn send_shortcut() -> &'static str {
     "ctrl-enter"
 }
 

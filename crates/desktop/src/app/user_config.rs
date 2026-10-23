@@ -67,19 +67,42 @@ mod tests {
     use super::*;
     use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, size};
 
-    #[gpui_kit::test]
-    fn settings_shortcut_opens_theme_dropdown_and_escape_closes_in_order(cx: &mut TestAppContext) {
+    fn settings_window(cx: &mut TestAppContext) -> gpui_kit::WindowHandle<ProbeApp> {
         cx.update(Theme::init);
         cx.update(bind_platform_hotkeys);
-        let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
-        cx.simulate_keystrokes(
-            window.into(),
-            if cfg!(target_os = "macos") {
-                "cmd-,"
-            } else {
-                "ctrl-,"
-            },
-        );
+        cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new)
+    }
+
+    fn show_settings(window: gpui_kit::WindowHandle<ProbeApp>, cx: &mut TestAppContext) {
+        window
+            .update(cx, |view, window, cx| {
+                view.show_application_dialog(
+                    ApplicationDialog::Settings {
+                        theme: ThemeMode::System,
+                    },
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    fn click_settings_control(
+        window: gpui_kit::WindowHandle<ProbeApp>,
+        cx: &mut TestAppContext,
+        selector: &'static str,
+    ) {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let bounds = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(bounds.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn settings_shortcut_opens_theme_dropdown_and_escape_closes_in_order(cx: &mut TestAppContext) {
+        let window = settings_window(cx);
+        cx.simulate_keystrokes(window.into(), crate::app::tests::settings_shortcut());
         cx.run_until_parked();
         window
             .update(cx, |view, _, _| {
@@ -89,10 +112,8 @@ mod tests {
                 ));
             })
             .unwrap();
+        click_settings_control(window, cx, "settings-theme-mode-trigger");
         let mut visual = VisualTestContext::from_window(window.into(), cx);
-        let trigger = visual.debug_bounds("settings-theme-mode-trigger").unwrap();
-        visual.simulate_click(trigger.center(), Modifiers::default());
-        visual.run_until_parked();
         for selector in [
             "settings-theme-mode-item-0",
             "settings-theme-mode-item-1",
@@ -114,28 +135,10 @@ mod tests {
 
     #[gpui_kit::test]
     fn settings_selection_is_a_draft_and_cancel_discards_it(cx: &mut TestAppContext) {
-        cx.update(Theme::init);
-        cx.update(bind_platform_hotkeys);
-        let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
-        window
-            .update(cx, |view, window, cx| {
-                view.show_application_dialog(
-                    ApplicationDialog::Settings {
-                        theme: ThemeMode::System,
-                    },
-                    window,
-                    cx,
-                );
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        let trigger = visual.debug_bounds("settings-theme-mode-trigger").unwrap();
-        visual.simulate_click(trigger.center(), Modifiers::default());
-        visual.run_until_parked();
-        let dark = visual.debug_bounds("settings-theme-mode-item-2").unwrap();
-        visual.simulate_click(dark.center(), Modifiers::default());
-        visual.run_until_parked();
+        let window = settings_window(cx);
+        show_settings(window, cx);
+        click_settings_control(window, cx, "settings-theme-mode-trigger");
+        click_settings_control(window, cx, "settings-theme-mode-item-2");
         window
             .update(cx, |view, _, _| {
                 assert_eq!(view.user_config.theme, ThemeMode::System);
@@ -162,8 +165,7 @@ mod tests {
     fn settings_save_keeps_draft_on_failure_and_applies_only_after_success(
         cx: &mut TestAppContext,
     ) {
-        cx.update(Theme::init);
-        let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+        let window = settings_window(cx);
         window
             .update(cx, |view, window, cx| {
                 view.show_application_dialog(
@@ -208,8 +210,6 @@ mod tests {
     #[gpui_kit::test]
     fn settings_save_shortcut_resolves_from_dialog_and_dropdown(cx: &mut TestAppContext) {
         use std::{cell::Cell, rc::Rc};
-        cx.update(Theme::init);
-        cx.update(bind_platform_hotkeys);
         let submissions = Rc::new(Cell::new(0));
         let observed = submissions.clone();
         let _subscription = cx.update(|cx| {
@@ -223,31 +223,13 @@ mod tests {
                 }
             })
         });
-        let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
-        window
-            .update(cx, |view, window, cx| {
-                view.show_application_dialog(
-                    ApplicationDialog::Settings {
-                        theme: ThemeMode::System,
-                    },
-                    window,
-                    cx,
-                );
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let shortcut = if cfg!(target_os = "macos") {
-            "cmd-enter"
-        } else {
-            "ctrl-enter"
-        };
+        let window = settings_window(cx);
+        show_settings(window, cx);
+        let shortcut = crate::app::tests::send_shortcut();
         cx.simulate_keystrokes(window.into(), shortcut);
         cx.run_until_parked();
         assert_eq!(submissions.get(), 1);
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        let trigger = visual.debug_bounds("settings-theme-mode-trigger").unwrap();
-        visual.simulate_click(trigger.center(), Modifiers::default());
-        visual.run_until_parked();
+        click_settings_control(window, cx, "settings-theme-mode-trigger");
         cx.simulate_keystrokes(window.into(), "escape");
         cx.run_until_parked();
         cx.simulate_keystrokes(window.into(), shortcut);
@@ -269,15 +251,9 @@ mod tests {
     fn settings_shortcut_preserves_structure_environment_and_application_dialogs(
         cx: &mut TestAppContext,
     ) {
-        cx.update(Theme::init);
-        cx.update(bind_platform_hotkeys);
-        let shortcut = if cfg!(target_os = "macos") {
-            "cmd-,"
-        } else {
-            "ctrl-,"
-        };
+        let shortcut = crate::app::tests::settings_shortcut();
         for modal in ["structure", "environment", "application"] {
-            let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+            let window = settings_window(cx);
             let mut structure = StructureDialog::create_folder(None);
             structure.name = "Unsaved folder".into();
             window

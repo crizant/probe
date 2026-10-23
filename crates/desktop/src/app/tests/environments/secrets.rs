@@ -1024,11 +1024,7 @@ fn settings_shortcut_preserves_editor_secret_draft(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_keystrokes(
         workspace.window.into(),
-        if cfg!(target_os = "macos") {
-            "cmd-,"
-        } else {
-            "ctrl-,"
-        },
+        crate::app::tests::settings_shortcut(),
     );
     cx.run_until_parked();
     workspace.update(cx, |view, _, cx| {

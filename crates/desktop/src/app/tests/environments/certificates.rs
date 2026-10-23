@@ -1483,11 +1483,7 @@ fn settings_shortcut_preserves_environment_and_certificate_drafts(cx: &mut TestA
         dialog.draft_mut().name = "Unsaved environment".into();
         dialog.draft().clone()
     });
-    let shortcut = if cfg!(target_os = "macos") {
-        "cmd-,"
-    } else {
-        "ctrl-,"
-    };
+    let shortcut = crate::app::tests::settings_shortcut();
     cx.simulate_keystrokes(workspace.window.into(), shortcut);
     cx.run_until_parked();
     workspace.update(cx, |view, window, cx| {
