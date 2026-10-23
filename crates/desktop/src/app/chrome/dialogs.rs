@@ -1,5 +1,19 @@
 use super::*;
 
+fn about_app_icon() -> Arc<gpui_kit::Image> {
+    static ICON: std::sync::OnceLock<Arc<gpui_kit::Image>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        Arc::new(gpui_kit::Image::from_bytes(
+            gpui_kit::ImageFormat::Png,
+            include_bytes!(
+                "../../../assets/app-icon/linux/hicolor/128x128/apps/dev.probe.desktop.png"
+            )
+            .to_vec(),
+        ))
+    })
+    .clone()
+}
+
 impl ProbeApp {
     pub(super) fn render_application_dialog_actions(
         &self,
@@ -54,13 +68,18 @@ impl ProbeApp {
                 },
             ));
         }
-        actions.when(
-            matches!(
-                self.application_dialog,
-                Some(ApplicationDialog::Settings { .. })
-            ),
-            |actions| actions.mt(px(theme.metrics.spacing_4 * 1.5)),
-        )
+        actions
+            .when(
+                matches!(
+                    self.application_dialog,
+                    Some(ApplicationDialog::Settings { .. })
+                ),
+                |actions| actions.mt(px(theme.metrics.spacing_4 * 1.5)),
+            )
+            .when(
+                matches!(self.application_dialog, Some(ApplicationDialog::About)),
+                |actions| actions.mt(px(theme.metrics.spacing_4 + theme.metrics.spacing_1)),
+            )
     }
 
     pub(in crate::app) fn render_application_dialog(
@@ -126,11 +145,51 @@ impl ProbeApp {
                 .overflow_y_scroll()
                 .line_height(relative(theme.typography.body_line_height))
         };
-        let mut content = components::dialog_surface(theme, "application-dialog", dialog.width())
-            .child(components::dialog_title(theme, dialog.title()))
-            .when(!dialog.description().is_empty(), |content| {
-                content.child(description)
-            });
+        let mut content = components::dialog_surface(theme, "application-dialog", dialog.width());
+        if matches!(dialog, ApplicationDialog::About) {
+            content = content
+                .p(px(theme.metrics.spacing_4 + theme.metrics.spacing_1))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_3))
+                        .child(
+                            img(about_app_icon())
+                                .size(px(48.0))
+                                .flex_none()
+                                .rounded(px(theme.metrics.radius_medium)),
+                        )
+                        .child(
+                            div()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(theme.metrics.spacing_1))
+                                .child(components::dialog_title(theme, dialog.title()))
+                                .child(
+                                    div()
+                                        .text_size(px(theme.typography.caption_size))
+                                        .text_color(theme.colors.text.muted)
+                                        .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .mt(px(theme.metrics.spacing_3))
+                        .text_size(px(theme.typography.body_size))
+                        .text_color(theme.colors.text.primary)
+                        .line_height(relative(theme.typography.body_line_height))
+                        .child(dialog.description().into_owned()),
+                );
+        } else {
+            content = content
+                .child(components::dialog_title(theme, dialog.title()))
+                .when(!dialog.description().is_empty(), |content| {
+                    content.child(description)
+                });
+        }
 
         if let ApplicationDialog::Settings { theme: draft_theme } = dialog {
             content = content.p(px(theme.metrics.spacing_4 + theme.metrics.spacing_1));

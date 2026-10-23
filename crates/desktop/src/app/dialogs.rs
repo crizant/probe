@@ -400,11 +400,7 @@ impl ApplicationDialog {
     pub(crate) fn description(&self) -> Cow<'_, str> {
         match self {
             Self::Settings { .. } => Cow::Borrowed(""),
-            Self::About => Cow::Borrowed(concat!(
-                "Version ",
-                env!("CARGO_PKG_VERSION"),
-                "\n\nA fast, native, local-first API client."
-            )),
+            Self::About => Cow::Borrowed("A fast, native, local-first API client."),
             Self::Unsaved { .. } | Self::UnsavedEnvironment => {
                 Cow::Borrowed("Unsaved changes will be lost if you discard them.")
             }
@@ -435,7 +431,7 @@ impl ApplicationDialog {
 
     pub(crate) const fn width(&self) -> f32 {
         match self {
-            Self::Settings { .. } => 380.0,
+            Self::About | Self::Settings { .. } => 380.0,
             Self::SelectYaakWorkspace { .. }
             | Self::SelectCollectionFile { .. }
             | Self::ConfirmPartialImport { .. } => components::WIDE_DIALOG_WIDTH,

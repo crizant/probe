@@ -301,11 +301,11 @@ fn yaak_fixture(name: &str) -> PathBuf {
 }
 
 #[test]
-fn about_dialog_reports_the_packaged_version() {
+fn about_dialog_describes_the_app_and_offers_done() {
     let dialog = ApplicationDialog::About;
 
     assert_eq!(dialog.title(), "Probe");
-    assert!(dialog.description().contains(env!("CARGO_PKG_VERSION")));
+    assert!(dialog.description().contains("API client"));
     assert_eq!(dialog.action_specs().unwrap()[0].label, "Done");
     assert_eq!(
         dialog.primary_action(),
