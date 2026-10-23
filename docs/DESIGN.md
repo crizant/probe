@@ -264,15 +264,23 @@ content, without literal brackets. Inspect uses a neutral count badge. The Asser
 tab shows failure and evaluation-error counts with SVG status icons, subtle tinted
 backgrounds, and semantic error and warning colours. Zero counts are hidden; tooltips
 and the accessible tab label explain each count. Counts remain visible when another
-response tab is selected. The tab content has one inline summary. Failed comparisons precede evaluation errors, passed checks, and skipped
-(disabled) checks, with stable order within each group. Rows show the original,
+response tab is selected. The tab content has one inline summary with independent,
+nonzero counts: failed, evaluation errors, passed, and disabled, in that order.
+Each count uses its own semantic colour: error, warning, success, or muted text.
+The all-disabled message uses the same left-aligned summary layout and muted text.
+Failed comparisons precede evaluation errors, passed checks, and disabled checks,
+with stable order within each group. Rows show the original,
 uninterpolated declaration text; a description becomes the primary label when
 present. Rows share padding and a minimum height. Failed rows have a semantic error
 border and subtle highlighting, with redacted actual values inline after the comparison.
 Descriptions, declarations, values, and error reasons wrap to fit the pane. Errors
 use warning icons and shared, value-free reasons. Status icons and written
-skipped/error information accompany semantic colours. Empty/all-disabled states use shared placeholders; request
-failures report that assertions were not evaluated. Muted icon buttons at the
+disabled/error information accompany semantic colours. Disabled labels sit below
+row comparisons so the expression and comparison columns retain their alignment.
+The no-assertions state centers its explanatory text vertically and horizontally
+without an Add Assertion button; users add assertions in the request editor.
+Other empty states use shared placeholders; request failures report that assertions
+were not evaluated. Muted icon buttons at the
 right of each row open its editor declaration or copy its result, with tooltips
 and keyboard focus. Rows have no selection state.
 Status icons align with the first text line, including in wrapped rows.

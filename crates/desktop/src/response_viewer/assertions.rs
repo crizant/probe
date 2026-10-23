@@ -29,25 +29,25 @@ pub(crate) fn summary(results: &[AssertionResult]) -> Vec<String> {
     if results.is_empty() {
         return Vec::new();
     }
-    let [failed, errors, passed, skipped] = counts(results);
-    let error_text = || format!("{errors} {}", if errors == 1 { "error" } else { "errors" });
-    let mut parts = vec![if failed > 0 {
-        format!("{failed} of {} failed", failed + passed + errors)
-    } else if errors > 0 {
-        error_text()
-    } else if passed > 0 {
-        format!("{passed} passed")
-    } else {
-        "All assertions disabled".into()
-    }];
-    if failed == 0 && errors > 0 && passed > 0 {
+    let [failed, errors, passed, disabled] = counts(results);
+    if disabled == results.len() {
+        return vec!["All assertions disabled".into()];
+    }
+    let mut parts = Vec::new();
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    if errors > 0 {
+        parts.push(format!(
+            "{errors} evaluation {}",
+            if errors == 1 { "error" } else { "errors" }
+        ));
+    }
+    if passed > 0 {
         parts.push(format!("{passed} passed"));
     }
-    if skipped > 0 && skipped != results.len() {
-        parts.push(format!("{skipped} skipped"));
-    }
-    if failed > 0 && errors > 0 {
-        parts.push(error_text());
+    if disabled > 0 {
+        parts.push(format!("{disabled} disabled"));
     }
     parts
 }
@@ -127,28 +127,35 @@ mod tests {
         use AssertionOutcome::{Disabled, Error, Failed, Passed};
         let error = Error(AssertionError::BodyUnavailable);
         for (outcomes, expected) in [
-            (vec![Failed, Passed], vec!["1 of 2 failed"]),
+            (vec![Failed, Passed], vec!["1 failed", "1 passed"]),
+            (
+                vec![Failed, error.clone()],
+                vec!["1 failed", "1 evaluation error"],
+            ),
             (
                 vec![Passed, Failed, Disabled, error.clone(), Failed, Passed],
-                vec!["2 of 5 failed", "1 skipped", "1 error"],
+                vec!["2 failed", "1 evaluation error", "2 passed", "1 disabled"],
             ),
             (
                 vec![Failed, Disabled, Disabled],
-                vec!["1 of 1 failed", "2 skipped"],
+                vec!["1 failed", "2 disabled"],
             ),
-            (vec![error.clone()], vec!["1 error"]),
-            (vec![error.clone(), Disabled], vec!["1 error", "1 skipped"]),
+            (vec![error.clone()], vec!["1 evaluation error"]),
+            (
+                vec![error.clone(), Disabled],
+                vec!["1 evaluation error", "1 disabled"],
+            ),
             (
                 vec![error.clone(), error.clone(), Passed, Disabled],
-                vec!["2 errors", "1 passed", "1 skipped"],
+                vec!["2 evaluation errors", "1 passed", "1 disabled"],
             ),
             (vec![Passed], vec!["1 passed"]),
             (vec![Passed, Passed], vec!["2 passed"]),
-            (vec![Passed, Disabled], vec!["1 passed", "1 skipped"]),
+            (vec![Passed, Disabled], vec!["1 passed", "1 disabled"]),
             (vec![Disabled, Disabled], vec!["All assertions disabled"]),
             (
                 vec![Failed, error, Disabled],
-                vec!["1 of 2 failed", "1 skipped", "1 error"],
+                vec!["1 failed", "1 evaluation error", "1 disabled"],
             ),
             (vec![], vec![]),
         ] {

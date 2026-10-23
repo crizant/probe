@@ -455,7 +455,7 @@ impl ProbeApp {
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        use crate::response_viewer::assertions::{counts, ordered, summary};
+        use crate::response_viewer::assertions::ordered;
         let (assertions, declarations) = match self.execution.response(key) {
             Some(ResponseState::Complete {
                 assertions,
@@ -483,32 +483,13 @@ impl ProbeApp {
             .line_height(relative(1.25))
             .text_color(theme.colors.text.primary);
         if assertions.is_empty() {
-            let view = cx.weak_entity();
             return container
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(placeholder_message(
-                            theme,
-                            "No assertions. Add one in the request's Assertions tab.",
-                        ))
-                        .child(components::editor_add_button(
-                            theme,
-                            "open-request-assertions",
-                            "Add Assertion",
-                            move |_, _, cx| {
-                                let _ = view.update(cx, |view, cx| {
-                                    view.request_editor
-                                        .set_section(key, EditorSection::Assertions);
-                                    cx.notify();
-                                });
-                            },
-                        )),
-                )
+                .child(placeholder_message(
+                    theme,
+                    "No assertions. Add one in the request's Assertions tab.",
+                ))
                 .into_any_element();
         }
-        let [_, _, _, skipped] = counts(assertions);
         let rows = ordered(assertions);
         let mut content = div()
             .id("assertion-result-list")
@@ -523,17 +504,7 @@ impl ProbeApp {
                 self.response_viewer.assertion_scroll(key),
                 |content, scroll| content.track_scroll(scroll),
             )
-            .child(div().when(skipped != assertions.len(), |content| {
-                content.child(self.render_assertion_summary(assertions, theme))
-            }));
-        let container = container.when(skipped == assertions.len(), |container| {
-            container.child(
-                div()
-                    .id("assertions-all-disabled")
-                    .debug_selector(|| "assertions-all-disabled".into())
-                    .child(placeholder_message(theme, &summary(assertions)[0])),
-            )
-        });
+            .child(self.render_assertion_summary(assertions, theme));
         for result in rows {
             content = content.child(self.render_assertion_result_row(
                 key,
@@ -552,14 +523,15 @@ impl ProbeApp {
         theme: Theme,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         use crate::response_viewer::assertions::{counts, summary};
-        let [failed, errors, ..] = counts(assertions);
-        let summary_color = if failed > 0 {
-            theme.colors.status.error
-        } else if errors > 0 {
-            theme.colors.status.warning
-        } else {
-            theme.colors.status.success
-        };
+        let colors = counts(assertions)
+            .into_iter()
+            .zip([
+                theme.colors.status.error,
+                theme.colors.status.warning,
+                theme.colors.status.success,
+                theme.colors.text.muted,
+            ])
+            .filter_map(|(count, color)| (count > 0).then_some(color));
         let mut summary_line = div()
             .id("assertion-summary")
             .debug_selector(|| "assertion-summary".into())
@@ -576,20 +548,12 @@ impl ProbeApp {
             .items_center()
             .gap(px(theme.metrics.spacing_1))
             .line_height(relative(1.25));
-        for (index, part) in summary(assertions).into_iter().enumerate() {
+        for (index, (part, color)) in summary(assertions).into_iter().zip(colors).enumerate() {
             if index > 0 {
                 summary_line =
                     summary_line.child(div().text_color(theme.colors.text.muted).child("·"));
             }
-            summary_line = summary_line.child(
-                div()
-                    .text_color(if index > 0 {
-                        theme.colors.text.muted
-                    } else {
-                        summary_color
-                    })
-                    .child(part),
-            );
+            summary_line = summary_line.child(div().text_color(color).child(part));
         }
         summary_line
     }
@@ -669,11 +633,10 @@ impl ProbeApp {
                     .when(failed && result.actual.is_some(), |text| {
                         text.debug_selector(move || format!("assertion-actual-{index}"))
                     }),
-            )
-            .when(disabled, |line| {
-                line.child(div().flex_none().child("Skipped"))
-            });
-        details = details.child(primary);
+            );
+        details = details.child(primary).when(disabled, |details| {
+            details.child(div().text_color(theme.colors.text.muted).child("Disabled"))
+        });
         if let AssertionOutcome::Error(error) = result.outcome {
             details = details.child(
                 div()

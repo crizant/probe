@@ -21,6 +21,15 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- The empty response Assertions view centers its explanatory message and leaves
+  Add Assertion in the request editor.
+
+- Assertion summaries show separate failed, evaluation-error, passed, and disabled
+  counts, so assertions that could not be evaluated are not mistaken for passes.
+  Each outcome uses its status colour. Disabled assertions are labelled “Disabled”
+  below their comparison so columns stay aligned, and the all-disabled message
+  aligns with other summaries.
+
 - Response Assertions tabs now distinguish failed assertions and evaluation errors
   with compact rectangular status badges and explanatory tooltips. Inspect counts
   use the same badge style.

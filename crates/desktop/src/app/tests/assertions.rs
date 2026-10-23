@@ -547,7 +547,7 @@ fn assertion_add_delete_restores_original_list_presence_and_keyboard_save(cx: &m
 }
 
 #[gpui_kit::test]
-fn assertion_empty_skipped_and_failed_request_states_keep_editor_access(cx: &mut TestAppContext) {
+fn assertion_empty_disabled_and_failed_request_states_keep_editor_access(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(1500.0), px(1000.0)), ProbeApp::new);
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -574,7 +574,8 @@ fn assertion_empty_skipped_and_failed_request_states_keep_editor_access(cx: &mut
     cx.run_until_parked();
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     click(&mut visual, "response-tab-assertions");
-    click(&mut visual, "open-request-assertions");
+    assert!(visual.debug_bounds("open-request-assertions").is_none());
+    click(&mut visual, "request-tab-assertions");
     window
         .update(cx, |view, _, _| {
             assert_eq!(view.request_editor.section(key), EditorSection::Assertions)
@@ -678,7 +679,7 @@ fn assertion_empty_skipped_and_failed_request_states_keep_editor_access(cx: &mut
         })
         .unwrap();
     visual.run_until_parked();
-    assert!(visual.debug_bounds("assertions-all-disabled").is_some());
+    assert!(visual.debug_bounds("assertion-summary").is_some());
     assert!(visual.debug_bounds("assertion-result-0").is_some());
     assert!(visual.debug_bounds("assertion-failure-count-1").is_none());
     assert!(visual.debug_bounds("assertion-error-count-1").is_none());
