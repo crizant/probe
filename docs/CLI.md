@@ -277,6 +277,11 @@ not print headers, bodies, or secret values. `--json` returns the same resolved
 Unavailable secret variables still fail closed with `secret_variable_unavailable`.
 `--dry-run` cannot be combined with `--output` or `--assert`.
 
+### Response assertions
+
+For a first walkthrough of expressions, operators, and expected values, see
+[Write your first assertion](ASSERTIONS.md#write-your-first-assertion).
+
 Live HTTP/GraphQL runs automatically evaluate the selected request's persisted
 `runtime.assertions`. Disabled declarations remain in results but do not affect
 success. `--no-assertions` skips only collection assertions. Dry runs never evaluate

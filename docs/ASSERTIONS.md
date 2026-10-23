@@ -1,4 +1,92 @@
-# Shared assertion evaluator
+# Response assertions
+
+Assertions check whether a response matches what you expect, such as a successful
+status code or a particular JSON field. Each assertion has an **Expression** (what
+to read), an **Operator** (how to compare), and usually an **Expected Value**.
+Probe supports assertions for HTTP and GraphQL requests.
+
+## Write your first assertion
+
+Suppose your API returns status `200` and this JSON body:
+
+```json
+{
+  "users": [
+    { "id": 1, "name": "Alice", "active": true }
+  ],
+  "nextPage": null
+}
+```
+
+1. Open the request in Probe and select its **Assertions** tab.
+2. Click **Add Assertion**.
+3. Enter `response.status` in **Expression**, choose `equals`, and enter `200`
+   in **Expected Value**. Keep the assertion enabled. You can add a description,
+   such as "Request succeeds", to label the result.
+4. Send the request and open the response's **Assertions** tab. If the status is
+   `200`, the check passes. If it is `404`, the check fails and shows the actual
+   status so you can compare it with your expectation.
+5. Save the request to keep the assertion in your collection. Later sends evaluate
+   the current assertions automatically.
+
+Add more rows to check the sample body:
+
+| What to check | Expression | Operator | Expected Value |
+| --- | --- | --- | --- |
+| There is at least one user | `response.body.users.length` | `greaterThan` | `0` |
+| The first user's name is Alice | `response.body.users[0].name` | `equals` | `Alice` |
+| The name includes Ali | `response.body.users[0].name` | `contains` | `Ali` |
+| The first user is active | `response.body.users[0].active` | `equals` | `true` |
+| The first user's ID is not null | `response.body.users[0].id` | `isNotNull` | Leave empty |
+| There is no next page | `response.body.nextPage` | `isNull` | Leave empty |
+
+All enabled checks must pass. Disable a row to skip it without deleting it.
+`isNull` and `isNotNull` do not use an expected value.
+
+### Choose expressions and values
+
+Start with `response.status` for the HTTP status or `response.body` for the JSON
+body. Use dots to select fields and zero-based indexes to select array entries:
+`response.body.users[0].name` reads the first user's name. Append `.length` to an
+array or string to check its length. For GraphQL, include the response's `data`
+or `errors` field in the path, for example `response.body.data.users.length`.
+
+Expressions are paths, not JavaScript: enter `response.status`, choose `equals`,
+and enter `200` in separate controls. Do not enter `response.status === 200`.
+See [supported expressions](#upstream-contract-and-probes-subset) for path limits
+and [values and operators](#values-and-operators) for all eight operators.
+
+Enter ordinary text such as `Alice` directly. Numbers, `true`, `false`, and `null`
+are treated as typed values. To match a JSON **string** containing digits, enter
+double quotes too: `"200"` matches the string `"200"`, while `200` matches a number.
+An expected value can also use a variable such as `{{expectedStatus}}`; make sure
+that variable is available in the request's selected environment.
+
+### Understand failures and errors
+
+A **failed** check means the response value was read successfully but did not
+match. An **error** means Probe could not evaluate the check. Common causes are:
+
+- **Missing property:** the field or array entry does not exist. `isNull` checks
+  an existing field containing JSON `null`; it does not test whether a field is
+  missing.
+- **Invalid JSON or unavailable body:** body checks need a complete, valid JSON
+  response. A truncated body cannot be checked. Status checks still work.
+- **Incompatible operands:** use `greaterThan` and `lessThan` with numbers, and
+  `contains` and `notContains` with strings.
+- **Variable resolution:** an expected value references a variable that cannot
+  be resolved.
+
+Check the response body and the path, operator, and expected value, then send
+again. Editing an assertion does not change the results of an earlier send.
+
+### Use assertions from the CLI
+
+Saved assertions run automatically for HTTP and GraphQL requests from the CLI too.
+For command examples, temporary checks with `--assert`, skipping saved checks,
+and exit codes, see the [CLI assertion guide](CLI.md#response-assertions).
+
+## Shared assertion evaluator
 
 `probe_application::evaluate_assertions(&[probe_core::Assertion], &HttpResponse,
 &RequestResolution, &dyn SecretProvider) -> Vec<AssertionResult>` is a standalone

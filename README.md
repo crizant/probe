@@ -55,6 +55,8 @@ Both interfaces use the same Rust application and domain layers.
 
 OAuth and AWS Signature authentication can be retained in YAML but are not executed.
 See [the CLI reference](docs/CLI.md) for command details and import limitations.
+To check response status codes and JSON fields, follow
+[Write your first assertion](docs/ASSERTIONS.md#write-your-first-assertion).
 
 ## Installation
 
