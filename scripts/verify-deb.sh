@@ -32,6 +32,13 @@ for name in probe probe-desktop; do
   cmp -s "$root/usr/share/doc/$name/copyright" "$repo_root/packaging/deb/copyright" || die "incorrect license: $name"
   cmp -s "$root/usr/share/doc/$name/README.md" "$repo_root/README.md" || die "incorrect README: $name"
   dpkg-deb --control "$package" "$root/DEBIAN"
+  # Inspect the archived control file: Description must be the last field.
+  awk '
+    /^[^[:space:]:]+:/ {
+      if (seen_description) exit 1
+      if (tolower($0) ~ /^description:/) seen_description = 1
+    }
+  ' "$root/DEBIAN/control" || die "Description must be the last control field: $package"
   [[ -s "$root/DEBIAN/md5sums" ]] || die "missing md5sums: $name"
   (cd "$root" && md5sum --check --quiet DEBIAN/md5sums) || die "invalid payload checksums: $name"
   changelog="$(gzip -cd "$root/usr/share/doc/$name/changelog.Debian.gz")"
