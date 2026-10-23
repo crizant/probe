@@ -358,28 +358,69 @@ impl ProbeApp {
                     },
                 )
                 .when(tab == ResponseViewerTab::Assertions, |tab| {
-                    let failures = match self.execution.response(key) {
+                    let [failures, errors, ..] = match self.execution.response(key) {
                         Some(ResponseState::Complete { assertions, .. }) => {
-                            crate::response_viewer::assertions::counts(assertions)[0]
+                            crate::response_viewer::assertions::counts(assertions)
                         }
-                        _ => 0,
+                        _ => [0; 4],
                     };
-                    tab.accessibility_label(if failures > 0 {
-                        format!("Assertions, {failures} failed")
-                    } else {
-                        "Assertions".into()
-                    })
-                    .when(failures > 0, |tab| {
-                        tab.child(
+                    let mut accessible_label = "Assertions".to_owned();
+                    let mut tab = tab;
+                    for (count, symbol, kind, color, description) in [
+                        (
+                            failures,
+                            "×",
+                            "failure",
+                            theme.colors.status.error,
+                            format!(
+                                "{failures} {} failed",
+                                if failures == 1 {
+                                    "assertion"
+                                } else {
+                                    "assertions"
+                                }
+                            ),
+                        ),
+                        (
+                            errors,
+                            "⚠\u{fe0e}",
+                            "error",
+                            theme.colors.status.warning,
+                            format!(
+                                "{errors} {} could not be evaluated",
+                                if errors == 1 {
+                                    "assertion"
+                                } else {
+                                    "assertions"
+                                }
+                            ),
+                        ),
+                    ] {
+                        if count == 0 {
+                            continue;
+                        }
+                        accessible_label.push_str(", ");
+                        accessible_label.push_str(&description);
+                        tab = tab.child(
                             div()
+                                .id(gpui_kit::SharedString::from(format!(
+                                    "assertion-tab-{kind}-count"
+                                )))
                                 .ml(px(theme.metrics.spacing_1))
-                                .text_color(theme.colors.status.error)
-                                .debug_selector(move || {
-                                    format!("assertion-failure-count-{failures}")
+                                .text_color(color)
+                                .tooltip(move |_, cx| {
+                                    cx.new(|_| components::ActionTooltip {
+                                        id: "assertion-count-tooltip",
+                                        theme,
+                                        label: description.clone(),
+                                    })
+                                    .into()
                                 })
-                                .child(failures.to_string()),
-                        )
-                    })
+                                .debug_selector(move || format!("assertion-{kind}-count-{count}"))
+                                .child(format!("[{symbol}{count}]")),
+                        );
+                    }
+                    tab.accessibility_label(accessible_label)
                 })
                 .flex_none()
                 .debug_selector(move || format!("response-tab-{debug_label}")),

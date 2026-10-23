@@ -259,8 +259,10 @@ and disabled for `isNull` and `isNotNull`, showing “Not used”; switching bac
 comparison restores its previous value. Assertion outcomes appear only
 in the response viewer.
 
-The response Assertions tab has a failure count in its label and one inline
-summary. Failed comparisons precede evaluation errors, passed checks, and skipped
+The response Assertions tab shows compact `[×N]` failure and `[⚠N]` evaluation-error
+badges, using semantic error and warning colours. Zero counts are hidden; tooltips
+and the accessible tab label explain each count. Counts remain visible when another
+response tab is selected. The tab content has one inline summary. Failed comparisons precede evaluation errors, passed checks, and skipped
 (disabled) checks, with stable order within each group. Rows show the original,
 uninterpolated declaration text; a description becomes the primary label when
 present. Rows share padding and a minimum height. Failed rows have a semantic error

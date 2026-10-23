@@ -221,6 +221,9 @@ fn assertion_results_render_outcomes_and_keep_response_tabs_usable(cx: &mut Test
     complete_assertion_snapshot(window, http, cx);
     visual.run_until_parked();
     click(&mut visual, "request-tab-assertions");
+    // Both problem counts remain visible while another response tab is selected.
+    assert!(visual.debug_bounds("assertion-failure-count-1").is_some());
+    assert!(visual.debug_bounds("assertion-error-count-1").is_some());
     click(&mut visual, "response-tab-assertions");
     for selector in [
         "assertion-summary",
@@ -678,6 +681,7 @@ fn assertion_empty_skipped_and_failed_request_states_keep_editor_access(cx: &mut
     assert!(visual.debug_bounds("assertions-all-disabled").is_some());
     assert!(visual.debug_bounds("assertion-result-0").is_some());
     assert!(visual.debug_bounds("assertion-failure-count-1").is_none());
+    assert!(visual.debug_bounds("assertion-error-count-1").is_none());
     window
         .update(cx, |view, _, cx| {
             let (tx, _) = oneshot::channel();

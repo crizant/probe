@@ -21,6 +21,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Response Assertions tabs now distinguish failed assertions and evaluation errors
+  with compact status badges and explanatory tooltips.
+
 - Environment Manager uses aligned text buttons for Add Variable, Add Secret, and
   Add Certificate, with distinct list footers. Certificates show readable expiry
   dates with warning icons.
