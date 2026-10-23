@@ -355,10 +355,24 @@ fn certificate_detail(
                 .when_some(warning, |value, warning| {
                     value.child(
                         div()
-                            .whitespace_normal()
+                            .flex()
+                            .items_start()
+                            .gap(px(theme.metrics.spacing_1))
                             .text_size(px(theme.typography.caption_size))
                             .text_color(theme.colors.status.warning)
-                            .child(warning),
+                            .font_weight(FontWeight::MEDIUM)
+                            .line_height(relative(1.25))
+                            .child(
+                                components::warning_icon(theme)
+                                    .h(px(theme.typography.caption_size * 1.25)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .whitespace_normal()
+                                    .child(warning),
+                            ),
                     )
                 }),
         )
@@ -697,13 +711,23 @@ impl ProbeApp {
                         .child("Selected for next request. TLS handshake not yet performed."),
                 );
                 if let Some(metadata) = metadata {
-                    for (label, value, warning) in [
-                        ("Subject", metadata.subject.as_str(), None),
-                        ("Issuer", metadata.issuer.as_str(), None),
-                        ("Expiry", metadata.expires.as_str(), warning),
+                    for (label, value) in [
+                        ("Subject", metadata.subject.as_str()),
+                        ("Issuer", metadata.issuer.as_str()),
                     ] {
-                        popup = popup.child(certificate_detail(theme, label, value, warning));
+                        popup = popup.child(certificate_detail(theme, label, value, None));
                     }
+                    let expires: chrono::DateTime<chrono::Utc> = metadata.not_after.into();
+                    popup = popup.child(
+                        certificate_detail(
+                            theme,
+                            "Expiry",
+                            &expires.format("%-d %b %Y").to_string(),
+                            warning,
+                        )
+                        .id("active-certificate-expiry")
+                        .hint(theme, format!("Expires {}", metadata.expires)),
+                    );
                 } else {
                     popup = popup.child(
                         div()

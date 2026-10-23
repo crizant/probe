@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::IconButtonHint;
 use probe_core::ClientCertificate;
 
 pub(in crate::app) const CERTIFICATE_ORDER_DESCRIPTION: &str =
@@ -138,7 +139,15 @@ impl ProbeApp {
                                     metadata.validity_warning(std::time::SystemTime::now())
                                 });
                                 let label = metadata
-                                    .map(|m| format!("{} · Expires {}", m.subject, m.expires))
+                                    .map(|m| {
+                                        let expires: chrono::DateTime<chrono::Utc> =
+                                            m.not_after.into();
+                                        format!(
+                                            "{} · Expires {}",
+                                            m.subject,
+                                            expires.format("%-d %b %Y")
+                                        )
+                                    })
                                     .unwrap_or_else(|| {
                                         if dialog
                                             .certificate_metadata
@@ -157,6 +166,13 @@ impl ProbeApp {
                                     .gap(px(theme.metrics.spacing_1))
                                     .child(
                                         components::truncated_label(label)
+                                            .id(("certificate-metadata", index))
+                                            .when_some(metadata, |label, metadata| {
+                                                label.hint(
+                                                    theme,
+                                                    format!("Expires {}", metadata.expires),
+                                                )
+                                            })
                                             .text_size(px(theme.typography.caption_size))
                                             .text_color(theme.colors.text.secondary),
                                     )
@@ -167,11 +183,26 @@ impl ProbeApp {
                                                 .debug_selector(move || {
                                                     format!("certificate-validity-warning-{index}")
                                                 })
-                                                .whitespace_normal()
+                                                .flex()
+                                                .items_start()
+                                                .gap(px(theme.metrics.spacing_1))
                                                 .text_size(px(theme.typography.caption_size))
                                                 .text_color(theme.colors.status.warning)
                                                 .font_weight(FontWeight::MEDIUM)
-                                                .child(warning),
+                                                .line_height(relative(1.25))
+                                                .child(
+                                                    components::warning_icon(theme).h(px(theme
+                                                        .typography
+                                                        .caption_size
+                                                        * 1.25)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .min_w(px(0.0))
+                                                        .whitespace_normal()
+                                                        .child(warning),
+                                                ),
                                         )
                                     })
                             })
@@ -297,11 +328,17 @@ impl ProbeApp {
                     .child(div().flex_1().child("CERTIFICATE")),
             )
             .child(
-                div().flex_1().min_h(px(0.0)).relative().child(list).child(
-                    Scrollbar::vertical(&dialog.certificates_scroll)
-                        .id("environment-manager-certificates-scrollbar")
-                        .mode(ScrollbarMode::Scrolling),
-                ),
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .relative()
+                    .overflow_hidden()
+                    .child(list)
+                    .child(
+                        Scrollbar::vertical(&dialog.certificates_scroll)
+                            .id("environment-manager-certificates-scrollbar")
+                            .mode(ScrollbarMode::Scrolling),
+                    ),
             )
             .child(
                 div()
@@ -310,23 +347,26 @@ impl ProbeApp {
                     .w_full()
                     .flex_none()
                     .px(px(theme.metrics.spacing_2))
-                    .py(px(theme.metrics.spacing_1))
+                    .py(px(theme.metrics.spacing_2))
                     .flex()
                     .items_center()
+                    .bg(theme.colors.surfaces.raised)
                     .border_t_1()
                     .border_color(theme.colors.borders.subtle)
                     .child(
-                        components::editor_add_button(
+                        components::text_button(
                             theme,
                             "certificate-add",
-                            "Add Certificate",
+                            "+ Add Certificate",
                             move |_, window, cx| {
                                 let _ = add.update(cx, |view, cx| {
                                     view.open_certificate_editor(None, window, cx)
                                 });
                             },
                         )
-                        .flex_none()
+                        .p(px(0.0))
+                        .h_auto()
+                        .font_weight(FontWeight::MEDIUM)
                         .disabled(busy),
                     ),
             );

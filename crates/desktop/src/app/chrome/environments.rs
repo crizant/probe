@@ -611,18 +611,19 @@ impl ProbeApp {
             .w_full()
             .flex_none()
             .px(px(theme.metrics.spacing_2))
-            .py(px(theme.metrics.spacing_1))
+            .py(px(theme.metrics.spacing_2))
             .flex()
             .items_center()
             .gap(px(theme.metrics.spacing_2))
+            .bg(theme.colors.surfaces.raised)
             .border_t_1()
             .border_color(theme.colors.borders.subtle)
             .when(tab == EnvironmentTab::Variables, |footer| {
                 footer.child(
-                    components::editor_add_button(
+                    components::text_button(
                         theme,
                         "environment-manager-add-variable",
-                        "Add Variable",
+                        "+ Add Variable",
                         move |_, _, cx| {
                             let _ = add_variable_view.update(cx, |view, cx| {
                                 view.add_environment_manager_variable(
@@ -638,16 +639,18 @@ impl ProbeApp {
                             });
                         },
                     )
-                    .flex_none()
+                    .p(px(0.0))
+                    .h_auto()
+                    .font_weight(FontWeight::MEDIUM)
                     .disabled(busy),
                 )
             })
             .when(tab == EnvironmentTab::Secrets, |footer| {
                 footer.child(
-                    components::editor_add_button(
+                    components::text_button(
                         theme,
                         "environment-manager-add-secret",
-                        "Add Secret",
+                        "+ Add Secret",
                         move |_, _, cx| {
                             let _ = add_secret_view.update(cx, |view, cx| {
                                 view.add_environment_manager_variable(
@@ -661,7 +664,9 @@ impl ProbeApp {
                             });
                         },
                     )
-                    .flex_none()
+                    .p(px(0.0))
+                    .h_auto()
+                    .font_weight(FontWeight::MEDIUM)
                     .disabled(busy),
                 )
             })

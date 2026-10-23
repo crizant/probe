@@ -87,6 +87,7 @@ pub(crate) use icons::{
     edit_icon, eye_icon, field_copy_icon, home_button, hover_fill, locate_icon, lock_icon,
     menu_folder_icon, open_dialog_icon, plus_icon, reorder_icon, request_icon, save_icon,
     sidebar_toggle, trash_icon, tree_disclosure_icon, tree_folder_icon, tree_icon_slot,
+    warning_icon,
 };
 use menus::{MenuButtonContent, MenuButtonStyle, context_menu_separator, menu_button_with_style};
 pub(crate) use menus::{

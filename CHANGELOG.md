@@ -21,6 +21,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Environment Manager uses aligned text buttons for Add Variable, Add Secret, and
+  Add Certificate, with distinct list footers. Certificates show readable expiry
+  dates with warning icons.
+
 - Text buttons now keep their hover and clickable areas sized to their content
   instead of stretching across popup rows.
 

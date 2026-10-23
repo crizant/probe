@@ -418,6 +418,15 @@ pub(crate) fn disconnect_severity_mark(
         .text_color(disconnect_severity_color(theme, severity))
 }
 
+pub(crate) fn warning_icon(theme: Theme) -> gpui_kit::Div {
+    library_icon(
+        "lucide-triangle",
+        &SEVERITY_TRIANGLE_SVG,
+        theme.metrics.icon_small,
+    )
+    .text_color(theme.colors.status.warning)
+}
+
 pub(crate) fn certificate_validation_icon(succeeded: bool) -> gpui_kit::Div {
     let (name, svg) = if succeeded {
         ("lucide-circle-check", &CIRCLE_CHECK_SVG)
