@@ -67,9 +67,12 @@ mod tests {
     use super::*;
     use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, size};
 
-    fn settings_window(cx: &mut TestAppContext) -> gpui_kit::WindowHandle<ProbeApp> {
+    fn init_settings_test(cx: &mut TestAppContext) {
         cx.update(Theme::init);
         cx.update(bind_platform_hotkeys);
+    }
+
+    fn settings_window(cx: &mut TestAppContext) -> gpui_kit::WindowHandle<ProbeApp> {
         cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new)
     }
 
@@ -101,6 +104,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn settings_shortcut_opens_theme_dropdown_and_escape_closes_in_order(cx: &mut TestAppContext) {
+        init_settings_test(cx);
         let window = settings_window(cx);
         cx.simulate_keystrokes(window.into(), crate::app::tests::settings_shortcut());
         cx.run_until_parked();
@@ -135,6 +139,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn settings_selection_is_a_draft_and_cancel_discards_it(cx: &mut TestAppContext) {
+        init_settings_test(cx);
         let window = settings_window(cx);
         show_settings(window, cx);
         click_settings_control(window, cx, "settings-theme-mode-trigger");
@@ -165,6 +170,7 @@ mod tests {
     fn settings_save_keeps_draft_on_failure_and_applies_only_after_success(
         cx: &mut TestAppContext,
     ) {
+        init_settings_test(cx);
         let window = settings_window(cx);
         window
             .update(cx, |view, window, cx| {
@@ -223,6 +229,7 @@ mod tests {
                 }
             })
         });
+        init_settings_test(cx);
         let window = settings_window(cx);
         show_settings(window, cx);
         let shortcut = crate::app::tests::send_shortcut();
@@ -251,6 +258,7 @@ mod tests {
     fn settings_shortcut_preserves_structure_environment_and_application_dialogs(
         cx: &mut TestAppContext,
     ) {
+        init_settings_test(cx);
         let shortcut = crate::app::tests::settings_shortcut();
         for modal in ["structure", "environment", "application"] {
             let window = settings_window(cx);
