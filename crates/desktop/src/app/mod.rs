@@ -153,6 +153,7 @@ gpui_kit::actions!(
         SendWebSocketMessage,
         CloseActiveTab,
         AboutProbe,
+        OpenSettings,
         CloseWindow,
         MinimizeWindow,
         ZoomWindow,
@@ -276,6 +277,7 @@ pub(crate) struct ProbeApp {
     loading: bool,
     session_store: Option<SessionStore>,
     user_config: UserConfig,
+    saving_user_config: bool,
     session: SessionState,
     session_save_task: Option<Task<()>>,
     request_save_task: Option<Task<()>>,
@@ -431,6 +433,7 @@ impl ProbeApp {
             loading: false,
             session_store: SessionStore::for_application(),
             user_config,
+            saving_user_config: false,
             session: SessionState::default(),
             session_save_task: None,
             request_save_task: None,
@@ -698,7 +701,11 @@ pub fn run() {
     let reopen_startup = startup.clone();
     app.on_reopen(move |cx| {
         if cx.windows().is_empty() {
-            open_probe_window(reopen_startup.clone(), cx);
+            let startup = cx
+                .try_global::<LoadedUserConfig>()
+                .cloned()
+                .unwrap_or_else(|| reopen_startup.clone());
+            open_probe_window(startup, cx);
         } else if let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied()) {
             let _ = window.update(cx, |_, window, _| window.activate_window());
         }
@@ -709,6 +716,7 @@ pub fn run() {
             cx.set_global(benchmark);
         }
         cx.set_app_identity(APPLICATION_ID, APPLICATION_NAME);
+        cx.set_global(startup.clone());
         Theme::init(cx);
         bind_platform_hotkeys(cx);
         install_system_menu(cx);
@@ -775,6 +783,8 @@ fn system_menus(pane_layout: PaneLayout) -> [Menu; 5] {
         Menu::new(APPLICATION_NAME).items([
             MenuItem::action("About Probe", AboutProbe),
             MenuItem::separator(),
+            MenuItem::action("Settings…", OpenSettings),
+            MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
             MenuItem::action("Hide Probe", HideApplication),
@@ -831,6 +841,15 @@ fn install_system_menu(_: &mut App) {}
 
 fn bind_platform_hotkeys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-,"
+            } else {
+                "ctrl-,"
+            },
+            OpenSettings,
+            None,
+        ),
         KeyBinding::new("tab", TabOrIndent, None),
         KeyBinding::new("shift-tab", ShiftTabOrOutdent, None),
         KeyBinding::new("up", SelectPreviousTreeItem, Some("RequestTree")),
@@ -857,6 +876,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
             Some("CreateEnvironmentDialog"),
         ),
         KeyBinding::new("enter", SubmitApplicationDialog, Some("ApplicationDialog")),
+        KeyBinding::new("escape", CancelApplicationDialog, Some("SettingsDialog")),
         KeyBinding::new("enter", SubmitSecretValueDialog, Some("SecretValueDialog")),
         KeyBinding::new("enter", SubmitCertificateDialog, Some("CertificateDialog")),
         KeyBinding::new("escape", CancelCertificateDialog, Some("CertificateDialog")),
@@ -981,6 +1001,17 @@ fn bind_platform_hotkeys(cx: &mut App) {
         ),
         KeyBinding::new("ctrl-w", CloseActiveTab, None),
     ]);
+
+    // Register after the platform send bindings so Settings owns its submit shortcut.
+    cx.bind_keys([KeyBinding::new(
+        if cfg!(target_os = "macos") {
+            "cmd-enter"
+        } else {
+            "ctrl-enter"
+        },
+        SubmitApplicationDialog,
+        Some("(SettingsDialog > Select) || SettingsDialog"),
+    )]);
 
     #[cfg(target_os = "windows")]
     cx.bind_keys([KeyBinding::new("alt-f4", CloseWindow, None)]);

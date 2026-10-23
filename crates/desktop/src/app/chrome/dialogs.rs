@@ -2,6 +2,7 @@ use super::*;
 
 impl ProbeApp {
     pub(super) fn render_application_dialog_actions(
+        &self,
         theme: Theme,
         specs: &[DialogActionSpec],
         window: &Window,
@@ -15,7 +16,14 @@ impl ProbeApp {
                     components::shortcut_label_for_action_in_context(
                         window,
                         &SubmitApplicationDialog,
-                        "ApplicationDialog",
+                        if matches!(
+                            self.application_dialog,
+                            Some(ApplicationDialog::Settings { .. })
+                        ) {
+                            "SettingsDialog"
+                        } else {
+                            "ApplicationDialog"
+                        },
                     )
                 }
                 components::DialogActionStyle::Secondary => None,
@@ -30,10 +38,15 @@ impl ProbeApp {
             actions = actions.child(components::dialog_action_button(
                 theme,
                 spec.id,
-                spec.label,
+                if self.saving_user_config && spec.id == "settings-dialog-save" {
+                    "Saving…"
+                } else {
+                    spec.label
+                },
                 spec.style,
                 shortcut_hint,
-                false,
+                matches!(self.application_dialog, Some(ApplicationDialog::Settings { theme })
+                    if self.saving_user_config || (spec.action == ApplicationDialogAction::Save && theme == self.user_config.theme)),
                 move |_, window, cx| {
                     let _ = view.update(cx, |view, cx| {
                         view.handle_application_dialog_action(spec.action, window, cx);
@@ -41,7 +54,13 @@ impl ProbeApp {
                 },
             ));
         }
-        actions
+        actions.when(
+            matches!(
+                self.application_dialog,
+                Some(ApplicationDialog::Settings { .. })
+            ),
+            |actions| actions.mt(px(theme.metrics.spacing_4 * 1.5)),
+        )
     }
 
     pub(in crate::app) fn render_application_dialog(
@@ -109,12 +128,63 @@ impl ProbeApp {
         };
         let mut content = components::dialog_surface(theme, "application-dialog", dialog.width())
             .child(components::dialog_title(theme, dialog.title()))
-            .child(description);
+            .when(!dialog.description().is_empty(), |content| {
+                content.child(description)
+            });
+
+        if let ApplicationDialog::Settings { theme: draft_theme } = dialog {
+            content = content.p(px(theme.metrics.spacing_4 + theme.metrics.spacing_1));
+            let view = cx.weak_entity();
+            content = content.child(
+                div()
+                    .mt(px(theme.metrics.spacing_4))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(theme.metrics.spacing_3))
+                    .child(
+                        div()
+                            .text_size(px(theme.typography.body_size))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.colors.text.secondary)
+                            .child("Theme mode"),
+                    )
+                    .child(
+                        div().w(px(180.0)).flex_none().child(
+                            components::dropdown(
+                                theme,
+                                "settings-theme-mode",
+                                "Theme mode",
+                                Some(*draft_theme),
+                                vec![
+                                    (ThemeMode::System, "System".to_owned()),
+                                    (ThemeMode::Light, "Light".to_owned()),
+                                    (ThemeMode::Dark, "Dark".to_owned()),
+                                ],
+                                180.0,
+                                move |mode, _, cx| {
+                                    if let Some(mode) = mode.copied() {
+                                        let _ = view.update(cx, |view, cx| {
+                                            if !view.saving_user_config
+                                                && let Some(ApplicationDialog::Settings { theme }) =
+                                                    &mut view.application_dialog
+                                            {
+                                                *theme = mode;
+                                                cx.notify();
+                                            }
+                                        });
+                                    }
+                                },
+                            )
+                            .disabled(self.saving_user_config),
+                        ),
+                    ),
+            );
+        }
 
         if let Some(specs) = dialog.action_specs() {
-            content = content.child(Self::render_application_dialog_actions(
-                theme, specs, window, cx,
-            ));
+            content =
+                content.child(self.render_application_dialog_actions(theme, specs, window, cx));
         } else if let ApplicationDialog::SelectYaakWorkspace { workspaces, .. } = dialog {
             let mut choices = div()
                 .id("application-dialog-workspaces")
@@ -143,7 +213,7 @@ impl ProbeApp {
             }
             content = content
                 .child(choices)
-                .child(Self::render_application_dialog_actions(
+                .child(self.render_application_dialog_actions(
                     theme,
                     &[CANCEL_DIALOG_ACTION],
                     window,
@@ -177,7 +247,7 @@ impl ProbeApp {
             }
             content = content
                 .child(choices)
-                .child(Self::render_application_dialog_actions(
+                .child(self.render_application_dialog_actions(
                     theme,
                     &[CANCEL_DIALOG_ACTION],
                     window,
@@ -188,7 +258,11 @@ impl ProbeApp {
         components::dialog_layer(
             theme,
             &self.application_dialog_focus,
-            "ApplicationDialog",
+            if matches!(dialog, ApplicationDialog::Settings { .. }) {
+                "SettingsDialog"
+            } else {
+                "ApplicationDialog"
+            },
             content,
         )
         .into_any_element()

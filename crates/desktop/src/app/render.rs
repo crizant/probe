@@ -190,6 +190,17 @@ impl Render for ProbeApp {
                     view.request_close_open_tab(tab, window, cx);
                 }
             }))
+            .on_action(cx.listener(|view, _: &OpenSettings, window, cx| {
+                if view.application_dialog.is_none() {
+                    view.show_application_dialog(
+                        ApplicationDialog::Settings {
+                            theme: view.user_config.theme,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }))
             .on_action(cx.listener(|view, _: &AboutProbe, window, cx| {
                 view.show_application_dialog(ApplicationDialog::About, window, cx);
             }))

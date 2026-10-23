@@ -336,7 +336,9 @@ Closing a collection clears active session state without deleting collection fil
 The desktop reads an optional TOML file for user settings. It is not an
 OpenCollection document, and it does not store collection variables, secrets, or
 desktop session state. The CLI does not load it. Omitted keys use defaults, and
-unknown keys are ignored. The desktop does not write the file.
+unknown keys are ignored when loading and preserved when saving. Saves are atomic
+and run off the UI thread, following symlinks to regular files. Invalid files and
+externally changed theme values are not overwritten.
 
 ```toml
 theme = "system"
@@ -367,9 +369,9 @@ other non-file, and a regular file larger than 64 KiB, are configuration
 errors. Invalid TOML and these filesystem failures include the config path.
 Startup reads this small file once, before the GPUI event loop and before the
 main window is created, so the effective theme is applied as the window is
-created. The same result is reused when the process opens another window later.
-The view does not parse TOML or touch the filesystem. A failure is shown as a
-persistent error toast once the window exists, and the window keeps the defaults.
+created. The latest successfully saved preference is reused when the process
+opens another window later. Views do not parse TOML or access the filesystem.
+Startup failures show an error toast and use the defaults.
 
 ### Runtime Identity and Persistence Locators
 

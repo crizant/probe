@@ -202,6 +202,8 @@ impl ProbeApp {
                     DesktopMenuItem::action("Close Tab", CloseActiveTab),
                     DesktopMenuItem::action("Close Window", CloseWindow),
                     DesktopMenuItem::Separator,
+                    DesktopMenuItem::action("Settings…", OpenSettings),
+                    DesktopMenuItem::Separator,
                     DesktopMenuItem::action(
                         if cfg!(target_os = "windows") {
                             "Exit"
