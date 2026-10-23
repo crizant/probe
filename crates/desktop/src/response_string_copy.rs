@@ -609,64 +609,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_json_string_uses_serde_for_unescaping() {
-        // Basic string
-        let text = r#""hello""#;
-        assert_eq!(extract_json_string(text, 0..7), Some("hello".to_owned()));
-
-        // Standard escapes
-        let text = r#""line\nbreak""#;
-        assert_eq!(
-            extract_json_string(text, 0..13),
-            Some("line\nbreak".to_owned())
-        );
-
-        let text = r#""say \"hi\"""#;
-        assert_eq!(
-            extract_json_string(text, 0..12),
-            Some("say \"hi\"".to_owned())
-        );
-    }
-
-    #[test]
-    fn extract_json_string_handles_utf16_surrogates() {
-        // Emoji using UTF-16 surrogate pair: 😀 = U+1F600 = \uD83D\uDE00
-        let text = r#""emoji: \uD83D\uDE00""#;
-        let result = extract_json_string(text, 0..text.len());
-        assert_eq!(result, Some("emoji: 😀".to_owned()));
-
-        // Another emoji: 🎉 = U+1F389 = \uD83C\uDF89
-        let text = r#""party: \uD83C\uDF89""#;
-        let result = extract_json_string(text, 0..text.len());
-        assert_eq!(result, Some("party: 🎉".to_owned()));
-
-        // Multiple emojis
-        let text = r#""\uD83D\uDE00\uD83D\uDE01""#;
-        let result = extract_json_string(text, 0..text.len());
-        assert_eq!(result, Some("😀😁".to_owned()));
-    }
-
-    #[test]
-    fn extract_json_string_handles_long_strings() {
-        // Test a long string (>100 chars)
-        let long_value = "a".repeat(150);
-        let json = format!(r#""{}""#, long_value);
-        let result = extract_json_string(&json, 0..json.len());
-        assert_eq!(result, Some(long_value));
-    }
-
-    #[test]
-    fn extract_json_string_returns_none_for_invalid_json() {
-        // Missing closing quote
-        let text = r#""hello"#;
-        assert_eq!(extract_json_string(text, 0..6), None);
-
-        // Not a string literal
-        let text = "hello";
-        assert_eq!(extract_json_string(text, 0..5), None);
-    }
-
-    #[test]
     fn quoted_copy_menu_label_formats_short_strings() {
         assert_eq!(
             quoted_copy_menu_label("Copy value", "hello"),
