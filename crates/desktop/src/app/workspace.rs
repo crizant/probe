@@ -635,6 +635,18 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if matches!(
+            self.application_dialog,
+            Some(ApplicationDialog::Settings { .. })
+        ) {
+            if !self.saving_user_config && action == ApplicationDialogAction::Save {
+                self.save_settings(window, cx);
+                return;
+            }
+            if self.saving_user_config {
+                return;
+            }
+        }
         let Some(dialog) = self.application_dialog.take() else {
             return;
         };

@@ -4,7 +4,7 @@ use gpui_kit::Action;
 use probe_core::{Environment, ImportDiagnostic, ImportDiagnosticSeverity, ItemKind, RequestKey};
 use probe_yaak::{YaakImportPreview, YaakWorkspaceSummary};
 
-use crate::{components, session::SessionState};
+use crate::{components, session::SessionState, user_config::ThemeMode};
 
 use super::{
     documentation::OverviewTarget,
@@ -257,6 +257,9 @@ pub(crate) enum StoredSecretRename {
 
 pub(crate) enum ApplicationDialog {
     About,
+    Settings {
+        theme: ThemeMode,
+    },
     Unsaved {
         keys: Vec<RequestKey>,
         documentation: bool,
@@ -350,6 +353,7 @@ impl DesktopMenuItem {
 impl ApplicationDialog {
     pub(crate) fn title(&self) -> Cow<'_, str> {
         match self {
+            Self::Settings { .. } => Cow::Borrowed("Settings"),
             Self::About => Cow::Borrowed("Probe"),
             Self::Unsaved {
                 keys,
@@ -395,11 +399,8 @@ impl ApplicationDialog {
 
     pub(crate) fn description(&self) -> Cow<'_, str> {
         match self {
-            Self::About => Cow::Borrowed(concat!(
-                "Version ",
-                env!("CARGO_PKG_VERSION"),
-                "\n\nA fast, native, local-first API client."
-            )),
+            Self::Settings { .. } => Cow::Borrowed(""),
+            Self::About => Cow::Borrowed("A fast, native, local-first API client."),
             Self::Unsaved { .. } | Self::UnsavedEnvironment => {
                 Cow::Borrowed("Unsaved changes will be lost if you discard them.")
             }
@@ -430,6 +431,7 @@ impl ApplicationDialog {
 
     pub(crate) const fn width(&self) -> f32 {
         match self {
+            Self::About | Self::Settings { .. } => 380.0,
             Self::SelectYaakWorkspace { .. }
             | Self::SelectCollectionFile { .. }
             | Self::ConfirmPartialImport { .. } => components::WIDE_DIALOG_WIDTH,
@@ -439,6 +441,7 @@ impl ApplicationDialog {
 
     pub(crate) const fn action_specs(&self) -> Option<&'static [DialogActionSpec]> {
         match self {
+            Self::Settings { .. } => Some(SETTINGS_DIALOG_ACTIONS),
             Self::About => Some(ABOUT_DIALOG_ACTIONS),
             Self::Unsaved { .. } | Self::UnsavedEnvironment => Some(UNSAVED_DIALOG_ACTIONS),
             Self::Delete { .. } | Self::DeleteEnvironment { .. } => Some(DELETE_DIALOG_ACTIONS),
@@ -508,6 +511,15 @@ pub(crate) const CANCEL_DIALOG_ACTION: DialogActionSpec = DialogActionSpec::new(
     components::DialogActionStyle::Secondary,
     ApplicationDialogAction::Cancel,
 );
+const SETTINGS_DIALOG_ACTIONS: &[DialogActionSpec] = &[
+    CANCEL_DIALOG_ACTION,
+    DialogActionSpec::new(
+        "settings-dialog-save",
+        "Save",
+        components::DialogActionStyle::Primary,
+        ApplicationDialogAction::Save,
+    ),
+];
 const ABOUT_DIALOG_ACTIONS: &[DialogActionSpec] = &[DialogActionSpec::new(
     "application-dialog-done",
     "Done",

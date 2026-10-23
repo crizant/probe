@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Settings dialog for choosing System, Light, or Dark theme mode, applied and
+  remembered when saved.
+
 ## [2.1.0] - 2026-10-23
 
 ### Added

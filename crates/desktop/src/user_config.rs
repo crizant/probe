@@ -78,6 +78,66 @@ impl UserConfig {
         Self::load_from(&config_path()?)
     }
 
+    /// Updates the theme off the UI thread, preserving other TOML keys.
+    pub(crate) fn save_theme(expected: ThemeMode, theme: ThemeMode) -> Result<(), String> {
+        let path = config_path().map_err(|error| error.to_string())?;
+        Self::save_theme_to(&path, expected, theme)
+            .map_err(|error| format!("Could not save settings at {}: {error}", path.display()))
+    }
+
+    fn save_theme_to(path: &Path, expected: ThemeMode, theme: ThemeMode) -> Result<(), String> {
+        use std::io::Write;
+
+        Self::load_from(path).map_err(|error| error.to_string())?;
+        // Follow dotfiles symlinks rather than replacing the link itself.
+        let target = if path.exists() {
+            fs::canonicalize(path).map_err(|error| error.to_string())?
+        } else {
+            path.to_path_buf()
+        };
+        let source = read_optional_config(&target)?;
+        let current = source
+            .as_deref()
+            .map(toml::from_str::<Self>)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        if current.theme != expected {
+            return Err(
+                "Settings changed outside Probe. Reopen Probe before changing the theme.".into(),
+            );
+        }
+        let mut document = source
+            .as_deref()
+            .unwrap_or_default()
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|error| error.to_string())?;
+        let mut value = toml_edit::Value::from(match theme {
+            ThemeMode::System => "system",
+            ThemeMode::Light => "light",
+            ThemeMode::Dark => "dark",
+        });
+        if let Some(existing) = document.get("theme").and_then(toml_edit::Item::as_value) {
+            *value.decor_mut() = existing.decor().clone();
+        }
+        document["theme"] = toml_edit::Item::Value(value);
+        let output = document.to_string();
+        if output.len() as u64 > MAX_CONFIG_BYTES {
+            return Err("Saved settings would exceed the 64 KiB size limit.".into());
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let mut file =
+            atomic_write_file::AtomicWriteFile::open(&target).map_err(|error| error.to_string())?;
+        file.write_all(output.as_bytes())
+            .map_err(|error| error.to_string())?;
+        if read_optional_config(&target)? != source {
+            return Err("Settings changed outside Probe while saving. Try again.".into());
+        }
+        file.commit().map_err(|error| error.to_string())
+    }
+
     /// Loads `path`.
     ///
     /// A missing file returns [`UserConfig::default`] and does not create a file
@@ -103,6 +163,14 @@ impl UserConfig {
         }
         let text = fs::read_to_string(path).map_err(|error| ConfigError::read(path, error))?;
         toml::from_str(&text).map_err(|source| ConfigError::invalid(path, source))
+    }
+}
+
+fn read_optional_config(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(source) => Ok(Some(source)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -268,6 +336,95 @@ fn absolute(path: Option<&Path>) -> Option<&Path> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn settings_save_round_trips_all_theme_modes_and_preserves_unknown_keys() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("nested/config.toml");
+        let mut previous = ThemeMode::System;
+        for mode in [ThemeMode::Dark, ThemeMode::Light, ThemeMode::System] {
+            UserConfig::save_theme_to(&path, previous, mode).unwrap();
+            assert_eq!(UserConfig::load_from(&path).unwrap().theme, mode);
+            previous = mode;
+        }
+        fs::write(
+            &path,
+            "theme = \"system\"\nfuture = \"keep\"\n[extra]\nvalue = 42\n",
+        )
+        .unwrap();
+        UserConfig::save_theme_to(&path, ThemeMode::System, ThemeMode::Dark).unwrap();
+        let document: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(document["future"].as_str(), Some("keep"));
+        assert_eq!(document["extra"]["value"].as_integer(), Some(42));
+    }
+
+    #[test]
+    fn settings_save_preserves_comments_order_and_spacing() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let source = concat!(
+            "# User preferences\n",
+            "zebra = 'leave this alone'\n\n",
+            "# Follow the desktop by default\n",
+            "  theme  =   \"system\"  # appearance\n\n",
+            "alpha = { x=1, y = 2 } # keep spacing\n\n",
+            "[extra] # future settings\n",
+            "values = [\n  3, # keep this comment\n  2,\n]\n",
+        );
+        fs::write(&path, source).unwrap();
+        UserConfig::save_theme_to(&path, ThemeMode::System, ThemeMode::Dark).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            source.replace("\"system\"", "\"dark\"")
+        );
+        assert_eq!(UserConfig::load_from(&path).unwrap().theme, ThemeMode::Dark);
+    }
+
+    #[test]
+    fn settings_save_adds_missing_theme_without_reformatting_existing_keys() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let source = "# Preferences\nfuture  =  [1,2]  # keep\n\n[extra]\nvalue='unchanged'\n";
+        fs::write(&path, source).unwrap();
+        UserConfig::save_theme_to(&path, ThemeMode::System, ThemeMode::Light).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert_eq!(saved.replace("theme = \"light\"\n", ""), source);
+        assert_eq!(
+            UserConfig::load_from(&path).unwrap().theme,
+            ThemeMode::Light
+        );
+    }
+
+    #[test]
+    fn settings_save_refuses_external_theme_changes_and_invalid_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        for source in [
+            "theme = \"light\"\n",
+            "theme = \"invalid\"\n",
+            "invalid = [",
+        ] {
+            fs::write(&path, source).unwrap();
+            assert!(UserConfig::save_theme_to(&path, ThemeMode::System, ThemeMode::Dark).is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), source);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn settings_save_follows_dotfiles_symlinks() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("dotfiles.toml");
+        let link = temp.path().join("config.toml");
+        fs::write(&target, "theme = \"system\"\n").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        UserConfig::save_theme_to(&link, ThemeMode::System, ThemeMode::Dark).unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(
+            UserConfig::load_from(&target).unwrap().theme,
+            ThemeMode::Dark
+        );
+    }
+
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},

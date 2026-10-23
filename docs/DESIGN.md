@@ -146,6 +146,14 @@ leaves that appearance to the OS. Every token has a fallback value. HTTP
 method, status, and syntax colors remain distinct from chrome. See
 [user configuration](ARCHITECTURE.md#user-configuration).
 
+Settings opens from Probe → Settings on macOS or File → Settings on Windows/Linux
+(Command+, / Ctrl+,). Its Theme mode row has the label on the left and a
+System/Light/Dark dropdown on the right. Save (Command+Enter / Ctrl+Enter) applies
+and persists changes; Cancel or Escape discards them. Save is disabled until a
+change is made, and controls are disabled while saving. A failed save keeps the
+draft open and the current theme unchanged. Enter and Escape retain normal
+dropdown behavior while its list is open.
+
 Theme changes must not alter application semantics, hide required state, move commands
 unexpectedly, or replace platform-standard interaction behavior. Selection, focus,
 errors, disabled controls, and request/response status must remain distinguishable

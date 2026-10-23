@@ -1010,3 +1010,28 @@ fn restored_session_presence_highlights_without_reading_the_store(cx: &mut TestA
     });
     let _ = fs::remove_dir_all(session_store.path().parent().unwrap());
 }
+
+#[gpui_kit::test]
+fn settings_shortcut_preserves_editor_secret_draft(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.select_environment(cx, "development");
+    let input = workspace.update(cx, |view, window, cx| {
+        open_editor_secret_dialog(view, &workspace.path, window, cx);
+        assert!(view.environment_manager_dialog.is_none());
+        type_secret(view, window, cx, "unsaved secret");
+        view.secret_value_dialog.as_ref().unwrap().input.clone()
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes(
+        workspace.window.into(),
+        crate::app::tests::settings_shortcut(),
+    );
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, cx| {
+        assert!(view.application_dialog.is_none());
+        let dialog = view.secret_value_dialog.as_ref().unwrap();
+        assert_eq!(dialog.input.entity_id(), input.entity_id());
+        assert_eq!(dialog.input.read(cx).value(), "unsaved secret");
+        assert_eq!(dialog.target.name, "secretToken");
+    });
+}

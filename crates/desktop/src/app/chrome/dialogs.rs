@@ -1,12 +1,31 @@
 use super::*;
 
+fn about_app_icon() -> Arc<gpui_kit::Image> {
+    static ICON: std::sync::OnceLock<Arc<gpui_kit::Image>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        Arc::new(gpui_kit::Image::from_bytes(
+            gpui_kit::ImageFormat::Png,
+            include_bytes!(
+                "../../../assets/app-icon/linux/hicolor/128x128/apps/dev.probe.desktop.png"
+            )
+            .to_vec(),
+        ))
+    })
+    .clone()
+}
+
 impl ProbeApp {
     pub(super) fn render_application_dialog_actions(
+        &self,
         theme: Theme,
         specs: &[DialogActionSpec],
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Div {
+        let settings_theme = match self.application_dialog {
+            Some(ApplicationDialog::Settings { theme }) => Some(theme),
+            _ => None,
+        };
         let mut actions = components::dialog_actions(theme);
         for spec in specs.iter().copied() {
             let view = cx.weak_entity();
@@ -15,7 +34,11 @@ impl ProbeApp {
                     components::shortcut_label_for_action_in_context(
                         window,
                         &SubmitApplicationDialog,
-                        "ApplicationDialog",
+                        if settings_theme.is_some() {
+                            "SettingsDialog"
+                        } else {
+                            "ApplicationDialog"
+                        },
                     )
                 }
                 components::DialogActionStyle::Secondary => None,
@@ -30,10 +53,18 @@ impl ProbeApp {
             actions = actions.child(components::dialog_action_button(
                 theme,
                 spec.id,
-                spec.label,
+                if self.saving_user_config && spec.id == "settings-dialog-save" {
+                    "Saving…"
+                } else {
+                    spec.label
+                },
                 spec.style,
                 shortcut_hint,
-                false,
+                settings_theme.is_some_and(|mode| {
+                    self.saving_user_config
+                        || (spec.action == ApplicationDialogAction::Save
+                            && mode == self.user_config.theme)
+                }),
                 move |_, window, cx| {
                     let _ = view.update(cx, |view, cx| {
                         view.handle_application_dialog_action(spec.action, window, cx);
@@ -42,6 +73,13 @@ impl ProbeApp {
             ));
         }
         actions
+            .when(settings_theme.is_some(), |actions| {
+                actions.mt(px(theme.metrics.spacing_4 * 1.5))
+            })
+            .when(
+                matches!(self.application_dialog, Some(ApplicationDialog::About)),
+                |actions| actions.mt(px(theme.metrics.spacing_4 + theme.metrics.spacing_1)),
+            )
     }
 
     pub(in crate::app) fn render_application_dialog(
@@ -107,14 +145,105 @@ impl ProbeApp {
                 .overflow_y_scroll()
                 .line_height(relative(theme.typography.body_line_height))
         };
-        let mut content = components::dialog_surface(theme, "application-dialog", dialog.width())
-            .child(components::dialog_title(theme, dialog.title()))
-            .child(description);
+        let mut content = components::dialog_surface(theme, "application-dialog", dialog.width());
+        if matches!(dialog, ApplicationDialog::About) {
+            content = content
+                .p(px(theme.metrics.spacing_4 + theme.metrics.spacing_1))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme.metrics.spacing_3))
+                        .child(
+                            img(about_app_icon())
+                                .size(px(48.0))
+                                .flex_none()
+                                .rounded(px(theme.metrics.radius_medium)),
+                        )
+                        .child(
+                            div()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(theme.metrics.spacing_1))
+                                .child(components::dialog_title(theme, dialog.title()))
+                                .child(
+                                    div()
+                                        .text_size(px(theme.typography.caption_size))
+                                        .text_color(theme.colors.text.muted)
+                                        .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .mt(px(theme.metrics.spacing_3))
+                        .text_size(px(theme.typography.body_size))
+                        .text_color(theme.colors.text.primary)
+                        .line_height(relative(theme.typography.body_line_height))
+                        .child(dialog.description().into_owned()),
+                );
+        } else {
+            content = content
+                .child(components::dialog_title(theme, dialog.title()))
+                .when(!dialog.description().is_empty(), |content| {
+                    content.child(description)
+                });
+        }
+
+        if let ApplicationDialog::Settings { theme: draft_theme } = dialog {
+            content = content.p(px(theme.metrics.spacing_4 + theme.metrics.spacing_1));
+            let view = cx.weak_entity();
+            content = content.child(
+                div()
+                    .mt(px(theme.metrics.spacing_4))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(theme.metrics.spacing_3))
+                    .child(
+                        div()
+                            .text_size(px(theme.typography.body_size))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.colors.text.secondary)
+                            .child("Theme mode"),
+                    )
+                    .child(
+                        div().w(px(180.0)).flex_none().child(
+                            components::dropdown(
+                                theme,
+                                "settings-theme-mode",
+                                "Theme mode",
+                                Some(*draft_theme),
+                                vec![
+                                    (ThemeMode::System, "System".to_owned()),
+                                    (ThemeMode::Light, "Light".to_owned()),
+                                    (ThemeMode::Dark, "Dark".to_owned()),
+                                ],
+                                180.0,
+                                move |mode, _, cx| {
+                                    if let Some(mode) = mode.copied() {
+                                        let _ = view.update(cx, |view, cx| {
+                                            if !view.saving_user_config
+                                                && let Some(ApplicationDialog::Settings { theme }) =
+                                                    &mut view.application_dialog
+                                            {
+                                                *theme = mode;
+                                                cx.notify();
+                                            }
+                                        });
+                                    }
+                                },
+                            )
+                            .disabled(self.saving_user_config),
+                        ),
+                    ),
+            );
+        }
 
         if let Some(specs) = dialog.action_specs() {
-            content = content.child(Self::render_application_dialog_actions(
-                theme, specs, window, cx,
-            ));
+            content =
+                content.child(self.render_application_dialog_actions(theme, specs, window, cx));
         } else if let ApplicationDialog::SelectYaakWorkspace { workspaces, .. } = dialog {
             let mut choices = div()
                 .id("application-dialog-workspaces")
@@ -143,7 +272,7 @@ impl ProbeApp {
             }
             content = content
                 .child(choices)
-                .child(Self::render_application_dialog_actions(
+                .child(self.render_application_dialog_actions(
                     theme,
                     &[CANCEL_DIALOG_ACTION],
                     window,
@@ -177,7 +306,7 @@ impl ProbeApp {
             }
             content = content
                 .child(choices)
-                .child(Self::render_application_dialog_actions(
+                .child(self.render_application_dialog_actions(
                     theme,
                     &[CANCEL_DIALOG_ACTION],
                     window,
@@ -188,7 +317,11 @@ impl ProbeApp {
         components::dialog_layer(
             theme,
             &self.application_dialog_focus,
-            "ApplicationDialog",
+            if matches!(dialog, ApplicationDialog::Settings { .. }) {
+                "SettingsDialog"
+            } else {
+                "ApplicationDialog"
+            },
             content,
         )
         .into_any_element()
