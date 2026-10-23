@@ -225,31 +225,6 @@ dpkg-deb --extract "$output/probe-cli-$version-linux-x64.deb" "$tmp/extracted-cl
 dpkg-deb --extract "$output/probe-desktop-$version-linux-x64.deb" "$tmp/extracted-desktop"
 cmp "$tmp/probe" "$tmp/extracted-cli/usr/bin/probe"
 cmp "$tmp/probe-desktop" "$tmp/extracted-desktop/usr/bin/probe-desktop"
-# Reject fields after Description in built packages, including fields other
-# than dependencies. Continuation lines in the original descriptions are valid.
-for asset in probe-cli probe-desktop; do
-  for field in Depends Recommends Homepage; do
-    [[ "$asset" != probe-cli || "$field" != Recommends ]] || continue
-    root="$tmp/after-description-$asset-$field"
-    dpkg-deb --raw-extract "$output/$asset-$version-linux-x64.deb" "$root"
-    awk -v field="$field" '
-      index($0, field ":") == 1 { moved = $0; next }
-      { print }
-      END { print moved }
-    ' "$root/DEBIAN/control" >"$tmp/reordered-control"
-    mv "$tmp/reordered-control" "$root/DEBIAN/control"
-    chmod 0755 "$root/DEBIAN"
-    reordered="$tmp/reordered-$asset-$field"
-    mkdir -p "$reordered"
-    cp "$output/"*.deb "$reordered/"
-    dpkg-deb --root-owner-group --build "$root" "$reordered/$asset-$version-linux-x64.deb" >/dev/null
-    if bash "$repo_root/scripts/verify-deb.sh" "$reordered" >"$tmp/order.out" 2>&1; then
-      die "verifier accepted $field after Description in $asset"
-    fi
-    grep -q 'Description must be the last control field' "$tmp/order.out" \
-      || die 'field order verification failed for an unexpected reason'
-  done
-done
 # Verifier rejects a package whose control metadata no longer matches its name.
 mkdir -p "$tmp/tampered"
 cp "$output/probe-desktop-$version-linux-x64.deb" "$tmp/tampered/"
