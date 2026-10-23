@@ -1473,3 +1473,50 @@ fn active_certificate_popover_opens_environment_management_without_secret_reads(
     });
     assert_eq!(workspace.store.get_calls(), 0);
 }
+
+#[gpui_kit::test]
+fn settings_shortcut_preserves_environment_and_certificate_drafts(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "base");
+    let draft = workspace.update(cx, |view, _, _| {
+        let dialog = view.environment_manager_dialog.as_mut().unwrap();
+        dialog.draft_mut().name = "Unsaved environment".into();
+        dialog.draft().clone()
+    });
+    let shortcut = if cfg!(target_os = "macos") {
+        "cmd-,"
+    } else {
+        "ctrl-,"
+    };
+    cx.simulate_keystrokes(workspace.window.into(), shortcut);
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.application_dialog.is_none());
+        assert_eq!(
+            view.environment_manager_dialog.as_ref().unwrap().draft(),
+            &draft
+        );
+        view.open_certificate_editor(None, window, cx);
+    });
+    fill(&workspace, cx, 0, "unsaved.example");
+    let input = workspace.update(cx, |view, _, _| {
+        view.environment_manager_dialog
+            .as_ref()
+            .unwrap()
+            .certificate_editor
+            .as_ref()
+            .unwrap()
+            .inputs[0]
+            .clone()
+    });
+    cx.simulate_keystrokes(workspace.window.into(), shortcut);
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, cx| {
+        assert!(view.application_dialog.is_none());
+        let dialog = view.environment_manager_dialog.as_ref().unwrap();
+        assert_eq!(dialog.draft(), &draft);
+        let editor = dialog.certificate_editor.as_ref().unwrap();
+        assert_eq!(editor.inputs[0].entity_id(), input.entity_id());
+        assert_eq!(editor.inputs[0].read(cx).value(), "unsaved.example");
+    });
+}

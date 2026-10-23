@@ -107,22 +107,21 @@ impl UserConfig {
                 "Settings changed outside Probe. Reopen Probe before changing the theme.".into(),
             );
         }
-        let mut document: toml::Table = match source.as_deref() {
-            Some(source) => toml::from_str(source).map_err(|error| error.to_string())?,
-            None => toml::Table::new(),
-        };
-        document.insert(
-            "theme".into(),
-            toml::Value::String(
-                match theme {
-                    ThemeMode::System => "system",
-                    ThemeMode::Light => "light",
-                    ThemeMode::Dark => "dark",
-                }
-                .into(),
-            ),
-        );
-        let output = toml::to_string_pretty(&document).map_err(|error| error.to_string())?;
+        let mut document = source
+            .as_deref()
+            .unwrap_or_default()
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|error| error.to_string())?;
+        let mut value = toml_edit::Value::from(match theme {
+            ThemeMode::System => "system",
+            ThemeMode::Light => "light",
+            ThemeMode::Dark => "dark",
+        });
+        if let Some(existing) = document.get("theme").and_then(toml_edit::Item::as_value) {
+            *value.decor_mut() = existing.decor().clone();
+        }
+        document["theme"] = toml_edit::Item::Value(value);
+        let output = document.to_string();
         if output.len() as u64 > MAX_CONFIG_BYTES {
             return Err("Saved settings would exceed the 64 KiB size limit.".into());
         }
@@ -356,6 +355,43 @@ mod tests {
         let document: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(document["future"].as_str(), Some("keep"));
         assert_eq!(document["extra"]["value"].as_integer(), Some(42));
+    }
+
+    #[test]
+    fn settings_save_preserves_comments_order_and_spacing() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let source = concat!(
+            "# User preferences\n",
+            "zebra = 'leave this alone'\n\n",
+            "# Follow the desktop by default\n",
+            "  theme  =   \"system\"  # appearance\n\n",
+            "alpha = { x=1, y = 2 } # keep spacing\n\n",
+            "[extra] # future settings\n",
+            "values = [\n  3, # keep this comment\n  2,\n]\n",
+        );
+        fs::write(&path, source).unwrap();
+        UserConfig::save_theme_to(&path, ThemeMode::System, ThemeMode::Dark).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            source.replace("\"system\"", "\"dark\"")
+        );
+        assert_eq!(UserConfig::load_from(&path).unwrap().theme, ThemeMode::Dark);
+    }
+
+    #[test]
+    fn settings_save_adds_missing_theme_without_reformatting_existing_keys() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let source = "# Preferences\nfuture  =  [1,2]  # keep\n\n[extra]\nvalue='unchanged'\n";
+        fs::write(&path, source).unwrap();
+        UserConfig::save_theme_to(&path, ThemeMode::System, ThemeMode::Light).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert_eq!(saved.replace("theme = \"light\"\n", ""), source);
+        assert_eq!(
+            UserConfig::load_from(&path).unwrap().theme,
+            ThemeMode::Light
+        );
     }
 
     #[test]

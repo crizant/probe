@@ -191,7 +191,12 @@ impl Render for ProbeApp {
                 }
             }))
             .on_action(cx.listener(|view, _: &OpenSettings, window, cx| {
-                if view.application_dialog.is_none() {
+                if view.application_dialog.is_none()
+                    && view.structure_dialog.is_none()
+                    && view.create_environment_dialog.is_none()
+                    && view.environment_manager_dialog.is_none()
+                    && view.secret_value_dialog.is_none()
+                {
                     view.show_application_dialog(
                         ApplicationDialog::Settings {
                             theme: view.user_config.theme,

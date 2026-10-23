@@ -264,4 +264,71 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(submissions.get(), 3);
     }
+
+    #[gpui_kit::test]
+    fn settings_shortcut_preserves_structure_environment_and_application_dialogs(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(Theme::init);
+        cx.update(bind_platform_hotkeys);
+        let shortcut = if cfg!(target_os = "macos") {
+            "cmd-,"
+        } else {
+            "ctrl-,"
+        };
+        for modal in ["structure", "environment", "application"] {
+            let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+            let mut structure = StructureDialog::create_folder(None);
+            structure.name = "Unsaved folder".into();
+            window
+                .update(cx, |view, window, cx| {
+                    match modal {
+                        "structure" => {
+                            view.structure_dialog = Some(structure.clone());
+                            view.structure_dialog_focus.focus(window, cx);
+                        }
+                        "environment" => {
+                            view.create_environment_dialog = Some("Unsaved environment".into());
+                            view.create_environment_dialog_focus.focus(window, cx);
+                        }
+                        _ => view.show_application_dialog(
+                            ApplicationDialog::Settings {
+                                theme: ThemeMode::Dark,
+                            },
+                            window,
+                            cx,
+                        ),
+                    }
+                    cx.notify();
+                })
+                .unwrap();
+            cx.run_until_parked();
+            cx.simulate_keystrokes(window.into(), shortcut);
+            cx.run_until_parked();
+            window
+                .update(cx, |view, _, _| {
+                    match modal {
+                        "structure" => {
+                            assert_eq!(view.structure_dialog.as_ref(), Some(&structure));
+                            assert!(view.application_dialog.is_none());
+                        }
+                        "environment" => {
+                            assert_eq!(
+                                view.create_environment_dialog.as_deref(),
+                                Some("Unsaved environment")
+                            );
+                            assert!(view.application_dialog.is_none());
+                        }
+                        _ => assert!(matches!(
+                            view.application_dialog,
+                            Some(ApplicationDialog::Settings {
+                                theme: ThemeMode::Dark
+                            })
+                        )),
+                    }
+                    assert!(view.pending_application_dialogs.is_empty());
+                })
+                .unwrap();
+        }
+    }
 }
