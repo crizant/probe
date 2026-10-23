@@ -409,6 +409,8 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         assert!(visual.debug_bounds("response-tab-pretty").is_some());
         assert!(visual.debug_bounds("response-tab-raw").is_some());
         assert!(visual.debug_bounds("response-tab-headers").is_some());
+        assert!(visual.debug_bounds("response-tab-inspect").is_some());
+        assert!(visual.debug_bounds("inspection-count-1").is_some());
         assert!(visual.debug_bounds("response-resize-handle").is_some());
         assert!(visual.debug_bounds("sidebar-resize-handle").is_some());
         assert!(visual.debug_bounds("response-raw-view-text").is_none());

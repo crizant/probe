@@ -1,5 +1,19 @@
 use super::*;
 
+fn response_tab_badge(theme: Theme, color: gpui_kit::Rgba) -> gpui_kit::Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .min_h(px(theme.metrics.icon_standard))
+        .ml(px(theme.metrics.spacing_1))
+        .px(px(theme.metrics.spacing_1))
+        .rounded(px(theme.metrics.radius_small / 2.0))
+        .line_height(relative(1.25))
+        .text_color(color)
+        .bg(color.opacity(0.1))
+}
+
 impl ProbeApp {
     pub(super) fn render_response_panel(
         &self,
@@ -332,13 +346,6 @@ impl ProbeApp {
             let selected = self.response_viewer.tab(key) == tab;
             let label = if tab == ResponseViewerTab::Pretty && document.is_image() {
                 "Preview".to_owned()
-            } else if tab == ResponseViewerTab::Inspect {
-                let count = document.inspection.count();
-                if count > 0 {
-                    format!("Inspect [{count}]")
-                } else {
-                    tab.label().to_owned()
-                }
             } else {
                 tab.label().to_owned()
             };
@@ -357,6 +364,20 @@ impl ProbeApp {
                         });
                     },
                 )
+                .when(tab == ResponseViewerTab::Inspect, |tab| {
+                    let count = document.inspection.count();
+                    tab.when(count > 0, |tab| {
+                        tab.accessibility_label(format!(
+                            "Inspect, {count} {}",
+                            if count == 1 { "finding" } else { "findings" }
+                        ))
+                        .child(
+                            response_tab_badge(theme, theme.colors.text.secondary)
+                                .child(count.to_string())
+                                .debug_selector(move || format!("inspection-count-{count}")),
+                        )
+                    })
+                })
                 .when(tab == ResponseViewerTab::Assertions, |tab| {
                     let [failures, errors, ..] = match self.execution.response(key) {
                         Some(ResponseState::Complete { assertions, .. }) => {
@@ -366,10 +387,10 @@ impl ProbeApp {
                     };
                     let mut accessible_label = "Assertions".to_owned();
                     let mut tab = tab;
-                    for (count, symbol, kind, color, description) in [
+                    for (count, icon, kind, color, description) in [
                         (
                             failures,
-                            "×",
+                            components::close_icon(theme),
                             "failure",
                             theme.colors.status.error,
                             format!(
@@ -383,7 +404,7 @@ impl ProbeApp {
                         ),
                         (
                             errors,
-                            "⚠\u{fe0e}",
+                            components::warning_icon(theme),
                             "error",
                             theme.colors.status.warning,
                             format!(
@@ -402,12 +423,12 @@ impl ProbeApp {
                         accessible_label.push_str(", ");
                         accessible_label.push_str(&description);
                         tab = tab.child(
-                            div()
+                            response_tab_badge(theme, color)
+                                .child(icon.text_color(color))
+                                .child(count.to_string())
                                 .id(gpui_kit::SharedString::from(format!(
                                     "assertion-tab-{kind}-count"
                                 )))
-                                .ml(px(theme.metrics.spacing_1))
-                                .text_color(color)
                                 .tooltip(move |_, cx| {
                                     cx.new(|_| components::ActionTooltip {
                                         id: "assertion-count-tooltip",
@@ -416,8 +437,7 @@ impl ProbeApp {
                                     })
                                     .into()
                                 })
-                                .debug_selector(move || format!("assertion-{kind}-count-{count}"))
-                                .child(format!("[{symbol}{count}]")),
+                                .debug_selector(move || format!("assertion-{kind}-count-{count}")),
                         );
                     }
                     tab.accessibility_label(accessible_label)

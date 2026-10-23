@@ -259,8 +259,10 @@ and disabled for `isNull` and `isNotNull`, showing “Not used”; switching bac
 comparison restores its previous value. Assertion outcomes appear only
 in the response viewer.
 
-The response Assertions tab shows compact `[×N]` failure and `[⚠N]` evaluation-error
-badges, using semantic error and warning colours. Zero counts are hidden; tooltips
+Response tab counts use compact rounded rectangular badges that expand with their
+content, without literal brackets. Inspect uses a neutral count badge. The Assertions
+tab shows failure and evaluation-error counts with SVG status icons, subtle tinted
+backgrounds, and semantic error and warning colours. Zero counts are hidden; tooltips
 and the accessible tab label explain each count. Counts remain visible when another
 response tab is selected. The tab content has one inline summary. Failed comparisons precede evaluation errors, passed checks, and skipped
 (disabled) checks, with stable order within each group. Rows show the original,
