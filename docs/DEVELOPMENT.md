@@ -1,197 +1,110 @@
 # Development Practices
 
-Read this document for implementation workflow, dependency changes, GPUI work, or
-test design. Project-wide architectural invariants remain in `AGENTS.md`.
+Read this for Rust, GPUI, dependencies, tests, and validation. Project invariants
+live in [AGENTS.md](../AGENTS.md); release packaging is in [PACKAGING.md](PACKAGING.md).
 
 ## Rust Toolchains
 
-The workspace declares Rust 1.95 as its minimum supported Rust version (MSRV).
-`rust-toolchain.toml` selects 1.95.0 for local development, and CI checks formatting,
-Clippy, and tests on 1.95.0 across Linux, macOS, and Windows. The other CI checks
-also use 1.95.0. Release validation runs the same formatting, Clippy, and test checks
-on 1.95.0 before building artifacts.
-
-Production CLI and desktop release artifacts use explicitly pinned Rust 1.99.0.
-The release workflow selects that compiler and each platform target in one setup
-step per build job. Each build job sets `RUSTUP_TOOLCHAIN` to override the
-repository's MSRV toolchain file for Cargo and its subprocesses, and verifies the
-active compiler before caching or building. This build compiler is independent of
-the MSRV; using it does not raise the minimum compiler required to build Probe from
-source. Keep both versions explicit rather than selecting floating `stable`, and
-keep GPUI and dependency upgrades separate from toolchain changes.
-
-## macOS Packaging Tools
-
-Native app icon packaging requires full Xcode 26 or later (`actool` and
-`assetutil`), Python 3.9 or later, and cargo-bundle 0.11.0. Compile the icon after
-bundling and before signing; see the [app-icon workflow](../crates/desktop/assets/app-icon/README.md).
-CairoSVG, Pillow, and system Cairo are needed only when regenerating artwork.
-Windows and Linux packaging continue to use the existing generated icons.
-
-## Linux RPM Packages
-
-Tagged releases publish upstream binary RPMs next to the Linux `.tar.gz`
-archives. Packaging reuses the x86_64 binaries already built for those archives.
-`scripts/build-rpm.sh` reads the version from `Cargo.toml`. A prerelease such
-as `0.11.0-beta.1` uses `~` in the RPM `Version` field (`0.11.0~beta.1`).
-This is not a mock or COPR source build: the spec packages prebuilt Probe
-binaries rather than compiling them. `scripts/test-rpm.sh` checks
-packaging with stand-in binaries.
-`scripts/build-rpm.sh` runs `scripts/verify-rpm.sh` before copying packages
-into the release output.
-
-## Linux DEB Packages
-
-Tagged releases also publish `probe-cli-<version>-linux-x64.deb` and
-`probe-desktop-<version>-linux-x64.deb`. The `package-deb` release job downloads
-and extracts the existing CLI and desktop Linux tarballs; it never builds Probe.
-The packages are named `probe` and `probe-desktop`, with architecture `amd64`.
-They install executables in `/usr/bin`; desktop also installs the shared desktop
-file and hicolor icons. Desktop depends on `hicolor-icon-theme` and `libvulkan1`
-and recommends the exact matching CLI version plus `libwayland-client0`,
-`libwayland-egl1`, and `libegl1`. These graphics libraries are loaded by name,
-so they supplement ELF dependency detection; Wayland/EGL remain optional on X11.
-
-On a Debian/Ubuntu amd64 host, install `dpkg-dev`, `binutils`, `file`, and
-`desktop-file-utils`, plus the runtime libraries needed by the supplied binaries.
-`dpkg-shlibdeps` derives package dependencies from each actual ELF using the
-host's Debian symbols/shlibs metadata. Missing libraries or dependency metadata
-fail the build. The CLI verifier requires `probe --version` to match the original
-workspace SemVer exactly. Development packages are not copied into package
-dependencies.
-
-```bash
-scripts/build-deb.sh --cli path/to/probe --desktop path/to/probe-desktop \
-  --output-dir dist/deb
-scripts/verify-deb.sh dist/deb
-bash scripts/test-deb.sh
-```
-
-The version comes from `Cargo.toml`; `--expect-version` checks the original
-SemVer. Debian control versions use a tilde for prereleases and revision `-1`
-(e.g. `0.11.0-beta.1` becomes `0.11.0~beta.1-1`). Build metadata is omitted
-from control versions because it has no SemVer precedence. Asset filenames keep
-the complete original SemVer. Packaging never strips or rewrites binaries and
-checks extracted executables against the supplied files before publishing output.
-The packages contain payload `md5sums`, a DEP-5 copyright file referring to
-`/usr/share/common-licenses/Apache-2.0`, and `changelog.Debian.gz`.
-
-`SOURCE_DATE_EPOCH` controls changelog dates and all package timestamps. It defaults
-to the source commit timestamp; source trees without Git metadata must supply it.
-The release job supplies the tagged commit timestamp explicitly. Compression omits
-gzip filename/time headers. Packaging the same inputs on the same packaging host
-with the same epoch produces byte-identical DEBs, even if input mtimes differ.
-
-Release filenames retain literal `+build` suffixes. GitHub CLI treats `#` as a
-label separator, while `+` remains part of the filename and is URL-encoded as
-`%2B` in the upload request. This was checked against the CLI upload implementation
-and a local mock upload endpoint. Keep the existing upload flow and filenames;
-consumers constructing download URLs should URL-encode filenames rather than
-interpret `+` as a form-encoded space.
-
-Both packages are staged and verified before replacing matching output files;
-unrelated output files are preserved. CI tests packaging with small ELF stand-ins
-(`gcc` and `libc6-dev` are needed for those tests).
-
-These are upstream binary packages, not Debian source packages. Release dependency
-metadata is generated on Ubuntu 22.04 to match the existing Linux build baseline;
-this does not guarantee compatibility with every Debian/Ubuntu release. Target
-systems must provide the required library ABIs and versions. The explicit graphics
-dependencies cover the known libraries loaded by name;
-ELF scans still cannot discover additional dynamically loaded libraries, graphics
-drivers, or desktop portal services. Desktop launch still needs a working
-graphical session.
+`rust-toolchain.toml` selects Rust 1.95.0, the workspace MSRV. CI and release
+validation run formatting, Clippy, and tests on that version across supported
+platforms. Production artifacts use Rust 1.99.0, pinned by `RUSTUP_TOOLCHAIN` in
+[release.yml](../.github/workflows/release.yml); this does not raise the MSRV.
+Keep versions explicit and toolchain changes separate from GPUI/dependency upgrades.
 
 ## Rust and Async Work
 
-- Prefer normal ownership, GPUI entity ownership, message passing, task results, and
-  immutable shared data before `Arc`, `Mutex`, `RwLock`, `RefCell`, or global mutable
-  state.
+- Prefer normal ownership, GPUI entities, message passing, task results, and immutable
+  shared data before `Arc`, `Mutex`, `RwLock`, `RefCell`, or global mutable state.
 - Keep shared networking and application APIs asynchronous where the desktop needs
-  them. Do not create duplicate synchronous business logic for the CLI.
-- Run filesystem I/O, HTTP, large YAML or JSON parsing, Git work, and expensive
-  highlighting away from the GPUI thread.
-- Never use `unsafe` solely to bypass ownership problems. Any unsafe code requires
-  explicit justification.
+  them; avoid duplicate synchronous CLI logic.
+- Keep filesystem I/O, HTTP, expensive parsing, Git work, and highlighting off the
+  GPUI thread. Any unsafe code requires explicit justification.
 
 ## Dependencies
 
-Before adding a crate, check the standard library and existing dependencies. Prefer
-actively maintained, cross-platform crates and avoid large dependencies for trivial
-work. Do not replace dependencies without a task-specific reason.
+Check the standard library and existing dependencies before adding a crate. Prefer
+maintained, cross-platform crates; avoid large dependencies for trivial work and
+replacements unrelated to the task.
 
-Probe depends on `gpui-kit` with `default-features = false` and imports through
-`gpui_kit` / its unstyled `gpui_kit::base` layer. Do not enable the pre-styled
-`component` layer or copy its APIs unless explicitly scoped. Initialize the theme
-once through `crate::theme::Theme::init(cx)` within `probe-desktop`.
+Use `gpui-kit` with `default-features = false`, importing through `gpui_kit` and
+its unstyled `gpui_kit::base` layer. Do not enable the pre-styled `component` layer
+or copy its APIs unless explicitly scoped. Initialize the theme once through
+`crate::theme::Theme::init(cx)` in `probe-desktop`.
 
-GPUI Kit coordinates the matching GPUI and base versions. Keep its resolved version
-in Cargo.lock; do not add independent `gpui`, `gpui-base`, `gpui-component`, or
-platform dependencies or upgrade Kit during unrelated work. Inspect the exact
-resolved gpui-kit/GPUI source and examples before using unfamiliar APIs.
-
-Do not introduce Electron, Tauri, WebView, React, Flutter, or another GUI framework
-without explicit approval.
+Kit coordinates GPUI and base versions. Keep its resolved version in `Cargo.lock`;
+do not add independent `gpui`, `gpui-base`, `gpui-component`, or platform dependencies,
+or upgrade Kit during unrelated work. Inspect the resolved source and examples for
+unfamiliar APIs. Introducing another GUI framework requires explicit approval.
 
 ## Tests
 
-Keep shared fixtures under `tests/fixtures/`. CLI integration tests cover command
-behavior, JSON output, and exit codes.
-
-On Linux, CLI terminal-width integration tests use util-linux `script` and coreutils
-`stty` to create a terminal with an explicit size, independent of the developer's
-terminal. Install these utilities before running CLI tests on a minimal system.
-
-Before writing a new test, inspect the existing tests for the affected behavior.
-Prefer extending an existing test with focused assertions or additional cases when
-it already exercises the relevant setup and contract. Add a separate test when the
-behavior needs distinct setup or extending an existing test would obscure its purpose.
-
-When tests inspect or compare text files, account for platform line endings. Windows
-may check out fixtures with CRLF (`\r\n`), so avoid assuming LF (`\n`) unless the
-test explicitly normalizes line endings or the format requires them.
-
-Do not automate visual constants such as spacing, radii, typography sizes, palette
-values, or contrast ratios. Review those visually against [DESIGN.md](DESIGN.md).
-Desktop tests may cover behavior such as appearance selection, pane constraints,
-focus, and highlight ranges. Extend an existing desktop test when it already builds
-the same surface and the new assertion is a follow-on interaction.
-
-Test state machines and pure rules at the type that owns them, and keep desktop tests
-for wiring, focus, dialogs, and cross-component contracts. Share window, workspace,
-and fake-store setup through test helpers instead of repeating it. Assert semantic
-actions, dynamic values, and safety-critical wording in UI copy rather than whole
-paragraphs. Similar tests at different boundaries, such as core, repository, and CLI
-integration tests, may protect different contracts.
+- Keep shared fixtures in `tests/fixtures/`. CLI integration tests cover commands,
+  JSON, and exit codes. Linux terminal-width tests require `script` and `stty`.
+- Inspect existing tests first. Extend them when setup and behavior match; add a
+  separate test when distinct setup or purpose makes it clearer.
+- Account for CRLF in text fixtures unless the format requires or normalizes LF.
+- Test state machines and pure rules at their owner. Use desktop tests for wiring,
+  focus, dialogs, pane constraints, and cross-component behavior; share setup helpers.
+- Assert semantic actions, dynamic values, and safety-critical wording rather than
+  whole paragraphs. Tests at different boundaries may protect different contracts.
+- Review visual constants in light and dark against [DESIGN.md](DESIGN.md), rather
+  than automating assertions about spacing, typography, radii, palettes, or contrast.
+- Add property tests or fuzzing only for a concrete input-space risk, such as
+  resolution, round trips, or untrusted import parsers.
 
 ## Completion Checks
 
-Before completing a code change, run:
+Run `cargo fmt --check` for all Rust changes, then select local checks by scope:
+
+| Change | Required local validation |
+| --- | --- |
+| Isolated Rust change | Formatting, affected-crate Clippy, regression and related tests; visual review for UI changes |
+| Shared behavior, persistence, cross-crate APIs, or uncertain impact | Full workspace tests; Clippy for affected crates and consumers |
+| Dependencies or `Cargo.lock` | Full workspace tests, affected-consumer Clippy, and advisory check |
+| Documentation only | Review diff, links, and command examples; no Cargo builds/tests |
+| Scripts or CI | Checks relevant to the changed files |
+
+For an isolated desktop change, replace `components::` with the relevant test or
+module; expand to additional filters or the affected crate's full suite as needed:
 
 ```bash
 unset CARGO_TARGET_DIR
 cargo fmt --check
+cargo clippy -p probe-desktop --all-targets --all-features -- -D warnings
+cargo test -p probe-desktop --all-features 'components::'
+```
+
+CI runs full workspace formatting, Clippy, tests, advisories, and the quality gates
+below. Isolated changes may leave full gates to CI. To run the broader checks locally:
+
+```bash
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 cargo deny check advisories
 ```
 
-Run those cargo commands outside the Cursor sandbox (`required_permissions: ["all"]`)
-and do not inherit the sandbox `CARGO_TARGET_DIR`. That cache cannot compile
-`gpui_macos` (Metal toolchain) or `aws-lc-sys`. Use the project `target/` directory.
-
-Do not report completion while any required check fails.
+Use the project `target/` with `CARGO_TARGET_DIR` unset. Run outside the Cursor
+sandbox: its cache cannot compile `gpui_macos` (Metal) or `aws-lc-sys`, and tests
+may need local server sockets. Run Cargo builds/tests sequentially per checkout.
+Reuse successful checks unless relevant changes or failures justify rerunning them.
+Report local results and gates left to CI; resolve required failures and wait for
+required CI checks before merging. Stop when the requested work and checks pass.
 
 ## Final Quality Checks
 
-Probe uses [Rust-TOPS 1.0.0](https://github.com/Hedronite/rust-tops/blob/v0.1.3/RUST_TOPS.md)
-as a risk-review protocol. `rust-tops.yaml` describes this workspace; the
-commands below and CI execute its Probe-specific gates. Run these after changes
-to Rust production behavior. Use the project `target/` directory and unset any
-inherited `CARGO_TARGET_DIR`, especially for macOS GPUI/Metal builds.
+[Rust-TOPS](https://github.com/Hedronite/rust-tops/blob/v0.1.3/RUST_TOPS.md) is the
+review protocol; [rust-tops.yaml](../rust-tops.yaml) describes Probe's gates.
+[CI](../.github/workflows/ci.yml) owns full coverage, CRAP, advisories, and applicable
+mutation checks. Local quality reruns are for failures, coverage gaps, or higher-risk
+changes; coverage also runs workspace tests. Use CI's pinned tool versions when
+installing tools. Use these commands and scripts rather than `cargo tops gate`,
+which duplicates checks and does not enforce Probe's configured thresholds.
+
+### Coverage and CRAP
+
+With `CARGO_TARGET_DIR` unset and `llvm-tools-preview` installed:
 
 ```bash
-unset CARGO_TARGET_DIR
 cargo llvm-cov --workspace --all-features --json --output-path target/coverage.json
 cargo llvm-cov report --lcov --output-path target/coverage.lcov
 python3 scripts/check-coverage.py target/coverage.json target/coverage.lcov
@@ -199,110 +112,49 @@ cargo crap --workspace --lcov target/coverage.lcov --format json --output target
 test -s target/crap.json
 ```
 
-The coverage job is CI-blocking. It checks each behavior crate's production
-line coverage against a floor set below its measured baseline. Inline
-`#[cfg(test)]` modules are excluded from these floors. It reports raw region
-coverage and desktop coverage without setting floors for them. This keeps UI
-rendering and visual constants from driving test design. Inspect the
-CRAP report for newly added or changed functions and investigate scores above
-30. The report must be nonempty in CI; the score is a review signal, not an
-automatic reason to split code or add a tautological test. Existing high scores
-are not a blanket failure. The largest risks are untested error/adapter paths
-and a few complex desktop interaction handlers.
+CI enforces production line-coverage floors for behavior crates, excluding inline
+`#[cfg(test)]` modules. Desktop and raw region coverage are reported without floors.
+Inspect changed functions' CRAP scores above 30; the score signals review, not a
+reason to split functions or add tautological tests. Existing high scores alone
+are not failures; CI requires a nonempty report.
 
-For a change with production lines in `crates/{application,cli,core,http,websocket,opencollection,postman,yaak}/src`,
-run diff-scoped mutation testing. The diff file must include the changed
-production lines. For uncommitted local changes, first run
-`git add -N path/to/new.rs` for each new production file so it appears in the
-diff. Then:
+If Homebrew Rust cannot find `llvm-tools-preview`, set the following before running
+the same coverage commands. Xcode tools must be able to read the compiler's data;
+compare `rustc -vV` and the tools' `--version` output if reporting fails.
+
+```bash
+export LLVM_COV="$(xcrun --find llvm-cov)"
+export LLVM_PROFDATA="$(xcrun --find llvm-profdata)"
+```
+
+### Mutation Review
+
+CI runs diff-scoped mutation testing on PRs changing Rust source in
+`crates/{application,cli,core,http,websocket,opencollection,postman,yaak}/src`.
+For a local investigation, include all changed production lines in the diff. Use
+`git add -N path/to/new.rs` for new files, then:
 
 ```bash
 git diff --unified=0 HEAD > target/mutants.diff
 scripts/run-mutants.sh target/mutants.diff
 ```
 
-By default, the wrapper gives cargo-mutants' jobserver half of the detected logical
-CPUs for Cargo/rustc builds, then divides that budget across its two mutant
-jobs for Rust test-framework threads (both counts have a minimum of one).
-Set `MUTANTS_JOBSERVER_TASKS` or `MUTANTS_TEST_THREADS` to override either
-count. These conservative concurrency limits reduce sustained CPU saturation,
-heat, and fan noise during local mutation runs; they are not a hard CPU cap.
+For committed PR changes, use `git diff --unified=0 origin/main...HEAD` instead.
+The wrapper limits build/test concurrency; `MUTANTS_JOBSERVER_TASKS` and
+`MUTANTS_TEST_THREADS` override its budgets. Reuse a warm target when available.
 
-For small local diffs in a quiet checkout with an already-warm `target/`, use:
+For a small diff in a quiet checkout, use:
 
 ```bash
 scripts/run-mutants.sh --in-place target/mutants.diff
 ```
 
-This keeps baseline verification, mutant selection, and the same compiler and
-test-thread budgets. It enables incremental compilation by default while honoring
-an explicit `CARGO_INCREMENTAL` value. cargo-mutants 27.1.0 requires serial mutant
-execution in this mode, so the wrapper omits `-j`. Source files are temporarily
-mutated: do not edit or run watchers or other Cargo commands in that checkout
-during the gate. Prefer a dedicated checkout with its own persistent target, and
-check source restoration after an interrupted run. The restored source may need
-a rebuild after the last mutant. Use the default scratch mode when the checkout
-must remain editable or when parallel mutants benefit a larger diff.
+This reuses incremental artifacts and runs mutants serially.
+It temporarily changes source: do not edit, run watchers, or run other Cargo
+commands there during the check. Prefer a dedicated checkout, verify restoration
+after interruption, and rebuild if needed. Default scratch mode keeps the checkout
+editable. Desktop mutation testing remains local and selective.
 
-Reuse a target already warmed by ordinary development. Building a cache solely
-for one gate does not provide the same benefit.
-
-CI uses the same wrapper and resource limits, with incremental compilation
-explicitly enabled for repeated builds. The wrapper reports resource counts,
-caught-mutant timings, and total gate duration. CI uploads `mutants.out/` and
-PR diff inputs even on failure. Superseded CI runs are cancelled only within
-the same PR; main runs are independent. Cargo downloads remain cached, while
-mutant builds retain separate temporary target directories.
-
-For a PR branch, use `git diff --unified=0 origin/main...HEAD` to include
-committed changes. CI runs this gate only on PRs that change Rust source in the
-eight behavior crates. A survivor needs investigation: it may expose a missing
-behavior assertion, an equivalent change, platform glue, or a design problem. Add
-a test when a documented behavior or regression has no assertion, and record the
-reason for an equivalent or irrelevant mutant in the change review. Desktop mutation
-testing is local and selective because GPUI compilation and render glue make a
-workspace-wide PR mutation run costly. Property tests fit pure resolution and
-round-trip contracts; fuzzing fits untrusted OpenCollection, Postman, and Yaak
-parsers. Add either only when a concrete input-space risk calls for it.
-
-Install the CI tool versions when needed: `cargo-llvm-cov 0.9.1`, `cargo-crap
-0.5.0`, `cargo-mutants 27.1.0`, and `cargo-deny 0.20.2`. Use `llvm-tools-preview`
-with the selected Rust toolchain for LLVM coverage. `cargo tops check` can
-check the protocol file's basic typed fields, but `cargo tops gate` 0.1.3
-hardcodes nextest, `origin/main`, global `target/` paths, and runs duplicate
-checks; it also does not enforce coverage or CRAP thresholds from the YAML.
-Use the commands above and Probe's CI instead.
-
-On macOS with a Homebrew Rust toolchain, `rustup` and `llvm-tools-preview` may
-be unavailable. If `cargo llvm-cov` reports `failed to find llvm-tools-preview`,
-check that Xcode's `llvm-cov` and `llvm-profdata` are compatible with the LLVM
-version used by `rustc`:
-
-```bash
-rustc -vV
-"$(xcrun --find llvm-cov)" --version
-"$(xcrun --find llvm-profdata)" --version
-```
-
-Then use the Xcode tools for the coverage commands:
-
-```bash
-unset CARGO_TARGET_DIR
-export LLVM_COV="$(xcrun --find llvm-cov)"
-export LLVM_PROFDATA="$(xcrun --find llvm-profdata)"
-cargo llvm-cov --workspace --all-features --json --output-path target/coverage.json
-cargo llvm-cov report --lcov --output-path target/coverage.lcov
-python3 scripts/check-coverage.py target/coverage.json target/coverage.lcov
-cargo crap --workspace --lcov target/coverage.lcov --format json --output target/crap.json
-test -s target/crap.json
-```
-
-These commands passed with Homebrew `rustc` using LLVM 22.1.8 and Xcode 26.6.0's
-Apple LLVM 21.0.0 tools. Version numbers need not match exactly, but the tools
-must be able to read the generated coverage data. Run the commands outside the
-sandbox when tests need to bind local mock HTTP servers.
-
-## Working Style
-
-Scope and worktree rules are in `AGENTS.md`. When reporting a change, summarize
-architectural decisions and remaining limitations.
+Investigate survivors. Add tests for missing behavior assertions; document equivalent
+or irrelevant mutants in the review. CI uploads quality and mutation reports for
+investigation. Describe architectural decisions and remaining limitations at handoff.

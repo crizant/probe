@@ -9,6 +9,7 @@ apply to every code change and routes task-specific work here.
 | [CLI](CLI.md) | Commands, selectors, JSON schemas, secret providers, error categories, and exit codes | Changing or consuming the CLI contract |
 | [Desktop design](DESIGN.md) | Platform behavior, components, semantic tokens, themes, accessibility, variable placeholder presentation, and secret value interaction | Changing desktop presentation or interaction |
 | [Development](DEVELOPMENT.md) | Rust ownership, async work, dependencies, GPUI Kit guidance, test design, completion checks, and coverage, CRAP, and mutation review | Implementing code or changing dependencies |
+| [Packaging](PACKAGING.md) | macOS icon tools, Linux RPM/DEB packages, verification, and reproducibility | Building or changing release packages |
 | [Errors and logging](ERRORS_AND_LOGGING.md) | Typed-error ownership and interface logging boundaries | Adding or mapping failures and diagnostics |
 | [Performance](PERFORMANCE.md) | Benchmark commands, fixtures, measurement policy, and reference results | Measuring or optimizing performance |
 | [Roadmap](../IMPLEMENTATION_PLAN.md) | Explicitly deferred product work | Planning scope or starting a deferred feature |

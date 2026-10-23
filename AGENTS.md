@@ -64,12 +64,9 @@ and regressions; never mirror the implementation or add assertions merely to rai
 coverage. Preserve unrelated worktree changes and never use unsafe merely to bypass
 ownership problems.
 
-Before completing a code change, run the
-[completion checks](docs/DEVELOPMENT.md#completion-checks). For changes to Rust
-production behavior, also run the
-[coverage, CRAP, and mutation review](docs/DEVELOPMENT.md#final-quality-checks).
-Stop once the requested work and applicable checks pass, without unrelated cleanup.
-Do not report completion while a required check fails.
+Follow the scope-based [validation policy](docs/DEVELOPMENT.md#completion-checks)
+and [quality review](docs/DEVELOPMENT.md#final-quality-checks), reporting local
+results and checks left to CI.
 
 ## Scope
 
