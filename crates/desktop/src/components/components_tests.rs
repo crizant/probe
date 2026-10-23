@@ -1542,6 +1542,79 @@ fn pane_splitter_without_idle_line_still_exposes_a_hit_target(cx: &mut TestAppCo
     assert_eq!(presses.get(), 1);
 }
 
+struct TextButtonHarness {
+    theme: Theme,
+    clicks: Rc<Cell<usize>>,
+}
+
+impl Render for TextButtonHarness {
+    fn render(&mut self, _: &mut gpui_kit::Window, _: &mut Context<Self>) -> impl IntoElement {
+        let clicks = self.clicks.clone();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(super::text_button(
+                self.theme,
+                "content-text-button",
+                "Manage Certificates",
+                move |_, _, _| clicks.set(clicks.get() + 1),
+            ))
+            .child(
+                super::text_button(
+                    self.theme,
+                    "full-width-text-button",
+                    "Full Width",
+                    |_, _, _| {},
+                )
+                .w_full(),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(super::text_button(
+                        self.theme,
+                        "row-text-button",
+                        "New Folder",
+                        |_, _, _| {},
+                    )),
+            )
+    }
+}
+
+#[gpui_kit::test]
+fn text_buttons_limit_clicks_to_content_and_allow_explicit_full_width(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    for theme in [Theme::light(), Theme::dark()] {
+        let clicks = Rc::new(Cell::new(0));
+        let window = cx.open_window(size(px(400.0), px(180.0)), {
+            let clicks = clicks.clone();
+            move |_, _| TextButtonHarness { theme, clicks }
+        });
+        cx.run_until_parked();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let content = visual.debug_bounds("content-text-button").unwrap();
+        let full = visual.debug_bounds("full-width-text-button").unwrap();
+        let row = visual.debug_bounds("row-text-button").unwrap();
+        assert!(content.size.width > px(0.0));
+        assert!(content.right() < full.right());
+        assert!(row.right() < full.right());
+
+        // The unused part of a popup row must not activate its text action.
+        visual.simulate_click(
+            point((content.right() + full.right()) / 2.0, content.center().y),
+            Modifiers::default(),
+        );
+        visual.run_until_parked();
+        assert_eq!(clicks.get(), 0);
+        visual.simulate_click(content.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert_eq!(clicks.get(), 1);
+    }
+}
+
 struct DropdownButtonHarness {
     open: bool,
     primary_clicks: usize,

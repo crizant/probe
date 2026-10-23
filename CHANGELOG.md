@@ -19,6 +19,11 @@ Release dates use Australia/Brisbane time (UTC+10).
   without sending a request. Protected certificates unlock only when Inspect is
   clicked; inspection and expiry never prevent saving.
 
+### Fixed
+
+- Text buttons now keep their hover and clickable areas sized to their content
+  instead of stretching across popup rows.
+
 ## [2.0.0] - 2026-10-22
 
 ### Added

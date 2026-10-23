@@ -281,6 +281,7 @@ pub(crate) fn text_button(
     Button::new(id)
         .debug_selector(move || debug_id.clone())
         .flex_none()
+        .self_start()
         .h(px(theme.typography.caption_size + theme.metrics.spacing_2))
         .px(px(0.0))
         .flex()
