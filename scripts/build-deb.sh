@@ -184,8 +184,6 @@ Priority: optional
 Maintainer: Probe Contributors <probe@users.noreply.github.com>
 Homepage: https://github.com/crizant/probe
 Installed-Size: $(du -sk "$root/usr" | awk '{print $1}')
-Description: $synopsis
-$details
 EOF
   if [[ -n "$dependencies" ]]; then
     printf 'Depends: %s\n' "$dependencies" >>"$root/DEBIAN/control"
@@ -193,6 +191,10 @@ EOF
   if [[ "$name" == probe-desktop ]]; then
     printf 'Recommends: probe (= %s), libwayland-client0, libwayland-egl1, libegl1\n' "$deb_version" >>"$root/DEBIAN/control"
   fi
+  cat >>"$root/DEBIAN/control" <<EOF
+Description: $synopsis
+$details
+EOF
   # Debian records checksums relative to the package root, excluding DEBIAN.
   (cd "$root" && find usr -type f -print0 | LC_ALL=C sort -z | xargs -0 md5sum) \
     >"$root/DEBIAN/md5sums"
