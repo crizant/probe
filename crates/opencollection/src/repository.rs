@@ -830,25 +830,17 @@ impl LoadedWorkspace {
             .get(&persistence.document_path)
             .expect("filesystem request must retain its source document");
         let diagnostic_prefix = self.request_diagnostic_prefix(&persistence.document_path);
-        let mut refreshed_diagnostics = None;
-        let serialized = mutate_existing_document(
+        let (serialized, refreshed_diagnostics) = mutate_existing_document(
             &persistence.document_path,
             &source.original_source,
             |document| {
                 let request_document = request_document_mut(document, &persistence.item_path)?;
                 apply_request_update(request_document, update)?;
-                refreshed_diagnostics = Some(diagnostics_for_request_document(
-                    document,
-                    diagnostic_prefix.as_deref(),
-                )?);
-                Ok(())
+                diagnostics_for_request_document(document, diagnostic_prefix.as_deref())
             },
         )?;
 
-        self.refresh_request_diagnostics(
-            diagnostic_prefix.as_deref(),
-            refreshed_diagnostics.unwrap(),
-        );
+        self.refresh_request_diagnostics(diagnostic_prefix.as_deref(), refreshed_diagnostics);
         self.documents.insert(
             persistence.document_path,
             SourceDocument {
@@ -872,9 +864,10 @@ impl LoadedWorkspace {
             .expect("collection document must retain its source")
             .original_source
             .clone();
-        let serialized = mutate_existing_document(&document_path, &original_source, |document| {
-            apply_collection_update(document, update)
-        })?;
+        let (serialized, ()) =
+            mutate_existing_document(&document_path, &original_source, |document| {
+                apply_collection_update(document, update)
+            })?;
         self.documents.insert(
             document_path,
             SourceDocument {
@@ -914,7 +907,7 @@ impl LoadedWorkspace {
             .expect("filesystem folder must retain its source document")
             .original_source
             .clone();
-        let serialized =
+        let (serialized, ()) =
             mutate_existing_document(&persistence.document_path, &original_source, |document| {
                 let folder_document = request_document_mut(document, &persistence.item_path)?;
                 apply_folder_update(folder_document, update)
@@ -1115,7 +1108,7 @@ impl PreparedDocumentationSave {
     /// Checks the retained source and writes documentation atomically.
     pub fn execute(self) -> Result<CompletedDocumentationSave, SaveError> {
         self.baseline.check_live()?;
-        let serialized =
+        let (serialized, ()) =
             mutate_existing_document(&self.document_path, &self.original_source, |document| {
                 match &self.update {
                     DocumentationUpdate::Collection(update) => {
@@ -1157,18 +1150,13 @@ impl PreparedRequestSave {
     /// Performs the exact-source check and atomic write.
     pub fn execute(self) -> Result<CompletedRequestSave, SaveError> {
         self.baseline.check_live()?;
-        let mut refreshed_diagnostics = None;
-        let serialized = mutate_existing_document(
+        let (serialized, diagnostics) = mutate_existing_document(
             &self.persistence.document_path,
             &self.original_source,
             |document| {
                 let request = request_document_mut(document, &self.persistence.item_path)?;
                 apply_request_update(request, &self.update)?;
-                refreshed_diagnostics = Some(diagnostics_for_request_document(
-                    document,
-                    self.diagnostic_prefix.as_deref(),
-                )?);
-                Ok(())
+                diagnostics_for_request_document(document, self.diagnostic_prefix.as_deref())
             },
         )?;
         Ok(CompletedRequestSave {
@@ -1176,7 +1164,7 @@ impl PreparedRequestSave {
             document_path: self.persistence.document_path,
             serialized_source: serialized.into(),
             diagnostic_prefix: self.diagnostic_prefix,
-            diagnostics: refreshed_diagnostics.unwrap(),
+            diagnostics,
         })
     }
 }
@@ -1899,11 +1887,11 @@ fn diagnostics_for_request_document(
     Ok(diagnostics)
 }
 
-fn mutate_existing_document(
+fn mutate_existing_document<T>(
     path: &Path,
     original_source: &[u8],
-    mutate: impl FnOnce(&mut Value) -> Result<(), SaveError>,
-) -> Result<Vec<u8>, SaveError> {
+    mutate: impl FnOnce(&mut Value) -> Result<T, SaveError>,
+) -> Result<(Vec<u8>, T), SaveError> {
     let (_save_lock, destination) = SaveLock::acquire_existing(path)?;
     let path = destination.as_path();
     let current = fs::read(path).map_err(|source| SaveError::Io {
@@ -1916,12 +1904,12 @@ fn mutate_existing_document(
     let mut document: Value = serde_yaml_ng::from_slice(original_source).map_err(|error| {
         SaveError::InvalidDocument(format!("retained source cannot be parsed: {error}"))
     })?;
-    mutate(&mut document)?;
+    let result = mutate(&mut document)?;
     let serialized = serde_yaml_ng::to_string(&document)
         .map_err(SaveError::Serialize)?
         .into_bytes();
     atomic_write(path, &serialized, original_source)?;
-    Ok(serialized)
+    Ok((serialized, result))
 }
 
 pub(crate) fn atomic_write(
