@@ -30,9 +30,18 @@ pub(super) fn set_documentation(
     name: &str,
     patch: &FieldPatch<Documentation>,
 ) {
+    set_patch(mapping, name, patch, documentation_value);
+}
+
+pub(super) fn set_patch<T>(
+    mapping: &mut serde_yaml_ng::Mapping,
+    name: &str,
+    patch: &FieldPatch<T>,
+    serialize: impl FnOnce(&T) -> Value,
+) {
     let value = match patch {
         FieldPatch::Unchanged => return,
-        FieldPatch::Set(documentation) => Some(documentation_value(documentation)),
+        FieldPatch::Set(value) => Some(serialize(value)),
         FieldPatch::Clear => None,
     };
     set_optional(mapping, name, value);

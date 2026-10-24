@@ -1473,17 +1473,9 @@ pub(crate) fn apply_request_update(
         let info = mapping_child(request, "info")?;
         set_documentation(info, "description", &update.description);
     }
-    if !update.docs.is_unchanged() {
-        set_optional(
-            request,
-            "docs",
-            match &update.docs {
-                FieldPatch::Set(docs) => Some(Value::String(docs.clone())),
-                FieldPatch::Clear => None,
-                FieldPatch::Unchanged => unreachable!("docs patch was checked"),
-            },
-        );
-    }
+    set_patch(request, "docs", &update.docs, |docs| {
+        Value::String(docs.clone())
+    });
     let websocket = protocol == RequestProtocol::WebSocket;
     validate_websocket_fields(websocket, update)?;
     match &update.assertions {
@@ -1512,32 +1504,19 @@ pub(crate) fn apply_request_update(
         || !update.body.is_unchanged()
         || !update.body_content.is_unchanged()
         || !update.authentication.is_unchanged()
-        || update.graphql.is_some()
+        || update.graphql.as_ref().is_some_and(|graphql| {
+            // Empty patches still need protocol validation on non-GraphQL requests.
+            !graphql.is_empty() || protocol != RequestProtocol::Graphql
+        })
         || !update.websocket_message.is_unchanged()
     {
         let details = mapping_child(request, details_name)?;
-        if !update.method.is_unchanged() {
-            set_optional(
-                details,
-                "method",
-                match &update.method {
-                    FieldPatch::Set(method) => Some(Value::String(method.clone())),
-                    FieldPatch::Clear => None,
-                    FieldPatch::Unchanged => unreachable!(),
-                },
-            );
-        }
-        if !update.url.is_unchanged() {
-            set_optional(
-                details,
-                "url",
-                match &update.url {
-                    FieldPatch::Set(url) => Some(Value::String(url.clone())),
-                    FieldPatch::Clear => None,
-                    FieldPatch::Unchanged => unreachable!(),
-                },
-            );
-        }
+        set_patch(details, "method", &update.method, |method| {
+            Value::String(method.clone())
+        });
+        set_patch(details, "url", &update.url, |url| {
+            Value::String(url.clone())
+        });
         if let Some(headers) = &update.headers {
             merge_sequence_preserving(
                 details,
@@ -1553,39 +1532,34 @@ pub(crate) fn apply_request_update(
                 update.path_parameters.as_deref(),
             );
         }
-        if !update.body.is_unchanged() {
-            if protocol == RequestProtocol::Graphql {
+        match &update.body {
+            FieldPatch::Unchanged => {}
+            _ if protocol == RequestProtocol::Graphql => {
                 return Err(SaveError::InvalidDocument(
                     "HTTP body updates cannot be applied to a native GraphQL request".to_owned(),
                 ));
             }
-            let value = match &update.body {
-                FieldPatch::Set(body) => Some(request_body_value(body)),
-                FieldPatch::Clear => None,
-                FieldPatch::Unchanged => unreachable!(),
-            };
-            set_optional_merged(details, "body", value);
+            FieldPatch::Set(body) => {
+                set_optional_merged(details, "body", Some(request_body_value(body)));
+            }
+            FieldPatch::Clear => set_optional_merged(details, "body", None),
         }
-        if !update.body_content.is_unchanged() {
-            if protocol == RequestProtocol::Graphql {
+        match &update.body_content {
+            FieldPatch::Unchanged => {}
+            _ if protocol == RequestProtocol::Graphql => {
                 return Err(SaveError::Protocol(
                     probe_core::RequestProtocolError::NotHttp,
                 ));
             }
-            match &update.body_content {
-                FieldPatch::Set(body) => apply_http_body_content(details, body)?,
-                FieldPatch::Clear => set_optional(details, "body", None),
-                FieldPatch::Unchanged => unreachable!(),
-            }
+            FieldPatch::Set(body) => apply_http_body_content(details, body)?,
+            FieldPatch::Clear => set_optional(details, "body", None),
         }
-        if !update.authentication.is_unchanged() {
-            let value = match &update.authentication {
-                FieldPatch::Set(authentication) => Some(authentication_value(authentication)),
-                FieldPatch::Clear => None,
-                FieldPatch::Unchanged => unreachable!(),
-            };
-            set_optional(details, "auth", value);
-        }
+        set_patch(
+            details,
+            "auth",
+            &update.authentication,
+            authentication_value,
+        );
         if let Some(graphql) = &update.graphql {
             if protocol != RequestProtocol::Graphql {
                 return Err(SaveError::Protocol(
@@ -1737,19 +1711,11 @@ fn apply_collection_update(
     })?;
     if !update.summary.is_unchanged() {
         let info = mapping_child(root, "info")?;
-        set_optional(
-            info,
-            "summary",
-            match &update.summary {
-                FieldPatch::Set(summary) => Some(Value::String(summary.clone())),
-                FieldPatch::Clear => None,
-                FieldPatch::Unchanged => unreachable!("summary patch was checked"),
-            },
-        );
+        set_patch(info, "summary", &update.summary, |summary| {
+            Value::String(summary.clone())
+        });
     }
-    if !update.docs.is_unchanged() {
-        set_documentation(root, "docs", &update.docs);
-    }
+    set_documentation(root, "docs", &update.docs);
     Ok(())
 }
 
@@ -1761,9 +1727,7 @@ fn apply_folder_update(document: &mut Value, update: &FolderUpdate) -> Result<()
         let info = mapping_child(folder, "info")?;
         set_documentation(info, "description", &update.description);
     }
-    if !update.docs.is_unchanged() {
-        set_documentation(folder, "docs", &update.docs);
-    }
+    set_documentation(folder, "docs", &update.docs);
     Ok(())
 }
 
@@ -1771,46 +1735,22 @@ fn apply_graphql_update(
     graphql: &mut serde_yaml_ng::Mapping,
     update: &probe_core::GraphqlUpdate,
 ) -> Result<(), SaveError> {
+    if update.is_empty() {
+        return Ok(());
+    }
     let body = graphql_body_mapping(graphql)?;
-    if !update.query.is_unchanged() {
-        set_optional(
-            body,
-            "query",
-            match &update.query {
-                FieldPatch::Set(query) => Some(Value::String(query.clone())),
-                FieldPatch::Clear => None,
-                FieldPatch::Unchanged => unreachable!(),
-            },
-        );
-    }
-    if !update.variables.is_unchanged() {
-        let value = match &update.variables {
-            FieldPatch::Set(variables) => Some(Value::String(
-                serde_json::Value::Object(variables.clone()).to_string(),
-            )),
-            FieldPatch::Clear => None,
-            FieldPatch::Unchanged => unreachable!(),
-        };
-        set_optional(body, "variables", value);
-    }
-    if !update.operation_name.is_unchanged() {
-        let value = match &update.operation_name {
-            FieldPatch::Set(operation_name) => Some(Value::String(operation_name.clone())),
-            FieldPatch::Clear => None,
-            FieldPatch::Unchanged => unreachable!(),
-        };
-        set_optional(body, "operationName", value);
-    }
-    if !update.extensions.is_unchanged() {
-        let value = match &update.extensions {
-            FieldPatch::Set(extensions) => Some(Value::String(
-                serde_json::Value::Object(extensions.clone()).to_string(),
-            )),
-            FieldPatch::Clear => None,
-            FieldPatch::Unchanged => unreachable!(),
-        };
-        set_optional(body, "extensions", value);
-    }
+    set_patch(body, "query", &update.query, |query| {
+        Value::String(query.clone())
+    });
+    set_patch(body, "variables", &update.variables, |variables| {
+        Value::String(serde_json::Value::Object(variables.clone()).to_string())
+    });
+    set_patch(body, "operationName", &update.operation_name, |name| {
+        Value::String(name.clone())
+    });
+    set_patch(body, "extensions", &update.extensions, |extensions| {
+        Value::String(serde_json::Value::Object(extensions.clone()).to_string())
+    });
     Ok(())
 }
 
@@ -2138,6 +2078,85 @@ mod tests {
         fs, process,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn unchanged_patches_preserve_values_and_do_not_create_mappings() {
+        use probe_core::{CollectionUpdate, FolderUpdate, GraphqlUpdate, RequestUpdate};
+        use serde_yaml_ng::Value;
+
+        for details in [
+            "",
+            "graphql: {}",
+            "graphql: {body: {query: original, x-vendor: retained}}",
+        ] {
+            let mut document: Value = serde_yaml_ng::from_str(&format!(
+                "info: {{type: graphql}}\nx-vendor: retained\n{details}\n"
+            ))
+            .unwrap();
+            let original = document.clone();
+            for graphql in [None, Some(GraphqlUpdate::default())] {
+                super::apply_request_update(
+                    &mut document,
+                    &RequestUpdate {
+                        graphql,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(document, original);
+            }
+        }
+
+        for source in [
+            "{}",
+            "info: {summary: original, description: original}\ndocs: original",
+        ] {
+            let mut document: Value = serde_yaml_ng::from_str(source).unwrap();
+            let original = document.clone();
+            super::apply_collection_update(&mut document, &CollectionUpdate::default()).unwrap();
+            super::apply_folder_update(&mut document, &FolderUpdate::default()).unwrap();
+            assert_eq!(document, original);
+        }
+    }
+
+    #[test]
+    fn unchanged_graphql_fields_do_not_create_body_when_updating_url() {
+        use probe_core::{FieldPatch, GraphqlUpdate, RequestUpdate};
+        use serde_yaml_ng::Value;
+
+        let mut document: Value = serde_yaml_ng::from_str("info: {type: graphql}").unwrap();
+        super::apply_request_update(
+            &mut document,
+            &RequestUpdate {
+                url: FieldPatch::Set("https://example.com/graphql".into()),
+                graphql: Some(GraphqlUpdate::default()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            document["graphql"],
+            serde_yaml_ng::from_str::<Value>("url: https://example.com/graphql").unwrap()
+        );
+    }
+
+    #[test]
+    fn empty_graphql_updates_still_reject_other_protocols() {
+        for protocol in ["http", "websocket"] {
+            let mut document =
+                serde_yaml_ng::from_str(&format!("info: {{type: {protocol}}}")).unwrap();
+            let update = probe_core::RequestUpdate {
+                graphql: Some(probe_core::GraphqlUpdate::default()),
+                ..Default::default()
+            };
+            assert!(matches!(
+                super::apply_request_update(&mut document, &update),
+                Err(SaveError::Protocol(
+                    probe_core::RequestProtocolError::NotGraphql
+                ))
+            ));
+        }
+    }
 
     #[test]
     fn request_updates_reject_non_request_item_types_without_mutating_document() {
