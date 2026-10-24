@@ -181,6 +181,12 @@ In Desktop, choose **Open Collection…** to open an OpenCollection YAML file or
 collection directory, select a request, and send it. Choose an environment when
 requests use variables.
 
+For workspaces stored in Git, add `.*.probe-lock` to the repository's `.gitignore`.
+It covers Probe's persistent lock sidecars in all nested directories. Keep these
+local files out of commits: checked-out sidecars can have permissions that prevent
+Unix saves, or belong to another user in a shared checkout. Leave sidecars in place while writers are running; see
+[the persistence locking policy](docs/ARCHITECTURE.md#persistence-and-filesystem-synchronization).
+
 The desktop app reads an optional user configuration file before it opens the
 main window. A missing file uses the built-in defaults and is not created. Set
 `theme` to `system`, `light`, or `dark`:
