@@ -137,7 +137,8 @@ VERSION="$version" perl -0pi -e '
 cargo check --workspace
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+# Match CI: library, binary, integration, and example tests. Benchmarks stay on `cargo bench`.
+cargo test --lib --bins --tests --examples --all-features
 
 updated_version="$(package_version)"
 
