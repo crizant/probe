@@ -84,7 +84,6 @@ pub(crate) fn event_affects_workspace(event: &Event, workspace_path: &Path) -> b
             event.kind,
             EventKind::Any
                 | EventKind::Other
-                | EventKind::Modify(ModifyKind::Name(_))
                 | EventKind::Create(CreateKind::Folder)
                 | EventKind::Remove(RemoveKind::Folder)
         )
@@ -546,5 +545,42 @@ mod tests {
         // Bundled documents may themselves use a name matching the sidecar shape.
         let event = Event::new(EventKind::Create(CreateKind::File)).add_path(sidecar.clone());
         assert!(events_reload_workspace(&[event], &sidecar));
+    }
+
+    #[test]
+    fn bundled_rename_events_require_a_relevant_path() {
+        let directory = TestDirectory::new();
+        let root = &directory.0;
+        let workspace = root.join("collection.yml");
+        fs::write(&workspace, "collection").unwrap();
+        let old = root.join("notes.txt");
+        let new = root.join("renamed.txt");
+        for mode in [
+            RenameMode::Any,
+            RenameMode::From,
+            RenameMode::To,
+            RenameMode::Both,
+        ] {
+            let event = Event::new(EventKind::Modify(ModifyKind::Name(mode)))
+                .add_path(old.clone())
+                .add_path(new.clone());
+            assert!(
+                !events_reload_workspace(std::slice::from_ref(&event), &workspace),
+                "{mode:?}"
+            );
+            assert!(events_reload_workspace(std::slice::from_ref(&event), root));
+            assert!(events_reload_workspace(
+                &[event.set_flag(Flag::Rescan)],
+                &workspace
+            ));
+        }
+        for (from, to) in [(&workspace, &new), (&old, &workspace)] {
+            let event = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+                .add_path(from.to_owned())
+                .add_path(to.to_owned());
+            assert!(events_reload_workspace(&[event], &workspace));
+        }
+        let pathless = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)));
+        assert!(events_reload_workspace(&[pathless], &workspace));
     }
 }

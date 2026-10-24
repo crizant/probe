@@ -479,3 +479,58 @@ fn prepared_documentation_checks_live_baselines_before_and_after_writing() {
         Err(SaveError::CommittedButNotIntegrated)
     ));
 }
+
+#[cfg(unix)]
+#[test]
+fn unbundled_root_symlink_saves_update_the_target_and_keep_conflict_detection() {
+    use std::os::unix::fs::symlink;
+    let directory = temporary_path("unbundled-root-symlink");
+    fs::create_dir(&directory).unwrap();
+    let root = directory.join("workspace");
+    copy_directory(&fixture("unbundled"), &root);
+    let config = root.join("opencollection.yml");
+    let target = directory.join("shared.yml");
+    fs::rename(&config, &target).unwrap();
+    symlink("../shared.yml", &config).unwrap();
+    let mut loaded = load_workspace(&root).unwrap();
+    let mut stale = load_workspace(&root).unwrap();
+    for summary in ["First save", "Second save"] {
+        loaded
+            .update_collection(&CollectionUpdate {
+                summary: FieldPatch::Set(summary.to_owned()),
+                ..CollectionUpdate::default()
+            })
+            .unwrap();
+        assert_eq!(
+            fs::read_link(&config).unwrap(),
+            std::path::Path::new("../shared.yml")
+        );
+        let document: serde_yaml_ng::Value =
+            serde_yaml_ng::from_slice(&fs::read(&target).unwrap()).unwrap();
+        assert_eq!(document["info"]["summary"].as_str(), Some(summary));
+        assert_eq!(
+            load_workspace(&root)
+                .unwrap()
+                .workspace()
+                .metadata()
+                .summary
+                .as_deref(),
+            Some(summary)
+        );
+    }
+    let before = fs::read(&target).unwrap();
+    assert!(matches!(
+        stale.update_collection(&CollectionUpdate {
+            summary: FieldPatch::Set("Stale writer".to_owned()),
+            ..CollectionUpdate::default()
+        }),
+        Err(SaveError::ConcurrentModification(_))
+    ));
+    assert_eq!(fs::read(&target).unwrap(), before);
+    assert!(
+        fs::symlink_metadata(&config)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}

@@ -20,6 +20,15 @@ impl SaveLock {
         Self::acquire_path(&lock_path(destination)?)
     }
 
+    pub(super) fn acquire_existing(destination: &Path) -> Result<(Self, PathBuf), SaveError> {
+        let destination = fs::canonicalize(destination).map_err(|source| SaveError::Io {
+            path: destination.to_owned(),
+            source,
+        })?;
+        let lock = Self::acquire_path(&resolved_lock_path(&destination)?)?;
+        Ok((lock, destination))
+    }
+
     pub(crate) fn acquire_pair(
         first: &Path,
         second: &Path,
@@ -84,7 +93,12 @@ fn lock_path(destination: &Path) -> Result<PathBuf, SaveError> {
             });
         }
     };
-    let destination = canonical.as_deref().unwrap_or(destination);
+    resolved_lock_path(canonical.as_deref().unwrap_or(destination))
+}
+
+// The caller has already resolved an existing document, or established that it
+// does not exist. Do not resolve the document again after choosing its identity.
+fn resolved_lock_path(destination: &Path) -> Result<PathBuf, SaveError> {
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -629,5 +643,32 @@ mod tests {
         #[cfg(windows)]
         let too_long = io::Error::from_raw_os_error(206);
         assert!(!sidecar_name_fits(Err(too_long)).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_keeps_its_resolved_target_when_the_source_symlink_is_retargeted() {
+        use std::os::unix::fs::symlink;
+        let directory = support::temporary_path("save-retargeted-symlink");
+        fs::create_dir(&directory).unwrap();
+        let original = directory.join("original.yml");
+        let other = directory.join("other.yml");
+        let alias = directory.join("alias.yml");
+        let source = b"name: original\n";
+        fs::write(&original, source).unwrap();
+        fs::write(&other, source).unwrap();
+        symlink(&original, &alias).unwrap();
+        super::super::mutate_existing_document(&alias, source, |document| {
+            fs::remove_file(&alias).unwrap();
+            symlink(&other, &alias).unwrap();
+            document["name"] = "saved".into();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read_link(&alias).unwrap(), other);
+        assert_eq!(fs::read(&other).unwrap(), source);
+        let saved: serde_yaml_ng::Value =
+            serde_yaml_ng::from_slice(&fs::read(&original).unwrap()).unwrap();
+        assert_eq!(saved["name"].as_str(), Some("saved"));
     }
 }
