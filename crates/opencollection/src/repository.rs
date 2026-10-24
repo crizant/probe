@@ -2229,6 +2229,36 @@ mod tests {
     }
 
     #[test]
+    fn graphql_requests_reject_http_body_content_updates_without_mutating_document() {
+        use probe_core::{
+            Body, FieldPatch, RawBody, RawBodyKind, RequestProtocolError, RequestUpdate,
+        };
+
+        for body_content in [
+            FieldPatch::Set(Body::Raw(RawBody {
+                kind: RawBodyKind::Text,
+                data: "replacement".to_owned(),
+            })),
+            FieldPatch::Clear,
+        ] {
+            let mut document: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+                "info: {type: graphql}\ngraphql: {body: {query: original, x-vendor: retained}}",
+            )
+            .unwrap();
+            let original = document.clone();
+            let update = RequestUpdate {
+                body_content,
+                ..Default::default()
+            };
+            assert!(matches!(
+                super::apply_request_update(&mut document, &update),
+                Err(SaveError::Protocol(RequestProtocolError::NotHttp))
+            ));
+            assert_eq!(document, original);
+        }
+    }
+
+    #[test]
     fn http_body_content_rejects_unusable_variant_lists() {
         use probe_core::{Body, RawBody, RawBodyKind};
 
