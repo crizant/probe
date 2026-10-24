@@ -288,14 +288,14 @@ fn apply_bundled(
     baseline: &[u8],
     operation: StructureOperation,
 ) -> Result<StructureResult, StructureError> {
-    let _lock = SaveLock::acquire(path)?;
-    verify_source(path, baseline)?;
+    let (_lock, destination) = SaveLock::acquire_existing(path)?;
+    verify_source(&destination, baseline)?;
     let mut document: Value = serde_yaml_ng::from_slice(baseline)
         .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;
     let result = mutate_bundled(&mut document, operation)?;
     let serialized = serde_yaml_ng::to_string(&document)
         .map_err(|error| StructureError::InvalidDocument(error.to_string()))?;
-    atomic_write(path, serialized.as_bytes(), baseline)?;
+    atomic_write(&destination, serialized.as_bytes(), baseline)?;
     Ok(result)
 }
 

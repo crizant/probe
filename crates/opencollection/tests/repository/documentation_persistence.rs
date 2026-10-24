@@ -505,9 +505,6 @@ fn unbundled_root_symlink_saves_update_the_target_and_keep_conflict_detection() 
             fs::read_link(&config).unwrap(),
             std::path::Path::new("../shared.yml")
         );
-        let document: serde_yaml_ng::Value =
-            serde_yaml_ng::from_slice(&fs::read(&target).unwrap()).unwrap();
-        assert_eq!(document["info"]["summary"].as_str(), Some(summary));
         assert_eq!(
             load_workspace(&root)
                 .unwrap()
@@ -527,10 +524,8 @@ fn unbundled_root_symlink_saves_update_the_target_and_keep_conflict_detection() 
         Err(SaveError::ConcurrentModification(_))
     ));
     assert_eq!(fs::read(&target).unwrap(), before);
-    assert!(
-        fs::symlink_metadata(&config)
-            .unwrap()
-            .file_type()
-            .is_symlink()
+    assert_eq!(
+        fs::read_link(&config).unwrap(),
+        std::path::Path::new("../shared.yml")
     );
 }

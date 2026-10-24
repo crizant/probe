@@ -78,8 +78,7 @@ pub(crate) fn drain_watch_events(
 }
 
 pub(crate) fn event_affects_workspace(event: &Event, workspace_path: &Path) -> bool {
-    event.need_rescan()
-        || event.paths.is_empty()
+    event.paths.is_empty()
         || matches!(
             event.kind,
             EventKind::Any
@@ -103,9 +102,6 @@ pub(crate) fn event_affects_workspace(event: &Event, workspace_path: &Path) -> b
 /// desktop refreshes continuously. A close-after-write still reloads, because
 /// some editors report a save only that way.
 fn event_changes_workspace_content(event: &Event, workspace_path: &Path) -> bool {
-    if event.need_rescan() {
-        return true;
-    }
     // Persistence leaves `.NAME.probe-lock` sidecars, and atomic-write-file
     // stages `.request.yml.XXXXXX` beside the destination.
     // Creation/metadata can arrive more than one debounce before commit. These
@@ -172,8 +168,9 @@ fn is_atomic_yaml_temporary(path: &Path) -> bool {
 /// Classifies filesystem hints using current path types; call off the UI thread.
 pub(crate) fn events_reload_workspace(events: &[Event], workspace_path: &Path) -> bool {
     events.iter().any(|event| {
-        event_affects_workspace(event, workspace_path)
-            && event_changes_workspace_content(event, workspace_path)
+        event.need_rescan()
+            || (event_affects_workspace(event, workspace_path)
+                && event_changes_workspace_content(event, workspace_path))
     })
 }
 
@@ -394,6 +391,11 @@ mod tests {
             ".request.yml",
             ".request.yml.A2K5AL.yaml",
             ".request.yaml.A2K5AL.yml",
+            "request.probe-lock.yml",
+            ".probe-lock.yml",
+            "probe-lock.yaml",
+            ".probe-lock",
+            ".request.probe-lock.yml",
         ] {
             let event = Event::new(EventKind::Create(CreateKind::File)).add_path(root.join(name));
             assert!(events_reload_workspace(&[event], &root));
@@ -446,7 +448,6 @@ mod tests {
         for name in [
             ".collection.yml.probe-lock",
             "nested/.request.yml.probe-lock",
-            ".0123456789abcdef.probe-lock",
         ] {
             let sidecar = root.join(name);
             fs::write(&sidecar, "").unwrap();
@@ -481,16 +482,6 @@ mod tests {
         let root = &directory.0;
         let bundled = root.join("collection.yml");
         fs::write(&bundled, "collection").unwrap();
-        for name in [
-            "request.probe-lock.yml",
-            ".probe-lock.yml",
-            "probe-lock.yaml",
-            ".probe-lock",
-            ".request.probe-lock.yml",
-        ] {
-            let event = Event::new(EventKind::Create(CreateKind::File)).add_path(root.join(name));
-            assert!(events_reload_workspace(&[event], root), "{name}");
-        }
         let sidecar = root.join(".collection.yml.probe-lock");
         fs::create_dir(&sidecar).unwrap();
         for kind in [

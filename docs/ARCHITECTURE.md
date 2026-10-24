@@ -727,21 +727,17 @@ refresh the retained baseline. Symlinked workspaces update their canonical targe
 without replacing the symlink.
 
 Persistence uses stable `.NAME.probe-lock` sidecars beside each document, under
-its canonical parent directory, and standard-library exclusive file locks. If the
-filesystem rejects the readable sidecar's component length, Probe uses
-`.SHA256.probe-lock` instead: the full hexadecimal SHA-256 of the canonical document
-path (Unix path bytes or Windows UTF-16LE). This is deterministic across processes
-and restarts; rename ordering and deduplication use the final resolved lock paths.
-Hashed sidecars require the same canonical absolute path and path encoding across
-writers; different network mount prefixes or operating-system encodings do not
-provide a shared hashed lock identity.
+its canonical parent directory, and standard-library exclusive file locks.
+Sidecar, atomic-write, and new-file staging names must fit the filesystem's path
+and component-length limits. An oversized name fails with a filesystem I/O error;
+Probe does not provide a separate long-filename fallback for locking.
 Environment renames acquire both sidecars in sorted path order, deduplicating an
 identical path. Sidecars remain after unlock: unlinking one could split a held
 lock from a waiting writer. They must not be removed while writers are running.
 No shared temporary directory or new private directory is used.
 
 Add `.*.probe-lock` to the workspace repository's `.gitignore`. This pattern has no
-slash, so it covers readable and hashed sidecars in nested directories too. Lock
+slash, so it covers sidecars in nested directories too. Lock
 files are local coordination artifacts, not collection data. Git checkouts normally
 create group/other-readable files; in a shared checkout, sidecars can also belong
 to another user. Either can make Unix permission or ownership validation reject
