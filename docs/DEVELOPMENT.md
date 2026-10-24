@@ -79,9 +79,13 @@ below. Isolated changes may leave full gates to CI. To run the broader checks lo
 
 ```bash
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+cargo test --lib --bins --tests --examples --all-features
 cargo deny check advisories
 ```
+
+Clippy keeps `--all-targets`, so benchmark sources stay linted. The test command
+runs library, binary, integration, and example tests. Criterion benchmarks stay
+on `cargo bench -p probe-cli --bench performance`.
 
 Use the project `target/` with `CARGO_TARGET_DIR` unset. Run outside the Cursor
 sandbox: its cache cannot compile `gpui_macos` (Metal) or `aws-lc-sys`, and tests

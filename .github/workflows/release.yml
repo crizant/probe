@@ -45,7 +45,8 @@ jobs:
             libxkbcommon-x11-dev
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all-targets --all-features
+      # Library, binary, integration, and example tests. Benchmarks stay on `cargo bench`.
+      - run: cargo test --lib --bins --tests --examples --all-features
 
   build-cli:
     name: Build CLI (${{ matrix.platform }})
