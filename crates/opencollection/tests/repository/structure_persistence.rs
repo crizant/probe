@@ -908,3 +908,44 @@ fn bundled_create_can_write_native_graphql_requests() {
     assert!(saved.contains("type: graphql"));
     fs::remove_file(path).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn bundled_write_resolves_a_symlink_installed_after_preparation() {
+    use std::os::unix::fs::symlink;
+    let directory = temporary_path("bundled-execution-symlink");
+    fs::create_dir(&directory).unwrap();
+    let path = directory.join("collection.yml");
+    let target = directory.join("shared.yml");
+    fs::copy(fixture("phase16-bundled.yml"), &path).unwrap();
+    let loaded = load_workspace(&path).unwrap();
+    let operation = StructureOperation::Rename {
+        target: ItemLocator::new(ItemKind::Request, "items/0"),
+        name: "Renamed".to_owned(),
+    };
+    let prepared = loaded.prepare_structure(operation.clone()).unwrap();
+    let stale = loaded.prepare_structure(operation).unwrap();
+    // Loading canonicalizes paths, so install the symlink only after preparing.
+    fs::rename(&path, &target).unwrap();
+    symlink("shared.yml", &path).unwrap();
+    let (_, fresh) = prepared.execute().unwrap();
+    assert_eq!(fs::read_link(&path).unwrap(), Path::new("shared.yml"));
+    let key = fresh.request_key("items/0").unwrap();
+    assert_eq!(
+        fresh
+            .workspace()
+            .request(key)
+            .unwrap()
+            .metadata
+            .name
+            .as_deref(),
+        Some("Renamed")
+    );
+    let saved = fs::read(&target).unwrap();
+    assert!(matches!(
+        stale.execute(),
+        Err(StructureError::ConcurrentModification(_))
+    ));
+    assert_eq!(fs::read(&target).unwrap(), saved);
+    assert_eq!(fs::read_link(&path).unwrap(), Path::new("shared.yml"));
+}

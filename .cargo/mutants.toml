@@ -1,0 +1,3 @@
+# CI's mutation job runs on macOS, so Windows-only code cannot be exercised there.
+# Native Windows MSRV tests cover this helper. Do not exclude shared lock logic.
+exclude_re = ['^crates/opencollection/src/repository/lock.rs:.*(in |replace )windows_validate_lock']

@@ -1904,7 +1904,8 @@ fn mutate_existing_document(
     original_source: &[u8],
     mutate: impl FnOnce(&mut Value) -> Result<(), SaveError>,
 ) -> Result<Vec<u8>, SaveError> {
-    let _save_lock = SaveLock::acquire(path)?;
+    let (_save_lock, destination) = SaveLock::acquire_existing(path)?;
+    let path = destination.as_path();
     let current = fs::read(path).map_err(|source| SaveError::Io {
         path: path.to_owned(),
         source,
