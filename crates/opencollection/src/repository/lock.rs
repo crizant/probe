@@ -111,18 +111,13 @@ fn lock_path(destination: &Path) -> Result<PathBuf, SaveError> {
     let within_component_limit = windows_component_fits(&readable);
     #[cfg(not(windows))]
     let within_component_limit = true;
-    if within_component_limit {
-        match fs::symlink_metadata(&readable) {
-            Ok(_) => return Ok(readable),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(readable),
-            Err(error) if filename_too_long(&error) => {}
-            Err(source) => {
-                return Err(SaveError::Io {
-                    path: readable,
-                    source,
-                });
-            }
-        }
+    if within_component_limit
+        && sidecar_name_fits(fs::symlink_metadata(&readable)).map_err(|source| SaveError::Io {
+            path: readable.clone(),
+            source,
+        })?
+    {
+        return Ok(readable);
     }
     let identity = parent.join(filename);
     let mut hash = Sha256::new();
@@ -143,6 +138,17 @@ fn lock_path(destination: &Path) -> Result<PathBuf, SaveError> {
     }
     name.push_str(".probe-lock");
     Ok(parent.join(name))
+}
+
+// Only a component-length error permits changing lock identity. Preserve other
+// I/O failures rather than silently switching to a different sidecar.
+fn sidecar_name_fits(metadata: io::Result<fs::Metadata>) -> io::Result<bool> {
+    match metadata {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) if filename_too_long(&error) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 fn filename_too_long(error: &io::Error) -> bool {
@@ -226,7 +232,7 @@ mod tests {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/mod.rs"));
     }
 
-    struct Worker(Child);
+    struct Worker(Child, PathBuf);
 
     impl Worker {
         fn spawn(directory: &Path, action: &str) -> Self {
@@ -257,11 +263,15 @@ mod tests {
                     .env("TEMP", directory.join(action))
                     .spawn()
                     .unwrap(),
+                directory.join(format!("{action}.ready")),
             )
         }
 
         fn finish(&mut self) {
-            let deadline = Instant::now() + Duration::from_secs(10);
+            wait_for(&self.1);
+            // A child has started once ready. Bound deadlock failures below the
+            // mutation gate's timeout, even with several serial regressions.
+            let deadline = Instant::now() + Duration::from_secs(4);
             loop {
                 if let Some(status) = self.0.try_wait().unwrap() {
                     assert!(status.success());
@@ -599,5 +609,25 @@ mod tests {
             }
             Err(error) => panic!("could not create test symlink: {error}"),
         }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn hashed_fallback_preserves_unrelated_io_failures() {
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::Other,
+            io::ErrorKind::Interrupted,
+        ] {
+            let error =
+                sidecar_name_fits(Err(io::Error::new(kind, "metadata failure"))).unwrap_err();
+            assert_eq!(error.kind(), kind);
+        }
+        assert!(sidecar_name_fits(Err(io::Error::from(io::ErrorKind::NotFound))).unwrap());
+        #[cfg(unix)]
+        let too_long = io::Error::from_raw_os_error(rustix::io::Errno::NAMETOOLONG.raw_os_error());
+        #[cfg(windows)]
+        let too_long = io::Error::from_raw_os_error(206);
+        assert!(!sidecar_name_fits(Err(too_long)).unwrap());
     }
 }
