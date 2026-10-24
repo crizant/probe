@@ -9,6 +9,7 @@ pub(super) fn persist_environment_yaml(
         let environment = environment_document_mut(document, persistence)?;
         apply_environment_mutation(environment, mutation)
     })
+    .map(|(serialized, ())| serialized)
 }
 
 pub(super) fn persist_environment_replacement(
@@ -21,6 +22,7 @@ pub(super) fn persist_environment_replacement(
         let environment = environment_document_mut(document, persistence)?;
         apply_environment_replacement(environment, replacement, description)
     })
+    .map(|(serialized, ())| serialized)
 }
 
 pub(super) fn persist_bundled_environment_create(
@@ -44,6 +46,7 @@ pub(super) fn persist_bundled_environment_create(
         environments.push(environment_value(environment));
         Ok(())
     })
+    .map(|(serialized, ())| serialized)
 }
 
 pub(super) fn persist_unbundled_environment_create(
@@ -94,6 +97,7 @@ pub(super) fn persist_bundled_environment_delete(
         environments.remove(index);
         Ok(())
     })
+    .map(|(serialized, ())| serialized)
 }
 
 pub(super) fn unbundled_rename_destination(
