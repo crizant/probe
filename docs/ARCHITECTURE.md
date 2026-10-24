@@ -726,6 +726,32 @@ syncs a temporary file, and atomically replaces the destination. Successful writ
 refresh the retained baseline. Symlinked workspaces update their canonical target
 without replacing the symlink.
 
+Persistence uses stable `.NAME.probe-lock` sidecars beside each document, under
+its canonical parent directory, and standard-library exclusive file locks.
+Environment renames acquire both sidecars in sorted path order, deduplicating an
+identical path. Sidecars remain after unlock: unlinking one could split a held
+lock from a waiting writer. They must not be removed while writers are running.
+No shared temporary directory or new private directory is used.
+
+On Unix, new sidecars have mode 0600 (subject to umask). Existing sidecars must
+be regular files owned by the effective user, with no group/other permissions
+and exactly one hard link; symlinks are rejected during open. Unsafe existing
+files are rejected rather than repaired or replaced. Consequently, two Unix
+users editing the same shared document cannot both save: the second user's lock
+open or ownership validation fails. Probe does not fall back to a per-user lock,
+which would allow concurrent saves. On Windows, sidecars inherit workspace ACLs;
+users allowed to open the same sidecar coordinate through the same lock, and
+reparse-point lock files are rejected. Unix ownership checks have no Windows
+ACL equivalent here.
+
+The workspace directory and its ancestors must be trusted. A user with permission
+to replace lock files or ancestor directories can defeat advisory coordination.
+Network filesystems must support the platform's file-locking semantics. All
+concurrent writers must use this locking scheme: older Probe versions using
+temporary-directory locks do not coordinate with these sidecars. Upgrade all
+writers together while no saves are running. Atomic replacement and loaded-byte
+conflict detection remain in place, including when lock acquisition fails.
+
 Desktop dirty state compares the live request with its last loaded or successfully
 saved snapshot. `probe-core` builds the request patch between those snapshots;
 the desktop owns save queue and revision tracking. Save completion acknowledges the

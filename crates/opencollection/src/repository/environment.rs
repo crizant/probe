@@ -122,8 +122,7 @@ pub(super) fn persist_unbundled_environment_rename(
     replacement: &Environment,
     description: &FieldPatch<Documentation>,
 ) -> Result<(Vec<u8>, PathBuf), SaveError> {
-    let _old_lock = SaveLock::acquire(old_path)?;
-    let _new_lock = SaveLock::acquire(new_path)?;
+    let _locks = SaveLock::acquire_pair(old_path, new_path)?;
     if new_path.exists() {
         return Err(SaveError::ConcurrentModification(new_path.to_owned()));
     }

@@ -1,7 +1,9 @@
-use std::{fs, fs::OpenOptions, path::Path};
-
-#[cfg(any(unix, windows))]
-use fs4::FileExt;
+use std::{
+    fs,
+    fs::OpenOptions,
+    io,
+    path::{Path, PathBuf},
+};
 
 use super::SaveError;
 
@@ -11,65 +13,417 @@ pub(crate) struct SaveLock {
 
 impl SaveLock {
     pub(crate) fn acquire(destination: &Path) -> Result<Self, SaveError> {
-        let directory = std::env::temp_dir().join("probe-persistence-locks");
-        fs::create_dir_all(&directory).map_err(|source| SaveError::Io {
-            path: destination.to_owned(),
+        Self::acquire_path(&lock_path(destination)?)
+    }
+
+    pub(crate) fn acquire_pair(
+        first: &Path,
+        second: &Path,
+    ) -> Result<(Self, Option<Self>), SaveError> {
+        let mut first = lock_path(first)?;
+        let mut second = lock_path(second)?;
+        if first > second {
+            std::mem::swap(&mut first, &mut second);
+        }
+        let lock = Self::acquire_path(&first)?;
+        let other = if first == second {
+            None
+        } else {
+            Some(Self::acquire_path(&second)?)
+        };
+        Ok((lock, other))
+    }
+
+    fn acquire_path(path: &Path) -> Result<Self, SaveError> {
+        let map_io = |source| SaveError::Io {
+            path: path.to_owned(),
             source,
-        })?;
-        let path = directory.join(format!("{:016x}.lock", stable_path_hash(destination)));
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)
-            .map_err(|source| SaveError::Io {
-                path: destination.to_owned(),
-                source,
-            })?;
-        #[cfg(any(unix, windows))]
-        FileExt::lock(&file).map_err(|source| SaveError::Io {
-            path: destination.to_owned(),
-            source,
-        })?;
+        };
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // Reject final-component symlinks atomically; don't hang opening a FIFO.
+            options.mode(0o600).custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+            );
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // Open the reparse point itself so validation cannot follow a symlink.
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let file = options.open(path).map_err(map_io)?;
+        validate_lock(&file.metadata().map_err(map_io)?).map_err(map_io)?;
+        file.lock().map_err(map_io)?;
         Ok(Self { file })
     }
 }
 
-fn stable_path_hash(path: &Path) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
+// Use a stable sidecar in the document's canonical parent, independent of TMPDIR
+// and user identity. No shared temporary directory or private directory is needed.
+// Workspace ancestors must be trusted: writers able to unlink these files can
+// defeat advisory locking, just as they can change the collection itself.
+fn lock_path(destination: &Path) -> Result<PathBuf, SaveError> {
+    // Existing aliases (including case aliases on case-insensitive filesystems)
+    // must resolve to one sidecar, or a rename could lock the same file twice.
+    let canonical = match fs::canonicalize(destination) {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(SaveError::Io {
+                path: destination.to_owned(),
+                source,
+            });
+        }
+    };
+    let destination = canonical.as_deref().unwrap_or(destination);
+    let parent = destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let parent = fs::canonicalize(parent).map_err(|source| SaveError::Io {
+        path: destination.to_owned(),
+        source,
+    })?;
+    let mut name = std::ffi::OsString::from(".");
+    name.push(destination.file_name().ok_or_else(|| SaveError::Io {
+        path: destination.to_owned(),
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "lock destination has no filename",
+        ),
+    })?);
+    name.push(".probe-lock");
+    Ok(parent.join(name))
+}
 
+fn validate_lock(metadata: &fs::Metadata) -> io::Result<()> {
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "persistence lock is not a regular file",
+        ));
+    }
     #[cfg(unix)]
     {
-        use std::os::unix::ffi::OsStrExt;
-        for byte in path.as_os_str().as_bytes() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(PRIME);
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o077 != 0
+            || metadata.nlink() != 1
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "persistence lock must be owned by the current user, private (0600), and have one link; cross-user saves are unsupported",
+            ));
         }
     }
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
-        for value in path.as_os_str().encode_wide() {
-            for byte in value.to_le_bytes() {
-                hash ^= u64::from(byte);
-                hash = hash.wrapping_mul(PRIME);
-            }
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "persistence lock is a reparse point",
+            ));
         }
     }
-    #[cfg(not(any(unix, windows)))]
-    for byte in path.to_string_lossy().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
+    Ok(())
 }
 
 impl Drop for SaveLock {
     fn drop(&mut self) {
-        #[cfg(any(unix, windows))]
-        let _ = FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
+        // Never unlink: a waiter may already hold this inode open. Removing it
+        // would let a third process acquire a different lock for the same path.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        process::{Child, Command},
+        time::{Duration, Instant},
+    };
+
+    #[allow(dead_code)]
+    mod support {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/mod.rs"));
+    }
+
+    struct Worker(Child);
+
+    impl Worker {
+        fn spawn(directory: &Path, action: &str) -> Self {
+            Self(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "repository::lock::tests::process_worker",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env("PROBE_LOCK_TEST_DIRECTORY", directory)
+                    .env("PROBE_LOCK_TEST_ACTION", action)
+                    // Different temp settings must not create independent lock domains.
+                    .env("TMPDIR", directory.join(action))
+                    .env("TMP", directory.join(action))
+                    .env("TEMP", directory.join(action))
+                    .spawn()
+                    .unwrap(),
+            )
+        }
+
+        fn finish(&mut self) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(status) = self.0.try_wait().unwrap() {
+                    assert!(status.success());
+                    return;
+                }
+                assert!(Instant::now() < deadline, "lock worker timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    impl Drop for Worker {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn wait_for(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "worker did not create {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    #[ignore = "subprocess entry point"]
+    fn process_worker() {
+        let directory = PathBuf::from(std::env::var_os("PROBE_LOCK_TEST_DIRECTORY").unwrap());
+        let action = std::env::var("PROBE_LOCK_TEST_ACTION").unwrap();
+        let a = directory.join("a.yml");
+        let b = directory.join("b.yml");
+        fs::write(directory.join(format!("{action}.ready")), []).unwrap();
+        match action.as_str() {
+            "save" => {
+                let result =
+                    super::super::mutate_existing_document(&a, b"name: original\n", |document| {
+                        document["name"] = "child".into();
+                        Ok(())
+                    });
+                assert!(matches!(result, Err(SaveError::ConcurrentModification(_))));
+            }
+            "same" | "alias" => {
+                let second = if action == "same" { &a } else { &b };
+                let (_first, second) = SaveLock::acquire_pair(&a, second).unwrap();
+                assert!(second.is_none());
+            }
+            "reverse" | "forward" => {
+                let (old, new) = if action == "reverse" {
+                    (&b, &a)
+                } else {
+                    (&a, &b)
+                };
+                let replacement = probe_core::Environment {
+                    name: "renamed".to_owned(),
+                    color: None,
+                    description: None,
+                    extends: None,
+                    dot_env_file_path: None,
+                    variables: Vec::new(),
+                    client_certificates: Vec::new(),
+                };
+                let result = super::super::environment::persist_unbundled_environment_rename(
+                    old,
+                    new,
+                    b"name: original\n",
+                    &replacement,
+                    &probe_core::FieldPatch::Unchanged,
+                );
+                assert!(
+                    matches!(result, Err(SaveError::ConcurrentModification(path)) if path == *new)
+                );
+            }
+            _ => panic!("unknown worker action"),
+        }
+        fs::write(directory.join(format!("{action}.done")), []).unwrap();
+    }
+
+    #[test]
+    fn processes_serialize_source_checks_and_keep_the_lock_file() {
+        let directory = support::temporary_path("lock-processes");
+        fs::create_dir(&directory).unwrap();
+        let document = directory.join("a.yml");
+        fs::write(&document, b"name: original\n").unwrap();
+        let lock = SaveLock::acquire(&document).unwrap();
+        let mut child = Worker::spawn(&directory, "save");
+        wait_for(&directory.join("save.ready"));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!directory.join("save.done").exists());
+        fs::write(&document, b"name: parent\n").unwrap();
+        drop(lock);
+        child.finish();
+        assert_eq!(fs::read(&document).unwrap(), b"name: parent\n");
+        assert!(lock_path(&document).unwrap().is_file());
+        let _lock = SaveLock::acquire(&document).unwrap();
+    }
+
+    #[test]
+    fn opposite_pairs_wait_for_the_same_first_lock() {
+        let directory = support::temporary_path("lock-order");
+        fs::create_dir(&directory).unwrap();
+        let a = directory.join("a.yml");
+        let b = directory.join("b.yml");
+        fs::write(&a, b"name: original\n").unwrap();
+        fs::write(&b, b"name: original\n").unwrap();
+        let first = SaveLock::acquire(&a).unwrap();
+        let mut reverse = Worker::spawn(&directory, "reverse");
+        wait_for(&directory.join("reverse.ready"));
+        std::thread::sleep(Duration::from_millis(100));
+        // Reverse order must wait on A without holding B. This catches B -> A.
+        let b_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path(&b).unwrap())
+            .unwrap();
+        b_file.try_lock().expect("reverse pair acquired B before A");
+        b_file.unlock().unwrap();
+        // Use the production permissions for subsequent opens of the test file.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(lock_path(&b).unwrap(), fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let mut forward = Worker::spawn(&directory, "forward");
+        wait_for(&directory.join("forward.ready"));
+        drop(first);
+        reverse.finish();
+        forward.finish();
+        Worker::spawn(&directory, "same").finish();
+        assert_eq!(fs::read(&a).unwrap(), b"name: original\n");
+        assert_eq!(fs::read(&b).unwrap(), b"name: original\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinks_hard_links_and_preexisting_directories() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = support::temporary_path("lock-links");
+        fs::create_dir(&directory).unwrap();
+        let document = directory.join("a.yml");
+        let path = lock_path(&document).unwrap();
+        let victim = directory.join("victim");
+        fs::write(&victim, b"untouched").unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&victim, &path).unwrap();
+        assert!(SaveLock::acquire(&document).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::hard_link(&victim, &path).unwrap();
+        assert!(SaveLock::acquire(&document).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(SaveLock::acquire(&document).is_err());
+        assert_eq!(fs::read(&victim).unwrap(), b"untouched");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_lock_permissions_and_permission_failures() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let directory = support::temporary_path("lock-permissions");
+        fs::create_dir(&directory).unwrap();
+        let document = directory.join("a.yml");
+        let path = lock_path(&document).unwrap();
+        drop(SaveLock::acquire(&document).unwrap());
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(
+            matches!(SaveLock::acquire(&document), Err(SaveError::Io { source, .. }) if source.kind() == io::ErrorKind::PermissionDenied)
+        );
+        // Do not silently chmod or replace an unsafe pre-existing lock.
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o666);
+        fs::remove_file(&path).unwrap();
+        if !rustix::process::geteuid().is_root() {
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
+            let result = SaveLock::acquire(&document);
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(
+                matches!(result, Err(SaveError::Io { source, .. }) if source.kind() == io::ErrorKind::PermissionDenied)
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn foreign_owned_private_lock_is_rejected() {
+        if !rustix::process::geteuid().is_root() {
+            eprintln!("foreign-owner regression requires root to chown a private test file");
+            return;
+        }
+        let directory = support::temporary_path("lock-owner");
+        fs::create_dir(&directory).unwrap();
+        let document = directory.join("a.yml");
+        drop(SaveLock::acquire(&document).unwrap());
+        rustix::fs::chown(
+            lock_path(&document).unwrap(),
+            Some(rustix::process::Uid::from_raw(65534)),
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(SaveLock::acquire(&document), Err(SaveError::Io { source, .. }) if source.kind() == io::ErrorKind::PermissionDenied)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_directory_aliases_share_the_lock() {
+        use std::os::unix::fs::symlink;
+        let directory = support::temporary_path("lock-parent-alias");
+        fs::create_dir(&directory).unwrap();
+        fs::create_dir(directory.join("real")).unwrap();
+        symlink(directory.join("real"), directory.join("alias")).unwrap();
+        let document = directory.join("real/a.yml");
+        let alias = directory.join("alias/a.yml");
+        let _lock = SaveLock::acquire(&document).unwrap();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path(&alias).unwrap())
+            .unwrap();
+        assert!(matches!(
+            file.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_document_aliases_are_deduplicated() {
+        use std::os::unix::fs::symlink;
+        let directory = support::temporary_path("lock-file-alias");
+        fs::create_dir(&directory).unwrap();
+        let document = directory.join("a.yml");
+        let alias = directory.join("b.yml");
+        fs::write(&document, b"name: original\n").unwrap();
+        symlink(&document, &alias).unwrap();
+        Worker::spawn(&directory, "alias").finish();
     }
 }
