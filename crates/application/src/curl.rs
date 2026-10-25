@@ -514,6 +514,26 @@ mod tests {
     }
 
     #[test]
+    fn uncontinued_newline_after_completed_words_is_not_argument_whitespace() {
+        for newline in ["\n", "\r\n"] {
+            for prefix in ["curl ", "curl https://example.com "] {
+                // The space completed a word before the newline. Following content
+                // must not be treated as another argument, even after whitespace.
+                let command = format!("{prefix}{newline} \thttps://other.example.com");
+                assert_eq!(
+                    parse_curl(&command).unwrap_err(),
+                    CurlParseError::ShellSyntax
+                );
+            }
+            let command = format!("{newline} \tcurl https://example.com");
+            assert_eq!(
+                parse_curl(&command).unwrap().url.as_deref(),
+                Some("https://example.com")
+            );
+        }
+    }
+
+    #[test]
     fn chrome_multiline_export_preserves_headers_query_and_json() {
         let request = parse_curl(
             r#"curl 'https://example.com/api?q=a%2Bb&q=two' \
