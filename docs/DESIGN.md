@@ -296,3 +296,26 @@ Status icons align with the first text line, including in wrapped rows.
 Response access remains available after assertion failures. Both surfaces use
 existing theme tokens and controls; text buttons and tabs retain an explicit
 `line_height(relative(1.25))`.
+
+### Import from cURL
+
+The sidebar Add (+) menu offers **Import from cURL…** for an open collection.
+Its compact dialog contains a request name, destination folder (initially the
+selected folder or selected request's parent, otherwise collection root), and a
+multiline POSIX cURL command. Parsing runs in the background through the shared
+parser; pasted commands are never executed. A read-only preview shows method,
+URL, and header, parameter, and body counts. Authentication headers, cookies, and
+Basic credentials trigger a warning that imported values persist in plaintext.
+
+Import Request stays disabled until the name and command are valid and workspace
+writes/reloads have finished. Command+Enter / Ctrl+Enter imports; Enter in the
+command inserts a newline. Escape or Cancel discards the dialog without writing.
+Once Import starts, cancellation is disabled until the atomic write completes.
+Validation and write errors preserve input and display an inline recovery message.
+A committed write whose refresh failed disables retry and asks the user to reopen
+the collection, preventing duplicate imports. Successful imports open and select
+the new request while preserving existing request drafts and editor state.
+
+The dialog uses the shared semantic dialog surfaces, field spacing, focus rings,
+and action buttons in both light and dark themes. Text-bearing buttons retain
+`line_height(relative(1.25))`.

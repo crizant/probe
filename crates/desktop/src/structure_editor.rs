@@ -5,18 +5,29 @@ use probe_opencollection::{ItemLocator, LoadedWorkspace, StructureOperation};
 
 pub(crate) const ROOT_PARENT: &str = "";
 
+/// Parsed data stays in memory until the existing structure operation commits it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct CurlImport {
+    pub(crate) command: String,
+    pub(crate) parsed: Option<Result<probe_core::Request, probe_application::CurlParseError>>,
+    pub(crate) error: Option<String>,
+    pub(crate) committed: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StructureDialogMode {
     CreateRequest(RequestProtocol),
+    ImportCurl,
     CreateFolder,
     SaveDetachedRequest { key: RequestKey },
     Rename { kind: ItemKind, selector: String },
     Move { kind: ItemKind, selector: String },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StructureDialog {
     pub(crate) mode: StructureDialogMode,
+    pub(crate) curl: Option<CurlImport>,
     pub(crate) name: String,
     pub(crate) parent: String,
     pub(crate) index: String,
@@ -42,6 +53,7 @@ impl StructureDialog {
             index: String::new(),
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
+            curl: None,
         }
     }
     pub(crate) fn create_request(protocol: RequestProtocol, parent: Option<String>) -> Self {
@@ -52,6 +64,7 @@ impl StructureDialog {
             index: String::new(),
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
+            curl: None,
         }
     }
 
@@ -63,6 +76,7 @@ impl StructureDialog {
             index: String::new(),
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
+            curl: None,
         }
     }
 
@@ -74,6 +88,7 @@ impl StructureDialog {
             index: String::new(),
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
+            curl: None,
         }
     }
 
@@ -85,11 +100,20 @@ impl StructureDialog {
             index: String::new(),
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
+            curl: None,
         }
+    }
+
+    pub(crate) fn import_curl(parent: Option<String>) -> Self {
+        let mut dialog = Self::create_request(RequestProtocol::Http, parent);
+        dialog.mode = StructureDialogMode::ImportCurl;
+        dialog.curl = Some(CurlImport::default());
+        dialog
     }
 
     pub(crate) const fn title(&self) -> &'static str {
         match self.mode {
+            StructureDialogMode::ImportCurl => "Import from cURL",
             StructureDialogMode::CreateRequest(RequestProtocol::Http) => "New HTTP Request",
             StructureDialogMode::CreateRequest(RequestProtocol::Graphql) => "New GraphQL Request",
             StructureDialogMode::CreateRequest(RequestProtocol::WebSocket) => {
@@ -104,6 +128,7 @@ impl StructureDialog {
 
     pub(crate) const fn submit_label(&self) -> &'static str {
         match self.mode {
+            StructureDialogMode::ImportCurl => "Import Request",
             StructureDialogMode::CreateRequest(_) | StructureDialogMode::CreateFolder => "Create",
             StructureDialogMode::SaveDetachedRequest { .. } => "Save",
             StructureDialogMode::Rename { .. } => "Rename",
@@ -137,6 +162,39 @@ impl StructureDialog {
         };
 
         match &self.mode {
+            StructureDialogMode::ImportCurl => {
+                if name.is_empty() {
+                    return Err("Request name is required.".into());
+                }
+                let request = self
+                    .curl
+                    .as_ref()
+                    .and_then(|curl| curl.parsed.as_ref())
+                    .ok_or("Paste a supported cURL command and wait for its preview.")?
+                    .as_ref()
+                    .map_err(|error| error.to_string())?;
+                let update = probe_core::RequestUpdate {
+                    headers: Some(request.headers.clone()),
+                    query_parameters: Some(request.query_parameters.clone()),
+                    path_parameters: Some(request.path_parameters.clone()),
+                    body: probe_core::FieldPatch::from_optional(request.http_body().cloned()),
+                    authentication: probe_core::FieldPatch::from_optional(
+                        request.authentication.clone(),
+                    ),
+                    ..Default::default()
+                };
+                Ok(StructureOperation::CreateRequest {
+                    parent,
+                    index: None,
+                    name: name.to_owned(),
+                    method: request.method.clone(),
+                    url: request.url.clone(),
+                    settings: Some(request.settings.clone()),
+                    protocol: RequestProtocol::Http,
+                    graphql: None,
+                    update: Some(update),
+                })
+            }
             StructureDialogMode::SaveDetachedRequest { .. } => {
                 Err("Request save is handled by the desktop editor.".to_owned())
             }

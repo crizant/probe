@@ -350,6 +350,14 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.curl_import_in_progress() {
+            self.show_toast(
+                ToastIntent::Warning,
+                "Wait for the request import to finish before switching or closing the collection.",
+                cx,
+            );
+            return;
+        }
         let dirty = self.dirty_keys();
         if !dirty.is_empty() || self.documentation_blocks_close_or_open() {
             self.prompt_unsaved(dirty, pending, window, cx);
@@ -366,6 +374,9 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.curl_import_in_progress() {
+            return false;
+        }
         if self.application_dialog.is_some() {
             return false;
         }

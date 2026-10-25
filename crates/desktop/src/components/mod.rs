@@ -53,7 +53,7 @@ use editor::ProbeEditor;
 use editor::SecretTooltipState;
 pub(crate) use editor::editor_paint_style;
 pub(crate) use editor::{
-    BodySyntax, body_text_input, documentation_text_input, response_body_input,
+    BodySyntax, body_text_input, curl_command_input, documentation_text_input, response_body_input,
     response_headers_input, response_inspector_input, single_line, websocket_composer,
 };
 use editor::{VariableTooltipPresentation, input_variable_ranges, variable_input_overlay};

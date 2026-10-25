@@ -561,6 +561,7 @@ impl ProbeApp {
             return;
         }
         self.structure_dialog = None;
+        self.curl_parse_task = None;
         self.create_environment_dialog = None;
         self.dismiss_transient_surfaces();
         self.application_dialog = Some(dialog);
@@ -869,6 +870,7 @@ impl ProbeApp {
         self.documentation_save_task = None;
         self.selected_tree_item = None;
         self.structure_dialog = None;
+        self.curl_parse_task = None;
         self.create_environment_dialog = None;
         self.discard_environment_manager_dialog();
         self.application_dialog = None;
@@ -1002,7 +1004,8 @@ impl ProbeApp {
 
         let mut target_exists = true;
         match &mut dialog.mode {
-            StructureDialogMode::CreateRequest(_)
+            StructureDialogMode::ImportCurl
+            | StructureDialogMode::CreateRequest(_)
             | StructureDialogMode::SaveDetachedRequest { .. }
             | StructureDialogMode::CreateFolder => {}
             StructureDialogMode::Rename { kind, selector }
@@ -1041,8 +1044,15 @@ impl ProbeApp {
                 dialog.parent.clone_from(mapped);
             }
             if loaded.folder_key(&dialog.parent).is_none() {
-                if matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+                if matches!(
+                    dialog.mode,
+                    StructureDialogMode::SaveDetachedRequest { .. }
+                        | StructureDialogMode::ImportCurl
+                ) {
                     dialog.parent.clear();
+                    if let Some(curl) = dialog.curl.as_mut() {
+                        curl.error = Some("The destination folder was removed. Review the destination before importing.".into());
+                    }
                 } else {
                     self.structure_dialog = None;
                 }
