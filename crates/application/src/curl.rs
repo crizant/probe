@@ -192,7 +192,15 @@ pub fn parse_curl(command: &str) -> Result<Request, CurlParseError> {
         .url
         .as_deref()
         .ok_or(CurlParseError::InvalidCommand)?;
-    if !globoff && url.contains(['{', '}', '[', ']']) {
+    let parsed_url = url::Url::parse(url).map_err(|_| CurlParseError::InvalidValue)?;
+    // A validated IPv6 host owns the first bracket pair. Inspect everything after
+    // that host so brackets/braces in the port, path, query, or fragment still fail.
+    let glob_source = if matches!(parsed_url.host(), Some(url::Host::Ipv6(_))) {
+        url.split_once(']').map_or(url, |(_, suffix)| suffix)
+    } else {
+        url
+    };
+    if !globoff && glob_source.contains(['{', '}', '[', ']']) {
         return Err(CurlParseError::UnsupportedBehavior);
     }
     if basic && request.authentication.is_none() {
@@ -299,9 +307,6 @@ fn tokenize(command: &str) -> Result<Vec<String>, CurlParseError> {
     let mut started = false;
     let mut quote = None;
     while let Some(c) = chars.next() {
-        if c == '\r' && quote.is_some() {
-            return Err(CurlParseError::ShellSyntax);
-        }
         if quote == Some('\'') {
             if c == '\'' {
                 quote = None;
@@ -349,8 +354,9 @@ fn tokenize(command: &str) -> Result<Vec<String>, CurlParseError> {
                 }
                 return Err(CurlParseError::ShellSyntax);
             }
-            ';' | '|' | '&' | '<' | '>' | '(' | ')' | '#' | '~' | '*' | '?' | '[' | ']' | '{'
-            | '}' | '^' => return Err(CurlParseError::ShellSyntax),
+            '#' if !started => return Err(CurlParseError::ShellSyntax),
+            ';' | '|' | '&' | '<' | '>' | '(' | ')' | '~' | '*' | '?' | '[' | ']' | '{' | '}'
+            | '^' => return Err(CurlParseError::ShellSyntax),
             ' ' | '\t' => {
                 if started {
                     words.push(std::mem::take(&mut word));
@@ -643,6 +649,80 @@ mod tests {
     }
 
     #[test]
+    fn ipv6_host_brackets_are_not_url_globs() {
+        for url in [
+            "http://[::1]:8080/api",
+            "https://[2001:db8::1]/api?q=value",
+            "http://[0:0:0:0:0:0:0:1]/api",
+        ] {
+            assert_eq!(
+                parse_curl(&format!("curl '{url}'")).unwrap().url.as_deref(),
+                Some(url)
+            );
+        }
+        for url in [
+            "http://[::1]:8080/api/[1-3]",
+            "http://[::1]:8080/api/{one,two}",
+            "http://[::1]:8080/api?q=[1-3]",
+            "http://[::1]:8080/api?q={one,two}",
+            "https://example.com/api/[1-3]",
+            "https://example.com/api?q={one,two}",
+        ] {
+            assert_eq!(
+                parse_curl(&format!("curl '{url}'")).unwrap_err(),
+                CurlParseError::UnsupportedBehavior
+            );
+        }
+    }
+
+    #[test]
+    fn unquoted_hash_is_literal_after_a_word_has_started() {
+        let request =
+            parse_curl("curl https://example.com/page#section --data-raw first#second").unwrap();
+        assert_eq!(
+            request.url.as_deref(),
+            Some("https://example.com/page#section")
+        );
+        assert_eq!(data(&request), "first#second");
+        assert_eq!(
+            data(&parse_curl("curl https://example.com --data-raw ''#literal").unwrap()),
+            "#literal"
+        );
+        for command in [
+            "# curl https://example.com",
+            "curl https://example.com # comment",
+        ] {
+            assert_eq!(
+                parse_curl(command).unwrap_err(),
+                CurlParseError::ShellSyntax
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_carriage_returns_are_body_data_but_invalid_in_urls_and_headers() {
+        for quote in ['\'', '"'] {
+            for body in ["first\r\nsecond", "first\rsecond"] {
+                let command = format!("curl https://example.com --data-raw {quote}{body}{quote}");
+                assert_eq!(data(&parse_curl(&command).unwrap()), body);
+            }
+            for newline in ["\r", "\n", "\r\n"] {
+                for command in [
+                    format!("curl {quote}https://example.com/first{newline}second{quote}"),
+                    format!(
+                        "curl https://example.com -H {quote}X-Test: first{newline}second{quote}"
+                    ),
+                ] {
+                    assert_eq!(
+                        parse_curl(&command).unwrap_err(),
+                        CurlParseError::InvalidValue
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn repeated_inline_cookies_preserve_all_values_in_order() {
         let request =
             parse_curl("curl https://example.com -b 'a=1' --cookie 'b=2' -b 'a=3; c=4'").unwrap();
@@ -828,6 +908,7 @@ mod tests {
             "curl https://example.com -X PATCH -H 'Content-Type: application/json' --data-raw '{ \"text\": \"O'\\''Brien\" }'",
             "curl https://example.com -d 'a=%2f+%20&empty=&a=2' -u 'alice:p:ass' -L --max-redirs 3 --max-time 0.5",
             "curl https://example.com -H 'Content-Type: text/plain' --data-binary 'a\nb' -b 'session=abc'",
+            "curl https://example.com -H 'Content-Type: text/plain' --data-raw 'first\r\nsecond'",
         ] {
             let original = parse_curl(command).unwrap();
             let exported = engine
