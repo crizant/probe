@@ -69,7 +69,7 @@ pub fn parse_curl(command: &str) -> Result<Request, CurlParseError> {
     let mut body: Option<String> = None;
     let mut globoff = false;
     let mut basic = false;
-    let mut cookie = None;
+    let mut cookies = Vec::new();
     let mut args = words.iter().skip(1);
     let mut positional = false;
     while let Some(arg) = args.next() {
@@ -151,7 +151,7 @@ pub fn parse_curl(command: &str) -> Result<Request, CurlParseError> {
                 if !value.contains('=') || value.contains(['\r', '\n']) {
                     return Err(CurlParseError::UnsupportedBehavior);
                 }
-                cookie = Some(value);
+                cookies.push(value);
             }
             "-u" | "--user" => {
                 let (username, password) = value
@@ -206,7 +206,7 @@ pub fn parse_curl(command: &str) -> Result<Request, CurlParseError> {
     {
         return Err(CurlParseError::UnsupportedBehavior);
     }
-    if let Some(cookie) = cookie {
+    if !cookies.is_empty() {
         if request
             .headers
             .iter()
@@ -216,7 +216,7 @@ pub fn parse_curl(command: &str) -> Result<Request, CurlParseError> {
         }
         request.headers.push(Header {
             name: "Cookie".into(),
-            value: cookie.into(),
+            value: cookies.join("; "),
             disabled: false,
         });
     }
@@ -277,6 +277,7 @@ fn parse_header(value: &str) -> Result<Header, CurlParseError> {
         return Err(CurlParseError::InvalidValue);
     }
     // cURL's empty-value colon syntax suppresses a header; Probe cannot express that.
+    // Its X; syntax sends an empty header and is also unsupported (rejected above).
     let value = value.trim_start_matches([' ', '\t']);
     if value.is_empty() {
         return Err(CurlParseError::UnsupportedBehavior);
@@ -642,6 +643,33 @@ mod tests {
     }
 
     #[test]
+    fn repeated_inline_cookies_preserve_all_values_in_order() {
+        let request =
+            parse_curl("curl https://example.com -b 'a=1' --cookie 'b=2' -b 'a=3; c=4'").unwrap();
+        assert_eq!(
+            request.headers,
+            [Header {
+                name: "Cookie".into(),
+                value: "a=1; b=2; a=3; c=4".into(),
+                disabled: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn repeated_cookies_conflict_with_explicit_cookie_headers_in_either_order() {
+        for command in [
+            "curl https://example.com -b 'a=first-cookie-secret' --cookie 'b=second-cookie-secret' -H 'cOoKiE: explicit-cookie-secret'",
+            "curl https://example.com -H 'cOoKiE: explicit-cookie-secret' --cookie 'a=first-cookie-secret' -b 'b=second-cookie-secret'",
+        ] {
+            let error = parse_curl(command).unwrap_err();
+            assert_eq!(error, CurlParseError::UnsupportedBehavior);
+            assert!(!format!("{error} {error:?}").contains("cookie-secret"));
+            assert!(std::error::Error::source(&error).is_none());
+        }
+    }
+
+    #[test]
     fn basic_auth_and_exporter_settings() {
         let request = parse_curl("curl -g -L --max-redirs 4 --max-time 1.25 --basic -u 'alice:p:a:ss' 'https://example.com/[id]'").unwrap();
         assert_eq!(
@@ -699,6 +727,9 @@ mod tests {
             "--config file",
             "--next",
             "--form a=b",
+            "--form 'file=@upload.bin'",
+            "--data-binary @upload.bin",
+            "-H 'X;'",
             "--data @file",
             "--data-binary @-",
             "--header @file",
@@ -721,6 +752,10 @@ mod tests {
             );
         }
         assert!(parse_curl("curl 'https://example.com/{a,b}'").is_err());
+        assert_eq!(
+            parse_curl("curl 'https://example.com/{{template}}'").unwrap_err(),
+            CurlParseError::UnsupportedBehavior
+        );
         assert!(parse_curl("curl 'https://alice:pass@example.com'").is_err());
         assert!(parse_curl("curl file:///tmp/input").is_err());
     }
@@ -731,6 +766,8 @@ mod tests {
             "curl https://example.com -H 'Authorization: secret-token' --unknown=secret-token",
             "curl https://example.com -u 'alice:secret-token' --digest",
             "curl https://example.com --cookie 'session=secret-token' --insecure",
+            "curl https://example.com -b 'a=secret-token-first' --cookie 'b=secret-token-second' --insecure",
+            "curl https://example.com -b 'a=secret-token-first' --cookie 'secret-token-invalid'",
             "curl https://example.com --data-raw 'secret-token' --form 'secret-token'",
             "curl 'https://secret-token:pass@example.com'",
             "curl https://example.com -H 'secret-token'",
