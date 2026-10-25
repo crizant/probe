@@ -250,8 +250,8 @@ fn set_url(request: &mut Request, value: &str) -> Result<(), CurlParseError> {
         return Err(CurlParseError::InvalidCommand);
     }
     let url = url::Url::parse(value).map_err(|_| CurlParseError::InvalidValue)?;
+    // Url::parse already requires a nonempty host for HTTP(S) URLs.
     if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
         || value.chars().any(|c| c.is_whitespace() || c.is_control())
     {
         return Err(CurlParseError::InvalidValue);
@@ -332,7 +332,9 @@ fn tokenize(command: &str) -> Result<Vec<String>, CurlParseError> {
                 quote = Some(c);
                 started = true;
             }
-            '"' if quote == Some('"') => quote = None,
+            // Single quotes were handled above, and unquoted quotes open a string
+            // in the preceding branch, so this can only close double quotes.
+            '"' => quote = None,
             c if quote.is_some() => word.push(c),
             '\n' | '\r' => {
                 if c == '\r' && chars.next() != Some('\n') {
@@ -379,6 +381,136 @@ mod tests {
             panic!("expected raw body")
         };
         &body.data
+    }
+
+    #[test]
+    fn every_error_category_has_a_visible_diagnostic() {
+        for error in [
+            CurlParseError::ShellSyntax,
+            CurlParseError::InvalidCommand,
+            CurlParseError::UnsupportedOption,
+            CurlParseError::InvalidValue,
+            CurlParseError::UnsupportedBehavior,
+        ] {
+            assert!(!error.to_string().trim().is_empty());
+        }
+    }
+
+    #[test]
+    fn redirect_defaults_match_curl_even_when_location_is_enabled() {
+        let request = parse_curl("curl https://example.com").unwrap();
+        assert_eq!(request.settings.follow_redirects, Some(false));
+        assert_eq!(request.settings.max_redirects, Some(50));
+        let request = parse_curl("curl --location https://example.com").unwrap();
+        assert_eq!(request.settings.follow_redirects, Some(true));
+        assert_eq!(request.settings.max_redirects, Some(50));
+    }
+
+    #[test]
+    fn option_terminator_accepts_one_positional_url() {
+        let request = parse_curl("curl -X POST -- https://example.com/path").unwrap();
+        assert_eq!(request.method.as_deref(), Some("POST"));
+        assert_eq!(request.url.as_deref(), Some("https://example.com/path"));
+        // After --, a second -- is a positional argument, not another terminator.
+        assert_eq!(
+            parse_curl("curl -- -- https://example.com").unwrap_err(),
+            CurlParseError::InvalidValue
+        );
+    }
+
+    #[test]
+    fn basic_credentials_reject_non_ascii_and_newlines_independently() {
+        for credentials in [
+            "álîce:password",
+            "alice:pässword",
+            "ali\nce:password",
+            "alice:pass\nword",
+        ] {
+            assert_eq!(
+                parse_curl(&format!("curl https://example.com --user '{credentials}'"))
+                    .unwrap_err(),
+                CurlParseError::UnsupportedBehavior
+            );
+        }
+        let request = parse_curl("curl https://example.com --user 'alice:password'").unwrap();
+        assert_eq!(
+            request.authentication.unwrap().kind,
+            AuthenticationKind::Basic
+        );
+    }
+
+    #[test]
+    fn url_validation_rejects_each_unsupported_component() {
+        for url in [
+            "ftp://example.com/file",
+            "mailto:alice@example.com",
+            "https://example.com/a b",
+            "https://example.com/a\u{7f}b",
+            "https://example.com/a\tb",
+            "https://example.com/a\nb",
+            "http://",
+            "https://?query=value",
+        ] {
+            assert_eq!(
+                parse_curl(&format!("curl --url '{url}'")).unwrap_err(),
+                CurlParseError::InvalidValue
+            );
+        }
+        // Username-only and password-only userinfo are independently unsupported.
+        for url in [
+            "https://alice@example.com/",
+            "https://:password@example.com/",
+        ] {
+            assert_eq!(
+                parse_curl(&format!("curl '{url}'")).unwrap_err(),
+                CurlParseError::UnsupportedBehavior
+            );
+        }
+        let url = "https://example.com/path?query=value";
+        assert_eq!(
+            parse_curl(&format!("curl '{url}'")).unwrap().url.as_deref(),
+            Some(url)
+        );
+    }
+
+    #[test]
+    fn header_validation_rejects_empty_and_invalid_names_independently() {
+        for header in [
+            ": value",
+            "bad name: value",
+            "bad(name): value",
+            "X-Test: bad\u{7f}value",
+        ] {
+            assert_eq!(
+                parse_curl(&format!("curl https://example.com --header '{header}'")).unwrap_err(),
+                CurlParseError::InvalidValue
+            );
+        }
+        let request = parse_curl("curl https://example.com -H 'X-Test: first\tsecond'").unwrap();
+        assert_eq!(request.headers[0].value, "first\tsecond");
+    }
+
+    #[test]
+    fn lf_and_crlf_command_boundaries_preserve_quoted_newlines() {
+        for command in [
+            "curl https://example.com\n",
+            "curl https://example.com\r\n",
+            "\ncurl https://example.com\n",
+            "\r\ncurl https://example.com\r\n",
+        ] {
+            assert_eq!(
+                parse_curl(command).unwrap().url.as_deref(),
+                Some("https://example.com")
+            );
+        }
+        let request =
+            parse_curl("curl https://example.com --data-raw \"one\\\"two\nthree\"'four'five")
+                .unwrap();
+        assert_eq!(data(&request), "one\"two\nthreefourfive");
+        assert_eq!(
+            parse_curl("curl https://example.com\ncurl https://other.com").unwrap_err(),
+            CurlParseError::ShellSyntax
+        );
     }
 
     #[test]
