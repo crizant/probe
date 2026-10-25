@@ -146,6 +146,7 @@ fn both_layouts_preserve_assertions_through_edits_creation_duplication_and_domai
                     name: format!("Copied {}", edited.kind.as_str()),
                     method: edited.method.clone(),
                     url: edited.url.clone(),
+                    settings: None,
                     protocol: edited.kind.protocol(),
                     graphql: None,
                     update: Some(RequestUpdate::between(None, &copy).unwrap()),

@@ -375,7 +375,7 @@ fn item_info_value(metadata: &probe_core::ItemMetadata, item_type: &str) -> serd
 }
 
 /// Serializes only the settings the protocol's OpenCollection settings schema allows.
-fn request_settings_value(
+pub(crate) fn request_settings_value(
     settings: &probe_core::RequestSettings,
     protocol: RequestProtocol,
 ) -> Option<Value> {

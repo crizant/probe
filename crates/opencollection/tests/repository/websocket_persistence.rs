@@ -362,6 +362,7 @@ fn websocket_rejects_fields_outside_its_opencollection_shape_without_writing() {
                 name: "Invalid".to_owned(),
                 method: None,
                 url: None,
+                settings: None,
                 protocol: RequestProtocol::WebSocket,
                 graphql: None,
                 update: Some(update),
@@ -467,6 +468,7 @@ fn websocket_structure_operations_create_rename_and_reorder() {
             name: "Invalid".to_owned(),
             method: Some("GET".to_owned()),
             url: None,
+            settings: None,
             protocol: RequestProtocol::WebSocket,
             graphql: None,
             update: None,
@@ -480,6 +482,7 @@ fn websocket_structure_operations_create_rename_and_reorder() {
             name: "Invalid HTTP".to_owned(),
             method: Some("GET".to_owned()),
             url: None,
+            settings: None,
             protocol: RequestProtocol::Http,
             graphql: None,
             update: Some(RequestUpdate {
@@ -503,6 +506,7 @@ fn websocket_structure_operations_create_rename_and_reorder() {
             name: "Created socket".to_owned(),
             method: None,
             url: Some("wss://{{host}}/created".to_owned()),
+            settings: None,
             protocol: RequestProtocol::WebSocket,
             graphql: None,
             update: Some(RequestUpdate {

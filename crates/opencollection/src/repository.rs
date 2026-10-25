@@ -35,6 +35,7 @@ mod new_file;
 mod yaml;
 
 use create::environment_value;
+pub(crate) use create::request_settings_value;
 pub use create::{create_bundled_workspace, create_bundled_workspace_from_collection};
 use environment::*;
 pub use errors::{CreateError, LoadError, SaveError};

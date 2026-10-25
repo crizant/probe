@@ -10,6 +10,7 @@ use serde_json::json;
 mod agent;
 mod collection;
 mod command;
+mod curl;
 mod environment;
 mod error;
 mod presentation;
@@ -131,6 +132,7 @@ pub const fn help() -> &'static str {
         "  request run <path> <selector>       Execute a request\n",
         "  request set <path> <selector>       Set and persist request fields, description, or docs\n",
         "  request unset <path> <selector>     Remove request description or docs\n",
+        "  request import curl <workspace> --name <name>  Import cURL from stdin or --file\n",
         "  request create|rename|delete|move|reorder   Edit request structure\n",
         "  folder list <path>                  List folders\n",
         "  folder get <path> <selector>        Show one folder's description and docs\n",
@@ -143,6 +145,8 @@ pub const fn help() -> &'static str {
         "  environment unset <path>            Remove an environment variable or description\n",
         "  environment delete <path>           Delete an environment\n",
         "  environment rename <path>           Rename an environment\n",
+        "\n",
+        "cURL import saves literal secrets in plaintext OpenCollection YAML; it never executes the request.\n",
         "\n",
         "Options:\n",
         "      --environment <name>  Environment used to resolve or mutate variables\n",
@@ -167,6 +171,7 @@ pub const fn help() -> &'static str {
         "      --description-json <json>  Set description as a JSON string, null, or {content,type} object\n",
         "      --docs <text>          Set documentation as a string\n",
         "      --docs-json <json>     Set collection or folder docs as JSON; invalid for request docs\n",
+        "      --file <path>          Read a cURL command from a file instead of stdin\n",
         "      --method <method>      Set an HTTP method\n",
         "      --url <url>            Set a request URL\n",
         "      --type <http|graphql>  Request protocol for request create\n",
@@ -238,6 +243,7 @@ const REQUEST_HELP: &str = concat!(
     "  set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
     "  unset <path> <selector> [--description] [--docs]  Remove description and/or docs from the file\n",
     "  create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
+    "  import curl <workspace> --name <name> [--parent <folder>] [--index <index>] [--file <path>] [--json]\n",
     "  rename <path> <selector> --name <name>\n",
     "  delete <path> <selector>\n",
     "  move <path> <selector> [--parent <folder>] [--index <index>]\n",
@@ -257,6 +263,9 @@ const REQUEST_HELP: &str = concat!(
     "                                  or each Base64 line -> binary.\n",
     "      --max-messages <n>   WebSocket only: close after n inbound messages.\n",
     "      --timeout <seconds>  WebSocket only: CLI live-run bound, not connection timeout.\n",
+    "\n",
+    "cURL import reads stdin or --file and never executes the request. Literal authorization\n",
+    "headers, cookies, credentials, and bodies may be saved in plaintext OpenCollection YAML.\n",
     "\n",
     "WebSocket runs stream interactively: > outbound, < inbound. --json emits NDJSON.\n",
     "--output, --show-headers and --assert apply only to HTTP/GraphQL runs.\n",
@@ -516,6 +525,13 @@ fn execute(
             None,
             allow_partial,
         ),
+        Command::ImportCurl {
+            input,
+            name,
+            parent,
+            index,
+            file,
+        } => curl::import(&input, name, parent, index, file.as_deref(), stdin),
         Command::Validate { input } => collection::validate(&input, stdin),
         Command::GetCollection { input } => collection::get(&input, stdin),
         Command::SetCollection { input, update } => collection::set(&input, &update, stdin),

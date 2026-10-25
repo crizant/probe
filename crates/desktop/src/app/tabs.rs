@@ -525,6 +525,7 @@ impl ProbeApp {
             name,
             method: draft.method.clone(),
             url: draft.url.clone(),
+            settings: None,
             protocol,
             graphql: graphql_update,
             update: Some(update),

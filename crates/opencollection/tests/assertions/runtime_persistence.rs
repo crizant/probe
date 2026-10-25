@@ -161,6 +161,7 @@ fn websocket_assertion_set_and_clear_leave_the_domain_and_saved_yaml_unchanged()
                         name: "WebSocket".into(),
                         method: None,
                         url: Some("wss://example.com".into()),
+                        settings: None,
                         protocol: RequestProtocol::WebSocket,
                         graphql: None,
                         update: Some(update),
