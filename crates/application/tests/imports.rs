@@ -1,4 +1,5 @@
 use std::{
+    error::Error,
     fs,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -52,11 +53,14 @@ fn staged_imports_preserve_provider_metadata_diagnostics_and_persistence() {
         let path = fixture(provider, name);
         let conversion = inspect_import(source, &path).unwrap();
         let imported = conversion.convert(true).unwrap();
+        assert_eq!(conversion.source(), source);
+        assert_eq!(imported.source(), source);
         let direct_collection = match &imported.metadata {
             ImportMetadata::Postman { format, collection } => {
                 let preview = inspect_postman_source(&path).unwrap();
                 let direct = preview.convert(true).unwrap();
                 assert_eq!(*format, preview.format());
+                assert_eq!(imported.source_name(), direct.source.name);
                 assert_eq!(*collection, direct.source);
                 assert_eq!(imported.diagnostics, direct.diagnostics);
                 assert_eq!(imported.partial, direct.partial);
@@ -70,6 +74,7 @@ fn staged_imports_preserve_provider_metadata_diagnostics_and_persistence() {
                 let preview = inspect_yaak_source(&path).unwrap();
                 let direct = preview.convert(None, true).unwrap();
                 assert_eq!(*format, preview.format());
+                assert_eq!(imported.source_name(), direct.workspace.name);
                 assert_eq!(*workspace, direct.workspace);
                 assert_eq!(imported.diagnostics, direct.diagnostics);
                 assert_eq!(imported.partial, direct.partial);
@@ -133,7 +138,15 @@ fn strict_conversion_keeps_diagnostics_and_can_be_retried_after_consent() {
         };
         let error = conversion.convert(false).unwrap_err();
         assert_eq!(error.diagnostics(), direct_error.diagnostics());
-        assert_eq!(error.to_string(), direct_error.to_string());
+        let provider_error: &dyn Error = match &direct_error {
+            ImportError::Postman(error) => error,
+            ImportError::Yaak(error) => error,
+        };
+        assert_eq!(error.to_string(), provider_error.to_string());
+        assert_eq!(
+            error.source().unwrap().to_string(),
+            provider_error.to_string()
+        );
         let imported = conversion.convert(true).unwrap();
         assert!(imported.partial);
         assert_eq!(Some(imported.diagnostics.as_slice()), error.diagnostics());
