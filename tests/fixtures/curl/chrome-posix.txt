@@ -1,0 +1,7 @@
+curl 'https://example.com/api?search=a%2Bb&tag=one&tag=two' \
+  -H 'accept: application/json' \
+  -H 'content-type: application/json' \
+  -H 'x-tag: first' \
+  -H 'x-tag: second' \
+  -b 'session=example-only' \
+  --data-raw '{ "name": "O'\''Brien", "message": "hello 世界", "literal": "$HOME" }'
