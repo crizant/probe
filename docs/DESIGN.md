@@ -302,10 +302,13 @@ existing theme tokens and controls; text buttons and tabs retain an explicit
 The sidebar Add (+) menu offers **Import from cURL…** for an open collection.
 Its compact dialog contains a request name, destination folder (initially the
 selected folder or selected request's parent, otherwise collection root), and a
-multiline POSIX cURL command. Parsing runs in the background through the shared
-parser; pasted commands are never executed. A read-only preview shows method,
-URL, and header, parameter, and body counts. Authentication headers, cookies, and
-Basic credentials trigger a warning that imported values persist in plaintext.
+multiline POSIX cURL command. Folder labels include their unique collection
+selectors to distinguish same-named folders. If a destination is removed during
+a reload, Import stays disabled until the user explicitly selects a destination.
+Parsing runs in the background through the shared parser; pasted commands are
+never executed. A read-only preview shows method, URL, and header, parameter, and
+body counts. Authentication headers, cookies, and Basic credentials trigger a
+warning that imported values persist in plaintext.
 
 Import Request stays disabled until the name and command are valid and workspace
 writes/reloads have finished. Command+Enter / Ctrl+Enter imports; Enter in the

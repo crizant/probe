@@ -556,6 +556,14 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.curl_import_in_progress() {
+            self.show_toast(
+                ToastIntent::Warning,
+                "Wait for the request import to finish before opening another dialog.",
+                cx,
+            );
+            return;
+        }
         if self.application_dialog.is_some() {
             self.enqueue_application_dialog(dialog);
             return;
@@ -1049,9 +1057,10 @@ impl ProbeApp {
                     StructureDialogMode::SaveDetachedRequest { .. }
                         | StructureDialogMode::ImportCurl
                 ) {
-                    dialog.parent.clear();
                     if let Some(curl) = dialog.curl.as_mut() {
-                        curl.error = Some("The destination folder was removed. Review the destination before importing.".into());
+                        curl.destination_required = true;
+                    } else {
+                        dialog.parent.clear();
                     }
                 } else {
                     self.structure_dialog = None;

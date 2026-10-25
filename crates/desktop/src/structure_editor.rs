@@ -12,6 +12,7 @@ pub(crate) struct CurlImport {
     pub(crate) parsed: Option<Result<probe_core::Request, probe_application::CurlParseError>>,
     pub(crate) error: Option<String>,
     pub(crate) committed: bool,
+    pub(crate) destination_required: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

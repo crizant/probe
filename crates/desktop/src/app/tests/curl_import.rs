@@ -427,7 +427,9 @@ fn curl_import_protects_documentation_and_committed_refresh_failure(cx: &mut Tes
 }
 
 #[gpui_kit::test]
-fn curl_import_defers_stale_watcher_reload_and_workspace_close(cx: &mut TestAppContext) {
+fn curl_import_keeps_its_lock_when_about_opens_and_defers_reload_and_close(
+    cx: &mut TestAppContext,
+) {
     let (window, path) = import_window(cx, "curl-reload-race");
     fill_import(window, cx, COMMAND);
     window
@@ -436,6 +438,23 @@ fn curl_import_defers_stale_watcher_reload_and_workspace_close(cx: &mut TestAppC
             let baseline = view.loaded_workspace.as_ref().unwrap().baseline();
             view.submit_structure_dialog(window, cx);
             assert!(view.curl_import_in_progress());
+            // AboutProbe's global handler calls this shared entry point.
+            view.show_application_dialog(ApplicationDialog::About, window, cx);
+            assert!(view.application_dialog.is_none());
+            assert!(
+                view.curl_import_in_progress(),
+                "About must not remove the import lock"
+            );
+            assert_eq!(
+                view.structure_dialog
+                    .as_ref()
+                    .unwrap()
+                    .curl
+                    .as_ref()
+                    .unwrap()
+                    .command,
+                COMMAND
+            );
             assert!(!view.apply_watched_workspace(
                 baseline,
                 Ok(fresh),
@@ -523,5 +542,138 @@ fn curl_import_resumes_saves_queued_during_atomic_creation(cx: &mut TestAppConte
             .as_deref(),
         Some("https://queued-save.test")
     );
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn curl_import_disambiguates_same_named_destination_folders(cx: &mut TestAppContext) {
+    let (window, path) = import_window(cx, "curl-folder-labels");
+    fs::write(
+        &path,
+        r#"opencollection: 1.0.0
+info:
+  name: Destinations
+bundled: true
+items:
+  - info: {name: Auth, type: folder}
+    items:
+      - info: {name: Examples, type: folder}
+        items: []
+  - info: {name: Payments, type: folder}
+    items:
+      - info: {name: Examples, type: folder}
+        items: []
+"#,
+    )
+    .unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.set_workspace(
+                path.clone(),
+                probe_opencollection::load_workspace(&path).unwrap(),
+            );
+            view.open_curl_import_dialog(window, cx);
+            let choices = view.curl_import_destinations();
+            let auth = choices
+                .iter()
+                .find(|(selector, _)| selector == "items/0/items/0")
+                .unwrap();
+            let payments = choices
+                .iter()
+                .find(|(selector, _)| selector == "items/1/items/0")
+                .unwrap();
+            assert!(auth.1.contains("Examples"));
+            assert!(payments.1.contains("Examples"));
+            assert_ne!(
+                auth.1, payments.1,
+                "same-named folders must be distinguishable"
+            );
+            assert!(auth.1.contains(&auth.0));
+            assert!(payments.1.contains(&payments.0));
+        })
+        .unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn curl_import_removed_destination_requires_explicit_reselection(cx: &mut TestAppContext) {
+    let (window, path) = import_window(cx, "curl-removed-destination");
+    window
+        .update(cx, |view, _, cx| {
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+        })
+        .unwrap();
+    fill_import(window, cx, COMMAND);
+    let mut external = probe_opencollection::load_workspace(&path).unwrap();
+    external
+        .apply_structure(probe_opencollection::StructureOperation::Delete {
+            target: probe_opencollection::ItemLocator {
+                kind: probe_core::ItemKind::Folder,
+                selector: "items/1".into(),
+            },
+        })
+        .unwrap();
+    let before = fs::read(&path).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.reconcile_filesystem_workspace(external, BTreeMap::new(), window, cx));
+            let dialog = view.structure_dialog.as_ref().unwrap();
+            assert_eq!(dialog.parent, "items/1", "do not silently select the root");
+            assert!(dialog.curl.as_ref().unwrap().destination_required);
+            assert!(view.curl_import_disabled());
+            view.submit_structure_dialog(window, cx);
+            assert!(view.structure_task.is_none());
+            // Correcting command/name validation must not acknowledge a missing folder.
+            view.structure_dialog.as_mut().unwrap().name = "Reselected".into();
+            view.edit_curl_command("curl https://reselected.test".into(), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.curl_import_disabled());
+            view.submit_structure_dialog(window, cx);
+            assert!(view.structure_task.is_none());
+        })
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before);
+
+    // Explicitly choosing Collection root is permitted, even though its selector
+    // is empty. Exercise the actual dropdown callback rather than clearing a flag.
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let destination = visual.debug_bounds("curl-parent-trigger").unwrap();
+    visual.simulate_click(destination.center(), Modifiers::default());
+    drop(visual);
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), "enter");
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            let dialog = view.structure_dialog.as_ref().unwrap();
+            assert_eq!(dialog.parent, "");
+            assert!(!dialog.curl.as_ref().unwrap().destination_required);
+            assert!(!view.curl_import_disabled());
+            view.submit_structure_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.structure_dialog.is_none(), "{:?}", toast_debug(view))
+        })
+        .unwrap();
+    let disk = probe_opencollection::load_workspace(&path).unwrap();
+    let imported = disk
+        .workspace()
+        .request(disk.request_key("items/1").unwrap())
+        .unwrap();
+    assert_eq!(imported.metadata.name.as_deref(), Some("Reselected"));
+    assert_eq!(imported.url.as_deref(), Some("https://reselected.test"));
     fs::remove_file(path).unwrap();
 }

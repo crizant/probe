@@ -101,11 +101,35 @@ impl ProbeApp {
             || self.has_active_workspace_write()
             || self.structure_dialog.as_ref().is_none_or(|dialog| {
                 dialog.name.trim().is_empty()
-                    || dialog
-                        .curl
-                        .as_ref()
-                        .is_none_or(|curl| curl.committed || !matches!(curl.parsed, Some(Ok(_))))
+                    || dialog.curl.as_ref().is_none_or(|curl| {
+                        curl.committed
+                            || curl.destination_required
+                            || !matches!(curl.parsed, Some(Ok(_)))
+                    })
             })
+    }
+
+    pub(super) fn curl_import_destinations(&self) -> Vec<(String, String)> {
+        let mut destinations = vec![(String::new(), "Collection root".to_owned())];
+        if let Some(loaded) = &self.loaded_workspace {
+            destinations.extend(loaded.folders().iter().filter_map(|folder| {
+                Some((
+                    folder.selector().to_owned(),
+                    format!(
+                        "{} — {}",
+                        loaded
+                            .workspace()
+                            .folder(folder.key())?
+                            .metadata
+                            .name
+                            .as_deref()
+                            .unwrap_or("Untitled folder"),
+                        folder.selector()
+                    ),
+                ))
+            }));
+        }
+        destinations
     }
 
     pub(super) fn render_curl_import_dialog(
@@ -126,21 +150,6 @@ impl ProbeApp {
         let parent_view = cx.weak_entity();
         let cancel_view = cx.weak_entity();
         let submit_view = cx.weak_entity();
-        let mut destinations = vec![(String::new(), "Collection root".to_owned())];
-        if let Some(loaded) = &self.loaded_workspace {
-            destinations.extend(loaded.folders().iter().filter_map(|folder| {
-                Some((
-                    folder.selector().to_owned(),
-                    loaded
-                        .workspace()
-                        .folder(folder.key())?
-                        .metadata
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| "Untitled folder".into()),
-                ))
-            }));
-        }
         let mut form = div()
             .mt(px(theme.metrics.spacing_4))
             .flex()
@@ -173,9 +182,9 @@ impl ProbeApp {
                 components::dropdown(
                     theme,
                     "curl-parent",
-                    "Destination folder",
-                    Some(dialog.parent.clone()),
-                    destinations,
+                    "Choose a destination folder",
+                    (!curl.destination_required).then(|| dialog.parent.clone()),
+                    self.curl_import_destinations(),
                     388.0,
                     move |value, _, cx| {
                         let _ = parent_view.update(cx, |view, cx| {
@@ -184,6 +193,9 @@ impl ProbeApp {
                                 && let Some(dialog) = view.structure_dialog.as_mut()
                             {
                                 dialog.parent.clone_from(value);
+                                if let Some(curl) = dialog.curl.as_mut() {
+                                    curl.destination_required = false;
+                                }
                             }
                             cx.notify();
                         });
@@ -253,6 +265,10 @@ impl ProbeApp {
                     .text_color(theme.colors.status.error)
                     .child("Request name is required."),
             );
+        }
+        if curl.destination_required {
+            form = form.child(div().text_size(px(theme.typography.caption_size)).text_color(theme.colors.status.error)
+                .child("The destination folder was removed. Select a destination before importing."));
         }
         if let Some(error) = &curl.error {
             form = form.child(
