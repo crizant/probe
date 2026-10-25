@@ -2,6 +2,7 @@ use std::{
     error::Error,
     fs,
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -22,14 +23,16 @@ fn fixture(provider: &str, name: &str) -> PathBuf {
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "probe-import-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        // Parallel tests can observe the same wall-clock timestamp, including
+        // on Windows where the file clock often does not advance between them.
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("probe-import-{}-{nanos}-{id}", std::process::id()));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
