@@ -8,6 +8,9 @@
 
 pub mod imports;
 
+mod curl;
+pub use curl::{CurlParseError, parse_curl};
+
 mod assertions;
 mod client_certificate;
 pub use client_certificate::{
