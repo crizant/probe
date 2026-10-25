@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-25
+
 ### Added
 
 - Settings dialog for choosing System, Light, or Dark theme mode, applied and
@@ -689,6 +691,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[2.1.1]: https://github.com/crizant/probe/releases/tag/v2.1.1
 [2.1.0]: https://github.com/crizant/probe/releases/tag/v2.1.0
 [2.0.0]: https://github.com/crizant/probe/releases/tag/v2.0.0
 [1.1.1]: https://github.com/crizant/probe/releases/tag/v1.1.1
