@@ -4,6 +4,7 @@
 
 use std::io::{self, Read, Write};
 
+use probe_application::imports::ImportSource;
 use serde_json::json;
 
 mod agent;
@@ -497,12 +498,24 @@ fn execute(
             destination,
             workspace,
             allow_partial,
-        } => collection::import_yaak(source, destination, workspace.as_deref(), allow_partial),
+        } => collection::import_collection(
+            ImportSource::Yaak,
+            source,
+            destination,
+            workspace.as_deref(),
+            allow_partial,
+        ),
         Command::ImportPostman {
             source,
             destination,
             allow_partial,
-        } => collection::import_postman(source, destination, allow_partial),
+        } => collection::import_collection(
+            ImportSource::Postman,
+            source,
+            destination,
+            None,
+            allow_partial,
+        ),
         Command::Validate { input } => collection::validate(&input, stdin),
         Command::GetCollection { input } => collection::get(&input, stdin),
         Command::SetCollection { input, update } => collection::set(&input, &update, stdin),

@@ -52,8 +52,10 @@ interface. OpenCollection remains the only canonical persistence representation:
                        ↓
        Bundled YAML file
 
-The adapters do not own CLI prompts, GPUI state, or filesystem persistence. Both
-frontends invoke them and pass the converted domain value to the shared atomic writer.
+The adapters do not own CLI prompts, GPUI state, or filesystem persistence. The
+application layer coordinates inspection, conversion, and atomic bundled workspace
+creation. Both frontends use its staged import API, retaining provider-specific
+metadata and typed diagnostics; prompts and output formatting stay in the interfaces.
 Shared import diagnostics live in the core so strict and partial behavior remains
 identical across providers and interfaces.
 OpenCollection projection diagnostics live in the repository adapter. They identify
@@ -99,18 +101,23 @@ Infrastructure implements capabilities required by the application.
 
 The crate graph is acyclic:
 
-    probe-cli ─────┐        ┌──► probe-opencollection ──┐
-                   ├────────┤    probe-postman ─────────┤
-    probe-desktop ─┘        │    probe-yaak ────────────┤
-                            │                           ▼
-                            └──► probe-application ──► probe-core
-                                        │                ▲
-                                        ├──► probe-http ─┤
-                                        └──► probe-websocket ─┘
+    probe-cli ─────┐
+                   ├──► probe-application ──► probe-core
+    probe-desktop ─┘             │                 ▲
+                                 ├──► probe-postman ┤
+                                 ├──► probe-yaak ───┤
+                                 ├──► probe-opencollection
+                                 ├──► probe-http ───┤
+                                 └──► probe-websocket
 
-Both interfaces depend on `probe-application`, `probe-core`, the repository and
-import adapters, and `probe-http` for engine construction and response types.
-`probe-application` coordinates `probe-core`, `probe-http`, and `probe-websocket`.
+Interfaces also use repository operations directly; every adapter depends inward
+on `probe-core`.
+
+Both interfaces depend on `probe-application`, `probe-core`, the repository,
+and `probe-http` for engine construction and response types. Import adapter types
+remain available for provider-specific presentation and diagnostics.
+`probe-application` coordinates `probe-core`, the repository and import adapters,
+`probe-http`, and `probe-websocket`.
 Both transports depend inward on `probe-core`, never on each other or on interfaces.
 Only `probe-desktop` depends on `gpui-kit` (GPUI and gpui-base) and `keyring`.
 
@@ -214,9 +221,16 @@ was used. `NoSecrets` is the shared provider for invocations without a secret ba
 The process-environment provider stays in the CLI. The native credential provider and
 its presence observer stay in the desktop.
 
-Other use cases are not yet collected here. Loading, listing, validation, saving,
-structure edits, and import conversion are shared through `probe-core`,
-`probe-opencollection`, `probe-postman`, and `probe-yaak` directly.
+Portable imports use `probe_application::imports::inspect_import` to retain an
+`ImportConversion`, then `convert` with the caller's partial-import consent and
+optional Yaak workspace selection. `CollectionImport` retains the converted domain
+collection, provider metadata, diagnostics, partial flag, and suggested environment.
+Its `create_workspace` operation delegates atomic, no-overwrite persistence to the
+OpenCollection repository. Inspection and persistence are blocking; desktop callers
+schedule every import stage on their background executor.
+
+Loading, listing, validation, saving, and structure edits are shared through
+`probe-core` and `probe-opencollection` directly.
 
 
 ## Workspace
