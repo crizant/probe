@@ -18,8 +18,10 @@ pub(crate) fn import(
 ) -> Result<CommandOutput, CliError> {
     // Never evaluate the command or include input/read-error contents in diagnostics.
     let source = if let Some(file) = file {
-        fs::read_to_string(file)
-            .map_err(|_| invalid_import("cannot read cURL command file as UTF-8".to_owned()))?
+        let bytes = fs::read(file)
+            .map_err(|_| invalid_import("cannot read cURL command file".to_owned()))?;
+        String::from_utf8(bytes)
+            .map_err(|_| invalid_import("cURL command file is not valid UTF-8".to_owned()))?
     } else {
         let mut source = String::new();
         stdin.read_to_string(&mut source).map_err(|_| CliError {

@@ -388,3 +388,146 @@ fn curl_import_help_and_argument_validation_follow_cli_conventions() {
         assert_eq!(error["error"]["category"], "invalid_arguments");
     }
 }
+
+fn with_terminal_status(
+    args: &[&str],
+    stdin: &mut impl Read,
+    terminal: bool,
+) -> probe_cli::RunOutput {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let exit_code = probe_cli::run_with_io_and_terminal(
+        args,
+        stdin,
+        terminal,
+        &mut stdout,
+        &mut stderr,
+        |_| panic!("cURL import must not start WebSocket input"),
+    )
+    .unwrap();
+    probe_cli::RunOutput {
+        stdout: String::from_utf8(stdout).unwrap(),
+        stderr: String::from_utf8(stderr).unwrap(),
+        exit_code,
+    }
+}
+
+#[test]
+fn terminal_stdin_fails_without_reading_but_file_and_redirected_input_work() {
+    struct MustNotRead;
+    impl Read for MustNotRead {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            panic!("interactive stdin must not be read");
+        }
+    }
+    for unbundled in [false, true] {
+        let path = workspace(unbundled);
+        let before = documents(&path);
+        for json in [false, true] {
+            let mut args = vec![
+                "request",
+                "import",
+                "curl",
+                path.to_str().unwrap(),
+                "--name",
+                "Imported",
+            ];
+            if json {
+                args.push("--json");
+            }
+            let output = with_terminal_status(&args, &mut MustNotRead, true);
+            assert_eq!(output.exit_code, 2);
+            let message = if json {
+                assert!(output.stderr.is_empty());
+                let error: Value = serde_json::from_str(&output.stdout).unwrap();
+                assert_eq!(error["schemaVersion"], 1);
+                assert_eq!(error["error"]["category"], "invalid_arguments");
+                assert_eq!(error["error"]["exitCode"], 2);
+                error["error"]["message"].as_str().unwrap().to_owned()
+            } else {
+                assert!(output.stdout.is_empty());
+                assert!(output.stderr.starts_with("error[invalid_arguments]:"));
+                output.stderr
+            };
+            assert!(message.contains("pipe a cURL command"));
+            assert!(message.contains("--file <path>"));
+            assert_eq!(documents(&path), before);
+        }
+        let file = temporary_path("terminal-curl.txt");
+        fs::write(&file, "curl https://example.com").unwrap();
+        let output = with_terminal_status(
+            &[
+                "request",
+                "import",
+                "curl",
+                path.to_str().unwrap(),
+                "--name",
+                "File imported",
+                "--file",
+                file.to_str().unwrap(),
+            ],
+            &mut MustNotRead,
+            true,
+        );
+        assert_eq!(output.exit_code, 0, "{output:?}");
+        let output = with_terminal_status(
+            &[
+                "request",
+                "import",
+                "curl",
+                path.to_str().unwrap(),
+                "--name",
+                "Redirected imported",
+            ],
+            &mut &b"curl https://example.com"[..],
+            false,
+        );
+        assert_eq!(output.exit_code, 0, "{output:?}");
+        fs::remove_file(file).unwrap();
+        cleanup(path);
+    }
+}
+
+#[test]
+fn file_read_and_utf8_errors_are_distinct_safe_and_leave_workspace_unchanged() {
+    let root = temporary_path("curl-read-errors");
+    fs::create_dir(&root).unwrap();
+    let missing = root.join("missing");
+    let invalid_utf8 = root.join("invalid.txt");
+    fs::write(&invalid_utf8, b"credential-secret\xff").unwrap();
+    for unbundled in [false, true] {
+        let path = workspace(unbundled);
+        let before = documents(&path);
+        for (file, message) in [
+            (&missing, "cannot read cURL command file"),
+            (&root, "cannot read cURL command file"),
+            (&invalid_utf8, "cURL command file is not valid UTF-8"),
+        ] {
+            for json in [false, true] {
+                let mut options = vec!["--name", "Imported", "--file", file.to_str().unwrap()];
+                if json {
+                    options.push("--json");
+                }
+                let output = import(path.to_str().unwrap(), &options, "");
+                assert_eq!(output.status.code(), Some(3));
+                if json {
+                    assert!(output.stderr.is_empty());
+                    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+                    assert_eq!(error["schemaVersion"], 1);
+                    assert_eq!(error["error"]["category"], "invalid_import");
+                    assert_eq!(error["error"]["exitCode"], 3);
+                    assert_eq!(error["error"]["message"], message);
+                } else {
+                    assert!(output.stdout.is_empty());
+                    assert_eq!(
+                        String::from_utf8(output.stderr).unwrap(),
+                        format!("error[invalid_import]: {message}\n")
+                    );
+                }
+                assert_eq!(documents(&path), before);
+            }
+        }
+        cleanup(path);
+    }
+    fs::remove_dir_all(root).unwrap();
+}

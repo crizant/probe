@@ -146,6 +146,7 @@ pub const fn help() -> &'static str {
         "  environment delete <path>           Delete an environment\n",
         "  environment rename <path>           Rename an environment\n",
         "\n",
+        "cURL import requires piped/redirected stdin or --file; interactive stdin is rejected.\n",
         "cURL import saves literal secrets in plaintext OpenCollection YAML; it never executes the request.\n",
         "\n",
         "Options:\n",
@@ -264,6 +265,7 @@ const REQUEST_HELP: &str = concat!(
     "      --max-messages <n>   WebSocket only: close after n inbound messages.\n",
     "      --timeout <seconds>  WebSocket only: CLI live-run bound, not connection timeout.\n",
     "\n",
+    "cURL import rejects interactive stdin; pipe/redirect a cURL command or use --file <path>.\n",
     "cURL import reads stdin or --file and never executes the request. Literal authorization\n",
     "headers, cookies, credentials, and bodies may be saved in plaintext OpenCollection YAML.\n",
     "\n",
@@ -368,6 +370,27 @@ pub fn run_with_io<I, S, R, F>(
     stdin: &mut R,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    input: F,
+) -> io::Result<u8>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+    R: Read,
+    F: FnMut(&mut dyn Read) -> io::Result<tokio::sync::mpsc::Receiver<io::Result<String>>>,
+{
+    run_with_io_and_terminal(args, stdin, false, stdout, stderr, input)
+}
+
+/// Runs commands with an explicit terminal status for the supplied reader.
+/// The executable detects this at its stdin boundary; injected readers default to
+/// non-terminal in [`run_with_io`]. Terminal stdin requires `--file` for cURL import.
+/// Other commands retain the same input and streaming behavior as [`run_with_io`].
+pub fn run_with_io_and_terminal<I, S, R, F>(
+    args: I,
+    stdin: &mut R,
+    stdin_is_terminal: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
     mut input: F,
 ) -> io::Result<u8>
 where
@@ -377,7 +400,7 @@ where
     F: FnMut(&mut dyn Read) -> io::Result<tokio::sync::mpsc::Receiver<io::Result<String>>>,
 {
     let mut live = streaming::LiveOutput::new(stdout, stderr, &mut input);
-    let output = run_internal(args, stdin, &mut live);
+    let output = run_internal(args, stdin, stdin_is_terminal, &mut live);
     live.stdout.write_all(output.stdout.as_bytes())?;
     live.stderr.write_all(output.stderr.as_bytes())?;
     live.stdout.flush()?;
@@ -385,7 +408,12 @@ where
     Ok(output.exit_code)
 }
 
-fn run_internal<I, S, R>(args: I, stdin: &mut R, live: &mut streaming::LiveOutput<'_>) -> RunOutput
+fn run_internal<I, S, R>(
+    args: I,
+    stdin: &mut R,
+    stdin_is_terminal: bool,
+    live: &mut streaming::LiveOutput<'_>,
+) -> RunOutput
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -445,7 +473,14 @@ where
     }
 
     live.mode = streaming::OutputMode::from_flags(json_output, quiet);
-    match parse_command(args).and_then(|command| execute(command, stdin, live)) {
+    match parse_command(args).and_then(|command| {
+        if stdin_is_terminal && matches!(&command, Command::ImportCurl { file: None, .. }) {
+            return Err(CliError::invalid_arguments(
+                "cURL import requires piped or redirected stdin; pipe a cURL command into probe request import curl or use --file <path>",
+            ));
+        }
+        execute(command, stdin, live)
+    }) {
         Ok(_) if live.started => RunOutput {
             stdout: String::new(),
             stderr: String::new(),

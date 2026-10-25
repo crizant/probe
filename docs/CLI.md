@@ -143,7 +143,10 @@ not silent data loss.
 
 `request import curl` imports one POSIX cURL command into an existing bundled or
 unbundled workspace. An explicit, nonempty `--name` is required. Read the command
-from stdin by default or from a UTF-8 file with `--file`; file mode ignores stdin.
+from piped or redirected stdin by default or from a UTF-8 file with `--file`;
+file mode ignores stdin. When stdin is an interactive terminal and `--file` is
+absent, import fails immediately with `invalid_arguments` (exit 2), explaining
+how to pipe a cURL command or use `--file`. It does not wait for terminal input.
 The workspace must be a filesystem path (`-` is rejected). Omit `--parent` to use
 the root, or pass an exact folder selector from `folder list`. `--index` is a
 zero-based sibling insertion position; omitting it appends. Existing requests
