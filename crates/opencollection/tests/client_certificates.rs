@@ -241,6 +241,27 @@ fn unbundled_environment_rename_preserves_certificate_configuration() {
             .unwrap(),
         &replacement
     );
+
+    let prepared = loaded
+        .prepare_environment_create("new".into(), None)
+        .unwrap();
+    let debug = format!("{prepared:?}");
+    assert!(debug.contains(&format!(
+        "kind: Unbundled {{ root: {:?} }}",
+        fs::canonicalize(&root).unwrap()
+    )));
+    let completed = prepared.execute().unwrap();
+    assert_redacted(&completed);
+    loaded.complete_environment_create(completed).unwrap();
+
+    let prepared = loaded.prepare_environment_delete("new").unwrap();
+    assert_redacted(&prepared);
+    let completed = prepared.execute().unwrap();
+    for debug in [format!("{completed:?}"), format!("{completed:#?}")] {
+        assert!(debug.contains("serialized_source: None"));
+        assert!(debug.contains("bundled_index: None"));
+    }
+    loaded.complete_environment_delete(completed).unwrap();
 }
 
 #[test]
@@ -313,21 +334,40 @@ fn inheritance_errors_and_certificate_free_defaults_are_unchanged() {
 }
 
 fn assert_redacted(value: &impl std::fmt::Debug) {
-    let debug = format!("{value:?}");
-    assert!(
-        !debug.is_empty(),
-        "debug output should identify the operation"
-    );
-    assert!(!debug.contains("literal-passphrase"));
-    assert!(!debug.contains("certPassphrase"));
-    assert!(debug.contains("len="));
+    for debug in [format!("{value:?}"), format!("{value:#?}")] {
+        assert!(
+            !debug.is_empty(),
+            "debug output should identify the operation"
+        );
+        for sensitive in [
+            "literal-passphrase",
+            "certPassphrase",
+            "replacement-pem-passphrase",
+            "replacement-pkcs12-passphrase",
+            "PRIVATE_YAML_VALUE",
+            "PRIVATE_SECRET_VALUE",
+            "PRIVATE_COMMENT",
+        ] {
+            assert!(!debug.contains(sensitive), "debug disclosed sensitive data");
+        }
+        // Arc<[u8]>'s default Debug prints decimal bytes rather than YAML text.
+        assert!(!debug.contains("80, 82, 73, 86, 65, 84, 69"));
+        assert!(debug.contains("len="));
+    }
 }
 
 #[test]
 fn repository_debug_output_never_dumps_passphrase_bearing_source() {
     let path = temporary_path("certificate-debug.yml");
     let source = source().replace("items: []", "items:\n  - info: {name: Example, type: http}\n    http: {method: GET, url: https://api.example.com}");
-    fs::write(&path, source).unwrap();
+    let source = source.replace(
+        "      variables:\n        - name: baseUrl",
+        "      variables:\n        - {name: secretToken, secret: true, value: PRIVATE_SECRET_VALUE}\n        - name: baseUrl",
+    );
+    let source = format!(
+        "{source}\nx-private: {{value: PRIVATE_YAML_VALUE, secret: PRIVATE_SECRET_VALUE}}\n# PRIVATE_COMMENT\n"
+    );
+    fs::write(&path, &source).unwrap();
     let mut loaded = load_workspace(&path).unwrap();
     assert_redacted(&loaded);
     assert!(format!("{loaded:?}").contains("SourceDocument"));
@@ -338,6 +378,15 @@ fn repository_debug_output_never_dumps_passphrase_bearing_source() {
         })
         .unwrap();
     assert_redacted(&prepared);
+    let debug = format!("{prepared:?}");
+    assert!(debug.starts_with("PreparedDocumentationSave { baseline:"));
+    assert!(debug.contains(&format!("original_source: Source(len={})", source.len())));
+    assert!(debug.contains("update: Collection(CollectionUpdate"));
+    assert!(debug.contains("Updated"));
+    assert!(debug.contains(&format!(
+        "document_path: {:?}",
+        fs::canonicalize(&path).unwrap()
+    )));
     let completed = prepared.execute().unwrap();
     assert_redacted(&completed);
     loaded.complete_documentation_save(completed).unwrap();
@@ -367,7 +416,22 @@ fn repository_debug_output_never_dumps_passphrase_bearing_source() {
     assert_redacted(&completed);
     loaded.complete_environment_save(completed).unwrap();
 
-    let replacement = loaded.workspace().environments()[0].clone();
+    let mut replacement = loaded.workspace().environments()[0].clone();
+    replacement.client_certificates = vec![
+        ClientCertificate::Pem {
+            domain: "dev-api.example.com".into(),
+            certificate_file_path: "./certs/dev.pem".into(),
+            private_key_file_path: "./certs/dev-key.pem".into(),
+            passphrase: Some("replacement-pem-passphrase".into()),
+            disabled: false,
+        },
+        ClientCertificate::Pkcs12 {
+            domain: "dev-api.example.com".into(),
+            pkcs12_file_path: "./certs/dev.p12".into(),
+            passphrase: Some("replacement-pkcs12-passphrase".into()),
+            disabled: false,
+        },
+    ];
     let prepared = loaded
         .prepare_environment_replace("development", replacement)
         .unwrap();
