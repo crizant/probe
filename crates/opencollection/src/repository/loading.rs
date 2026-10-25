@@ -249,7 +249,7 @@ fn read_items(
 struct ReadItem {
     item: Option<CollectionItem>,
     diagnostics: Vec<ProjectionDiagnostic>,
-    original_source: Arc<[u8]>,
+    original_source: SourceBytes,
 }
 
 fn read_item(path: &Path) -> Result<ReadItem, LoadError> {

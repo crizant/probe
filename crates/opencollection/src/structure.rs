@@ -3,7 +3,6 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use atomic_write_file::AtomicWriteFile;
@@ -11,6 +10,7 @@ use serde_yaml_ng::{Mapping, Value};
 
 use probe_core::{FieldPatch, GraphqlUpdate, ItemKind, RequestProtocol, RequestUpdate};
 
+use crate::debug::SourceBytes;
 use crate::document::NativeItemType;
 use crate::repository::{
     LoadedWorkspace, SaveError, SaveLock, WorkspaceSource, apply_request_update, atomic_write,
@@ -251,7 +251,7 @@ impl LoadedWorkspace {
 pub struct PreparedStructureEdit {
     operation: StructureOperation,
     source: WorkspaceSource,
-    baselines: BTreeMap<PathBuf, Arc<[u8]>>,
+    baselines: BTreeMap<PathBuf, SourceBytes>,
     old_selectors: Vec<String>,
 }
 
@@ -301,7 +301,7 @@ fn apply_bundled(
 
 fn apply_unbundled(
     root: &Path,
-    baselines: &BTreeMap<PathBuf, Arc<[u8]>>,
+    baselines: &BTreeMap<PathBuf, SourceBytes>,
     operation: StructureOperation,
 ) -> Result<StructureResult, StructureError> {
     let root_config = root.join("opencollection.yml");
