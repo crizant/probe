@@ -15,12 +15,11 @@ use probe_core::{
 };
 use probe_http::{HttpResponse, ResponseHeader};
 use probe_postman::{COLLECTION_VARIABLES_ENVIRONMENT, inspect_postman_source};
-use probe_yaak::{ImportDiagnostic, ImportDiagnosticSeverity, inspect_yaak_source};
+use probe_yaak::{ImportDiagnostic, ImportDiagnosticSeverity};
 use tokio::sync::oneshot;
 
 use super::imports::{
-    CollectionPathResolution, ImportConversion, ImportConversionResult, InspectedImport,
-    inspect_import, resolve_collection_path,
+    CollectionPathResolution, ImportConversion, inspect_import, resolve_collection_path,
 };
 use super::{
     ApplicationDialog, ApplicationDialogAction, CloseImportSubmenu, DesktopMenu,
@@ -924,16 +923,14 @@ fn import_diagnostics_bound_the_number_of_issue_groups() {
 
 #[test]
 fn import_inspection_selects_the_only_yaak_workspace() {
-    let Ok(InspectedImport::Ready(conversion)) =
-        inspect_import(ImportSource::Yaak, yaak_fixture("export-v4.json"))
-    else {
+    let Ok(conversion) = inspect_import(ImportSource::Yaak, yaak_fixture("export-v4.json")) else {
         panic!("single-workspace Yaak export should be ready to convert");
     };
     assert_eq!(conversion.source(), ImportSource::Yaak);
-    let ImportConversionResult::Imported(import) = conversion.convert(false) else {
-        panic!("lossless Yaak export should convert");
-    };
-    assert_eq!(import.source, ImportSource::Yaak);
+    let import = conversion
+        .convert(false)
+        .expect("lossless Yaak export should convert");
+    assert_eq!(import.source(), ImportSource::Yaak);
     assert_eq!(
         import.selected_environment.as_deref(),
         Some("Global Variables")
@@ -948,25 +945,23 @@ fn import_inspection_reports_invalid_sources() {
 
 #[test]
 fn lossy_import_conversion_waits_for_confirmation_then_imports_partially() {
-    let Ok(InspectedImport::Ready(conversion)) = inspect_import(
+    let Ok(conversion) = inspect_import(
         ImportSource::Postman,
         postman_fixture("collection-lossy.json"),
     ) else {
         panic!("Postman collection should be ready to convert");
     };
-    let ImportConversionResult::NeedsPartialConfirmation { conversion, detail } =
-        conversion.convert(false)
-    else {
-        panic!("strict lossy conversion should require confirmation");
-    };
-    assert!(detail.contains("lossy"));
+    let error = conversion
+        .convert(false)
+        .expect_err("strict lossy conversion should fail");
+    assert!(format_import_diagnostics(error.diagnostics().unwrap()).contains("lossy"));
     assert_eq!(conversion.source(), ImportSource::Postman);
 
-    let ImportConversionResult::Imported(import) = conversion.convert(true) else {
-        panic!("confirmed partial conversion should import supported data");
-    };
-    assert_eq!(import.source, ImportSource::Postman);
-    assert!(import.warning_count > 0);
+    let import = conversion
+        .convert(true)
+        .expect("confirmed partial conversion should import supported data");
+    assert_eq!(import.source(), ImportSource::Postman);
+    assert!(!import.diagnostics.is_empty());
 }
 
 #[gpui_kit::test]
@@ -1008,10 +1003,13 @@ fn postman_lossy_import_requires_desktop_confirmation(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn successful_postman_import_selects_collection_variables_environment(cx: &mut TestAppContext) {
     cx.update(Theme::init);
-    let imported = inspect_postman_source(postman_fixture("collection-v2.1.json"))
-        .unwrap()
-        .convert(false)
-        .unwrap();
+    let imported = probe_application::imports::inspect_import(
+        ImportSource::Postman,
+        postman_fixture("collection-v2.1.json"),
+    )
+    .unwrap()
+    .convert(false)
+    .unwrap();
     let destination = std::env::temp_dir().join(format!(
         "probe-desktop-postman-{}-{}.yml",
         std::process::id(),
@@ -1042,7 +1040,7 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
                     collapsed_folders: vec!["items/0".to_owned()],
                 },
             );
-            view.choose_import_destination(imported.into(), window, cx);
+            view.choose_import_destination(imported, window, cx);
         })
         .unwrap();
     assert!(cx.did_prompt_for_new_path());
@@ -1085,10 +1083,13 @@ fn successful_postman_import_selects_collection_variables_environment(cx: &mut T
 #[gpui_kit::test]
 fn successful_yaak_import_selects_global_environment(cx: &mut TestAppContext) {
     cx.update(Theme::init);
-    let imported = inspect_yaak_source(yaak_fixture("export-v4.json"))
-        .unwrap()
-        .convert(None, false)
-        .unwrap();
+    let imported = probe_application::imports::inspect_import(
+        ImportSource::Yaak,
+        yaak_fixture("export-v4.json"),
+    )
+    .unwrap()
+    .convert(false)
+    .unwrap();
     let destination = std::env::temp_dir().join(format!(
         "probe-desktop-yaak-{}-{}.yml",
         std::process::id(),
@@ -1103,7 +1104,7 @@ fn successful_yaak_import_selects_global_environment(cx: &mut TestAppContext) {
     window
         .update(cx, |view, window, cx| {
             view.session_store = None;
-            view.choose_import_destination(imported.into(), window, cx);
+            view.choose_import_destination(imported, window, cx);
         })
         .unwrap();
     assert!(cx.did_prompt_for_new_path());

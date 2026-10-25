@@ -738,7 +738,7 @@ impl ProbeApp {
                 if let Some(workspace) = workspaces.get(index) {
                     let conversion = ImportConversion::Yaak {
                         preview,
-                        workspace_id: workspace.id.clone(),
+                        workspace_id: Some(workspace.id.clone()),
                     };
                     self.convert_import(conversion, false, window, cx);
                 } else {

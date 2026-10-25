@@ -28,17 +28,16 @@ use gpui_kit::{
 #[cfg(target_os = "macos")]
 use gpui_kit::{Menu, MenuItem, OsAction, SystemMenuType};
 use probe_core::{
-    AuthenticationKind, AuthenticationValue, Body, Collection, Environment, EnvironmentVariable,
-    FileReference, FormField, Header, ItemKind, MultipartPart, MultipartPartKind, MultipartValue,
-    QueryParameter, RawBodyKind, Request, RequestBody, RequestKey, SecretVariable, Variable,
-    VariableValue, VariableValueSet, WorkspaceItemRef, add_path_parameter,
-    ensure_path_parameters_from_url, remove_path_parameter_at, rename_path_parameter_at,
-    resolve_environment,
+    AuthenticationKind, AuthenticationValue, Body, Environment, EnvironmentVariable, FileReference,
+    FormField, Header, ItemKind, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter,
+    RawBodyKind, Request, RequestBody, RequestKey, SecretVariable, Variable, VariableValue,
+    VariableValueSet, WorkspaceItemRef, add_path_parameter, ensure_path_parameters_from_url,
+    remove_path_parameter_at, rename_path_parameter_at, resolve_environment,
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
 use probe_opencollection::{
     CompletedEnvironmentDelete, LoadedWorkspace, StructureOperation, StructureResult,
-    create_bundled_workspace, create_bundled_workspace_from_collection, load_workspace,
+    create_bundled_workspace, load_workspace,
 };
 mod active_certificate;
 mod certificates;

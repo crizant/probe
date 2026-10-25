@@ -1,11 +1,8 @@
 use std::{io::Read, path::PathBuf};
 
+use probe_application::imports::{ImportConversion, ImportMetadata, ImportSource, inspect_import};
 use probe_core::{CollectionUpdate, FieldPatch};
-use probe_opencollection::{
-    LoadedWorkspace, create_bundled_workspace, create_bundled_workspace_from_collection,
-};
-use probe_postman::inspect_postman_source;
-use probe_yaak::inspect_yaak_source;
+use probe_opencollection::{LoadedWorkspace, create_bundled_workspace};
 use serde_json::{Value, json};
 
 use crate::{
@@ -35,83 +32,67 @@ pub(crate) fn create(path: PathBuf, name: Option<String>) -> Result<CommandOutpu
     })
 }
 
-pub(crate) fn import_yaak(
+pub(crate) fn import_collection(
+    source_kind: ImportSource,
     source: PathBuf,
     destination: PathBuf,
     workspace_id: Option<&str>,
     allow_partial: bool,
 ) -> Result<CommandOutput, CliError> {
-    let preview = inspect_yaak_source(&source).map_err(CliError::yaak)?;
-    let source_format = preview.format();
-    let imported = preview
-        .convert(workspace_id, allow_partial)
-        .map_err(CliError::yaak)?;
-    let loaded = create_bundled_workspace_from_collection(&destination, &imported.collection)
+    let mut conversion = inspect_import(source_kind, &source).map_err(CliError::import)?;
+    if let ImportConversion::Yaak {
+        workspace_id: selected,
+        ..
+    } = &mut conversion
+    {
+        *selected = workspace_id.map(str::to_owned);
+    }
+    let imported = conversion
+        .convert(allow_partial)
+        .map_err(CliError::import)?;
+    let loaded = imported
+        .create_workspace(&destination)
         .map_err(CliError::create)?;
     let path = source_path_or(loaded.source_path(), destination);
     let warning_count = imported.diagnostics.len();
     let projection_summary = projection_summary(&loaded);
-    let environment = imported.default_environment;
+    let (label, kind, environment_label, identity_key, environment_key, source_format, identity) =
+        match &imported.metadata {
+            ImportMetadata::Postman { format, collection } => (
+                "Postman",
+                "collection",
+                "Collection variables environment",
+                "collection",
+                "collectionVariablesEnvironment",
+                format.as_str(),
+                json!({ "id": collection.id, "name": collection.name }),
+            ),
+            ImportMetadata::Yaak { format, workspace } => (
+                "Yaak",
+                "workspace",
+                "Default environment",
+                "workspace",
+                "defaultEnvironment",
+                format.as_str(),
+                json!({ "id": workspace.id, "name": workspace.name }),
+            ),
+        };
     Ok(CommandOutput {
         human: format!(
-            "Imported Yaak workspace\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nDefault environment: {}\nWarnings: {warning_count}\n{projection_summary}",
-            imported.workspace.name,
+            "Imported {label} {kind}\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\n{environment_label}: {}\nWarnings: {warning_count}\n{projection_summary}",
+            imported.source_name(),
             path.display(),
             loaded.workspace().request_count(),
             loaded.workspace().folder_count(),
             loaded.workspace().environments().len(),
-            environment.as_deref().unwrap_or("none"),
+            imported.selected_environment.as_deref().unwrap_or("none"),
         ),
         json: json!({
             "imported": true,
             "partial": imported.partial,
-            "sourceFormat": source_format.as_str(),
-            "workspace": {
-                "id": imported.workspace.id,
-                "name": imported.workspace.name,
-            },
-            "defaultEnvironment": environment,
-            "path": path,
-            "counts": workspace_counts(&loaded),
-            "warnings": imported.diagnostics.iter().map(import_diagnostic_json).collect::<Vec<_>>(),
-            "projectionWarnings": projection_warnings(&loaded),
-        }),
-    })
-}
-
-pub(crate) fn import_postman(
-    source: PathBuf,
-    destination: PathBuf,
-    allow_partial: bool,
-) -> Result<CommandOutput, CliError> {
-    let preview = inspect_postman_source(&source).map_err(CliError::postman)?;
-    let source_format = preview.format();
-    let imported = preview.convert(allow_partial).map_err(CliError::postman)?;
-    let loaded = create_bundled_workspace_from_collection(&destination, &imported.collection)
-        .map_err(CliError::create)?;
-    let path = source_path_or(loaded.source_path(), destination);
-    let warning_count = imported.diagnostics.len();
-    let projection_summary = projection_summary(&loaded);
-    let environment = imported.collection_variables_environment;
-    Ok(CommandOutput {
-        human: format!(
-            "Imported Postman collection\nName: {}\nPath: {}\nRequests: {}\nFolders: {}\nEnvironments: {}\nCollection variables environment: {}\nWarnings: {warning_count}\n{projection_summary}",
-            imported.source.name,
-            path.display(),
-            loaded.workspace().request_count(),
-            loaded.workspace().folder_count(),
-            loaded.workspace().environments().len(),
-            environment.as_deref().unwrap_or("none"),
-        ),
-        json: json!({
-            "imported": true,
-            "partial": imported.partial,
-            "sourceFormat": source_format.as_str(),
-            "collection": {
-                "id": imported.source.id,
-                "name": imported.source.name,
-            },
-            "collectionVariablesEnvironment": environment,
+            "sourceFormat": source_format,
+            (identity_key): identity,
+            (environment_key): imported.selected_environment,
             "path": path,
             "counts": workspace_counts(&loaded),
             "warnings": imported.diagnostics.iter().map(import_diagnostic_json).collect::<Vec<_>>(),

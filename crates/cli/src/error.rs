@@ -1,3 +1,4 @@
+use probe_application::imports::ImportError;
 use probe_core::{EnvironmentResolutionError, ImportDiagnostic, RequestProtocolError};
 use probe_http::HttpError;
 use probe_opencollection::{CreateError, SaveError, StructureError};
@@ -259,9 +260,9 @@ impl CliError {
         }
     }
 
-    pub(crate) fn yaak(error: YaakImportError) -> Self {
+    pub(crate) fn import(error: ImportError) -> Self {
         match error {
-            YaakImportError::WorkspaceSelectionRequired(workspaces) => Self {
+            ImportError::Yaak(YaakImportError::WorkspaceSelectionRequired(workspaces)) => Self {
                 category: "workspace_selection_required",
                 message: format!(
                     "Yaak source contains {} workspaces; select one with --workspace <id>",
@@ -275,29 +276,22 @@ impl CliError {
                     })).collect::<Vec<_>>()
                 })),
             },
-            YaakImportError::WorkspaceNotFound(id) => Self {
+            ImportError::Yaak(YaakImportError::WorkspaceNotFound(id)) => Self {
                 category: "workspace_not_found",
                 message: format!("Yaak workspace not found: {id}"),
                 exit_code: INVALID_ARGUMENTS_EXIT_CODE,
                 details: None,
             },
-            YaakImportError::Unsupported(diagnostics) => {
-                unsupported_import("Yaak workspace", diagnostics)
-            }
-            YaakImportError::Invalid(message) => invalid_import(message),
-            YaakImportError::Io { path, source } => {
-                invalid_import(format!("cannot read {}: {source}", path.display()))
-            }
-        }
-    }
-
-    pub(crate) fn postman(error: PostmanImportError) -> Self {
-        match error {
-            PostmanImportError::Unsupported(diagnostics) => {
+            ImportError::Postman(PostmanImportError::Unsupported(diagnostics)) => {
                 unsupported_import("Postman collection", diagnostics)
             }
-            PostmanImportError::Invalid(message) => invalid_import(message),
-            PostmanImportError::Io { path, source } => {
+            ImportError::Yaak(YaakImportError::Unsupported(diagnostics)) => {
+                unsupported_import("Yaak workspace", diagnostics)
+            }
+            ImportError::Postman(PostmanImportError::Invalid(message))
+            | ImportError::Yaak(YaakImportError::Invalid(message)) => invalid_import(message),
+            ImportError::Postman(PostmanImportError::Io { path, source })
+            | ImportError::Yaak(YaakImportError::Io { path, source }) => {
                 invalid_import(format!("cannot read {}: {source}", path.display()))
             }
         }

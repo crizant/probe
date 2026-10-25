@@ -8,7 +8,7 @@ use crate::{components, session::SessionState, user_config::ThemeMode};
 
 use super::{
     documentation::OverviewTarget,
-    imports::{ImportConversion, ImportSource},
+    imports::{ImportConversion, ImportSource, import_source_label},
 };
 
 pub(crate) const IMPORT_DIAGNOSTIC_GROUP_LIMIT: usize = 8;
@@ -392,7 +392,7 @@ impl ApplicationDialog {
             Self::SelectCollectionFile { .. } => Cow::Borrowed("Select a collection"),
             Self::ConfirmPartialImport { conversion, .. } => Cow::Owned(format!(
                 "Some {} data cannot be represented",
-                conversion.source().label()
+                import_source_label(conversion.source())
             )),
         }
     }
