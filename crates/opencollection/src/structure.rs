@@ -8,7 +8,9 @@ use std::{
 use atomic_write_file::AtomicWriteFile;
 use serde_yaml_ng::{Mapping, Value};
 
-use probe_core::{FieldPatch, GraphqlUpdate, ItemKind, RequestProtocol, RequestUpdate};
+use probe_core::{
+    FieldPatch, GraphqlUpdate, ItemKind, RequestProtocol, RequestSettings, RequestUpdate,
+};
 
 use crate::debug::SourceBytes;
 use crate::document::NativeItemType;
@@ -63,6 +65,8 @@ pub enum StructureOperation {
         method: Option<String>,
         /// Initial URL.
         url: Option<String>,
+        /// Initial execution settings, saved with the request.
+        settings: Option<RequestSettings>,
         /// Native protocol identity written to `info.type`.
         protocol: RequestProtocol,
         /// Initial native GraphQL body, when creating a GraphQL request.
@@ -486,6 +490,7 @@ fn request_value(
     url: Option<String>,
     protocol: RequestProtocol,
     graphql: Option<GraphqlUpdate>,
+    settings: Option<RequestSettings>,
 ) -> Result<Value, StructureError> {
     let mut details = Mapping::new();
     if let Some(method) = method {
@@ -512,11 +517,15 @@ fn request_value(
             graphql_body_value(&graphql),
         );
     }
-    Ok(item_value(
-        name,
-        protocol.as_str(),
-        Some(Value::Mapping(details)),
-    ))
+    let mut item = item_value(name, protocol.as_str(), Some(Value::Mapping(details)));
+    if let Some(settings) = settings
+        && let Some(value) = crate::repository::request_settings_value(&settings, protocol)
+    {
+        item.as_mapping_mut()
+            .expect("new request is a mapping")
+            .insert(Value::String("settings".to_owned()), value);
+    }
+    Ok(item)
 }
 
 fn graphql_body_value(update: &GraphqlUpdate) -> Value {

@@ -298,7 +298,7 @@ impl CliError {
     }
 }
 
-fn invalid_import(message: String) -> CliError {
+pub(crate) fn invalid_import(message: String) -> CliError {
     CliError {
         category: "invalid_import",
         message,

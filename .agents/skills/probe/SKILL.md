@@ -69,6 +69,14 @@ Create requests with:
 probe request create <path> --name <name> ...
 ```
 
+To import a pasted cURL command into an existing workspace, use
+`probe request import curl <path> --name <name>` with stdin, or `--file <path>`.
+Choose an exact folder selector with `--parent` and a zero-based insertion position
+with `--index` when needed. Import does not execute the request. Literal authorization
+headers, cookies, credentials, and bodies may be saved in plaintext OpenCollection
+YAML; review secrets before saving or sharing. Consult the CLI reference for the
+supported cURL subset and error/output contracts.
+
 Modify requests with:
 
 ```bash

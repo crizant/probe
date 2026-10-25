@@ -10,6 +10,7 @@ use serde_json::json;
 mod agent;
 mod collection;
 mod command;
+mod curl;
 mod environment;
 mod error;
 mod presentation;
@@ -131,6 +132,7 @@ pub const fn help() -> &'static str {
         "  request run <path> <selector>       Execute a request\n",
         "  request set <path> <selector>       Set and persist request fields, description, or docs\n",
         "  request unset <path> <selector>     Remove request description or docs\n",
+        "  request import curl <workspace> --name <name>  Import cURL from stdin or --file\n",
         "  request create|rename|delete|move|reorder   Edit request structure\n",
         "  folder list <path>                  List folders\n",
         "  folder get <path> <selector>        Show one folder's description and docs\n",
@@ -143,6 +145,9 @@ pub const fn help() -> &'static str {
         "  environment unset <path>            Remove an environment variable or description\n",
         "  environment delete <path>           Delete an environment\n",
         "  environment rename <path>           Rename an environment\n",
+        "\n",
+        "cURL import requires piped/redirected stdin or --file; interactive stdin is rejected.\n",
+        "cURL import saves literal secrets in plaintext OpenCollection YAML; it never executes the request.\n",
         "\n",
         "Options:\n",
         "      --environment <name>  Environment used to resolve or mutate variables\n",
@@ -167,6 +172,7 @@ pub const fn help() -> &'static str {
         "      --description-json <json>  Set description as a JSON string, null, or {content,type} object\n",
         "      --docs <text>          Set documentation as a string\n",
         "      --docs-json <json>     Set collection or folder docs as JSON; invalid for request docs\n",
+        "      --file <path>          Read a cURL command from a file instead of stdin\n",
         "      --method <method>      Set an HTTP method\n",
         "      --url <url>            Set a request URL\n",
         "      --type <http|graphql>  Request protocol for request create\n",
@@ -238,6 +244,7 @@ const REQUEST_HELP: &str = concat!(
     "  set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
     "  unset <path> <selector> [--description] [--docs]  Remove description and/or docs from the file\n",
     "  create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-or-null>] [--query-parameters <json-or-null>] [--path-parameters <json-or-null>] [--body <json-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-or-null>]\n",
+    "  import curl <workspace> --name <name> [--parent <folder>] [--index <index>] [--file <path>] [--json]\n",
     "  rename <path> <selector> --name <name>\n",
     "  delete <path> <selector>\n",
     "  move <path> <selector> [--parent <folder>] [--index <index>]\n",
@@ -257,6 +264,10 @@ const REQUEST_HELP: &str = concat!(
     "                                  or each Base64 line -> binary.\n",
     "      --max-messages <n>   WebSocket only: close after n inbound messages.\n",
     "      --timeout <seconds>  WebSocket only: CLI live-run bound, not connection timeout.\n",
+    "\n",
+    "cURL import rejects interactive stdin; pipe/redirect a cURL command or use --file <path>.\n",
+    "cURL import reads stdin or --file and never executes the request. Literal authorization\n",
+    "headers, cookies, credentials, and bodies may be saved in plaintext OpenCollection YAML.\n",
     "\n",
     "WebSocket runs stream interactively: > outbound, < inbound. --json emits NDJSON.\n",
     "--output, --show-headers and --assert apply only to HTTP/GraphQL runs.\n",
@@ -359,6 +370,27 @@ pub fn run_with_io<I, S, R, F>(
     stdin: &mut R,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    input: F,
+) -> io::Result<u8>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+    R: Read,
+    F: FnMut(&mut dyn Read) -> io::Result<tokio::sync::mpsc::Receiver<io::Result<String>>>,
+{
+    run_with_io_and_terminal(args, stdin, false, stdout, stderr, input)
+}
+
+/// Runs commands with an explicit terminal status for the supplied reader.
+/// The executable detects this at its stdin boundary; injected readers default to
+/// non-terminal in [`run_with_io`]. Terminal stdin requires `--file` for cURL import.
+/// Other commands retain the same input and streaming behavior as [`run_with_io`].
+pub fn run_with_io_and_terminal<I, S, R, F>(
+    args: I,
+    stdin: &mut R,
+    stdin_is_terminal: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
     mut input: F,
 ) -> io::Result<u8>
 where
@@ -368,7 +400,7 @@ where
     F: FnMut(&mut dyn Read) -> io::Result<tokio::sync::mpsc::Receiver<io::Result<String>>>,
 {
     let mut live = streaming::LiveOutput::new(stdout, stderr, &mut input);
-    let output = run_internal(args, stdin, &mut live);
+    let output = run_internal(args, stdin, stdin_is_terminal, &mut live);
     live.stdout.write_all(output.stdout.as_bytes())?;
     live.stderr.write_all(output.stderr.as_bytes())?;
     live.stdout.flush()?;
@@ -376,7 +408,12 @@ where
     Ok(output.exit_code)
 }
 
-fn run_internal<I, S, R>(args: I, stdin: &mut R, live: &mut streaming::LiveOutput<'_>) -> RunOutput
+fn run_internal<I, S, R>(
+    args: I,
+    stdin: &mut R,
+    stdin_is_terminal: bool,
+    live: &mut streaming::LiveOutput<'_>,
+) -> RunOutput
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -436,7 +473,14 @@ where
     }
 
     live.mode = streaming::OutputMode::from_flags(json_output, quiet);
-    match parse_command(args).and_then(|command| execute(command, stdin, live)) {
+    match parse_command(args).and_then(|command| {
+        if stdin_is_terminal && matches!(&command, Command::ImportCurl { file: None, .. }) {
+            return Err(CliError::invalid_arguments(
+                "cURL import requires piped or redirected stdin; pipe a cURL command into probe request import curl or use --file <path>",
+            ));
+        }
+        execute(command, stdin, live)
+    }) {
         Ok(_) if live.started => RunOutput {
             stdout: String::new(),
             stderr: String::new(),
@@ -516,6 +560,13 @@ fn execute(
             None,
             allow_partial,
         ),
+        Command::ImportCurl {
+            input,
+            name,
+            parent,
+            index,
+            file,
+        } => curl::import(&input, name, parent, index, file.as_deref(), stdin),
         Command::Validate { input } => collection::validate(&input, stdin),
         Command::GetCollection { input } => collection::get(&input, stdin),
         Command::SetCollection { input, update } => collection::set(&input, &update, stdin),

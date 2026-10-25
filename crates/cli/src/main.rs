@@ -1,13 +1,16 @@
 use std::{
     env,
-    io::{self, BufRead},
+    io::{self, BufRead, IsTerminal},
     process::ExitCode,
 };
 
 fn main() -> ExitCode {
-    let result = probe_cli::run_with_io(
+    let mut stdin = io::stdin();
+    let stdin_is_terminal = stdin.is_terminal();
+    let result = probe_cli::run_with_io_and_terminal(
         env::args().skip(1),
-        &mut io::stdin(),
+        &mut stdin,
+        stdin_is_terminal,
         &mut io::stdout(),
         &mut io::stderr(),
         |_| {

@@ -36,6 +36,13 @@ pub(crate) enum Command {
         destination: PathBuf,
         allow_partial: bool,
     },
+    ImportCurl {
+        input: WorkspaceInput,
+        name: String,
+        parent: Option<String>,
+        index: Option<usize>,
+        file: Option<PathBuf>,
+    },
     Validate {
         input: WorkspaceInput,
     },
@@ -203,6 +210,7 @@ pub(crate) fn parse(args: Vec<String>) -> Result<Command, CliError> {
         ("request", "run") => parse_run(parser),
         ("request", "set") => parse_request_set(parser),
         ("request", "create") => parse_request_create(parser),
+        ("request", "import") => parse_curl_import(parser),
         ("folder", "create") => parse_folder_create(parser),
         ("request", "rename" | "delete" | "move" | "reorder") => {
             parse_item(parser, ItemKind::Request, &action)
@@ -810,6 +818,42 @@ fn documentation_json_error(flag: &str) -> CliError {
     ))
 }
 
+fn parse_curl_import(mut parser: Parser) -> Result<Command, CliError> {
+    if parser.command_word()? != "curl" {
+        return Err(invalid_command());
+    }
+    let mut paths = Vec::new();
+    let mut name = None;
+    let mut parent = None;
+    let mut index = None;
+    let mut file = None;
+    while let Some(argument) = parser.bump() {
+        match argument.as_str() {
+            "--name" => parser.once(&mut name, "--name")?,
+            "--parent" => parser.once(&mut parent, "--parent")?,
+            "--index" => parser.once_index(&mut index)?,
+            "--file" => parser.once(&mut file, "--file")?,
+            other => push_positional(&mut paths, other, 1)?,
+        }
+    }
+    let path = one_path(&paths)?;
+    if path == "-" {
+        return Err(CliError::invalid_arguments(
+            "cURL import requires an existing workspace path",
+        ));
+    }
+    let name = name
+        .filter(|name: &String| !name.trim().is_empty())
+        .ok_or_else(|| CliError::invalid_arguments("cURL import requires --name <name>"))?;
+    Ok(Command::ImportCurl {
+        input: input(&path),
+        name,
+        parent,
+        index,
+        file: file.map(PathBuf::from),
+    })
+}
+
 struct RequestCreateOptions {
     parent: Option<String>,
     index: Option<usize>,
@@ -871,6 +915,7 @@ fn parse_request_create(mut parser: Parser) -> Result<Command, CliError> {
             name,
             method,
             url,
+            settings: None,
             protocol,
             graphql,
             update,
@@ -1388,6 +1433,7 @@ fn is_known_option(argument: &str) -> bool {
         "--environment"
             | "--secret-provider"
             | "--output"
+            | "--file"
             | "--name"
             | "--method"
             | "--url"

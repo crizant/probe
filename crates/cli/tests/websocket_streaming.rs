@@ -971,7 +971,7 @@ fn input_channel_errors_close_and_report_without_repeating_transport_events() {
     let path = workspace(&url, None);
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let code = probe_cli::run_with_io(
+    let code = probe_cli::run_with_io_and_terminal(
         [
             "request",
             "run",
@@ -980,6 +980,7 @@ fn input_channel_errors_close_and_report_without_repeating_transport_events() {
             "--json",
         ],
         &mut std::io::empty(),
+        true, // Terminal status must not reject interactive WebSocket input.
         &mut stdout,
         &mut stderr,
         |_| {

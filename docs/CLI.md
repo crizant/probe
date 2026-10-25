@@ -45,6 +45,7 @@ probe request run <path> <selector> [--environment <name>] [--strict-variables] 
 probe request set <path> <selector> [--name <name>] [--method <method>] [--url <url>] [--description <text>] [--description-json <json>] [--docs <text>] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
 probe request unset <path> <selector> [--description] [--docs] [--json]
 probe request create <path> --name <name> [--parent <folder>] [--index <index>] [--method <method>] [--url <url>] [--type http|graphql] [--headers <json-array-or-null>] [--query-parameters <json-array-or-null>] [--path-parameters <json-array-or-null>] [--body <json-object-or-null>] [--auth <json-or-null>] [--graphql-query <text>] [--graphql-variables <json-object-or-null>] [--graphql-operation-name <json-string-or-null>] [--graphql-extensions <json-object-or-null>] [--json]
+probe request import curl <workspace> --name <name> [--parent <folder>] [--index <index>] [--file <path>] [--json]
 probe request rename <path> <selector> --name <name> [--json]
 probe request delete <path> <selector> [--json]
 probe request move <path> <selector> [--parent <folder>] [--index <index>] [--json]
@@ -139,6 +140,48 @@ permits those omissions and returns every deterministic compatibility diagnostic
 `warnings`. Authentication kinds that OpenCollection can store are preserved even if
 Probe's current HTTP engine cannot execute them; those appear as warning diagnostics,
 not silent data loss.
+
+`request import curl` imports one POSIX cURL command into an existing bundled or
+unbundled workspace. An explicit, nonempty `--name` is required. Read the command
+from piped or redirected stdin by default or from a UTF-8 file with `--file`;
+file mode ignores stdin. When stdin is an interactive terminal and `--file` is
+absent, import fails immediately with `invalid_arguments` (exit 2), explaining
+how to pipe a cURL command or use `--file`. It does not wait for terminal input.
+The workspace must be a filesystem path (`-` is rejected). Omit `--parent` to use
+the root, or pass an exact folder selector from `folder list`. `--index` is a
+zero-based sibling insertion position; omitting it appends. Existing requests
+are preserved, and an existing unbundled destination file is never overwritten.
+
+```bash
+printf '%s\n' "curl 'https://api.example.com/users'" | \
+  probe request import curl collection.yml --name 'List users' --json
+probe request import curl ./workspace --name 'Create user' \
+  --parent users --index 0 --file command.txt --json
+```
+
+Import parses literal input without evaluating shell commands, resolving variables,
+reading files referenced by cURL options, or executing the request. The shared parser
+supports one HTTP URL, method, ordered headers, inline bodies/cookies, Basic
+credentials, and redirect/timeout settings. It conservatively rejects unsupported
+options, shell expansions, malformed syntax, file bodies, and multiple URLs. All
+supported fields are saved through one atomic request creation operation; parsing
+failures never persist a partial request. Existing locking, modification checks,
+and selector remaps are the same as for `request create`.
+
+**Imported authorization headers, cookies, Basic credentials, request bodies, and
+other literal secrets may be saved in plaintext OpenCollection YAML.** Review
+commands before importing, protect the workspace, and replace literal credentials
+with environment or secret references before sharing it. Import diagnostics and
+success output do not echo the command, credentials, or body. Explicit `request get`
+inspection returns stored values as usual.
+
+Success uses the structural JSON contract with `operation: "import"`, `itemType:
+"request"`, `selector`, `parent`, `index`, `previousSelector`, and `selectorRemaps`,
+plus `schemaVersion`. Malformed or unsupported cURL and unreadable/non-UTF-8 command
+files use `invalid_import` (exit 3); stdin read failures use `stdin_error` (exit 3).
+Missing names and invalid options use `invalid_arguments` (exit 2). Workspace,
+destination, and persistence errors retain the existing categories and exit codes.
+Inspect the returned selector with `probe request get <workspace> <selector> --json`.
 
 For `request get` and `request run`, `--environment <name>` selects an environment,
 applies parent environments from `extends`, and interpolates variables in supported

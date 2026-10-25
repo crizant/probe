@@ -6,6 +6,13 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Import a cURL command from stdin or a file into an existing bundled or unbundled
+  workspace with `probe request import curl`, including folder and insertion position
+  selection, without executing the request. Imported literal secrets are stored in
+  plaintext OpenCollection YAML.
+
 ## [2.1.1] - 2026-10-25
 
 ### Added
