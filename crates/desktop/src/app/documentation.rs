@@ -13,10 +13,20 @@ pub(super) struct OverviewContent {
     pub(super) docs: Option<Documentation>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FolderDraftNotice {
+    /// The folder selector no longer addresses a folder.
+    Deleted,
+    /// The selector would now address a different folder, so the draft was detached.
+    Unidentified,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct OverviewDraft {
     pub(super) original: OverviewContent,
     pub(super) current: OverviewContent,
+    /// Set after a reload has already explained that this draft cannot be saved.
+    pub(super) orphan_notice: Option<FolderDraftNotice>,
 }
 
 impl OverviewContent {
@@ -109,6 +119,7 @@ impl ProbeApp {
             .or_insert_with(|| OverviewDraft {
                 current: original.clone(),
                 original,
+                orphan_notice: None,
             });
         edit_documentation(
             if docs {

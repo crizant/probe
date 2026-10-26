@@ -43,7 +43,12 @@ Release dates use Australia/Brisbane time (UTC+10).
   that folder as well; if the folder cannot be identified, the draft is kept
   but cannot be saved into a different folder. An Unsaved Changes confirmation
   that is already open follows the same folder, and confirming it does not
-  write the draft into a different one. Expanded folders in the dialog
+  write the draft into a different one. Close Other Tabs and other pending tab
+  actions follow that tab after a reload, or the action is cancelled instead of
+  closing or discarding a different tab. A delete confirmation follows the same
+  folder or request, or closes without deleting when that item cannot be
+  identified. A warning that unsaved folder documentation was kept is shown
+  once, and says when the folder was deleted. Expanded folders in the dialog
   and collapsed folders in the sidebar follow the folder rather than its
   previous position. The Save Request
   New Folder sheet explains when the destination must be chosen again and does

@@ -126,12 +126,12 @@ pub(crate) fn request_method_options(
 pub(crate) struct ShellSelectors {
     pub(crate) ordered_tabs: Vec<(crate::shell::OpenTab, Option<crate::session::TabLocator>)>,
     pub(crate) active_tab: Option<crate::shell::OpenTab>,
-    pub(crate) pending_keep: Option<crate::shell::OpenTab>,
     pub(crate) folder_anchors: Vec<FolderAnchor>,
     pub(crate) selected: Option<(probe_core::ItemKind, String)>,
     /// Captured when the sidebar selection is a folder. Absent for requests.
     pub(crate) selected_folder: Option<FolderAnchor>,
-    /// Folder overview tabs and documentation drafts, keyed by the selector
-    /// they used before the reload.
+    /// Folder selectors held across a reload, keyed by the selector they used
+    /// before it: open overview tabs, documentation drafts, pending saves, and
+    /// folder targets inside pending close and delete confirmations.
     pub(crate) overview_folder_anchors: BTreeMap<String, FolderAnchor>,
 }

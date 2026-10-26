@@ -903,10 +903,6 @@ impl ProbeApp {
                 .map(|tab| (*tab, crate::session::TabLocator::capture(*tab, old)))
                 .collect(),
             active_tab: self.shell.active_open_tab(),
-            pending_keep: match self.pending_close.as_ref() {
-                Some(PendingClose::OtherTabs { keep }) => Some(*keep),
-                _ => None,
-            },
             folder_anchors: self
                 .shell
                 .collapsed_folders()
@@ -927,54 +923,42 @@ impl ProbeApp {
             }),
             overview_folder_anchors: self
                 .overview_folder_selectors(old)
+                .into_iter()
                 .filter_map(|selector| folders.anchor(&selector).map(|anchor| (selector, anchor)))
                 .collect(),
         }
     }
 
-    fn overview_folder_selectors<'a>(
-        &'a self,
-        old: &'a LoadedWorkspace,
-    ) -> impl Iterator<Item = String> + 'a {
-        let open_tabs = self.shell.open_tabs().iter().filter_map(|tab| {
+    fn overview_folder_selectors(&self, old: &LoadedWorkspace) -> Vec<String> {
+        let mut selectors = Vec::new();
+        for tab in self.shell.open_tabs() {
             let crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) = tab
             else {
-                return None;
+                continue;
             };
-            old.folder_selector(*key).map(str::to_owned)
-        });
-        let drafts = self
+            if let Some(selector) = old.folder_selector(*key) {
+                selectors.push(selector.to_owned());
+            }
+        }
+        for target in self
             .overview_drafts
             .keys()
-            .filter_map(|target| match target {
-                OverviewTarget::Folder(selector) => Some(selector.clone()),
-                OverviewTarget::Collection => None,
-            });
-        let pending = self
-            .pending_documentation_saves
-            .iter()
-            .filter_map(|target| match target {
-                OverviewTarget::Folder(selector) => Some(selector.clone()),
-                OverviewTarget::Collection => None,
-            });
-        let closing = match &self.pending_close {
-            Some(PendingClose::Overview(OverviewTarget::Folder(selector))) => {
-                Some(selector.clone())
+            .chain(self.pending_documentation_saves.iter())
+        {
+            if let OverviewTarget::Folder(selector) = target {
+                selectors.push(selector.clone());
             }
-            _ => None,
-        };
-        let prompted = match &self.application_dialog {
-            Some(ApplicationDialog::Unsaved {
-                pending: PendingClose::Overview(OverviewTarget::Folder(selector)),
-                ..
-            }) => Some(selector.clone()),
-            _ => None,
-        };
-        open_tabs
-            .chain(drafts)
-            .chain(pending)
-            .chain(closing)
-            .chain(prompted)
+        }
+        if let Some(pending) = &self.pending_close {
+            push_pending_folder_selector(pending, &mut selectors);
+        }
+        if let Some(dialog) = &self.application_dialog {
+            push_dialog_folder_selectors(dialog, &mut selectors);
+        }
+        for dialog in &self.pending_application_dialogs {
+            push_dialog_folder_selectors(dialog, &mut selectors);
+        }
+        selectors
     }
 
     pub(super) fn install_reloaded_workspace(
@@ -983,20 +967,20 @@ impl ProbeApp {
         baselines: Vec<(RequestKey, Request)>,
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
         selector_remaps: &BTreeMap<String, String>,
-    ) -> BTreeMap<RequestKey, RequestKey> {
+    ) -> (BTreeMap<RequestKey, RequestKey>, bool) {
         let old_folders = FolderIndex::build(
             self.loaded_workspace
                 .as_ref()
                 .expect("workspace must exist before reload"),
         );
-        self.install_reloaded_workspace_indexed(
+        let (remaps, _folders, cancelled_pending_action) = self.install_reloaded_workspace_indexed(
             workspace,
             baselines,
             key_remaps,
             selector_remaps,
             &old_folders,
-        )
-        .0
+        );
+        (remaps, cancelled_pending_action)
     }
 
     fn install_reloaded_workspace_indexed(
@@ -1006,7 +990,7 @@ impl ProbeApp {
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
         selector_remaps: &BTreeMap<String, String>,
         old_folders: &FolderIndex,
-    ) -> (BTreeMap<RequestKey, RequestKey>, FolderIndex) {
+    ) -> (BTreeMap<RequestKey, RequestKey>, FolderIndex, bool) {
         let selectors = self.snapshot_shell_selectors(
             self.loaded_workspace
                 .as_ref()
@@ -1055,41 +1039,42 @@ impl ProbeApp {
                 true
             })
         });
+        let mut cancelled_pending_action = false;
         if let Some(StructureDialog {
             mode: StructureDialogMode::SaveDetachedRequest { key },
             ..
         }) = self.structure_dialog.as_mut()
-            && let Some(new_key) = remaps.get(key)
         {
-            *key = *new_key;
+            if let Some(new_key) = remaps.get(key) {
+                *key = *new_key;
+            } else {
+                cancelled_pending_action = true;
+            }
         }
-        match self.pending_close.as_mut() {
-            Some(PendingClose::Tab(key)) => {
-                if let Some(new_key) = remaps.get(key) {
-                    *key = *new_key;
-                }
-            }
-            Some(PendingClose::OtherTabs {
-                keep: crate::shell::OpenTab::Request(key),
-            }) => {
-                if let Some(new_key) = remaps.get(key) {
-                    *key = *new_key;
-                }
-            }
-            _ => {}
+        if cancelled_pending_action {
+            self.structure_dialog = None;
         }
         let new_folders = FolderIndex::build(
             self.loaded_workspace
                 .as_ref()
                 .expect("workspace was replaced"),
         );
-        self.restore_shell_selectors(selector_remaps, &remaps, selectors, &new_folders);
+        cancelled_pending_action |=
+            self.restore_shell_selectors(selector_remaps, &remaps, selectors, &new_folders);
         for (old_key, selection) in certificate_overrides {
             if let Some(key) = remaps.get(&old_key) {
                 self.shell.set_certificate_override(*key, selection);
             }
         }
-        (remaps, new_folders)
+        // Context menus and in-progress drags hold the previous generation's
+        // keys. Drop them instead of completing a move or menu action on
+        // whichever item now occupies that key.
+        self.clear_tree_drag();
+        self.tab_drag_source = None;
+        self.tab_drop_target = None;
+        self.tab_auto_scroll.stop();
+        self.dismiss_transient_surfaces();
+        (remaps, new_folders, cancelled_pending_action)
     }
 
     pub(super) fn remap_structure_dialog(
@@ -1196,7 +1181,7 @@ impl ProbeApp {
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
         selectors: ShellSelectors,
         folders: &FolderIndex,
-    ) {
+    ) -> bool {
         let loaded = self
             .loaded_workspace
             .as_ref()
@@ -1216,24 +1201,6 @@ impl ProbeApp {
             .collect();
         for target in &mut self.pending_documentation_saves {
             *target = retarget_overview_target(target.clone(), &retarget);
-        }
-        if let Some(PendingClose::Overview(target)) = self.pending_close.as_mut() {
-            *target = retarget_overview_target(target.clone(), &retarget);
-        }
-        let prompted = match &self.application_dialog {
-            Some(ApplicationDialog::Unsaved {
-                pending: PendingClose::Overview(OverviewTarget::Folder(selector)),
-                ..
-            }) => Some(retarget(selector)),
-            _ => None,
-        };
-        if let Some(selector) = prompted
-            && let Some(ApplicationDialog::Unsaved {
-                pending: PendingClose::Overview(OverviewTarget::Folder(current)),
-                ..
-            }) = self.application_dialog.as_mut()
-        {
-            *current = selector;
         }
         let restored: Vec<_> = selectors
             .ordered_tabs
@@ -1265,12 +1232,24 @@ impl ProbeApp {
             restored.iter().map(|(_, tab)| *tab),
             selectors.active_tab.and_then(resolve_runtime),
         );
-        if let Some(keep) = selectors.pending_keep.and_then(resolve_runtime)
-            && let Some(PendingClose::OtherTabs { keep: pending_keep }) =
-                self.pending_close.as_mut()
-        {
-            *pending_keep = keep;
-        }
+        let pending_close = self.pending_close.take();
+        let application_dialog = self.application_dialog.take();
+        let pending_application_dialogs = std::mem::take(&mut self.pending_application_dialogs);
+        let held = remap_held_identities(
+            pending_close,
+            application_dialog,
+            pending_application_dialogs,
+            &IdentityRemap {
+                retarget: &retarget,
+                resolve_tab: &resolve_runtime,
+                key_remaps,
+                selector_remaps: remaps,
+                loaded,
+            },
+        );
+        self.pending_close = held.pending_close;
+        self.application_dialog = held.application_dialog;
+        self.pending_application_dialogs = held.pending_application_dialogs;
         for anchor in selectors.folder_anchors {
             let Some(selector) = relocate_folder(&anchor, remaps, loaded, folders) else {
                 continue;
@@ -1288,6 +1267,7 @@ impl ProbeApp {
             let selector = remaps.get(&selector)?.as_str();
             loaded.item_key(kind, selector)
         });
+        held.cancelled
     }
 
     pub(super) fn apply_reconciled_workspace(
@@ -1309,20 +1289,33 @@ impl ProbeApp {
         let old_folders = FolderIndex::build(old);
         let dialog_anchors =
             DialogFolderAnchors::capture(self.structure_dialog.as_ref(), &old_folders);
-        let (_key_remaps, new_folders) = self.install_reloaded_workspace_indexed(
-            reconciled.workspace,
-            reconciled.baselines,
-            &key_remaps,
-            &reconciled.selector_remaps,
-            &old_folders,
-        );
+        let (_key_remaps, new_folders, cancelled_pending_action) = self
+            .install_reloaded_workspace_indexed(
+                reconciled.workspace,
+                reconciled.baselines,
+                &key_remaps,
+                &reconciled.selector_remaps,
+                &old_folders,
+            );
         self.remap_structure_dialog(&reconciled.selector_remaps, dialog_anchors, &new_folders);
-        if orphaned_folder_documentation_draft(self) {
+        let (deleted_folder_draft, unidentified_folder_draft) =
+            announce_orphaned_folder_drafts(self);
+        if deleted_folder_draft {
+            self.show_toast(
+                ToastIntent::Warning,
+                "A folder was deleted. Its unsaved documentation was kept and was not saved.",
+                cx,
+            );
+        }
+        if unidentified_folder_draft {
             self.show_toast(
                 ToastIntent::Warning,
                 "A folder could not be identified. Its unsaved documentation was kept and was not saved.",
                 cx,
             );
+        }
+        if cancelled_pending_action {
+            self.show_toast(ToastIntent::Warning, CANCELLED_PENDING_ACTION, cx);
         }
         // The new-environment dialog is only a typed name. A refresh replaces
         // stored documents, and the next submit uses that refreshed workspace.
@@ -1358,25 +1351,243 @@ impl ProbeApp {
     }
 }
 
+pub(super) const CANCELLED_PENDING_ACTION: &str =
+    "The pending action was cancelled because its tab or item could not be identified.";
+
+fn push_pending_folder_selector(pending: &PendingClose, selectors: &mut Vec<String>) {
+    if let PendingClose::Overview(OverviewTarget::Folder(selector)) = pending {
+        selectors.push(selector.clone());
+    }
+}
+
+fn push_dialog_folder_selectors(dialog: &ApplicationDialog, selectors: &mut Vec<String>) {
+    match dialog {
+        ApplicationDialog::Unsaved { pending, .. } => {
+            push_pending_folder_selector(pending, selectors);
+        }
+        ApplicationDialog::Delete {
+            kind: ItemKind::Folder,
+            selector,
+            ..
+        } => selectors.push(selector.clone()),
+        _ => {}
+    }
+}
+
+struct HeldIdentities {
+    pending_close: Option<PendingClose>,
+    application_dialog: Option<ApplicationDialog>,
+    pending_application_dialogs: VecDeque<ApplicationDialog>,
+    cancelled: bool,
+}
+
+struct IdentityRemap<'a, Retarget, Resolve> {
+    retarget: &'a Retarget,
+    resolve_tab: &'a Resolve,
+    key_remaps: &'a BTreeMap<RequestKey, RequestKey>,
+    selector_remaps: &'a BTreeMap<String, String>,
+    loaded: &'a LoadedWorkspace,
+}
+
+/// Remaps every tab key and folder selector held by a pending action.
+///
+/// Overview selectors are retargeted once, from the selector captured before
+/// the reload. A pending close, delete, or unsaved action whose target cannot
+/// be identified is dropped so a later confirm cannot affect a different item.
+fn remap_held_identities<Retarget, Resolve>(
+    pending_close: Option<PendingClose>,
+    application_dialog: Option<ApplicationDialog>,
+    queued: VecDeque<ApplicationDialog>,
+    remap: &IdentityRemap<'_, Retarget, Resolve>,
+) -> HeldIdentities
+where
+    Retarget: Fn(&str) -> String,
+    Resolve: Fn(crate::shell::OpenTab) -> Option<crate::shell::OpenTab>,
+{
+    let mut cancelled = false;
+    let pending_close = match pending_close {
+        Some(pending) => match remap_pending_close(pending, remap) {
+            Some(pending) => Some(pending),
+            None => {
+                cancelled = true;
+                None
+            }
+        },
+        None => None,
+    };
+    let had_dialog = application_dialog.is_some();
+    let mut application_dialog = match application_dialog {
+        Some(dialog) => match remap_application_dialog(dialog, remap) {
+            Some(dialog) => Some(dialog),
+            None => {
+                cancelled = true;
+                None
+            }
+        },
+        None => None,
+    };
+    let mut pending_application_dialogs = VecDeque::new();
+    for dialog in queued {
+        match remap_application_dialog(dialog, remap) {
+            Some(dialog) => pending_application_dialogs.push_back(dialog),
+            None => cancelled = true,
+        }
+    }
+    if had_dialog && application_dialog.is_none() {
+        application_dialog = pending_application_dialogs.pop_front();
+    }
+    HeldIdentities {
+        pending_close,
+        application_dialog,
+        pending_application_dialogs,
+        cancelled,
+    }
+}
+
+fn remap_pending_close<Retarget, Resolve>(
+    pending: PendingClose,
+    remap: &IdentityRemap<'_, Retarget, Resolve>,
+) -> Option<PendingClose>
+where
+    Retarget: Fn(&str) -> String,
+    Resolve: Fn(crate::shell::OpenTab) -> Option<crate::shell::OpenTab>,
+{
+    Some(match pending {
+        PendingClose::Tab(key) => PendingClose::Tab(*remap.key_remaps.get(&key)?),
+        PendingClose::Overview(target) => {
+            PendingClose::Overview(retarget_overview_target(target, remap.retarget))
+        }
+        PendingClose::OtherTabs { keep } => PendingClose::OtherTabs {
+            keep: (remap.resolve_tab)(keep)?,
+        },
+        other => other,
+    })
+}
+
+fn remap_application_dialog<Retarget, Resolve>(
+    dialog: ApplicationDialog,
+    remap: &IdentityRemap<'_, Retarget, Resolve>,
+) -> Option<ApplicationDialog>
+where
+    Retarget: Fn(&str) -> String,
+    Resolve: Fn(crate::shell::OpenTab) -> Option<crate::shell::OpenTab>,
+{
+    match dialog {
+        ApplicationDialog::Unsaved {
+            keys,
+            documentation,
+            pending,
+        } => {
+            let keys = keys
+                .into_iter()
+                .filter_map(|key| remap.key_remaps.get(&key).copied())
+                .collect();
+            Some(ApplicationDialog::Unsaved {
+                keys,
+                documentation,
+                pending: remap_pending_close(pending, remap)?,
+            })
+        }
+        ApplicationDialog::Delete {
+            kind,
+            selector,
+            name,
+            detail,
+        } => {
+            let selector = remap_delete_selector(kind, &selector, remap)?;
+            Some(ApplicationDialog::Delete {
+                kind,
+                selector,
+                name,
+                detail,
+            })
+        }
+        other => Some(other),
+    }
+}
+
+fn remap_delete_selector<Retarget, Resolve>(
+    kind: ItemKind,
+    selector: &str,
+    remap: &IdentityRemap<'_, Retarget, Resolve>,
+) -> Option<String>
+where
+    Retarget: Fn(&str) -> String,
+{
+    match kind {
+        ItemKind::Folder => {
+            let mapped = (remap.retarget)(selector);
+            remap.loaded.folder_key(&mapped).is_some().then_some(mapped)
+        }
+        ItemKind::Request => {
+            let mapped = remap.selector_remaps.get(selector)?;
+            remap
+                .loaded
+                .item_key(ItemKind::Request, mapped)
+                .is_some()
+                .then(|| mapped.clone())
+        }
+    }
+}
+
+/// Records which unsavable folder drafts have already been announced.
+///
+/// Returns whether a deleted-folder notice and an unidentified-folder notice
+/// still need to be shown.
+fn announce_orphaned_folder_drafts(view: &mut ProbeApp) -> (bool, bool) {
+    let unresolved = {
+        let Some(loaded) = view.loaded_workspace.as_ref() else {
+            return (false, false);
+        };
+        view.overview_drafts
+            .iter()
+            .filter_map(|(target, draft)| {
+                if !draft.is_dirty() {
+                    return None;
+                }
+                let OverviewTarget::Folder(selector) = target else {
+                    return None;
+                };
+                if loaded.folder_key(selector).is_some() {
+                    return None;
+                }
+                let notice = if selector.starts_with('\u{0}') {
+                    FolderDraftNotice::Unidentified
+                } else {
+                    FolderDraftNotice::Deleted
+                };
+                Some((target.clone(), notice))
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut deleted = false;
+    let mut unidentified = false;
+    for (target, notice) in &unresolved {
+        let Some(draft) = view.overview_drafts.get_mut(target) else {
+            continue;
+        };
+        if draft.orphan_notice != Some(*notice) {
+            match notice {
+                FolderDraftNotice::Deleted => deleted = true,
+                FolderDraftNotice::Unidentified => unidentified = true,
+            }
+        }
+        draft.orphan_notice = Some(*notice);
+    }
+    for (target, draft) in &mut view.overview_drafts {
+        if !unresolved.iter().any(|(orphaned, _)| orphaned == target) {
+            draft.orphan_notice = None;
+        }
+    }
+    (deleted, unidentified)
+}
+
 /// Moves a folder overview selector onto the same folder, or onto a selector
 /// that does not address any folder when that identity is missing or ambiguous.
 ///
 /// A stale selector is left unchanged: saving it already fails because the
 /// folder is gone. A selector that now addresses a different folder is detached
 /// so the draft text remains but cannot be written there.
-fn orphaned_folder_documentation_draft(view: &ProbeApp) -> bool {
-    let Some(loaded) = view.loaded_workspace.as_ref() else {
-        return false;
-    };
-    view.overview_drafts.iter().any(|(target, draft)| {
-        draft.is_dirty()
-            && matches!(
-                target,
-                OverviewTarget::Folder(selector) if loaded.folder_key(selector).is_none()
-            )
-    })
-}
-
 fn retarget_folder_selector(
     selector: &str,
     anchors: &BTreeMap<String, FolderAnchor>,

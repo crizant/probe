@@ -839,12 +839,13 @@ items:
                 .overview_drafts
                 .iter()
                 .find(|(_, draft)| draft.is_dirty())
+                .map(|(target, draft)| (target.clone(), draft.current.docs.clone()))
                 .expect("the unsaved text stays in memory");
             assert_eq!(
-                draft.current.docs,
+                draft,
                 Some(probe_core::Documentation::Text("Secret notes".into()))
             );
-            let crate::app::documentation::OverviewTarget::Folder(selector) = target else {
+            let crate::app::documentation::OverviewTarget::Folder(selector) = &target else {
                 panic!("draft should stay a folder draft");
             };
             assert!(
@@ -855,7 +856,18 @@ items:
                     .is_none(),
                 "the draft must not address the other twin"
             );
-            view.enqueue_documentation_save(target.clone());
+            assert_eq!(
+                active_toast_count(view, ToastIntent::Warning, "could not be identified"),
+                1
+            );
+            let fresh = probe_opencollection::load_workspace(&path).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            assert_eq!(
+                active_toast_count(view, ToastIntent::Warning, "could not be identified"),
+                1,
+                "a later reload must not repeat the warning"
+            );
+            view.enqueue_documentation_save(target);
             view.pump_workspace_writes(window, cx);
             assert!(has_active_toast(
                 view,
@@ -1020,6 +1032,473 @@ items:
         })
         .unwrap();
     assert_eq!(fs::read(&path).unwrap(), before_save);
+    fs::remove_file(path).unwrap();
+}
+
+fn active_toast_count(view: &ProbeApp, intent: ToastIntent, text: &str) -> usize {
+    view.toasts
+        .iter()
+        .filter(|(_, toast, status)| {
+            *status != gpui_kit::base::ToastTransitionStatus::Ending
+                && toast.intent == intent
+                && toast.message.contains(text)
+        })
+        .count()
+}
+
+#[gpui_kit::test]
+fn close_other_tabs_keeps_the_dirty_folder_after_an_external_reorder(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let path = temp_collection("close-other-tabs", COLLECTION);
+    reset_collection(window, cx, &path, COLLECTION);
+    window
+        .update(cx, |view, window, cx| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let before = loaded.folder_key("items/0").unwrap();
+            let target = loaded.folder_key("items/1").unwrap();
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(before));
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(target));
+            view.edit_overview(
+                crate::app::documentation::OverviewTarget::Folder("items/0".into()),
+                true,
+                "Before notes".into(),
+                cx,
+            );
+            view.edit_overview(
+                crate::app::documentation::OverviewTarget::Folder("items/1".into()),
+                true,
+                "Target notes".into(),
+                cx,
+            );
+            view.request_close_other_tabs(crate::shell::OverviewTab::Folder(before), window, cx);
+            assert!(matches!(
+                view.application_dialog,
+                Some(ApplicationDialog::Unsaved {
+                    pending: PendingClose::OtherTabs { .. },
+                    ..
+                })
+            ));
+        })
+        .unwrap();
+    let fresh = external_edit(
+        &path,
+        StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Folder, "items/1"),
+            parent: None,
+            index: Some(0),
+        },
+    );
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            let keep = match &view.application_dialog {
+                Some(ApplicationDialog::Unsaved {
+                    pending:
+                        PendingClose::OtherTabs {
+                            keep:
+                                crate::shell::OpenTab::Overview(
+                                    crate::shell::OverviewTab::Folder(key),
+                                ),
+                        },
+                    ..
+                }) => *key,
+                _ => panic!("close other tabs should stay open on the kept folder"),
+            };
+            assert_eq!(
+                view.loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .folder_selector(keep),
+                Some("items/1")
+            );
+            assert_eq!(folder_name(view, "items/1").as_deref(), Some("Before"));
+            view.handle_application_dialog_action(ApplicationDialogAction::Discard, window, cx);
+            assert!(view.overview_drafts.iter().any(|(target, draft)| {
+                matches!(target, crate::app::documentation::OverviewTarget::Folder(selector) if selector == "items/1")
+                    && draft.current.docs
+                        == Some(probe_core::Documentation::Text("Before notes".into()))
+            }));
+            assert!(view.overview_drafts.values().all(|draft| {
+                draft.current.docs != Some(probe_core::Documentation::Text("Target notes".into()))
+            }));
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let before = loaded.folder_key("items/1").unwrap();
+            let target = loaded.folder_key("items/0").unwrap();
+            assert!(view
+                .shell
+                .open_tabs()
+                .contains(&crate::shell::OverviewTab::Folder(before).into()));
+            assert!(!view
+                .shell
+                .open_tabs()
+                .contains(&crate::shell::OverviewTab::Folder(target).into()));
+        })
+        .unwrap();
+    let saved = probe_opencollection::load_workspace(&path).unwrap();
+    assert!(saved.folders().iter().all(|folder| {
+        saved
+            .workspace()
+            .folder(folder.key())
+            .unwrap()
+            .docs
+            .is_none()
+    }));
+
+    let identical = r#"opencollection: 1.0.0
+info:
+  name: Twins
+bundled: true
+items:
+  - info: {name: Twin, type: folder}
+    items: []
+  - info: {name: Twin, type: folder}
+    items: []
+"#;
+    reset_collection(window, cx, &path, identical);
+    window
+        .update(cx, |view, window, cx| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let first = loaded.folder_key("items/0").unwrap();
+            let second = loaded.folder_key("items/1").unwrap();
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(first));
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(second));
+            view.edit_overview(
+                crate::app::documentation::OverviewTarget::Folder("items/0".into()),
+                true,
+                "First notes".into(),
+                cx,
+            );
+            view.edit_overview(
+                crate::app::documentation::OverviewTarget::Folder("items/1".into()),
+                true,
+                "Second notes".into(),
+                cx,
+            );
+            view.request_close_other_tabs(crate::shell::OverviewTab::Folder(first), window, cx);
+        })
+        .unwrap();
+    let before_save = fs::read(&path).unwrap();
+    let fresh = probe_opencollection::load_workspace(&path).unwrap();
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.application_dialog.is_none());
+            assert!(view.pending_close.is_none());
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "pending action was cancelled"
+            ));
+            assert!(view.overview_drafts.values().any(|draft| {
+                draft.current.docs == Some(probe_core::Documentation::Text("First notes".into()))
+            }));
+            assert!(view.overview_drafts.values().any(|draft| {
+                draft.current.docs == Some(probe_core::Documentation::Text("Second notes".into()))
+            }));
+        })
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before_save);
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn delete_confirmation_follows_a_folder_or_closes_when_it_cannot(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let path = temp_collection("delete-folder", COLLECTION);
+    reset_collection(window, cx, &path, COLLECTION);
+    window
+        .update(cx, |view, window, cx| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let target = loaded.folder_key("items/1").unwrap();
+            let before = loaded.folder_key("items/0").unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(target), cx);
+            view.request_delete_selected(window, cx);
+            view.select_tree_item(WorkspaceItemRef::Folder(before), cx);
+            view.request_delete_selected(window, cx);
+        })
+        .unwrap();
+    let fresh = external_edit(
+        &path,
+        StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Folder, "items/1"),
+            parent: None,
+            index: Some(0),
+        },
+    );
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            match &view.application_dialog {
+                Some(ApplicationDialog::Delete {
+                    kind,
+                    selector,
+                    name,
+                    ..
+                }) => {
+                    assert_eq!(*kind, ItemKind::Folder);
+                    assert_eq!(selector, "items/0");
+                    assert_eq!(name, "Target");
+                }
+                _ => panic!("delete confirmation should follow Target"),
+            }
+            match view.pending_application_dialogs.front() {
+                Some(ApplicationDialog::Delete {
+                    kind,
+                    selector,
+                    name,
+                    ..
+                }) => {
+                    assert_eq!(*kind, ItemKind::Folder);
+                    assert_eq!(selector, "items/1");
+                    assert_eq!(name, "Before");
+                }
+                _ => panic!("queued delete confirmation should follow Before"),
+            }
+            view.handle_application_dialog_action(ApplicationDialogAction::Delete, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let saved = probe_opencollection::load_workspace(&path).unwrap();
+    let names: Vec<_> = saved
+        .folders()
+        .iter()
+        .filter_map(|folder| {
+            saved
+                .workspace()
+                .folder(folder.key())
+                .and_then(|folder| folder.metadata.name.clone())
+        })
+        .collect();
+    assert_eq!(names, ["Before", "After"]);
+
+    let identical = r#"opencollection: 1.0.0
+info:
+  name: Twins
+bundled: true
+items:
+  - info: {name: Twin, type: folder}
+    items: []
+  - info: {name: Twin, type: folder}
+    items: []
+"#;
+    reset_collection(window, cx, &path, identical);
+    window
+        .update(cx, |view, window, cx| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let second = loaded.folder_key("items/1").unwrap();
+            let first = loaded.folder_key("items/0").unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(second), cx);
+            view.request_delete_selected(window, cx);
+            view.select_tree_item(WorkspaceItemRef::Folder(first), cx);
+            view.request_delete_selected(window, cx);
+        })
+        .unwrap();
+    let before_disk = fs::read(&path).unwrap();
+    let fresh = probe_opencollection::load_workspace(&path).unwrap();
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.application_dialog.is_none());
+            assert!(view.pending_application_dialogs.is_empty());
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "pending action was cancelled"
+            ));
+        })
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before_disk);
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn delete_confirmation_follows_a_request_or_closes_when_it_is_gone(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let source = r#"opencollection: 1.0.0
+info:
+  name: Requests
+bundled: true
+items:
+  - info: {name: Alpha, type: http}
+    http: {method: GET, url: https://example.test/alpha}
+  - info: {name: Beta, type: http}
+    http: {method: GET, url: https://example.test/beta}
+"#;
+    let path = temp_collection("delete-request", source);
+    reset_collection(window, cx, &path, source);
+    window
+        .update(cx, |view, window, cx| {
+            let alpha = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .request_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Request(alpha), cx);
+            view.request_delete_selected(window, cx);
+        })
+        .unwrap();
+    let fresh = external_edit(
+        &path,
+        StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Request, "items/0"),
+            parent: None,
+            index: Some(1),
+        },
+    );
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            match &view.application_dialog {
+                Some(ApplicationDialog::Delete {
+                    kind,
+                    selector,
+                    name,
+                    ..
+                }) => {
+                    assert_eq!(*kind, ItemKind::Request);
+                    assert_eq!(selector, "items/1");
+                    assert_eq!(name, "Alpha");
+                }
+                _ => panic!("delete confirmation should follow Alpha"),
+            }
+            view.handle_application_dialog_action(ApplicationDialogAction::Delete, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let saved = probe_opencollection::load_workspace(&path).unwrap();
+    let names: Vec<_> = saved
+        .requests()
+        .iter()
+        .filter_map(|request| {
+            saved
+                .workspace()
+                .request(request.key())
+                .and_then(|request| request.metadata.name.clone())
+        })
+        .collect();
+    assert_eq!(names, ["Beta"]);
+
+    reset_collection(window, cx, &path, source);
+    window
+        .update(cx, |view, window, cx| {
+            let alpha = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .request_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Request(alpha), cx);
+            view.request_delete_selected(window, cx);
+        })
+        .unwrap();
+    let fresh = external_edit(
+        &path,
+        StructureOperation::Delete {
+            target: ItemLocator::new(ItemKind::Request, "items/0"),
+        },
+    );
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.application_dialog.is_none());
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "pending action was cancelled"
+            ));
+            assert_eq!(
+                view.loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .requests()
+                    .iter()
+                    .filter_map(|request| {
+                        view.loaded_workspace
+                            .as_ref()
+                            .unwrap()
+                            .workspace()
+                            .request(request.key())
+                            .and_then(|request| request.metadata.name.clone())
+                    })
+                    .collect::<Vec<_>>(),
+                ["Beta"]
+            );
+        })
+        .unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn deleted_folder_draft_warns_once(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let path = temp_collection("deleted-folder-draft", COLLECTION);
+    reset_collection(window, cx, &path, COLLECTION);
+    window
+        .update(cx, |view, _, cx| {
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/2")
+                .unwrap();
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(folder));
+            view.edit_overview(
+                crate::app::documentation::OverviewTarget::Folder("items/2".into()),
+                true,
+                "After notes".into(),
+                cx,
+            );
+        })
+        .unwrap();
+    let fresh = external_edit(
+        &path,
+        StructureOperation::Delete {
+            target: ItemLocator::new(ItemKind::Folder, "items/2"),
+        },
+    );
+    let after_external = fs::read(&path).unwrap();
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(
+                active_toast_count(view, ToastIntent::Warning, "was deleted"),
+                1
+            );
+            assert_eq!(
+                active_toast_count(view, ToastIntent::Warning, "could not be identified"),
+                0
+            );
+            assert!(view.overview_drafts.values().any(|draft| {
+                draft.current.docs == Some(probe_core::Documentation::Text("After notes".into()))
+            }));
+            let again = probe_opencollection::load_workspace(&path).unwrap();
+            assert!(view.reconcile_filesystem_workspace(again, BTreeMap::new(), window, cx));
+            assert_eq!(
+                active_toast_count(view, ToastIntent::Warning, "was deleted"),
+                1,
+                "a later reload must not repeat the warning"
+            );
+        })
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), after_external);
     fs::remove_file(path).unwrap();
 }
 

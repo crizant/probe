@@ -73,7 +73,7 @@ use dialogs::{
     EnvironmentManagerDialog, PendingClose, SecretUiStatus, StoredSecretRename,
     format_import_diagnostics, suggested_collection_filename,
 };
-use documentation::OverviewTarget;
+use documentation::{FolderDraftNotice, OverviewTarget};
 use imports::{ImportConversion, ImportSource};
 use presentation::{
     InspectListRow, PrettyRevealState, ShellSelectors, inspect_list_rows, inspect_row_index,

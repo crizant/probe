@@ -659,12 +659,19 @@ impl ProbeApp {
                 Some((located.key(), baseline))
             })
             .collect::<Vec<_>>();
-        let key_remaps = self.install_reloaded_workspace(
+        let (key_remaps, cancelled_pending_action) = self.install_reloaded_workspace(
             workspace,
             baselines,
             &key_remaps,
             &result.selector_remaps,
         );
+        if cancelled_pending_action {
+            self.show_toast(
+                ToastIntent::Warning,
+                crate::app::workspace::CANCELLED_PENDING_ACTION,
+                cx,
+            );
+        }
         self.sync_save_dialog_after_structure(operation, &result);
         if matches!(operation, StructureOperation::CreateFolder { .. })
             && matches!(
