@@ -740,7 +740,32 @@ fn certificate_dialog_escape_cancel_and_save_preserve_outer_draft(cx: &mut TestA
     fill(&workspace, cx, 0, "saved.example.com");
     fill(&workspace, cx, 1, "{{certPath}}");
     fill(&workspace, cx, 2, "key.pem");
-    click(&workspace, cx, "certificate-save");
+    let hint = if cfg!(target_os = "macos") {
+        "certificate-save-shortcut:⌘⏎"
+    } else {
+        "certificate-save-shortcut:ctrl-⏎"
+    };
+    assert!(workspace.visual(cx).debug_bounds(hint).is_some());
+    click(&workspace, cx, "certificate-field-0");
+    workspace.update(cx, |_, window, _| {
+        assert!(
+            window
+                .context_stack()
+                .iter()
+                .any(|context| context.contains("Input"))
+        );
+    });
+    cx.simulate_keystrokes(workspace.window.into(), "enter");
+    cx.run_until_parked();
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-dialog")
+            .is_some()
+    );
+    assert!(certificates(&workspace, cx).is_empty());
+    cx.simulate_keystrokes(workspace.window.into(), send_shortcut());
+    cx.run_until_parked();
     assert_eq!(certificates(&workspace, cx).len(), 1);
     assert_eq!(
         workspace.yaml(),
@@ -767,7 +792,19 @@ fn certificate_dialog_escape_cancel_and_save_preserve_outer_draft(cx: &mut TestA
     );
     click(&workspace, cx, "certificate-edit-0");
     fill(&workspace, cx, 0, "edited.example.com");
+    click(&workspace, cx, "certificate-field-0");
     cx.simulate_keystrokes(workspace.window.into(), "enter");
+    cx.run_until_parked();
+    assert!(
+        workspace
+            .visual(cx)
+            .debug_bounds("certificate-dialog")
+            .is_some()
+    );
+    assert!(
+        matches!(&certificates(&workspace, cx)[0], ClientCertificate::Pem { domain, .. } if domain == "saved.example.com")
+    );
+    cx.simulate_keystrokes(workspace.window.into(), send_shortcut());
     cx.run_until_parked();
     assert!(
         matches!(&certificates(&workspace, cx)[0], ClientCertificate::Pem { domain, .. } if domain == "edited.example.com")

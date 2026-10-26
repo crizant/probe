@@ -17,6 +17,15 @@ Release dates use Australia/Brisbane time (UTC+10).
   Add menu or File → Import From → cURL, with a parsed preview, validation, and
   plaintext credential warnings.
 
+### Changed
+
+- Save Request, New HTTP Request, New GraphQL Request, and New Folder share a
+  destination folder tree styled like the collection sidebar. These dialogs and
+  Add/Edit Certificate submit with Command+Enter on macOS or Ctrl+Enter on
+  Windows/Linux, with the shortcut shown on the submit button.
+- Removed the Move dialog; collection items can still be moved by dragging them
+  in the sidebar.
+
 ## [2.1.1] - 2026-10-25
 
 ### Added

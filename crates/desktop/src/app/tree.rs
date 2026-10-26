@@ -1,7 +1,8 @@
 use gpui_kit::base::Button;
 use gpui_kit::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window,
-    div, prelude::FluentBuilder as _, px, relative,
+    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    relative,
 };
 use probe_core::{ItemKind, Workspace, WorkspaceItemRef};
 
@@ -94,6 +95,118 @@ pub(crate) fn tree_row_button(
             row.hover(move |row| row.bg(theme.sidebar_hover()))
         })
         .cursor_pointer()
+}
+
+/// A destination picker shared by structure dialogs. State and callbacks belong
+/// to the caller, independently of the sidebar's expansion and selection.
+pub(crate) fn destination_tree(
+    theme: Theme,
+    rows: &[crate::structure_editor::SaveDestinationRow],
+    selected_parent: &str,
+    on_select: impl Fn(String, &mut gpui_kit::App) + Clone + 'static,
+    on_toggle: impl Fn(String, &mut gpui_kit::App) + Clone + 'static,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let mut tree = div()
+        .id("save-destination-tree")
+        .w_full()
+        .max_h(px(theme.metrics.tree_row_height * 8.0))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .p(px(theme.metrics.spacing_1))
+        .rounded(px(theme.metrics.radius_small))
+        .border_1()
+        .border_color(theme.colors.borders.standard)
+        .bg(theme.colors.surfaces.sidebar)
+        .font_family(theme.typography.interface_family)
+        .text_size(px(theme.typography.body_size))
+        .text_color(theme.colors.text.primary);
+    for (index, row) in rows.iter().enumerate() {
+        let selected = row.selector == selected_parent;
+        let select_id = if row.selector.is_empty() {
+            "save-destination-root".to_owned()
+        } else {
+            format!("save-destination-{}", row.selector)
+        };
+        let selector = row.selector.clone();
+        let action_selector = selector.clone();
+        let select = on_select.clone();
+        let activate = on_select.clone();
+        let mut marker = div().flex_none().flex().items_center();
+        if row.expandable {
+            let toggle = on_toggle.clone();
+            let toggle_action = on_toggle.clone();
+            let selector = row.selector.clone();
+            let action_selector = selector.clone();
+            let toggle_id = format!("save-destination-toggle-{}", row.selector);
+            marker = marker.child(
+                Button::new(toggle_id.clone())
+                    .debug_selector(move || toggle_id.clone())
+                    .accessibility_label(format!(
+                        "{} {}",
+                        if row.expanded { "Collapse" } else { "Expand" },
+                        row.name,
+                    ))
+                    .key_context("SaveDestination")
+                    .w(px(tree_disclosure_width(theme)))
+                    .h(px(theme.metrics.tree_row_height))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        components::tree_disclosure_icon(theme, row.expanded)
+                            .relative()
+                            .left(px(-theme.metrics.spacing_1 / 2.0)),
+                    )
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        toggle(selector.clone(), cx);
+                    })
+                    .on_action(move |_: &super::ActivateSaveDestination, _, cx| {
+                        cx.stop_propagation();
+                        toggle_action(action_selector.clone(), cx);
+                    }),
+            );
+        } else {
+            marker = marker.child(div().flex_none().w(px(tree_disclosure_width(theme))));
+        }
+        marker = marker.child(components::tree_icon_slot(
+            theme,
+            components::tree_folder_icon(theme, row.expanded, false),
+        ));
+        let button = tree_row_button(theme, select_id.clone(), row.depth, selected)
+            .debug_selector(move || select_id.clone())
+            .accessibility_label(if row.selector.is_empty() {
+                "Collection root".to_owned()
+            } else {
+                format!("Folder {}", row.name)
+            })
+            .key_context("SaveDestination")
+            .on_click(move |_, _, cx| select(selector.clone(), cx))
+            .on_action(move |_: &super::ActivateSaveDestination, _, cx| {
+                cx.stop_propagation();
+                activate(action_selector.clone(), cx);
+            })
+            .child(marker)
+            .child(
+                components::truncated_label(row.name.clone())
+                    .flex_1()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+            );
+        tree = tree.child(
+            div()
+                .id(("save-destination-row", index))
+                .relative()
+                .w_full()
+                .h(px(theme.metrics.tree_row_height))
+                .child(button)
+                .when(row.depth > 0, |line| {
+                    line.child(tree_hierarchy_guides(theme, row.depth, selected))
+                }),
+        );
+    }
+    tree
 }
 
 pub(crate) fn tree_disclosure_width(theme: Theme) -> f32 {

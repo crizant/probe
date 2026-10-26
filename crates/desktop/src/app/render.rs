@@ -261,9 +261,6 @@ impl Render for ProbeApp {
             .on_action(cx.listener(|view, _: &DeleteTreeItem, window, cx| {
                 view.request_delete_selected(window, cx);
             }))
-            .on_action(cx.listener(|view, _: &MoveTreeItem, window, cx| {
-                view.open_move_dialog(window, cx);
-            }))
             .on_action(cx.listener(|view, _: &MoveTreeItemUp, window, cx| {
                 view.reorder_selected(-1, window, cx);
             }))
@@ -446,7 +443,7 @@ impl Render for ProbeApp {
             .child(self.render_environment_manager_dialog(theme, window, cx))
             .child(self.render_secret_value_dialog(theme, window, cx))
             .child(self.render_environment_manager_context_menu(theme, window, cx))
-            .child(self.render_certificate_dialog(theme, cx))
+            .child(self.render_certificate_dialog(theme, window, cx))
             .child(self.render_create_environment_dialog(theme, window, cx))
             .child(self.render_application_dialog(theme, window, cx))
             .child(self.render_tab_tooltip(theme))

@@ -86,6 +86,7 @@ fn manager_secret_status_comes_from_presence_for_the_effective_environment(
 
 #[gpui_kit::test]
 fn manager_secret_row_actions_follow_presence_and_saved_state(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "base");
     workspace.select_manager_tab(cx, crate::app::EnvironmentTab::Secrets);
@@ -107,6 +108,7 @@ fn manager_secret_row_actions_follow_presence_and_saved_state(cx: &mut TestAppCo
     });
     visual.run_until_parked();
     assert!(renders(&mut visual, "secret-value-identity"));
+    assert!(renders(&mut visual, "secret-value-save-shortcut:⏎"));
     assert!(!renders(&mut visual, "secret-value-delete-stored"));
     workspace.update(cx, |view, window, cx| {
         view.close_secret_value_dialog(window, cx)

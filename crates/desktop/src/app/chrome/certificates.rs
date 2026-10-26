@@ -393,6 +393,7 @@ impl ProbeApp {
     pub(in crate::app) fn render_certificate_dialog(
         &self,
         theme: Theme,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let Some(editor) = self
@@ -718,7 +719,11 @@ impl ProbeApp {
                     "certificate-save",
                     "Save",
                     components::DialogActionStyle::Primary,
-                    None,
+                    components::shortcut_label_for_action_in_context(
+                        window,
+                        &SubmitCertificateDialog,
+                        "CertificateDialog",
+                    ),
                     missing_field.is_some(),
                     move |_, window, cx| {
                         let _ =
