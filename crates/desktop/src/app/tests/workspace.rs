@@ -1252,6 +1252,11 @@ fn enter_in_the_save_folder_field_creates_the_folder_without_saving(cx: &mut Tes
         })
         .unwrap();
     cx.run_until_parked();
+    assert!(
+        VisualTestContext::from_window(window.into(), cx)
+            .debug_bounds("save-folder-create-shortcut:⏎")
+            .is_some()
+    );
     cx.simulate_keystrokes(window.into(), "enter");
     cx.run_until_parked();
 
@@ -1566,61 +1571,6 @@ fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
             assert!(dialog.expanded_folders.contains("items/1"));
         })
         .unwrap();
-}
-
-#[gpui_kit::test]
-fn move_dialog_keeps_a_destination_parent(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = writable_structure_fixture("move-dialog-parent");
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let request = workspace.request_key("items/0").unwrap();
-    window
-        .update(cx, |view, window, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture.clone(), workspace);
-            view.select_request(request, cx);
-            view.open_move_dialog(window, cx);
-            let dialog = view.structure_dialog.as_ref().unwrap();
-            assert!(matches!(dialog.mode, StructureDialogMode::Move { .. }));
-            assert_eq!(dialog.parent, "");
-            view.structure_dialog.as_mut().unwrap().parent = "items/1".to_owned();
-            view.submit_structure_dialog(window, cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
-    let moved = loaded
-        .requests()
-        .iter()
-        .find(|located| {
-            loaded
-                .workspace()
-                .request(located.key())
-                .unwrap()
-                .metadata
-                .name
-                .as_deref()
-                == Some("Alpha")
-        })
-        .expect("moved request should remain");
-    let parent = loaded
-        .workspace()
-        .request_ancestor_folders(moved.key())
-        .and_then(|ancestors| ancestors.last().copied())
-        .expect("request should leave the collection root");
-    assert_eq!(
-        loaded
-            .workspace()
-            .folder(parent)
-            .unwrap()
-            .metadata
-            .name
-            .as_deref(),
-        Some("Folder")
-    );
 }
 
 #[gpui_kit::test]
@@ -3068,6 +3018,11 @@ fn enter_triggers_create_environment_dialog_primary_action(cx: &mut TestAppConte
         .unwrap();
     cx.run_until_parked();
 
+    assert!(
+        VisualTestContext::from_window(window.into(), cx)
+            .debug_bounds("create-environment-submit-shortcut:⏎")
+            .is_some()
+    );
     cx.simulate_keystrokes(window.into(), "enter");
     cx.run_until_parked();
 
@@ -5162,4 +5117,330 @@ fn certificate_overrides_follow_reloaded_tabs_without_persistence_or_dirty_state
         .unwrap();
     assert_eq!(fs::read(&fixture).unwrap(), original);
     fs::remove_file(fixture).unwrap();
+}
+
+#[gpui_kit::test]
+fn destination_dialogs_select_with_enter_and_submit_with_modified_enter(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    for mode in ["http", "graphql", "folder", "save"] {
+        for focus_tree in [false, true] {
+            let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+            let fixture = writable_structure_fixture(&format!("destination-{mode}-{focus_tree}"));
+            let mut source = fs::read_to_string(&fixture).unwrap();
+            source.push_str(
+                "      - info:\n          name: Child\n          type: folder\n        items: []\n",
+            );
+            fs::write(&fixture, source).unwrap();
+            let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+            let child_selector = "items/1/items/1";
+            let child = workspace.folder_key(child_selector).unwrap();
+            window
+                .update(cx, |view, window, cx| {
+                    view.session_store = None;
+                    view.set_workspace(fixture.clone(), workspace);
+                    view.select_tree_item(WorkspaceItemRef::Folder(child), cx);
+                    match mode {
+                        "http" => view.open_create_request_dialog(
+                            probe_core::RequestProtocol::Http,
+                            window,
+                            cx,
+                        ),
+                        "graphql" => view.open_create_request_dialog(
+                            probe_core::RequestProtocol::Graphql,
+                            window,
+                            cx,
+                        ),
+                        "folder" => view.open_create_folder_dialog(window, cx),
+                        "save" => {
+                            view.new_detached_request(
+                                probe_core::RequestProtocol::Http,
+                                window,
+                                cx,
+                            );
+                            view.select_tree_item(WorkspaceItemRef::Folder(child), cx);
+                            view.open_save_detached_request_dialog(
+                                view.shell.active_tab().unwrap(),
+                                window,
+                                cx,
+                            );
+                        }
+                        _ => unreachable!(),
+                    }
+                    let dialog = view.structure_dialog.as_mut().unwrap();
+                    dialog.name = "Created here".into();
+                    assert_eq!(dialog.parent, child_selector);
+                    assert!(dialog.expanded_folders.contains("items/1"));
+                    cx.notify();
+                })
+                .unwrap();
+            cx.run_until_parked();
+            let hint = if cfg!(target_os = "macos") {
+                "structure-submit-shortcut:⌘⏎"
+            } else {
+                "structure-submit-shortcut:ctrl-⏎"
+            };
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds(hint).is_some(), "{mode}: submit hint");
+            assert!(
+                visual
+                    .debug_bounds("save-destination-items/1/items/1")
+                    .is_some()
+            );
+            assert_eq!(
+                visual.debug_bounds("save-new-folder").is_some(),
+                mode == "save"
+            );
+            window
+                .update(cx, |_, window, _| {
+                    assert!(
+                        window
+                            .context_stack()
+                            .iter()
+                            .any(|context| context.contains("Input")),
+                        "{mode}: name input should own focus"
+                    );
+                })
+                .unwrap();
+            // The name field is initially focused. Enter must leave the dialog open.
+            visual.simulate_keystrokes("enter");
+            visual.run_until_parked();
+            window
+                .update(cx, |view, _, _| {
+                    assert!(
+                        view.structure_dialog.is_some(),
+                        "{mode}: plain Enter submitted"
+                    );
+                    assert!(view.structure_task.is_none());
+                })
+                .unwrap();
+            if focus_tree {
+                let toggle = visual
+                    .debug_bounds("save-destination-toggle-items/1")
+                    .unwrap();
+                visual.simulate_click(toggle.center(), Modifiers::default());
+                visual.run_until_parked();
+                assert!(
+                    visual
+                        .debug_bounds("save-destination-items/1/items/1")
+                        .is_none()
+                );
+                visual.simulate_keystrokes("enter");
+                visual.run_until_parked();
+                let child_row = visual
+                    .debug_bounds("save-destination-items/1/items/1")
+                    .unwrap();
+                visual.simulate_click(child_row.center(), Modifiers::default());
+                visual.run_until_parked();
+                window
+                    .update(cx, |view, _, cx| {
+                        view.structure_dialog.as_mut().unwrap().parent.clear();
+                        cx.notify();
+                    })
+                    .unwrap();
+                visual.simulate_keystrokes("enter");
+                visual.run_until_parked();
+                window
+                    .update(cx, |view, _, _| {
+                        assert_eq!(
+                            view.structure_dialog.as_ref().unwrap().parent,
+                            child_selector
+                        );
+                        assert!(view.structure_task.is_none());
+                    })
+                    .unwrap();
+            }
+            visual.simulate_keystrokes(super::send_shortcut());
+            visual.run_until_parked();
+            cx.run_until_parked();
+            window
+                .update(cx, |view, _, _| {
+                    assert!(
+                        view.structure_dialog.is_none(),
+                        "{mode}, focus_tree={focus_tree}: {:?}",
+                        toast_debug(view)
+                    );
+                })
+                .unwrap();
+            let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+            let child = loaded.folder_key(child_selector).unwrap();
+            let children = &loaded.workspace().folder(child).unwrap().children;
+            assert_eq!(children.len(), 1, "{mode}: created in the selected folder");
+            assert_eq!(
+                loaded
+                    .workspace()
+                    .item_metadata(children[0])
+                    .unwrap()
+                    .name
+                    .as_deref(),
+                Some("Created here")
+            );
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn removed_move_shortcut_does_not_open_a_dialog(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let workspace = probe_opencollection::load_workspace(nested_fixture()).unwrap();
+    let request = workspace.request_key("items/0").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(nested_fixture(), workspace);
+            view.select_request(request, cx);
+            view.tree_focus_handle.focus(window, cx);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), "m");
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| assert!(view.structure_dialog.is_none()))
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn application_dialog_buttons_display_their_submit_shortcuts(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let preview = inspect_postman_source(postman_fixture("collection-lossy.json")).unwrap();
+    for (dialog, selector) in [
+        (
+            ApplicationDialog::About,
+            "application-dialog-done-shortcut:⏎",
+        ),
+        (
+            ApplicationDialog::UnsavedEnvironment,
+            "application-dialog-save-shortcut:⏎",
+        ),
+        (
+            ApplicationDialog::RenameStoredSecrets {
+                kind: StoredSecretRename::Environment,
+            },
+            "application-dialog-rename-shortcut:⏎",
+        ),
+        (
+            ApplicationDialog::ConfirmPartialImport {
+                conversion: ImportConversion::Postman(Box::new(preview)),
+                detail: String::new(),
+            },
+            "application-dialog-import-supported-shortcut:⏎",
+        ),
+    ] {
+        window
+            .update(cx, |view, window, cx| {
+                view.application_dialog = None;
+                view.show_application_dialog(dialog, window, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            VisualTestContext::from_window(window.into(), cx)
+                .debug_bounds(selector)
+                .is_some(),
+            "missing {selector}"
+        );
+    }
+    // Delete intentionally uses the destructive shortcut, preserving the
+    // existing safeguard that plain Enter does not delete data.
+    window
+        .update(cx, |view, window, cx| {
+            view.application_dialog = None;
+            view.show_application_dialog(
+                ApplicationDialog::DeleteEnvironment {
+                    name: "test".into(),
+                    detail: String::new(),
+                },
+                window,
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let selector = if cfg!(target_os = "macos") {
+        "application-dialog-delete-shortcut:⌘⌫"
+    } else {
+        "application-dialog-delete-shortcut:ctrl-delete"
+    };
+    assert!(
+        VisualTestContext::from_window(window.into(), cx)
+            .debug_bounds(selector)
+            .is_some()
+    );
+}
+
+#[gpui_kit::test]
+fn rename_keeps_plain_enter_submission_without_a_destination_tree(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let fixture = writable_structure_fixture("rename-enter-no-tree");
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request = loaded.request_key("items/0").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), loaded);
+            view.select_request(request, cx);
+            view.open_rename_dialog(window, cx);
+            view.structure_dialog.as_mut().unwrap().name = "Renamed".into();
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(visual.debug_bounds("structure-submit-shortcut:⏎").is_some());
+    assert!(visual.debug_bounds("save-destination-root").is_none());
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let request = loaded.request_key("items/0").unwrap();
+    assert_eq!(
+        loaded
+            .workspace()
+            .request(request)
+            .unwrap()
+            .metadata
+            .name
+            .as_deref(),
+        Some("Renamed")
+    );
+}
+
+#[test]
+fn destination_root_does_not_add_depth_to_top_level_folders() {
+    let loaded = probe_opencollection::load_workspace(nested_fixture()).unwrap();
+    let workspace = loaded.workspace();
+    let folder = loaded.folder_key("items/1").unwrap();
+    let mut sidebar_rows = Vec::new();
+    crate::app::tree::flatten_visible_tree_rows(
+        workspace,
+        workspace.root_items(),
+        0,
+        &crate::shell::ShellState::default(),
+        None,
+        &mut sidebar_rows,
+    );
+    let dialog_rows = crate::structure_editor::save_destination_rows(&loaded, &Default::default());
+    assert!(
+        dialog_rows[0].selector.is_empty(),
+        "collection root remains a separate choice"
+    );
+    let sidebar_depth = sidebar_rows
+        .iter()
+        .find(|row| row.item == WorkspaceItemRef::Folder(folder))
+        .unwrap()
+        .depth;
+    let dialog_depth = dialog_rows
+        .iter()
+        .find(|row| row.selector == "items/1")
+        .unwrap()
+        .depth;
+    assert_eq!((sidebar_depth, dialog_depth), (0, 0));
 }

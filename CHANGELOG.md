@@ -17,6 +17,27 @@ Release dates use Australia/Brisbane time (UTC+10).
   Add menu or File → Import From → cURL, with a parsed preview, validation, and
   plaintext credential warnings.
 
+### Changed
+
+- Save Request, New HTTP Request, New GraphQL Request, New Folder, and Import
+  from cURL share a destination folder tree styled like the collection sidebar,
+  with Collection root at the left padding and the same indentation per level.
+  cURL imports preserve pasted commands and require an explicit destination
+  selection if the chosen folder disappears.
+- Save Request, New HTTP Request, New GraphQL Request, New Folder, and Add/Edit
+  Certificate now submit with Cmd+Enter on macOS or Ctrl+Enter on Linux/Windows
+  instead of plain Enter, with the shortcut shown on the submit button.
+
+### Fixed
+
+- Destination tree hierarchy guides no longer run through collapsed folder
+  chevrons; top-level folders align with the collection sidebar.
+
+### Removed
+
+- Removed the Move dialog. Sidebar drag-and-drop moving and Alt+Up/Alt+Down
+  keyboard reordering still work.
+
 ## [2.1.1] - 2026-10-25
 
 ### Added

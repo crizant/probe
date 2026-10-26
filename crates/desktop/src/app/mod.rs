@@ -82,8 +82,8 @@ use presentation::{
 use tabs::TabDrag;
 use transient::TransientSurfaces;
 use tree::{
-    TreeDrag, TreeRow, TreeRowSpec, flatten_visible_tree_rows, tree_disclosure_width,
-    tree_hierarchy_guides, tree_level_indent, tree_row_button,
+    TreeDrag, TreeRow, TreeRowContent, TreeRowElement, TreeRowSpec, flatten_visible_tree_rows,
+    tree_level_indent, tree_row,
 };
 
 use crate::{
@@ -179,7 +179,6 @@ gpui_kit::actions!(
         DuplicateRequest,
         RenameTreeItem,
         DeleteTreeItem,
-        MoveTreeItem,
         MoveTreeItemUp,
         MoveTreeItemDown,
         SelectPreviousTreeItem,
@@ -877,7 +876,6 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("escape", CloseImportSubmenu, Some("ImportSubmenu")),
         KeyBinding::new("n", NewRequest, Some("RequestTree")),
         KeyBinding::new("shift-n", NewFolder, Some("RequestTree")),
-        KeyBinding::new("m", MoveTreeItem, Some("RequestTree")),
         KeyBinding::new("alt-up", MoveTreeItemUp, Some("RequestTree")),
         KeyBinding::new("alt-down", MoveTreeItemDown, Some("RequestTree")),
         KeyBinding::new("enter", SubmitStructureDialog, Some("StructureDialog")),
@@ -893,9 +891,12 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("enter", SubmitApplicationDialog, Some("ApplicationDialog")),
         KeyBinding::new("escape", CancelApplicationDialog, Some("SettingsDialog")),
         KeyBinding::new("enter", SubmitSecretValueDialog, Some("SecretValueDialog")),
-        KeyBinding::new("enter", SubmitCertificateDialog, Some("CertificateDialog")),
         KeyBinding::new("escape", CancelCertificateDialog, Some("CertificateDialog")),
-        KeyBinding::new("escape", CancelStructureDialog, Some("StructureDialog")),
+        KeyBinding::new(
+            "escape",
+            CancelStructureDialog,
+            Some("StructureDialog || TreeStructureDialog"),
+        ),
         KeyBinding::new(
             "escape",
             CancelCreateEnvironmentDialog,
@@ -1025,7 +1026,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
             "ctrl-enter"
         },
         SubmitStructureDialog,
-        Some("(CurlImportDialog > Input) || CurlImportDialog"),
+        Some("(CurlImportDialog > Input) || (CurlImportDialog > SaveDestination) || CurlImportDialog"),
     )]);
 
     // Register after the platform send bindings so Settings owns its submit shortcut.
@@ -1038,6 +1039,25 @@ fn bind_platform_hotkeys(cx: &mut App) {
         SubmitApplicationDialog,
         Some("(SettingsDialog > Select) || SettingsDialog"),
     )]);
+
+    // These dialogs own submission even when a text input or tree row is focused.
+    let dialog_submit = if cfg!(target_os = "macos") {
+        "cmd-enter"
+    } else {
+        "ctrl-enter"
+    };
+    cx.bind_keys([
+        KeyBinding::new(
+            dialog_submit,
+            SubmitStructureDialog,
+            Some("(TreeStructureDialog > Input) || (TreeStructureDialog > SaveDestination) || TreeStructureDialog"),
+        ),
+        KeyBinding::new(
+            dialog_submit,
+            SubmitCertificateDialog,
+            Some("(CertificateDialog > Input) || CertificateDialog"),
+        ),
+    ]);
 
     #[cfg(target_os = "windows")]
     cx.bind_keys([KeyBinding::new("alt-f4", CloseWindow, None)]);

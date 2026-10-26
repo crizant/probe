@@ -1016,8 +1016,7 @@ impl ProbeApp {
             | StructureDialogMode::CreateRequest(_)
             | StructureDialogMode::SaveDetachedRequest { .. }
             | StructureDialogMode::CreateFolder => {}
-            StructureDialogMode::Rename { kind, selector }
-            | StructureDialogMode::Move { kind, selector } => {
+            StructureDialogMode::Rename { kind, selector } => {
                 if let Some(mapped) = remaps.get(selector) {
                     selector.clone_from(mapped);
                 }
@@ -1030,7 +1029,7 @@ impl ProbeApp {
             return;
         }
 
-        if matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+        if dialog.edits_destination() {
             let expanded = std::mem::take(&mut dialog.expanded_folders);
             dialog.expanded_folders = expanded
                 .into_iter()

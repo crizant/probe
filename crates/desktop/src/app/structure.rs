@@ -44,7 +44,7 @@ impl ProbeApp {
             name,
             self.selected_parent_selector(),
         ));
-        self.expand_save_dialog_ancestors();
+        self.expand_destination_ancestors();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -114,6 +114,7 @@ impl ProbeApp {
             protocol,
             self.selected_parent_selector(),
         ));
+        self.expand_destination_ancestors();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -130,6 +131,7 @@ impl ProbeApp {
         self.structure_dialog = Some(StructureDialog::create_folder(
             self.selected_parent_selector(),
         ));
+        self.expand_destination_ancestors();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -156,28 +158,6 @@ impl ProbeApp {
             return;
         };
         self.structure_dialog = Some(StructureDialog::rename(kind, selector, name));
-        self.structure_dialog_focus.focus(window, cx);
-        cx.notify();
-    }
-
-    pub(super) fn open_move_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.structure_task.is_some() {
-            return;
-        }
-        let Some((kind, selector, _)) = self.selected_item_details() else {
-            return;
-        };
-        let Some(loaded) = &self.loaded_workspace else {
-            return;
-        };
-        let selected = self
-            .selected_tree_item
-            .expect("details require a selection");
-        let Some((parent, _)) = item_position(loaded.workspace(), selected) else {
-            return;
-        };
-        let parent = parent.and_then(|key| loaded.folder_selector(key).map(str::to_owned));
-        self.structure_dialog = Some(StructureDialog::move_item(kind, selector, parent));
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -380,22 +360,39 @@ impl ProbeApp {
         cx.notify();
     }
 
-    pub(super) fn select_save_dialog_parent(&mut self, parent: String, cx: &mut Context<Self>) {
+    pub(super) fn destination_picker_locked(&self) -> bool {
+        self.structure_task.is_some()
+            || self.structure_dialog.as_ref().is_some_and(|dialog| {
+                dialog.new_folder_name.is_some()
+                    || dialog.curl.as_ref().is_some_and(|curl| curl.committed)
+            })
+    }
+
+    pub(super) fn select_destination_parent(&mut self, parent: String, cx: &mut Context<Self>) {
+        if self.destination_picker_locked() {
+            return;
+        }
         let Some(dialog) = self.structure_dialog.as_mut() else {
             return;
         };
-        if !matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+        if !dialog.edits_destination() {
             return;
         }
         dialog.parent = parent;
+        if let Some(curl) = dialog.curl.as_mut() {
+            curl.destination_required = false;
+        }
         cx.notify();
     }
 
-    pub(super) fn toggle_save_dialog_folder(&mut self, selector: String, cx: &mut Context<Self>) {
+    pub(super) fn toggle_destination_folder(&mut self, selector: String, cx: &mut Context<Self>) {
+        if self.destination_picker_locked() {
+            return;
+        }
         let Some(dialog) = self.structure_dialog.as_mut() else {
             return;
         };
-        if !matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+        if !dialog.edits_destination() {
             return;
         }
         if !dialog.expanded_folders.remove(&selector) {
@@ -779,13 +776,14 @@ impl ProbeApp {
                 dialog.new_folder_name = None;
             }
         }
-        self.expand_save_dialog_ancestors();
+        self.expand_destination_ancestors();
         self.drop_missing_save_dialog_folders();
     }
 
-    fn expand_save_dialog_ancestors(&mut self) {
+    pub(super) fn expand_destination_ancestors(&mut self) {
         let Some(parent) = self.structure_dialog.as_ref().and_then(|dialog| {
-            matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. })
+            dialog
+                .edits_destination()
                 .then(|| dialog.parent.clone())
                 .filter(|parent| !parent.is_empty())
         }) else {

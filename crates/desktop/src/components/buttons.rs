@@ -345,6 +345,7 @@ fn action_button(
     let label = label.into();
     let id = id.into();
     let debug_id = id.to_string();
+    let hint_id = format!("{debug_id}-shortcut");
     let button = Button::new(id)
         .debug_selector(move || debug_id.clone())
         .h(px(theme.metrics.control_height))
@@ -388,6 +389,7 @@ fn action_button(
             .disabled(disabled)
             .on_click(on_click)
             .child(action_button_label(
+                hint_id,
                 theme,
                 label,
                 kind,
@@ -420,6 +422,7 @@ fn action_button(
             .disabled(disabled)
             .on_click(on_click)
             .child(action_button_label(
+                hint_id,
                 theme,
                 label,
                 kind,
@@ -457,6 +460,7 @@ fn action_button(
             .disabled(disabled)
             .on_click(on_click)
             .child(action_button_label(
+                hint_id,
                 theme,
                 label,
                 kind,
@@ -502,6 +506,7 @@ fn action_button(
                 .disabled(disabled)
                 .on_click(on_click)
                 .child(action_button_label(
+                    hint_id,
                     theme,
                     label,
                     kind,
@@ -513,6 +518,7 @@ fn action_button(
 }
 
 fn action_button_label(
+    hint_id: String,
     theme: Theme,
     label: String,
     kind: ActionButtonKind,
@@ -523,6 +529,7 @@ fn action_button_label(
         return div().child(label);
     };
 
+    let hint_selector = format!("{hint_id}:{shortcut_hint}");
     let key_color: Hsla = if disabled {
         theme.colors.actions.disabled_foreground.into()
     } else {
@@ -566,6 +573,7 @@ fn action_button_label(
                 .border_color(hint_border)
                 .text_size(px(theme.typography.caption_size))
                 .text_color(hint_color)
+                .debug_selector(move || hint_selector.clone())
                 .child(shortcut_hint),
         )
 }

@@ -22,7 +22,6 @@ pub(crate) enum StructureDialogMode {
     CreateFolder,
     SaveDetachedRequest { key: RequestKey },
     Rename { kind: ItemKind, selector: String },
-    Move { kind: ItemKind, selector: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -31,8 +30,7 @@ pub(crate) struct StructureDialog {
     pub(crate) curl: Option<CurlImport>,
     pub(crate) name: String,
     pub(crate) parent: String,
-    pub(crate) index: String,
-    /// Folder selectors expanded in the save-dialog destination tree.
+    /// Folder selectors expanded in the dialog destination tree.
     ///
     /// This is independent of the sidebar so collapsing a destination does not
     /// collapse the collection tree.
@@ -51,7 +49,6 @@ impl StructureDialog {
             mode: StructureDialogMode::SaveDetachedRequest { key },
             name,
             parent: parent.unwrap_or_default(),
-            index: String::new(),
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
             curl: None,
@@ -62,7 +59,6 @@ impl StructureDialog {
             mode: StructureDialogMode::CreateRequest(protocol),
             name: String::new(),
             parent: parent.unwrap_or_default(),
-            index: String::new(),
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
             curl: None,
@@ -74,7 +70,6 @@ impl StructureDialog {
             mode: StructureDialogMode::CreateFolder,
             name: String::new(),
             parent: parent.unwrap_or_default(),
-            index: String::new(),
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
             curl: None,
@@ -86,19 +81,6 @@ impl StructureDialog {
             mode: StructureDialogMode::Rename { kind, selector },
             name,
             parent: String::new(),
-            index: String::new(),
-            expanded_folders: BTreeSet::new(),
-            new_folder_name: None,
-            curl: None,
-        }
-    }
-
-    pub(crate) fn move_item(kind: ItemKind, selector: String, parent: Option<String>) -> Self {
-        Self {
-            mode: StructureDialogMode::Move { kind, selector },
-            name: String::new(),
-            parent: parent.unwrap_or_default(),
-            index: String::new(),
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
             curl: None,
@@ -123,7 +105,6 @@ impl StructureDialog {
             StructureDialogMode::CreateFolder => "New Folder",
             StructureDialogMode::SaveDetachedRequest { .. } => "Save Request",
             StructureDialogMode::Rename { .. } => "Rename",
-            StructureDialogMode::Move { .. } => "Move",
         }
     }
 
@@ -133,35 +114,32 @@ impl StructureDialog {
             StructureDialogMode::CreateRequest(_) | StructureDialogMode::CreateFolder => "Create",
             StructureDialogMode::SaveDetachedRequest { .. } => "Save",
             StructureDialogMode::Rename { .. } => "Rename",
-            StructureDialogMode::Move { .. } => "Move",
         }
-    }
-
-    pub(crate) const fn edits_name(&self) -> bool {
-        !matches!(self.mode, StructureDialogMode::Move { .. })
     }
 
     pub(crate) const fn edits_destination(&self) -> bool {
         matches!(
             self.mode,
-            StructureDialogMode::Move { .. } | StructureDialogMode::SaveDetachedRequest { .. }
+            StructureDialogMode::CreateRequest(_)
+                | StructureDialogMode::ImportCurl
+                | StructureDialogMode::CreateFolder
+                | StructureDialogMode::SaveDetachedRequest { .. }
         )
+    }
+
+    pub(crate) const fn key_context(&self) -> &'static str {
+        if matches!(self.mode, StructureDialogMode::ImportCurl) {
+            "CurlImportDialog"
+        } else if self.edits_destination() {
+            "TreeStructureDialog"
+        } else {
+            "StructureDialog"
+        }
     }
 
     pub(crate) fn operation(&self) -> Result<StructureOperation, String> {
         let name = self.name.trim();
         let parent = (!self.parent.is_empty()).then(|| self.parent.clone());
-        let index = if self.index.trim().is_empty() {
-            None
-        } else {
-            Some(
-                self.index
-                    .trim()
-                    .parse::<usize>()
-                    .map_err(|_| "Position must be a non-negative whole number.".to_owned())?,
-            )
-        };
-
         match &self.mode {
             StructureDialogMode::ImportCurl => {
                 if name.is_empty() {
@@ -237,14 +215,6 @@ impl StructureDialog {
                     name: name.to_owned(),
                 })
             }
-            StructureDialogMode::Move { kind, selector } => Ok(StructureOperation::Move {
-                target: ItemLocator {
-                    kind: *kind,
-                    selector: selector.clone(),
-                },
-                parent,
-                index,
-            }),
         }
     }
 }
@@ -270,7 +240,8 @@ pub(crate) fn save_destination_rows(
         expanded: true,
     }];
     let root = loaded.workspace().root_items().to_vec();
-    append_save_destination_folders(loaded, &root, 1, expanded, &mut rows);
+    // The synthetic collection-root choice does not add a level to sidebar folders.
+    append_save_destination_folders(loaded, &root, 0, expanded, &mut rows);
     rows
 }
 
@@ -645,7 +616,7 @@ mod tests {
     };
 
     #[test]
-    fn dialog_builds_typed_operations_and_validates_positions() {
+    fn dialog_builds_typed_create_operations() {
         for (protocol, method, title) in [
             (RequestProtocol::Http, "GET", "New HTTP Request"),
             (RequestProtocol::Graphql, "POST", "New GraphQL Request"),
@@ -670,31 +641,6 @@ mod tests {
                 }
             );
         }
-        let mut dialog = StructureDialog::move_item(
-            ItemKind::Request,
-            "old.yml".to_owned(),
-            Some("folder".to_owned()),
-        );
-        assert_eq!(
-            dialog.operation().unwrap(),
-            StructureOperation::Move {
-                target: ItemLocator::new(ItemKind::Request, "old.yml"),
-                parent: Some("folder".to_owned()),
-                index: None,
-            },
-            "moves should append by default because the source index may be invalid in the destination"
-        );
-        dialog.index = "2".to_owned();
-        assert_eq!(
-            dialog.operation().unwrap(),
-            StructureOperation::Move {
-                target: ItemLocator::new(ItemKind::Request, "old.yml"),
-                parent: Some("folder".to_owned()),
-                index: Some(2),
-            }
-        );
-        dialog.index = "-1".to_owned();
-        assert!(dialog.operation().is_err());
     }
 
     #[test]
