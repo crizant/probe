@@ -3,6 +3,10 @@
   <title id="title">Probe app icon — dark</title>
   <desc id="description">A close-up of the orange probe tip touching a concentric target, with the finger guard and three burnt-orange grip rings filling the upper-right edge.</desc>
   <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3B3D40"/>
+      <stop offset="1" stop-color="#26282B"/>
+    </linearGradient>
     <pattern id="grid" x="1" y="1" width="64" height="64" patternUnits="userSpaceOnUse">
       <path d="M64 0H0V64" fill="none" stroke="#35363B" stroke-width="1.5"/>
     </pattern>
@@ -35,8 +39,8 @@
     </clipPath>
   </defs>
 
-  <!-- Keep the original graphite field and 64px grid cadence. -->
-  <rect width="1024" height="1024" fill="#242529"/>
+  <!-- Shade the graphite field from upper left to lower right beneath the grid. -->
+  <rect width="1024" height="1024" fill="url(#background)"/>
   <rect width="1024" height="1024" fill="url(#grid)"/>
 
   <!-- Frame the tip and grip rings; the rest of the handle is outside the canvas. -->
