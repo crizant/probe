@@ -882,10 +882,16 @@ impl ProbeApp {
         let Some(row) = rows.iter().find(|row| row.selector == selector) else {
             return;
         };
-        if row.expandable && row.expanded {
+        let collapse = row.expandable && row.expanded;
+        if collapse {
             self.toggle_destination_folder(selector, cx);
-        } else if !selector.is_empty() {
-            self.select_destination_parent(destination_parent_selector(&selector), cx);
+        } else if !selector.is_empty()
+            && let Some(loaded) = self.loaded_workspace.as_ref()
+        {
+            // Ancestors come from the folder tree. Directory selectors such as
+            // `api/v1` are not bundled `items/N` paths.
+            let parent = destination_parent_selector(loaded, &selector);
+            self.select_destination_parent(parent, cx);
         }
         self.destination_tree_focus.focus(window, cx);
     }
@@ -1120,10 +1126,12 @@ fn destination_selection_index(
 }
 
 /// Parent folder selector for a destination row. Top-level folders return the
-/// collection root.
-fn destination_parent_selector(selector: &str) -> String {
-    match selector.rsplit_once("/items/") {
-        Some((parent, _)) => parent.to_owned(),
-        None => String::new(),
-    }
+/// collection root. The path is taken from the loaded folder tree so bundled
+/// `items/N` selectors and unbundled directory selectors share one rule.
+fn destination_parent_selector(
+    loaded: &probe_opencollection::LoadedWorkspace,
+    selector: &str,
+) -> String {
+    let ancestors = folder_ancestor_selectors(loaded, selector);
+    ancestors.iter().rev().nth(1).cloned().unwrap_or_default()
 }

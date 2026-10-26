@@ -5637,6 +5637,81 @@ fn destination_dialogs_reveal_a_preselected_folder(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn destination_left_selects_the_unbundled_parent_folder(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "probe-desktop-destination-unbundled-{}-{unique}",
+        std::process::id()
+    ));
+    fs::create_dir_all(root.join("api/v1")).unwrap();
+    fs::write(
+        root.join("opencollection.yml"),
+        "opencollection: 1.0.0\ninfo:\n  name: Nested directory\nbundled: false\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("api/folder.yml"),
+        "info:\n  name: API\n  type: folder\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("api/v1/folder.yml"),
+        "info:\n  name: V1\n  type: folder\n",
+    )
+    .unwrap();
+    let workspace =
+        probe_opencollection::load_workspace(&root).expect("nested directory collection loads");
+    let child = workspace
+        .folder_key("api/v1")
+        .expect("nested directory folder");
+    let window = cx.open_window(size(px(900.0), px(1200.0)), ProbeApp::new);
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(root.clone(), workspace);
+            view.select_tree_item(WorkspaceItemRef::Folder(child), cx);
+            view.open_create_request_dialog(probe_core::RequestProtocol::Http, window, cx);
+            let dialog = view.structure_dialog.as_ref().expect("dialog");
+            assert_eq!(dialog.parent, "api/v1");
+            assert!(dialog.expanded_folders.contains("api"));
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_keystrokes("tab");
+    visual.run_until_parked();
+    window
+        .update(cx, |_, window, _| {
+            assert!(
+                window
+                    .context_stack()
+                    .iter()
+                    .any(|context| context.contains("SaveDestination")),
+                "tab should land in the destination tree"
+            );
+        })
+        .expect("test window should remain open");
+    visual.simulate_keystrokes("left");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.structure_dialog.as_ref().expect("dialog").parent,
+                "api",
+                "Left on an unbundled nested folder should select its parent"
+            );
+        })
+        .expect("test window should remain open");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[gpui_kit::test]
 fn destination_keyboard_reaches_an_offscreen_folder(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
