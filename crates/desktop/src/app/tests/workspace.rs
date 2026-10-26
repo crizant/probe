@@ -968,7 +968,10 @@ fn unchanged_active_folder_survives_reconciliation_in_mixed_tab_order(cx: &mut T
                 .map(|tab| crate::session::TabLocator::capture(*tab, loaded).unwrap())
                 .collect();
             assert_eq!(actual, expected);
-            assert_eq!(view.selected_tree_item, None);
+            assert_eq!(
+                view.selected_tree_item,
+                loaded.item_key(ItemKind::Folder, "items/1")
+            );
             assert_eq!(
                 crate::session::TabLocator::capture(view.shell.active_open_tab().unwrap(), loaded),
                 Some(crate::session::TabLocator::Folder("items/1".into()))
@@ -1555,7 +1558,7 @@ fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
             dialog.name = "Kept".to_owned();
             dialog.parent = "not-a-folder".to_owned();
             dialog.expanded_folders.insert("items/1".to_owned());
-            view.remap_structure_dialog(&BTreeMap::new());
+            view.clear_structure_destination();
             let dialog = view
                 .structure_dialog
                 .as_ref()

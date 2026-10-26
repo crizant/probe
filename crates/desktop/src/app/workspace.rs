@@ -5,7 +5,7 @@ impl ProbeApp {
     pub(super) fn recover_committed_save(
         &mut self,
         saved_path: Option<PathBuf>,
-        documentation: Option<(OverviewTarget, super::documentation::OverviewContent)>,
+        documentation: Option<(OverviewTarget, super::documentation::OverviewContent, u64)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -56,8 +56,8 @@ impl ProbeApp {
                                 view.start_workspace_watcher(window, cx);
                                 true
                             };
-                            if integrated && let Some((target, submitted)) = documentation {
-                                view.complete_overview_draft_save(&target, &submitted);
+                            if integrated && let Some((target, submitted, save_token)) = documentation {
+                                view.complete_overview_draft_save(&target, &submitted, save_token);
                             }
                         }
                         Err(error) => {
@@ -1013,62 +1013,69 @@ impl ProbeApp {
         remaps
     }
 
-    /// External reloads do not prove that a positional folder selector is the
-    /// same folder. Destination forms stay open with their typed state, but the
-    /// chosen folder is cleared. Rename is closed so it cannot rename whichever
-    /// item now occupies the old selector.
-    pub(super) fn remap_structure_dialog(&mut self, _remaps: &BTreeMap<String, String>) -> bool {
+    /// Clears a destination or closes Rename after the folder structure changed.
+    /// Typed form state stays. Returns a warning when an open dialog was affected.
+    pub(super) fn clear_structure_destination(&mut self) -> Option<String> {
         if self.loaded_workspace.is_none() {
             self.structure_dialog = None;
-            return false;
+            return None;
         }
-        if matches!(
+        let rename = matches!(
             self.structure_dialog.as_ref().map(|dialog| &dialog.mode),
             Some(StructureDialogMode::Rename { .. })
-        ) {
+        )
+        .then(|| {
+            self.structure_dialog
+                .as_ref()
+                .map(|dialog| dialog.name.clone())
+                .unwrap_or_default()
+        });
+        if let Some(name) = rename {
             self.structure_dialog = None;
-            return true;
+            return Some(format!("Rename “{name}” was cancelled."));
         }
-        let Some(dialog) = self.structure_dialog.as_mut() else {
-            return false;
-        };
-        if dialog.edits_destination() {
-            dialog.parent.clear();
-            dialog.expanded_folders.clear();
-            dialog.destination_required = true;
-            if let Some(curl) = dialog.curl.as_mut() {
-                curl.destination_required = true;
-            }
+        let dialog = self.structure_dialog.as_mut()?;
+        if !dialog.edits_destination() {
+            return None;
         }
-        false
+        let title = dialog.title();
+        dialog.parent.clear();
+        dialog.expanded_folders.clear();
+        dialog.destination_required = true;
+        if let Some(curl) = dialog.curl.as_mut() {
+            curl.destination_required = true;
+        }
+        Some(format!("{title} needs a destination folder again."))
     }
 
-    /// Drops outstanding folder selections and confirmations after an external
-    /// reload. Request tabs keep the existing request-key remap. Unsaved folder
-    /// documentation stays in memory under a target that cannot be saved.
-    fn detach_reloaded_folder_state(&mut self) -> (bool, bool) {
-        let mut cancelled = false;
+    /// Drops outstanding folder selections and confirmations after the folder
+    /// structure changed. Request tabs keep the existing request-key remap.
+    /// Unsaved folder documentation stays in memory under a target that cannot
+    /// be saved. Each returned string is one warning.
+    fn detach_reloaded_folder_state(&mut self) -> Vec<String> {
+        let mut warnings = Vec::new();
         if self
             .pending_close
             .as_ref()
             .is_some_and(pending_holds_folder)
+            && let Some(pending) = self.pending_close.take()
         {
-            self.pending_close = None;
-            cancelled = true;
+            warnings.push(pending_cancel_message(&pending));
         }
         let visible_cancelled = self
             .application_dialog
             .as_ref()
             .is_some_and(confirmation_cancelled_by_reload);
-        if visible_cancelled {
-            self.application_dialog = None;
-            cancelled = true;
+        if visible_cancelled && let Some(dialog) = self.application_dialog.take() {
+            warnings.push(confirmation_message(&dialog));
         }
-        let queued = self.pending_application_dialogs.len();
-        self.pending_application_dialogs
-            .retain(|dialog| !confirmation_cancelled_by_reload(dialog));
-        if self.pending_application_dialogs.len() != queued {
-            cancelled = true;
+        let queued = std::mem::take(&mut self.pending_application_dialogs);
+        for dialog in queued {
+            if confirmation_cancelled_by_reload(&dialog) {
+                warnings.push(confirmation_message(&dialog));
+            } else {
+                self.pending_application_dialogs.push_back(dialog);
+            }
         }
         if visible_cancelled {
             self.application_dialog = self.pending_application_dialogs.pop_front();
@@ -1096,13 +1103,19 @@ impl ProbeApp {
             .collect();
         self.pending_documentation_saves
             .retain(|target| !matches!(target, OverviewTarget::Folder(_)));
+        if drafts_detached {
+            warnings.push(
+                "Unsaved folder documentation was kept and was not saved. Discard it to continue."
+                    .to_owned(),
+            );
+        }
         for key in self.shell.collapsed_folders().collect::<Vec<_>>() {
             self.shell.expand_folder(key);
         }
         if matches!(self.selected_tree_item, Some(WorkspaceItemRef::Folder(_))) {
             self.selected_tree_item = None;
         }
-        (cancelled, drafts_detached)
+        warnings
     }
 
     pub(super) fn restore_shell_selectors(
@@ -1200,6 +1213,7 @@ impl ProbeApp {
         let projection_warning = (old.diagnostics() != reconciled.workspace.diagnostics())
             .then(|| projection_warning(&reconciled.workspace))
             .flatten();
+        let old_folders = folder_structure(old);
         let key_remaps =
             request_key_remaps(old, &reconciled.workspace, &reconciled.selector_remaps);
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
@@ -1211,21 +1225,18 @@ impl ProbeApp {
             &key_remaps,
             &reconciled.selector_remaps,
         );
-        let rename_cancelled = self.remap_structure_dialog(&reconciled.selector_remaps);
-        let (actions_cancelled, drafts_detached) = self.detach_reloaded_folder_state();
-        if rename_cancelled || actions_cancelled {
-            self.show_toast(
-                ToastIntent::Warning,
-                "The collection changed. The pending action was cancelled.",
-                cx,
-            );
-        }
-        if drafts_detached {
-            self.show_toast(
-                ToastIntent::Warning,
-                "Unsaved folder documentation was kept and was not saved.",
-                cx,
-            );
+        let structure_changed = self
+            .loaded_workspace
+            .as_ref()
+            .is_none_or(|loaded| folder_structure(loaded) != old_folders);
+        if structure_changed {
+            let mut warnings = self.detach_reloaded_folder_state();
+            if let Some(message) = self.clear_structure_destination() {
+                warnings.insert(0, message);
+            }
+            for message in warnings {
+                self.show_toast(ToastIntent::Warning, message, cx);
+            }
         }
         // The new-environment dialog is only a typed name. A refresh replaces
         // stored documents, and the next submit uses that refreshed workspace.
@@ -1258,6 +1269,42 @@ impl ProbeApp {
             self.show_toast(ToastIntent::Warning, message, cx);
         }
         cx.notify();
+    }
+}
+
+/// Selectors and names only. Documentation and request edits do not count,
+/// so a save of one folder does not detach another folder's draft.
+fn folder_structure(loaded: &LoadedWorkspace) -> Vec<(String, Option<String>)> {
+    let mut folders: Vec<_> = loaded
+        .folders()
+        .iter()
+        .map(|folder| {
+            (
+                folder.selector().to_owned(),
+                loaded
+                    .workspace()
+                    .folder(folder.key())
+                    .and_then(|folder| folder.metadata.name.clone()),
+            )
+        })
+        .collect();
+    folders.sort();
+    folders
+}
+
+fn pending_cancel_message(pending: &PendingClose) -> String {
+    match pending {
+        PendingClose::OtherTabs { .. } => "Close Other Tabs was cancelled.".to_owned(),
+        PendingClose::Overview(_) => "Closing a folder was cancelled.".to_owned(),
+        _ => "The pending action was cancelled.".to_owned(),
+    }
+}
+
+fn confirmation_message(dialog: &ApplicationDialog) -> String {
+    match dialog {
+        ApplicationDialog::Delete { name, .. } => format!("Delete “{name}” was cancelled."),
+        ApplicationDialog::Unsaved { pending, .. } => pending_cancel_message(pending),
+        _ => "The pending action was cancelled.".to_owned(),
     }
 }
 

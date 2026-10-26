@@ -43,7 +43,10 @@ Release dates use Australia/Brisbane time (UTC+10).
   confirmations close instead of changing whichever item now occupies the old
   position. Close Other Tabs and other unsaved-folder confirmations are
   cancelled without discarding unsaved work. Unsaved folder documentation is
-  kept and cannot be saved into another folder.
+  kept and cannot be saved into another folder. Collapsed folders and the
+  sidebar selection reset when the folder structure changes. An unchanged
+  reload, or a save that does not move or rename folders, leaves those
+  confirmations, drafts, and the chosen destination in place.
 
 ### Removed
 

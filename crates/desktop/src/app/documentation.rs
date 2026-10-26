@@ -19,6 +19,8 @@ pub(super) struct OverviewContent {
 pub(super) struct OverviewDraft {
     pub(super) original: OverviewContent,
     pub(super) current: OverviewContent,
+    /// Identifies the save that started for this draft. Completion matches it.
+    pub(super) save_token: Option<u64>,
 }
 
 impl OverviewContent {
@@ -112,6 +114,7 @@ impl ProbeApp {
             .or_insert_with(|| OverviewDraft {
                 current: original.clone(),
                 original,
+                save_token: None,
             });
         edit_documentation(
             if docs {
@@ -136,21 +139,14 @@ impl ProbeApp {
         &mut self,
         target: &OverviewTarget,
         submitted: &OverviewContent,
+        save_token: u64,
     ) {
-        let key = if self.overview_drafts.contains_key(target) {
-            target.clone()
-        } else {
-            let detached: Vec<_> = self
-                .overview_drafts
-                .keys()
-                .filter(|key| matches!(key, OverviewTarget::Detached(_)))
-                .cloned()
-                .collect();
-            if detached.len() == 1 {
-                detached.into_iter().next().expect("one detached draft")
-            } else {
-                target.clone()
-            }
+        let Some(key) = self
+            .overview_drafts
+            .iter()
+            .find_map(|(key, draft)| (draft.save_token == Some(save_token)).then(|| key.clone()))
+        else {
+            return;
         };
         if let Some(saved) = self.overview_content(target)
             && let Some(current) = self.overview_drafts.get_mut(&key)
@@ -221,6 +217,11 @@ impl ProbeApp {
         let Some(target) = self.pending_documentation_saves.pop_front() else {
             return ControlFlow::Break(());
         };
+        self.documentation_save_token = self.documentation_save_token.wrapping_add(1);
+        let save_token = self.documentation_save_token;
+        if let Some(draft) = self.overview_drafts.get_mut(&target) {
+            draft.save_token = Some(save_token);
+        }
         let Some(draft) = self
             .overview_drafts
             .get(&target)
@@ -229,9 +230,16 @@ impl ProbeApp {
         else {
             return ControlFlow::Continue(());
         };
+        if let OverviewTarget::Detached(_) = &target {
+            self.fail_documentation_save(
+                "This documentation was kept after the folders changed, so it was not saved. Discard the draft to continue.",
+                cx,
+            );
+            return ControlFlow::Break(());
+        }
         let Some(current) = self.overview_content(&target) else {
             self.fail_documentation_save(
-                "This documentation draft was not saved. Discard it to continue.",
+                "This folder is no longer in the collection, so its documentation was not saved. Discard the draft to continue.",
                 cx,
             );
             return ControlFlow::Break(());
@@ -256,7 +264,7 @@ impl ProbeApp {
             }
             OverviewTarget::Detached(_) => {
                 self.fail_documentation_save(
-                    "This documentation draft was not saved. Discard it to continue.",
+                    "This documentation was kept after the folders changed, so it was not saved. Discard the draft to continue.",
                     cx,
                 );
                 return ControlFlow::Break(());
@@ -291,7 +299,7 @@ impl ProbeApp {
                 });
                 match result {
                     Ok(()) => {
-                        view.complete_overview_draft_save(&target, &draft.current);
+                        view.complete_overview_draft_save(&target, &draft.current, save_token);
                         view.show_toast(ToastIntent::Success, "Documentation saved.", cx);
                         view.pump_workspace_writes(window, cx);
                     }
@@ -300,7 +308,7 @@ impl ProbeApp {
                         view.pending_close = None;
                         view.recover_committed_save(
                             path,
-                            Some((target, draft.current)),
+                            Some((target, draft.current, save_token)),
                             window,
                             cx,
                         );
