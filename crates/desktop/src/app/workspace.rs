@@ -1126,6 +1126,179 @@ impl ProbeApp {
         warnings
     }
 
+    /// Same names can swap without changing `(kind, selector, name)`. Requests
+    /// follow the content remap. Folder deletes, renames, ambiguous destinations,
+    /// and ambiguous documentation drafts are cancelled.
+    fn fail_closed_same_name_source_change(
+        &mut self,
+        key_remaps: &BTreeMap<RequestKey, RequestKey>,
+    ) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if let Some(message) = self.retarget_rename_request(key_remaps) {
+            warnings.push(message);
+        }
+        let visible = self.application_dialog.take();
+        let mut kept_visible = None;
+        if let Some(dialog) = visible {
+            match self.retarget_delete_dialog(dialog, key_remaps) {
+                Ok(dialog) => kept_visible = Some(dialog),
+                Err(message) => warnings.push(message),
+            }
+        }
+        let queued = std::mem::take(&mut self.pending_application_dialogs);
+        for dialog in queued {
+            match self.retarget_delete_dialog(dialog, key_remaps) {
+                Ok(dialog) => self.pending_application_dialogs.push_back(dialog),
+                Err(message) => warnings.push(message),
+            }
+        }
+        self.application_dialog =
+            kept_visible.or_else(|| self.pending_application_dialogs.pop_front());
+        if self.clear_ambiguous_destination()
+            && let Some(message) = self.clear_structure_destination()
+        {
+            warnings.push(message);
+        }
+        if self.detach_ambiguous_folder_drafts() {
+            warnings.push(
+                "Unsaved folder documentation was kept and was not saved. Discard it to continue."
+                    .to_owned(),
+            );
+        }
+        warnings
+    }
+
+    /// `Ok` keeps the dialog. `Err` is a warning and the dialog is dropped.
+    /// Non-delete dialogs pass through.
+    fn retarget_delete_dialog(
+        &self,
+        mut dialog: ApplicationDialog,
+        key_remaps: &BTreeMap<RequestKey, RequestKey>,
+    ) -> Result<ApplicationDialog, String> {
+        let ApplicationDialog::Delete {
+            kind,
+            selector,
+            name,
+            request,
+            ..
+        } = &mut dialog
+        else {
+            return Ok(dialog);
+        };
+        if *kind == ItemKind::Request {
+            let Some(key) = *request else {
+                return Err(format!("Delete “{name}” was cancelled."));
+            };
+            let Some(loaded) = self.loaded_workspace.as_ref() else {
+                return Err(format!("Delete “{name}” was cancelled."));
+            };
+            let Some(new_key) = key_remaps.get(&key).copied() else {
+                return Err(format!("Delete “{name}” was cancelled."));
+            };
+            let Some(new_selector) = loaded.request_selector(new_key) else {
+                return Err(format!("Delete “{name}” was cancelled."));
+            };
+            *selector = new_selector.to_owned();
+            *request = Some(new_key);
+            return Ok(dialog);
+        }
+        Err(format!("Delete “{name}” was cancelled."))
+    }
+
+    fn retarget_rename_request(
+        &mut self,
+        key_remaps: &BTreeMap<RequestKey, RequestKey>,
+    ) -> Option<String> {
+        let (kind, opened_name, request) =
+            match self.structure_dialog.as_ref().map(|dialog| &dialog.mode) {
+                Some(StructureDialogMode::Rename {
+                    kind,
+                    opened_name,
+                    request,
+                    ..
+                }) => (*kind, opened_name.clone(), *request),
+                _ => return None,
+            };
+        if kind == ItemKind::Request {
+            let resolved = self.loaded_workspace.as_ref().and_then(|loaded| {
+                let key = request?;
+                let new_key = key_remaps.get(&key).copied()?;
+                loaded
+                    .request_selector(new_key)
+                    .map(|selector| (new_key, selector.to_owned()))
+            });
+            let Some((new_key, new_selector)) = resolved else {
+                self.structure_dialog = None;
+                return Some(format!("Rename “{opened_name}” was cancelled."));
+            };
+            if let Some(dialog) = self.structure_dialog.as_mut()
+                && let StructureDialogMode::Rename {
+                    selector, request, ..
+                } = &mut dialog.mode
+            {
+                *selector = new_selector;
+                *request = Some(new_key);
+            }
+            return None;
+        }
+        self.structure_dialog = None;
+        Some(format!("Rename “{opened_name}” was cancelled."))
+    }
+
+    fn clear_ambiguous_destination(&self) -> bool {
+        let Some(dialog) = self.structure_dialog.as_ref() else {
+            return false;
+        };
+        dialog.edits_destination()
+            && !dialog.parent.is_empty()
+            && folder_name_is_ambiguous(self.loaded_workspace.as_ref(), &dialog.parent)
+    }
+
+    fn detach_ambiguous_folder_drafts(&mut self) -> bool {
+        let selectors: Vec<String> = self
+            .overview_drafts
+            .keys()
+            .filter_map(|target| match target {
+                OverviewTarget::Folder(selector)
+                    if folder_name_is_ambiguous(self.loaded_workspace.as_ref(), selector) =>
+                {
+                    Some(selector.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        if selectors.is_empty() {
+            return false;
+        }
+        let mut next_detached = self
+            .overview_drafts
+            .keys()
+            .filter_map(|target| match target {
+                OverviewTarget::Detached(id) => Some(*id),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        self.overview_drafts = std::mem::take(&mut self.overview_drafts)
+            .into_iter()
+            .map(|(target, draft)| match &target {
+                OverviewTarget::Folder(selector)
+                    if selectors.iter().any(|item| item == selector) =>
+                {
+                    next_detached += 1;
+                    (OverviewTarget::Detached(next_detached), draft)
+                }
+                _ => (target, draft),
+            })
+            .collect();
+        self.pending_documentation_saves
+            .retain(|target| match target {
+                OverviewTarget::Folder(selector) => !selectors.iter().any(|item| item == selector),
+                _ => true,
+            });
+        true
+    }
+
     pub(super) fn restore_shell_selectors(
         &mut self,
         remaps: &BTreeMap<String, String>,
@@ -1222,6 +1395,7 @@ impl ProbeApp {
             .then(|| projection_warning(&reconciled.workspace))
             .flatten();
         let old_tree = tree_structure(old);
+        let source_changed = !old.has_same_source(&reconciled.workspace);
         let key_remaps =
             request_key_remaps(old, &reconciled.workspace, &reconciled.selector_remaps);
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
@@ -1237,14 +1411,19 @@ impl ProbeApp {
             .loaded_workspace
             .as_ref()
             .is_none_or(|loaded| tree_structure(loaded) != old_tree);
-        if structure_changed {
+        let mut warnings = if structure_changed {
             let mut warnings = self.detach_reloaded_folder_state();
             if let Some(message) = self.clear_structure_destination() {
                 warnings.insert(0, message);
             }
-            for message in warnings {
-                self.show_toast(ToastIntent::Warning, message, cx);
-            }
+            warnings
+        } else if source_changed {
+            self.fail_closed_same_name_source_change(&key_remaps)
+        } else {
+            Vec::new()
+        };
+        for message in warnings.drain(..) {
+            self.show_toast(ToastIntent::Warning, message, cx);
         }
         // The new-environment dialog is only a typed name. A refresh replaces
         // stored documents, and the next submit uses that refreshed workspace.
@@ -1312,6 +1491,46 @@ fn tree_structure(loaded: &LoadedWorkspace) -> Vec<(ItemKind, String, Option<Str
     items
 }
 
+fn parent_selector(selector: &str) -> &str {
+    selector
+        .rfind("/items/")
+        .map(|index| &selector[..index])
+        .unwrap_or("")
+}
+
+/// Another folder with the same parent and name. A swap of those folders keeps
+/// `(kind, selector, name)` unchanged.
+fn folder_name_is_ambiguous(loaded: Option<&LoadedWorkspace>, selector: &str) -> bool {
+    let Some(loaded) = loaded else {
+        return true;
+    };
+    let Some(key) = loaded.folder_key(selector) else {
+        return true;
+    };
+    let name = loaded
+        .workspace()
+        .folder(key)
+        .and_then(|folder| folder.metadata.name.clone());
+    let parent = parent_selector(selector);
+    loaded
+        .folders()
+        .iter()
+        .filter(|folder| {
+            parent_selector(folder.selector()) == parent
+                && loaded
+                    .workspace()
+                    .folder(folder.key())
+                    .and_then(|folder| folder.metadata.name.clone())
+                    == name
+        })
+        .count()
+        > 1
+}
+
+pub(super) fn displayed_item_name(name: Option<String>, kind: ItemKind) -> String {
+    name.unwrap_or_else(|| format!("Untitled {}", kind.as_str()))
+}
+
 pub(super) fn item_matches(
     loaded: &LoadedWorkspace,
     kind: ItemKind,
@@ -1324,9 +1543,8 @@ pub(super) fn item_matches(
     let live = loaded
         .workspace()
         .item_metadata(item)
-        .and_then(|metadata| metadata.name.clone())
-        .unwrap_or_else(|| format!("Untitled {}", kind.as_str()));
-    live == name
+        .and_then(|metadata| metadata.name.clone());
+    displayed_item_name(live, kind) == name
 }
 
 fn pending_cancel_message(pending: &PendingClose) -> String {

@@ -3104,6 +3104,7 @@ fn application_dialogs_queue_without_repeating_the_same_filesystem_conflict(
                     selector: "products/list".to_owned(),
                     name: "List products".to_owned(),
                     detail: "This cannot be undone.".to_owned(),
+                    request: None,
                 },
                 window,
                 cx,

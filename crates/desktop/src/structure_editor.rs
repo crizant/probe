@@ -28,6 +28,8 @@ pub(crate) enum StructureDialogMode {
         selector: String,
         /// Name of the item when the dialog opened. The editable field may differ.
         opened_name: String,
+        /// Set for requests so a reload can follow the request by content.
+        request: Option<RequestKey>,
     },
 }
 
@@ -92,12 +94,18 @@ impl StructureDialog {
         }
     }
 
-    pub(crate) fn rename(kind: ItemKind, selector: String, name: String) -> Self {
+    pub(crate) fn rename(
+        kind: ItemKind,
+        selector: String,
+        name: String,
+        request: Option<RequestKey>,
+    ) -> Self {
         Self {
             mode: StructureDialogMode::Rename {
                 kind,
                 selector,
                 opened_name: name.clone(),
+                request,
             },
             name,
             parent: String::new(),

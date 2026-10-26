@@ -149,10 +149,7 @@ impl ProbeApp {
         Some((
             item.kind(),
             loaded.item_selector(item)?.to_owned(),
-            metadata
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("Untitled {}", item.kind().as_str())),
+            super::workspace::displayed_item_name(metadata.name.clone(), item.kind()),
         ))
     }
 
@@ -163,7 +160,11 @@ impl ProbeApp {
         let Some((kind, selector, name)) = self.selected_item_details() else {
             return;
         };
-        self.structure_dialog = Some(StructureDialog::rename(kind, selector, name));
+        let request = match (kind, self.selected_tree_item) {
+            (ItemKind::Request, Some(WorkspaceItemRef::Request(key))) => Some(key),
+            _ => None,
+        };
+        self.structure_dialog = Some(StructureDialog::rename(kind, selector, name, request));
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -260,12 +261,17 @@ impl ProbeApp {
                 "This will discard unsaved changes in {dirty_count} request(s) and cannot be undone."
             )
         };
+        let request = match (kind, self.selected_tree_item) {
+            (ItemKind::Request, Some(WorkspaceItemRef::Request(key))) => Some(key),
+            _ => None,
+        };
         self.show_application_dialog(
             ApplicationDialog::Delete {
                 kind,
                 selector,
                 name,
                 detail,
+                request,
             },
             window,
             cx,
@@ -288,6 +294,7 @@ impl ProbeApp {
                             kind,
                             selector,
                             opened_name,
+                            ..
                         } => Some((*kind, selector.clone(), opened_name.clone())),
                         _ => None,
                     },

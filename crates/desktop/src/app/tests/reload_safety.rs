@@ -552,6 +552,7 @@ fn request_reorder_does_not_delete_or_rename_the_other_request(cx: &mut TestAppC
                     selector: "items/0".into(),
                     name: "Alpha".into(),
                     detail: "This cannot be undone.".into(),
+                    request: None,
                 },
                 window,
                 cx,
@@ -586,6 +587,7 @@ fn request_reorder_does_not_delete_or_rename_the_other_request(cx: &mut TestAppC
                 ItemKind::Request,
                 "items/0".into(),
                 "Alpha".into(),
+                None,
             ));
             view.structure_dialog.as_mut().unwrap().name = "Gamma".into();
             view.submit_structure_dialog(window, cx);
@@ -680,6 +682,189 @@ fn same_name_folder_swap_does_not_touch_the_other_folder(cx: &mut TestAppContext
             assert!(!view.overview_drafts.keys().any(|target| {
                 matches!(target, OverviewTarget::Folder(selector) if selector == "items/0")
             }));
+        })
+        .unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+const DUPLICATES: &str = r#"opencollection: 1.0.0
+info:
+  name: Duplicates
+bundled: true
+items:
+  - info: {name: Dup, type: http}
+    http: {method: GET, url: https://example.test/one}
+  - info: {name: Dup, type: http}
+    http: {method: GET, url: https://example.test/two}
+"#;
+
+fn request_urls(path: &Path) -> Vec<String> {
+    let loaded = probe_opencollection::load_workspace(path).unwrap();
+    let mut urls: Vec<_> = loaded
+        .requests()
+        .iter()
+        .filter_map(|request| {
+            loaded
+                .workspace()
+                .request(request.key())
+                .and_then(|request| request.url.clone())
+        })
+        .collect();
+    urls.sort();
+    urls
+}
+
+#[gpui_kit::test]
+fn swapped_same_name_request_delete_removes_the_chosen_request(cx: &mut TestAppContext) {
+    let window = open_app(cx);
+    let path = temp_collection("dup-delete");
+    reset_source(window, cx, &path, DUPLICATES);
+    window
+        .update(cx, |view, window, cx| {
+            let first = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .request_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Request(first), cx);
+            view.request_delete_selected(window, cx);
+        })
+        .unwrap();
+    let fresh = move_item(&path, ItemKind::Request, "items/0", 1);
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            view.handle_application_dialog_action(ApplicationDialogAction::Delete, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(request_urls(&path), ["https://example.test/two"]);
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn swapped_same_name_request_rename_leaves_the_other_request(cx: &mut TestAppContext) {
+    let window = open_app(cx);
+    let path = temp_collection("dup-rename");
+    reset_source(window, cx, &path, DUPLICATES);
+    window
+        .update(cx, |view, window, cx| {
+            let first = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .request_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Request(first), cx);
+            view.open_rename_dialog(window, cx);
+            view.structure_dialog.as_mut().unwrap().name = "Renamed".into();
+        })
+        .unwrap();
+    let fresh = move_item(&path, ItemKind::Request, "items/0", 1);
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            view.submit_structure_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let loaded = probe_opencollection::load_workspace(&path).unwrap();
+    let named: Vec<_> = loaded
+        .requests()
+        .iter()
+        .filter_map(|request| {
+            let request = loaded.workspace().request(request.key())?;
+            Some((
+                request.metadata.name.clone().unwrap_or_default(),
+                request.url.clone().unwrap_or_default(),
+            ))
+        })
+        .collect();
+    assert!(named.contains(&("Dup".into(), "https://example.test/two".into())));
+    assert!(named.contains(&("Renamed".into(), "https://example.test/one".into())));
+    fs::remove_file(path).unwrap();
+}
+
+const TWIN_FOLDERS: &str = r#"opencollection: 1.0.0
+info:
+  name: Twin folders
+bundled: true
+items:
+  - info: {name: Same, type: folder}
+    items:
+      - info: {name: Child, type: http}
+        http: {method: GET, url: https://example.test/one}
+  - info: {name: Same, type: folder}
+    items:
+      - info: {name: Child, type: http}
+        http: {method: GET, url: https://example.test/two}
+"#;
+
+#[gpui_kit::test]
+fn swapped_same_name_folders_do_not_delete_the_other_folder(cx: &mut TestAppContext) {
+    let window = open_app(cx);
+    let path = temp_collection("twin-folders");
+    reset_source(window, cx, &path, TWIN_FOLDERS);
+    window
+        .update(cx, |view, window, cx| {
+            let chosen = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(chosen), cx);
+            view.request_delete_selected(window, cx);
+            view.edit_overview(
+                OverviewTarget::Folder("items/0".into()),
+                true,
+                "Chosen notes".into(),
+                cx,
+            );
+        })
+        .unwrap();
+    let fresh = move_item(&path, ItemKind::Folder, "items/1", 0);
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.application_dialog.is_none());
+            view.handle_application_dialog_action(ApplicationDialogAction::Delete, window, cx);
+            assert!(
+                view.overview_drafts
+                    .keys()
+                    .any(|target| { matches!(target, OverviewTarget::Detached(_)) })
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        request_urls(&path),
+        ["https://example.test/one", "https://example.test/two"]
+    );
+
+    reset_source(window, cx, &path, TWIN_FOLDERS);
+    window
+        .update(cx, |view, window, cx| {
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            let chosen = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(chosen), cx);
+            view.open_save_detached_request_dialog(key, window, cx);
+        })
+        .unwrap();
+    let fresh = move_item(&path, ItemKind::Folder, "items/1", 0);
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view.structure_dialog.as_ref().expect("form stays open");
+            assert!(dialog.destination_required);
+            assert!(dialog.parent.is_empty());
         })
         .unwrap();
     fs::remove_file(path).unwrap();

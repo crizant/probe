@@ -270,6 +270,8 @@ pub(crate) enum ApplicationDialog {
         selector: String,
         name: String,
         detail: String,
+        /// Set for requests so a reload can follow the request by content.
+        request: Option<RequestKey>,
     },
     DeleteEnvironment {
         name: String,
