@@ -240,7 +240,8 @@ pub(crate) fn save_destination_rows(
         expanded: true,
     }];
     let root = loaded.workspace().root_items().to_vec();
-    append_save_destination_folders(loaded, &root, 1, expanded, &mut rows);
+    // The synthetic collection-root choice does not add a level to sidebar folders.
+    append_save_destination_folders(loaded, &root, 0, expanded, &mut rows);
     rows
 }
 

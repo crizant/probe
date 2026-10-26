@@ -323,13 +323,17 @@ impl ProbeApp {
                 let view = cx.weak_entity();
                 let context_menu_view = cx.weak_entity();
                 let item = WorkspaceItemRef::Request(key);
-                let marker = components::request_icon(theme, &icon)
-                    .debug_selector(|| "request-tree-icon".into())
-                    .when(matches!(icon, components::RequestIcon::Graphql), |icon| {
-                        icon.debug_selector(|| "request-tree-protocol-label".into())
-                    });
-                let button =
-                    tree_row_button(theme, ("request-tree-item", key.slot()), depth, selected)
+                let row_element = tree_row(
+                    theme,
+                    ("request-tree-item", key.slot()),
+                    depth,
+                    selected,
+                    label,
+                    TreeRowContent::Request(icon.clone()),
+                    None,
+                )
+                .map_button(|button| {
+                    button
                         .accessibility_label(format!("{protocol_label} request {label}"))
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| view.select_request(key, cx));
@@ -345,26 +349,16 @@ impl ProbeApp {
                                 },
                             )
                         })
-                        .child(marker)
-                        .child(
-                            components::truncated_label(label.to_owned())
-                                .flex_1()
-                                .text_color(theme.colors.text.primary)
-                                .when(selected, |label| {
-                                    label.debug_selector(|| "request-tree-label".into())
-                                }),
-                        );
+                });
                 self.wrap_tree_row(
                     TreeRowSpec {
                         item,
                         selector: loaded.request_selector(key).unwrap_or_default().to_owned(),
                         label: label.to_owned(),
                         icon: Some(icon),
-                        depth,
-                        selected,
                     },
                     can_edit,
-                    button,
+                    row_element,
                     theme,
                     cx,
                 )
@@ -386,21 +380,6 @@ impl ProbeApp {
                 );
                 let disclosure = Button::new(("folder-disclosure", key.slot()))
                     .debug_selector(move || disclosure_selector.clone())
-                    .accessibility_label(format!(
-                        "{} {label}",
-                        if expanded { "Collapse" } else { "Expand" }
-                    ))
-                    .w(px(tree_disclosure_width(theme)))
-                    .h(px(theme.metrics.tree_row_height))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        components::tree_disclosure_icon(theme, expanded)
-                            .relative()
-                            .left(px(-theme.metrics.spacing_1 / 2.0)),
-                    )
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         let _ = disclosure_view.update(cx, |view, cx| {
@@ -410,18 +389,17 @@ impl ProbeApp {
                             cx.notify();
                         });
                     });
-                // The disclosure spans one level, aligning the folder heading with its child requests.
-                let marker = div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .child(disclosure)
-                    .child(components::tree_icon_slot(
-                        theme,
-                        components::tree_folder_icon(theme, expanded, false),
-                    ));
-                let button =
-                    tree_row_button(theme, ("folder-tree-item", key.slot()), depth, selected)
+                let row_element = tree_row(
+                    theme,
+                    ("folder-tree-item", key.slot()),
+                    depth,
+                    selected,
+                    label,
+                    TreeRowContent::Folder { expanded },
+                    Some(disclosure),
+                )
+                .map_button(|button| {
+                    button
                         .accessibility_label(format!("Folder {label}"))
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| {
@@ -443,23 +421,16 @@ impl ProbeApp {
                                 },
                             )
                         })
-                        .child(marker)
-                        .child(
-                            components::truncated_label(label.to_owned())
-                                .flex_1()
-                                .font_weight(FontWeight::SEMIBOLD),
-                        );
+                });
                 self.wrap_tree_row(
                     TreeRowSpec {
                         item,
                         selector: loaded.folder_selector(key).unwrap_or_default().to_owned(),
                         label: label.to_owned(),
                         icon: None,
-                        depth,
-                        selected,
                     },
                     can_edit,
-                    button,
+                    row_element,
                     theme,
                     cx,
                 )
@@ -471,7 +442,7 @@ impl ProbeApp {
         &self,
         spec: TreeRowSpec,
         can_edit: bool,
-        button: Button,
+        row: TreeRowElement,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
@@ -480,8 +451,6 @@ impl ProbeApp {
             selector,
             label,
             icon,
-            depth,
-            selected,
         } = spec;
         let indicator = self.tree_drop_target.map(|intent| intent.indicator);
         let show_before =
@@ -491,33 +460,35 @@ impl ProbeApp {
             indicator,
             Some(DropIndicator::IntoFolder(folder)) if item == WorkspaceItemRef::Folder(folder)
         );
-        let indent = tree_level_indent(theme, depth);
+        let indent = tree_level_indent(theme, row.depth());
         let drag_view = cx.weak_entity();
         let row_id = match item {
             WorkspaceItemRef::Request(key) => ("tree-drop-request", key.slot()),
             WorkspaceItemRef::Folder(key) => ("tree-drop-folder", key.slot()),
         };
-        let button = if can_edit {
-            button.on_drag(
-                TreeDrag {
-                    item,
-                    label,
-                    icon,
-                    theme_mode: self.user_config.theme,
-                },
-                move |drag, _, _, cx| {
-                    let preview = drag.clone();
-                    let item = drag.item;
-                    let _ = drag_view.update(cx, |view, cx| {
-                        view.tree_drag_source = Some(item);
-                        view.select_tree_item(item, cx);
-                    });
-                    cx.new(|_| preview)
-                },
-            )
-        } else {
-            button
-        };
+        let row = row.map_button(|button| {
+            if can_edit {
+                button.on_drag(
+                    TreeDrag {
+                        item,
+                        label,
+                        icon,
+                        theme_mode: self.user_config.theme,
+                    },
+                    move |drag, _, _, cx| {
+                        let preview = drag.clone();
+                        let item = drag.item;
+                        let _ = drag_view.update(cx, |view, cx| {
+                            view.tree_drag_source = Some(item);
+                            view.select_tree_item(item, cx);
+                        });
+                        cx.new(|_| preview)
+                    },
+                )
+            } else {
+                button
+            }
+        });
         let line = |top: bool| {
             div()
                 .absolute()
@@ -529,19 +500,10 @@ impl ProbeApp {
                 .rounded(px(1.0))
                 .bg(theme.colors.actions.accent)
         };
-        div()
-            .id(row_id)
-            .relative()
-            .w_full()
-            .h(px(theme.metrics.tree_row_height))
-            .debug_selector(move || format!("tree-row-{selector}"))
+        row.into_row(row_id, format!("tree-row-{selector}"))
             .when(drop_into, |row| {
                 row.rounded(px(theme.metrics.radius_small))
                     .bg(theme.colors.selection.inactive_background)
-            })
-            .child(button)
-            .when(depth > 0, |row| {
-                row.child(tree_hierarchy_guides(theme, depth, selected))
             })
             .when(show_before, |row| row.child(line(true)))
             .when(show_after, |row| row.child(line(false)))

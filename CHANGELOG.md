@@ -28,6 +28,11 @@ Release dates use Australia/Brisbane time (UTC+10).
   Certificate now submit with Cmd+Enter on macOS or Ctrl+Enter on Linux/Windows
   instead of plain Enter, with the shortcut shown on the submit button.
 
+### Fixed
+
+- Destination tree hierarchy guides no longer run through collapsed folder
+  chevrons; top-level folders align with the collection sidebar.
+
 ### Removed
 
 - Removed the Move dialog. Sidebar drag-and-drop moving and Alt+Up/Alt+Down

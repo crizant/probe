@@ -82,8 +82,8 @@ use presentation::{
 use tabs::TabDrag;
 use transient::TransientSurfaces;
 use tree::{
-    TreeDrag, TreeRow, TreeRowSpec, flatten_visible_tree_rows, tree_disclosure_width,
-    tree_hierarchy_guides, tree_level_indent, tree_row_button,
+    TreeDrag, TreeRow, TreeRowContent, TreeRowElement, TreeRowSpec, flatten_visible_tree_rows,
+    tree_level_indent, tree_row,
 };
 
 use crate::{
