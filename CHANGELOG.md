@@ -37,9 +37,12 @@ Release dates use Australia/Brisbane time (UTC+10).
   must be selected again instead of creating the item in a different folder.
   Removing or renaming one of two same-named folders does not select the other,
   including when both folders have the same contents. A later reload does not
-  turn that cleared destination into the collection root. Expanded folders in
-  the dialog and collapsed folders in the sidebar follow
-  the folder rather than its previous position.
+  turn that cleared destination into the collection root. The selected sidebar
+  folder follows that folder, or the selection is cleared when it cannot be
+  identified. Expanded folders in the dialog and collapsed folders in the
+  sidebar follow the folder rather than its previous position. The Save Request
+  New Folder sheet explains when the destination must be chosen again and does
+  not create a folder until then.
 - Destination tree hierarchy guides no longer run through collapsed folder
   chevrons; top-level folders align with the collection sidebar.
 

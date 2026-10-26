@@ -586,6 +586,142 @@ fn directory_collection_destination_survives_an_external_reload(cx: &mut TestApp
     let _ = fs::remove_dir_all(fixture);
 }
 
+#[gpui_kit::test]
+fn sidebar_folder_selection_follows_an_external_reorder(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let path = temp_collection("sidebar-selection", COLLECTION);
+    reset_collection(window, cx, &path, COLLECTION);
+    window
+        .update(cx, |view, _, cx| {
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+        })
+        .unwrap();
+    let fresh = external_edit(
+        &path,
+        StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Folder, "items/1"),
+            parent: None,
+            index: Some(0),
+        },
+    );
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let target = loaded.folder_key("items/0").unwrap();
+            assert_eq!(folder_name(view, "items/0").as_deref(), Some("Target"));
+            assert_eq!(
+                view.selected_tree_item,
+                Some(WorkspaceItemRef::Folder(target))
+            );
+            view.open_create_folder_dialog(window, cx);
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            assert_eq!(dialog.parent, "items/0");
+            dialog.name = "Inbox".into();
+            view.submit_structure_dialog(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let saved = probe_opencollection::load_workspace(&path).unwrap();
+    let inbox = saved.folder_key("items/0/items/1").unwrap();
+    assert_eq!(
+        saved
+            .workspace()
+            .folder(inbox)
+            .unwrap()
+            .metadata
+            .name
+            .as_deref(),
+        Some("Inbox")
+    );
+
+    let identical = r#"opencollection: 1.0.0
+info:
+  name: Twins
+bundled: true
+items:
+  - info: {name: Twin, type: folder}
+    items: []
+  - info: {name: Twin, type: folder}
+    items: []
+"#;
+    reset_collection(window, cx, &path, identical);
+    window
+        .update(cx, |view, _, cx| {
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+        })
+        .unwrap();
+    let fresh = probe_opencollection::load_workspace(&path).unwrap();
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            assert_eq!(view.selected_tree_item, None);
+            view.open_create_folder_dialog(window, cx);
+            assert!(view.structure_dialog.as_ref().unwrap().parent.is_empty());
+        })
+        .unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn save_folder_sheet_explains_a_missing_destination(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let path = temp_collection("save-folder-sheet", COLLECTION);
+    reset_collection(window, cx, &path, COLLECTION);
+    let before = fs::read(&path).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.new_detached_request(RequestProtocol::Http, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.open_save_detached_request_dialog(key, window, cx);
+            view.structure_dialog.as_mut().unwrap().destination_required = true;
+            view.open_save_folder_dialog(window, cx);
+            view.structure_dialog.as_mut().unwrap().new_folder_name = Some("Inbox".into());
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual
+            .debug_bounds("save-folder-destination-required")
+            .expect("the sheet explains that a destination must be selected");
+        let create = visual
+            .debug_bounds("save-folder-create")
+            .expect("create button stays visible");
+        visual.simulate_click(create.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |view, window, cx| {
+            window.dispatch_action(Box::new(crate::app::SubmitSaveFolderDialog), cx);
+            assert!(view.structure_task.is_none());
+            let dialog = view.structure_dialog.as_ref().expect("sheet stays open");
+            assert_eq!(dialog.new_folder_name.as_deref(), Some("Inbox"));
+        })
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before);
+    fs::remove_file(path).unwrap();
+}
+
 fn write_directory_collection(root: &Path) {
     fs::create_dir_all(root.join("users")).unwrap();
     fs::write(

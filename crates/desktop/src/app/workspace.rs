@@ -919,6 +919,12 @@ impl ProbeApp {
                 old.item_selector(item)
                     .map(|selector| (item.kind(), selector.to_owned()))
             }),
+            selected_folder: self.selected_tree_item.and_then(|item| match item {
+                WorkspaceItemRef::Folder(_) => old
+                    .item_selector(item)
+                    .and_then(|selector| folders.anchor(selector)),
+                WorkspaceItemRef::Request(_) => None,
+            }),
         }
     }
 
@@ -1209,13 +1215,12 @@ impl ProbeApp {
             }
         }
         self.selected_tree_item = selectors.selected.and_then(|(kind, selector)| {
-            let selector = if kind == ItemKind::Request {
-                remaps.get(&selector)?.as_str()
-            } else {
-                remaps
-                    .get(&selector)
-                    .map_or(selector.as_str(), String::as_str)
-            };
+            if kind == ItemKind::Folder {
+                let anchor = selectors.selected_folder.as_ref()?;
+                let selector = relocate_folder(anchor, remaps, loaded, folders)?;
+                return loaded.folder_key(&selector).map(WorkspaceItemRef::Folder);
+            }
+            let selector = remaps.get(&selector)?.as_str();
             loaded.item_key(kind, selector)
         });
     }

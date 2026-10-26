@@ -127,4 +127,6 @@ pub(crate) struct ShellSelectors {
     pub(crate) pending_keep: Option<crate::shell::OpenTab>,
     pub(crate) folder_anchors: Vec<FolderAnchor>,
     pub(crate) selected: Option<(probe_core::ItemKind, String)>,
+    /// Captured when the sidebar selection is a folder. Absent for requests.
+    pub(crate) selected_folder: Option<FolderAnchor>,
 }
