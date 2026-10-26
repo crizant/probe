@@ -20,11 +20,15 @@ Release dates use Australia/Brisbane time (UTC+10).
 ### Changed
 
 - Save Request, New HTTP Request, New GraphQL Request, and New Folder share a
-  destination folder tree styled like the collection sidebar. These dialogs and
-  Add/Edit Certificate submit with Command+Enter on macOS or Ctrl+Enter on
-  Windows/Linux, with the shortcut shown on the submit button.
-- Removed the Move dialog; collection items can still be moved by dragging them
-  in the sidebar.
+  destination folder tree styled like the collection sidebar.
+- Save Request, New HTTP Request, New GraphQL Request, New Folder, and Add/Edit
+  Certificate now submit with Cmd+Enter on macOS or Ctrl+Enter on Linux/Windows
+  instead of plain Enter, with the shortcut shown on the submit button.
+
+### Removed
+
+- Removed the Move dialog. Sidebar drag-and-drop moving and Alt+Up/Alt+Down
+  keyboard reordering still work.
 
 ## [2.1.1] - 2026-10-25
 
