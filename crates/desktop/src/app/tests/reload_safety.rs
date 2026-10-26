@@ -14,6 +14,7 @@ const TWIN_FOLDERS: &str = "opencollection: 1.0.0\ninfo: {name: Twin folders}\nb
 const NESTED_DUPS: &str = "opencollection: 1.0.0\ninfo: {name: Nested}\nbundled: true\nitems:\n- {info: {name: Group, type: folder}, items: [{info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/one}}, {info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/two}}]}\n";
 const NESTED_SWAPPED: &str = "opencollection: 1.0.0\ninfo: {name: Nested}\nbundled: true\nitems:\n- {info: {name: Group, type: folder}, items: [{info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/two}}, {info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/oneX}}]}\n";
 const NESTED_PARENTS: &str = "opencollection: 1.0.0\ninfo: {name: Parents}\nbundled: true\nitems:\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: folder}, items: [{info: {name: One, type: http}, http: {method: GET, url: https://example.test/one}}]}]}\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: folder}, items: [{info: {name: One, type: http}, http: {method: GET, url: https://example.test/two}}]}]}\n";
+const SAME_BRANCHES: &str = "opencollection: 1.0.0\ninfo: {name: Branches}\nbundled: true\nitems:\n- {info: {name: Same, type: folder}, items: [{info: {name: Note, type: http}, http: {method: GET, url: https://example.test/one}}]}\n- {info: {name: Same, type: folder}, items: [{info: {name: Note, type: http}, http: {method: GET, url: https://example.test/two}}]}\n";
 
 fn next_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -834,6 +835,113 @@ fn structural_reload_cancels_pending_close_other_tabs(cx: &mut TestAppContext) {
     });
     structural_reload_keeps_both_request_tabs(&workspace, cx);
     assert!(workspace.toast(cx, ToastIntent::Warning, "Close Other Tabs was cancelled."));
+}
+
+#[gpui_kit::test]
+fn swapped_folder_branches_cancel_close_other_tabs_without_dropping_drafts(
+    cx: &mut TestAppContext,
+) {
+    let workspace = Workspace::open(cx, "branch-tabs", SAME_BRANCHES);
+    workspace.update(cx, |view, window, cx| {
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        let keep = loaded.folder_key("items/0").unwrap();
+        let other = loaded.folder_key("items/1").unwrap();
+        view.shell
+            .open_overview(crate::shell::OverviewTab::Folder(keep));
+        view.shell
+            .open_overview(crate::shell::OverviewTab::Folder(other));
+        view.edit_overview(
+            OverviewTarget::Folder("items/0".into()),
+            true,
+            "Keep notes".into(),
+            cx,
+        );
+        view.edit_overview(
+            OverviewTarget::Folder("items/1".into()),
+            true,
+            "Other notes".into(),
+            cx,
+        );
+        view.request_close_other_tabs(crate::shell::OverviewTab::Folder(keep), window, cx);
+        assert!(matches!(
+            view.application_dialog,
+            Some(ApplicationDialog::Unsaved {
+                pending: PendingClose::OtherTabs { .. },
+                ..
+            })
+        ));
+    });
+    move_folder(&workspace, cx);
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.application_dialog.is_none());
+        assert!(view.pending_close.is_none());
+        view.handle_application_dialog_action(ApplicationDialogAction::Discard, window, cx);
+        let notes: Vec<_> = view
+            .overview_drafts
+            .iter()
+            .map(|(target, draft)| {
+                assert!(matches!(target, OverviewTarget::Detached(_)));
+                draft.current.docs.clone()
+            })
+            .collect();
+        assert!(notes.contains(&Some(note("Keep notes"))));
+        assert!(notes.contains(&Some(note("Other notes"))));
+    });
+}
+
+#[gpui_kit::test]
+fn swapped_same_name_requests_cancel_pending_close(cx: &mut TestAppContext) {
+    let workspace = Workspace::open(cx, "dup-close", DUPLICATES);
+    let (dirty, _) = open_dirty_request_pair(&workspace, cx);
+    workspace.update(cx, |view, window, cx| {
+        view.request_close_tab(dirty, window, cx)
+    });
+    let disk = workspace.reconcile_move(cx, ItemKind::Request, "items/0", 1);
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.application_dialog.is_none());
+        view.handle_application_dialog_action(ApplicationDialogAction::Discard, window, cx);
+        assert_eq!(view.shell.open_tabs().len(), 2);
+    });
+    assert_eq!(
+        workspace.urls(),
+        ["https://example.test/one", "https://example.test/two"]
+    );
+    assert_eq!(workspace.bytes(), disk);
+    assert!(workspace.toast(cx, ToastIntent::Warning, "Closing the tab was cancelled."));
+}
+
+#[gpui_kit::test]
+fn unchanged_reload_keeps_a_request_close_confirmation(cx: &mut TestAppContext) {
+    let workspace = Workspace::open(cx, "echo-close", REQUESTS);
+    let (dirty, _) = open_dirty_request_pair(&workspace, cx);
+    workspace.update(cx, |view, window, cx| {
+        view.request_close_tab(dirty, window, cx)
+    });
+    workspace.reconcile_same(cx);
+    workspace.update(cx, |view, window, cx| {
+        let Some(ApplicationDialog::Unsaved {
+            keys,
+            pending: PendingClose::Tab(key),
+            ..
+        }) = &view.application_dialog
+        else {
+            panic!("request Close stays open");
+        };
+        let key = *key;
+        assert_eq!(keys, &[key]);
+        assert!(
+            view.loaded_workspace
+                .as_ref()
+                .unwrap()
+                .workspace()
+                .request(key)
+                .is_some()
+        );
+        view.handle_application_dialog_action(ApplicationDialogAction::Discard, window, cx);
+        assert_eq!(view.shell.open_tabs().len(), 1);
+    });
+    assert_eq!(workspace.names(false), ["Alpha", "Beta"]);
+    assert!(!workspace.urls().iter().any(|url| url.contains("unsaved")));
 }
 
 #[gpui_kit::test]

@@ -1045,33 +1045,7 @@ impl ProbeApp {
     /// Unsaved folder documentation stays in memory under a target that cannot
     /// be saved. Each returned string is one warning.
     fn detach_reloaded_folder_state(&mut self) -> Vec<String> {
-        let mut warnings = Vec::new();
-        if self
-            .pending_close
-            .as_ref()
-            .is_some_and(pending_holds_folder)
-            && let Some(pending) = self.pending_close.take()
-        {
-            warnings.push(pending_cancel_message(&pending));
-        }
-        let visible_cancelled = self
-            .application_dialog
-            .as_ref()
-            .is_some_and(confirmation_cancelled_by_reload);
-        if visible_cancelled && let Some(dialog) = self.application_dialog.take() {
-            warnings.push(confirmation_message(&dialog));
-        }
-        let queued = std::mem::take(&mut self.pending_application_dialogs);
-        for dialog in queued {
-            if confirmation_cancelled_by_reload(&dialog) {
-                warnings.push(confirmation_message(&dialog));
-            } else {
-                self.pending_application_dialogs.push_back(dialog);
-            }
-        }
-        if visible_cancelled {
-            self.application_dialog = self.pending_application_dialogs.pop_front();
-        }
+        let mut warnings = self.cancel_reloaded_confirmations(true);
         if self.detach_all_folder_drafts() {
             warnings.push(
                 "Unsaved folder documentation was kept and was not saved. Discard it to continue."
@@ -1092,7 +1066,9 @@ impl ProbeApp {
         &mut self,
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
     ) -> Vec<String> {
-        let mut warnings = Vec::new();
+        // Request deletes stay so they can follow captured content. Everything
+        // `confirmation_cancelled_by_reload` would drop is cancelled here too.
+        let mut warnings = self.cancel_reloaded_confirmations(false);
         if let Some(message) = self.retarget_rename_request(key_remaps) {
             warnings.push(message);
         }
@@ -1150,6 +1126,52 @@ impl ProbeApp {
         }
     }
 
+    /// Drops confirmations whose targets were issued by the previous workspace.
+    /// `include_deletes` is set for a structural reload. A source-only change
+    /// leaves request deletes to `retarget_delete_dialog`.
+    fn cancel_reloaded_confirmations(&mut self, include_deletes: bool) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if self
+            .pending_close
+            .as_ref()
+            .is_some_and(reload_cancels_pending)
+            && let Some(pending) = self.pending_close.take()
+        {
+            warnings.push(pending_cancel_message(&pending));
+        }
+        let cancelled = |dialog: &ApplicationDialog| {
+            confirmation_cancelled_by_reload(dialog)
+                && (include_deletes || !matches!(dialog, ApplicationDialog::Delete { .. }))
+        };
+        let visible_cancelled = self.application_dialog.as_ref().is_some_and(cancelled);
+        if visible_cancelled && let Some(dialog) = self.application_dialog.take() {
+            warnings.push(confirmation_message(&dialog));
+        }
+        let queued = std::mem::take(&mut self.pending_application_dialogs);
+        for dialog in queued {
+            if cancelled(&dialog) {
+                warnings.push(confirmation_message(&dialog));
+            } else {
+                self.pending_application_dialogs.push_back(dialog);
+            }
+        }
+        if visible_cancelled {
+            self.application_dialog = self.pending_application_dialogs.pop_front();
+        }
+        warnings
+    }
+
+    /// An unchanged reload reissues request keys. Point an open request Close
+    /// confirmation at those keys; a real source change cancels it instead.
+    fn carry_unsaved_request_keys(&mut self, remaps: &BTreeMap<RequestKey, RequestKey>) {
+        if let Some(dialog) = self.application_dialog.as_mut() {
+            carry_unsaved_dialog(dialog, remaps);
+        }
+        for dialog in &mut self.pending_application_dialogs {
+            carry_unsaved_dialog(dialog, remaps);
+        }
+    }
+
     /// `Ok` keeps the dialog. `Err` is a warning and the dialog is dropped.
     /// Non-delete dialogs pass through.
     fn retarget_delete_dialog(
@@ -1182,6 +1204,7 @@ impl ProbeApp {
         Err(format!("Delete “{name}” was cancelled."))
     }
 
+    /// A folder rename is cancelled here when the tree did not change.
     fn retarget_rename_request(
         &mut self,
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
@@ -1403,6 +1426,7 @@ impl ProbeApp {
         } else if source_changed {
             self.apply_external_source_change(&key_remaps)
         } else {
+            self.carry_unsaved_request_keys(&key_remaps);
             Vec::new()
         };
         for message in warnings.drain(..) {
@@ -1513,17 +1537,42 @@ fn pending_holds_folder(pending: &PendingClose) -> bool {
     }
 }
 
+fn reload_cancels_pending(pending: &PendingClose) -> bool {
+    pending_holds_folder(pending)
+        || matches!(
+            pending,
+            PendingClose::Tab(_) | PendingClose::OtherTabs { .. }
+        )
+}
+
 fn confirmation_cancelled_by_reload(dialog: &ApplicationDialog) -> bool {
     match dialog {
         ApplicationDialog::Delete { .. } => true,
-        ApplicationDialog::Unsaved { pending, .. } => {
-            pending_holds_folder(pending)
-                || matches!(
-                    pending,
-                    PendingClose::Tab(_) | PendingClose::OtherTabs { .. }
-                )
-        }
+        ApplicationDialog::Unsaved { pending, .. } => reload_cancels_pending(pending),
         _ => false,
+    }
+}
+
+fn carry_unsaved_dialog(dialog: &mut ApplicationDialog, remaps: &BTreeMap<RequestKey, RequestKey>) {
+    let ApplicationDialog::Unsaved { keys, pending, .. } = dialog else {
+        return;
+    };
+    for key in keys.iter_mut() {
+        if let Some(new_key) = remaps.get(key).copied() {
+            *key = new_key;
+        }
+    }
+    let key = match pending {
+        PendingClose::Tab(key) => Some(key),
+        PendingClose::OtherTabs {
+            keep: crate::shell::OpenTab::Request(key),
+        } => Some(key),
+        _ => None,
+    };
+    if let Some(key) = key
+        && let Some(new_key) = remaps.get(key).copied()
+    {
+        *key = new_key;
     }
 }
 
