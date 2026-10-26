@@ -925,7 +925,45 @@ impl ProbeApp {
                     .and_then(|selector| folders.anchor(selector)),
                 WorkspaceItemRef::Request(_) => None,
             }),
+            overview_folder_anchors: self
+                .overview_folder_selectors(old)
+                .filter_map(|selector| folders.anchor(&selector).map(|anchor| (selector, anchor)))
+                .collect(),
         }
+    }
+
+    fn overview_folder_selectors<'a>(
+        &'a self,
+        old: &'a LoadedWorkspace,
+    ) -> impl Iterator<Item = String> + 'a {
+        let open_tabs = self.shell.open_tabs().iter().filter_map(|tab| {
+            let crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) = tab
+            else {
+                return None;
+            };
+            old.folder_selector(*key).map(str::to_owned)
+        });
+        let drafts = self
+            .overview_drafts
+            .keys()
+            .filter_map(|target| match target {
+                OverviewTarget::Folder(selector) => Some(selector.clone()),
+                OverviewTarget::Collection => None,
+            });
+        let pending = self
+            .pending_documentation_saves
+            .iter()
+            .filter_map(|target| match target {
+                OverviewTarget::Folder(selector) => Some(selector.clone()),
+                OverviewTarget::Collection => None,
+            });
+        let closing = match &self.pending_close {
+            Some(PendingClose::Overview(OverviewTarget::Folder(selector))) => {
+                Some(selector.clone())
+            }
+            _ => None,
+        };
+        open_tabs.chain(drafts).chain(pending).chain(closing)
     }
 
     pub(super) fn install_reloaded_workspace(
@@ -1152,29 +1190,24 @@ impl ProbeApp {
             .loaded_workspace
             .as_ref()
             .expect("workspace was replaced");
+        let retarget = |selector: &str| {
+            retarget_folder_selector(
+                selector,
+                &selectors.overview_folder_anchors,
+                remaps,
+                loaded,
+                folders,
+            )
+        };
         self.overview_drafts = std::mem::take(&mut self.overview_drafts)
             .into_iter()
-            .map(|(mut target, draft)| {
-                if let OverviewTarget::Folder(selector) = &mut target
-                    && let Some(mapped) = remaps.get(selector)
-                {
-                    selector.clone_from(mapped);
-                }
-                (target, draft)
-            })
+            .map(|(target, draft)| (retarget_overview_target(target, &retarget), draft))
             .collect();
         for target in &mut self.pending_documentation_saves {
-            if let OverviewTarget::Folder(selector) = target
-                && let Some(mapped) = remaps.get(selector)
-            {
-                selector.clone_from(mapped);
-            }
+            *target = retarget_overview_target(target.clone(), &retarget);
         }
-        if let Some(PendingClose::Overview(OverviewTarget::Folder(selector))) =
-            self.pending_close.as_mut()
-            && let Some(mapped) = remaps.get(selector)
-        {
-            selector.clone_from(mapped);
+        if let Some(PendingClose::Overview(target)) = self.pending_close.as_mut() {
+            *target = retarget_overview_target(target.clone(), &retarget);
         }
         let restored: Vec<_> = selectors
             .ordered_tabs
@@ -1184,9 +1217,15 @@ impl ProbeApp {
                     crate::shell::OpenTab::Request(key) => {
                         key_remaps.get(key).copied().map(Into::into)
                     }
-                    crate::shell::OpenTab::Overview(_) => locator
-                        .as_ref()
-                        .and_then(|locator| locator.remap(remaps).resolve(loaded)),
+                    crate::shell::OpenTab::Overview(_) => {
+                        locator.as_ref().and_then(|locator| match locator {
+                            crate::session::TabLocator::Folder(selector) => {
+                                crate::session::TabLocator::Folder(retarget(selector))
+                                    .resolve(loaded)
+                            }
+                            other => Some(other.remap(remaps).resolve(loaded)?),
+                        })
+                    }
                 }?;
                 Some((*tab, resolved))
             })
@@ -1283,6 +1322,40 @@ impl ProbeApp {
             self.show_toast(ToastIntent::Warning, message, cx);
         }
         cx.notify();
+    }
+}
+
+/// Moves a folder overview selector onto the same folder, or onto a selector
+/// that does not address any folder when that identity is missing or ambiguous.
+///
+/// A stale selector is left unchanged: saving it already fails because the
+/// folder is gone. A selector that now addresses a different folder is detached
+/// so the draft text remains but cannot be written there.
+fn retarget_folder_selector(
+    selector: &str,
+    anchors: &BTreeMap<String, FolderAnchor>,
+    remaps: &BTreeMap<String, String>,
+    loaded: &LoadedWorkspace,
+    folders: &FolderIndex,
+) -> String {
+    if let Some(anchor) = anchors.get(selector)
+        && let Some(mapped) = relocate_folder(anchor, remaps, loaded, folders)
+    {
+        return mapped;
+    }
+    if loaded.folder_key(selector).is_none() {
+        return selector.to_owned();
+    }
+    format!("\u{0}{selector}")
+}
+
+fn retarget_overview_target(
+    target: OverviewTarget,
+    retarget: &impl Fn(&str) -> String,
+) -> OverviewTarget {
+    match target {
+        OverviewTarget::Folder(selector) => OverviewTarget::Folder(retarget(&selector)),
+        OverviewTarget::Collection => OverviewTarget::Collection,
     }
 }
 

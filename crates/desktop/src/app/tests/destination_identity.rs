@@ -722,6 +722,155 @@ fn save_folder_sheet_explains_a_missing_destination(cx: &mut TestAppContext) {
     fs::remove_file(path).unwrap();
 }
 
+#[gpui_kit::test]
+fn folder_overview_draft_follows_an_external_reorder(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let path = temp_collection("overview-reorder", COLLECTION);
+    reset_collection(window, cx, &path, COLLECTION);
+    window
+        .update(cx, |view, _, cx| {
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(folder));
+            view.edit_overview(
+                crate::app::documentation::OverviewTarget::Folder("items/1".into()),
+                true,
+                "Target notes".into(),
+                cx,
+            );
+        })
+        .unwrap();
+    let fresh = external_edit(
+        &path,
+        StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Folder, "items/1"),
+            parent: None,
+            index: Some(0),
+        },
+    );
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let target = loaded.folder_key("items/0").unwrap();
+            assert_eq!(folder_name(view, "items/0").as_deref(), Some("Target"));
+            assert_eq!(
+                view.shell.active_overview(),
+                Some(crate::shell::OverviewTab::Folder(target))
+            );
+            let draft_target = crate::app::documentation::OverviewTarget::Folder("items/0".into());
+            assert_eq!(
+                view.overview_drafts[&draft_target].current.docs,
+                Some(probe_core::Documentation::Text("Target notes".into()))
+            );
+            assert!(!view.overview_drafts.contains_key(
+                &crate::app::documentation::OverviewTarget::Folder("items/1".into())
+            ));
+            view.save_active_editor(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let saved = probe_opencollection::load_workspace(&path).unwrap();
+    assert_eq!(
+        saved
+            .workspace()
+            .folder(saved.folder_key("items/0").unwrap())
+            .unwrap()
+            .docs,
+        Some(probe_core::Documentation::Text("Target notes".into()))
+    );
+    assert_eq!(
+        saved
+            .workspace()
+            .folder(saved.folder_key("items/1").unwrap())
+            .unwrap()
+            .docs,
+        None
+    );
+
+    let identical = r#"opencollection: 1.0.0
+info:
+  name: Twins
+bundled: true
+items:
+  - info: {name: Twin, type: folder}
+    items: []
+  - info: {name: Twin, type: folder}
+    items: []
+"#;
+    reset_collection(window, cx, &path, identical);
+    window
+        .update(cx, |view, _, cx| {
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(folder));
+            view.edit_overview(
+                crate::app::documentation::OverviewTarget::Folder("items/1".into()),
+                true,
+                "Secret notes".into(),
+                cx,
+            );
+        })
+        .unwrap();
+    let fresh = probe_opencollection::load_workspace(&path).unwrap();
+    reconcile(window, cx, fresh);
+    let before_save = fs::read(&path).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(
+                view.shell
+                    .overview_tabs()
+                    .all(|tab| { !matches!(tab, crate::shell::OverviewTab::Folder(_)) })
+            );
+            let (target, draft) = view
+                .overview_drafts
+                .iter()
+                .find(|(_, draft)| draft.is_dirty())
+                .expect("the unsaved text stays in memory");
+            assert_eq!(
+                draft.current.docs,
+                Some(probe_core::Documentation::Text("Secret notes".into()))
+            );
+            let crate::app::documentation::OverviewTarget::Folder(selector) = target else {
+                panic!("draft should stay a folder draft");
+            };
+            assert!(
+                view.loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .folder_key(selector)
+                    .is_none(),
+                "the draft must not address the other twin"
+            );
+            view.enqueue_documentation_save(target.clone());
+            view.pump_workspace_writes(window, cx);
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Error,
+                "The folder no longer exists"
+            ));
+            assert!(view.overview_drafts.values().any(|draft| {
+                draft.current.docs == Some(probe_core::Documentation::Text("Secret notes".into()))
+            }));
+        })
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before_save);
+    fs::remove_file(path).unwrap();
+}
+
 fn write_directory_collection(root: &Path) {
     fs::create_dir_all(root.join("users")).unwrap();
     fs::write(

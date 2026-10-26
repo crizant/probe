@@ -39,8 +39,11 @@ Release dates use Australia/Brisbane time (UTC+10).
   including when both folders have the same contents. A later reload does not
   turn that cleared destination into the collection root. The selected sidebar
   folder follows that folder, or the selection is cleared when it cannot be
-  identified. Expanded folders in the dialog and collapsed folders in the
-  sidebar follow the folder rather than its previous position. The Save Request
+  identified. An open folder Overview tab and its unsaved documentation follow
+  that folder as well; if the folder cannot be identified, the draft is kept
+  but cannot be saved into a different folder. Expanded folders in the dialog
+  and collapsed folders in the sidebar follow the folder rather than its
+  previous position. The Save Request
   New Folder sheet explains when the destination must be chosen again and does
   not create a folder until then.
 - Destination tree hierarchy guides no longer run through collapsed folder

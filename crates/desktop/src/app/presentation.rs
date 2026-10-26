@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use gpui_kit::{IntoElement as _, ParentElement as _, Styled as _, div, px};
 
 use crate::{
@@ -129,4 +131,7 @@ pub(crate) struct ShellSelectors {
     pub(crate) selected: Option<(probe_core::ItemKind, String)>,
     /// Captured when the sidebar selection is a folder. Absent for requests.
     pub(crate) selected_folder: Option<FolderAnchor>,
+    /// Folder overview tabs and documentation drafts, keyed by the selector
+    /// they used before the reload.
+    pub(crate) overview_folder_anchors: BTreeMap<String, FolderAnchor>,
 }
