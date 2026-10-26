@@ -73,7 +73,7 @@ use dialogs::{
     EnvironmentManagerDialog, PendingClose, SecretUiStatus, StoredSecretRename,
     format_import_diagnostics, suggested_collection_filename,
 };
-use documentation::{FolderDraftNotice, OverviewTarget};
+use documentation::OverviewTarget;
 use imports::{ImportConversion, ImportSource};
 use presentation::{
     InspectListRow, PrettyRevealState, ShellSelectors, inspect_list_rows, inspect_row_index,
@@ -115,12 +115,11 @@ use crate::{
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
     structure_editor::{
-        DESTINATION_RESELECTION_MESSAGE, DialogDestination, DialogFolderAnchors, DropIndicator,
-        DropReject, FolderAnchor, FolderIndex, ParentUpdate, ROOT_PARENT, SaveDestinationRow,
-        StructureDialog, StructureDialogMode, TreeDropIntent, descendant_requests, drop_intent,
-        drop_zone, folder_ancestor_selectors, hovered_row_index, item_position, relocate_folder,
-        resolve_dialog_destination, save_destination_rows, structure_operation_for_drop,
-        validate_tree_drop, would_duplicate_path,
+        DESTINATION_RESELECTION_MESSAGE, DropIndicator, DropReject, ROOT_PARENT,
+        SaveDestinationRow, StructureDialog, StructureDialogMode, TreeDropIntent,
+        descendant_requests, drop_intent, drop_zone, folder_ancestor_selectors, hovered_row_index,
+        item_position, save_destination_rows, structure_operation_for_drop, validate_tree_drop,
+        would_duplicate_path,
     },
     synchronization::{
         LocalRequestState, ReconcileResult, ReconciledWorkspace, SynchronizationConflict, reconcile,
@@ -327,6 +326,8 @@ pub(crate) struct ProbeApp {
     execution_service: Option<ExecutionService>,
     response_cache: probe_http::ResponseCache,
     response_viewer: ResponseViewerState,
+    destination_scroll: ScrollHandle,
+    revealed_destination: Option<String>,
     tree_scroll: UniformListScrollHandle,
     inspector_scroll: UniformListScrollHandle,
     environment_variables_scroll: UniformListScrollHandle,
@@ -491,6 +492,8 @@ impl ProbeApp {
             execution_service: None,
             response_cache,
             response_viewer: ResponseViewerState::default(),
+            destination_scroll: ScrollHandle::new(),
+            revealed_destination: None,
             tree_scroll: UniformListScrollHandle::new(),
             inspector_scroll: UniformListScrollHandle::new(),
             environment_variables_scroll: UniformListScrollHandle::new(),

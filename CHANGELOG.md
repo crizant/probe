@@ -30,31 +30,20 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
-- Save Request, New HTTP Request, New GraphQL Request, New Folder, and Import
-  from cURL keep the chosen folder when a bundled collection reloads while the
-  dialog is open. If that folder cannot be identified, including when a
-  same-named sibling cannot be distinguished, the destination is cleared and
-  must be selected again instead of creating the item in a different folder.
-  Removing or renaming one of two same-named folders does not select the other,
-  including when both folders have the same contents. A later reload does not
-  turn that cleared destination into the collection root. The selected sidebar
-  folder follows that folder, or the selection is cleared when it cannot be
-  identified. An open folder Overview tab and its unsaved documentation follow
-  that folder as well; if the folder cannot be identified, the draft is kept
-  but cannot be saved into a different folder. An Unsaved Changes confirmation
-  that is already open follows the same folder, and confirming it does not
-  write the draft into a different one. Close Other Tabs and other pending tab
-  actions follow that tab after a reload, or the action is cancelled instead of
-  closing or discarding a different tab. A delete confirmation follows the same
-  folder or request, or closes without deleting when that item cannot be
-  identified. A warning that unsaved folder documentation was kept is shown
-  once, and says when the folder was deleted. Expanded folders in the dialog
-  and collapsed folders in the sidebar follow the folder rather than its
-  previous position. The Save Request
-  New Folder sheet explains when the destination must be chosen again and does
-  not create a folder until then.
+- Destination folder trees reveal the preselected folder when a dialog opens and
+  keep newly selected destinations visible without resetting the user’s scroll.
+
 - Destination tree hierarchy guides no longer run through collapsed folder
   chevrons; top-level folders align with the collection sidebar.
+
+- An external collection reload no longer keeps a previously chosen folder for
+  Save Request, New HTTP Request, New GraphQL Request, New Folder, or Import
+  from cURL. The typed form stays open, the destination is cleared, and the
+  item is not created until a destination is selected again. Delete and Rename
+  confirmations close instead of changing whichever item now occupies the old
+  position. Close Other Tabs and other unsaved-folder confirmations are
+  cancelled without discarding unsaved work. Unsaved folder documentation is
+  kept and cannot be saved into another folder.
 
 ### Removed
 

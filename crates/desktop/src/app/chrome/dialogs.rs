@@ -390,7 +390,8 @@ impl ProbeApp {
         if dialog.edits_destination() {
             form = form.child(self.render_destination_picker(theme, cx));
         }
-        if dialog.destination_required {
+        let destination_required = dialog.destination_required;
+        if destination_required {
             form = form.child(
                 div()
                     .text_size(px(theme.typography.caption_size))
@@ -399,7 +400,6 @@ impl ProbeApp {
             );
         }
         let submit_label = dialog.submit_label();
-        let destination_required = dialog.destination_required;
         let content =
             components::dialog_surface(theme, "structure-dialog", components::COMPACT_DIALOG_WIDTH)
                 .child(components::dialog_title(theme, dialog.title()))
@@ -465,7 +465,6 @@ impl ProbeApp {
         };
         let parent = dialog.parent.clone();
         let expanded = dialog.expanded_folders.clone();
-        let destination_required = dialog.destination_required;
         let locked = self.destination_picker_locked();
         let rows = self
             .loaded_workspace
@@ -485,8 +484,14 @@ impl ProbeApp {
         let tree = super::super::tree::destination_tree(
             theme,
             &rows,
-            (!destination_required).then_some(parent.as_str()),
+            (!(dialog.destination_required
+                || dialog
+                    .curl
+                    .as_ref()
+                    .is_some_and(|curl| curl.destination_required)))
+            .then_some(parent.as_str()),
             locked,
+            &self.destination_scroll,
             move |selector, cx| {
                 let _ = select_view.update(cx, |view, cx| {
                     view.select_destination_parent(selector, cx);
@@ -549,18 +554,11 @@ impl ProbeApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        let Some((name, destination_required)) =
-            self.structure_dialog.as_ref().and_then(|dialog| {
-                matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. })
-                    .then(|| {
-                        dialog
-                            .new_folder_name
-                            .clone()
-                            .map(|name| (name, dialog.destination_required))
-                    })
-                    .flatten()
-            })
-        else {
+        let Some(name) = self.structure_dialog.as_ref().and_then(|dialog| {
+            matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. })
+                .then(|| dialog.new_folder_name.clone())
+                .flatten()
+        }) else {
             return div().into_any_element();
         };
         let name_view = cx.weak_entity();
@@ -568,55 +566,47 @@ impl ProbeApp {
         let cancel_view = cx.weak_entity();
         let submit_view = cx.weak_entity();
         let busy = self.structure_task.is_some();
-        let mut form = div()
-            .mt(px(theme.metrics.spacing_4))
-            .flex()
-            .flex_col()
-            .gap(px(theme.metrics.spacing_3))
-            .child(components::dialog_field(
-                theme,
-                "Name",
-                components::dialog_text_input(
-                    theme,
-                    "save-folder-name",
-                    name,
-                    "",
-                    true,
-                    move |value, _, cx| {
-                        let _ = name_view.update(cx, |view, cx| {
-                            if let Some(dialog) = view.structure_dialog.as_mut() {
-                                dialog.new_folder_name = Some(value.to_string());
-                            }
-                            cx.notify();
-                        });
-                    },
-                    move |value, _, cx| {
-                        let _ = name_enter_view.update(cx, |view, _| {
-                            if let Some(dialog) = view.structure_dialog.as_mut() {
-                                dialog.new_folder_name = Some(value.to_string());
-                            }
-                        });
-                    },
-                )
-                .disabled(busy),
-            ));
-        if destination_required {
-            form = form.child(
-                div()
-                    .id("save-folder-destination-required")
-                    .debug_selector(|| "save-folder-destination-required".into())
-                    .text_size(px(theme.typography.caption_size))
-                    .text_color(theme.colors.status.error)
-                    .child("The destination folder could not be identified. Close this sheet and select a destination before creating a folder."),
-            );
-        }
+        let destination_required = self
+            .structure_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.destination_required);
         let content = components::dialog_surface(
             theme,
             "save-folder-dialog",
             components::COMPACT_DIALOG_WIDTH,
         )
         .child(components::dialog_title(theme, "New Folder"))
-        .child(form)
+        .child(
+            div()
+                .mt(px(theme.metrics.spacing_4))
+                .child(components::dialog_field(
+                    theme,
+                    "Name",
+                    components::dialog_text_input(
+                        theme,
+                        "save-folder-name",
+                        name,
+                        "",
+                        true,
+                        move |value, _, cx| {
+                            let _ = name_view.update(cx, |view, cx| {
+                                if let Some(dialog) = view.structure_dialog.as_mut() {
+                                    dialog.new_folder_name = Some(value.to_string());
+                                }
+                                cx.notify();
+                            });
+                        },
+                        move |value, _, cx| {
+                            let _ = name_enter_view.update(cx, |view, _| {
+                                if let Some(dialog) = view.structure_dialog.as_mut() {
+                                    dialog.new_folder_name = Some(value.to_string());
+                                }
+                            });
+                        },
+                    )
+                    .disabled(busy),
+                )),
+        )
         .child(
             components::dialog_actions(theme)
                 .child(components::dialog_action_button(

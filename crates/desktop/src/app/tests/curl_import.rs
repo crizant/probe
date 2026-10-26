@@ -249,6 +249,8 @@ fn curl_import_write_failure_retains_input_and_retries_after_reload(cx: &mut Tes
                     .command,
                 COMMAND
             );
+            assert!(view.structure_dialog.as_ref().unwrap().destination_required);
+            view.select_destination_parent(String::new(), cx);
             view.submit_structure_dialog(window, cx);
         })
         .unwrap();
@@ -753,8 +755,9 @@ fn curl_import_removed_destination_requires_explicit_reselection(cx: &mut TestAp
         .update(cx, |view, window, cx| {
             assert!(view.reconcile_filesystem_workspace(external, BTreeMap::new(), window, cx));
             let dialog = view.structure_dialog.as_ref().unwrap();
-            assert_eq!(dialog.parent, "items/1", "do not silently select the root");
+            assert!(dialog.parent.is_empty());
             assert!(dialog.destination_required);
+            assert!(dialog.curl.as_ref().unwrap().destination_required);
             assert_eq!(dialog.curl.as_ref().unwrap().command, COMMAND);
             assert_eq!(dialog.name, "Imported");
             assert!(view.curl_import_disabled());
@@ -788,7 +791,7 @@ fn curl_import_removed_destination_requires_explicit_reselection(cx: &mut TestAp
         .update(cx, |view, window, cx| {
             let dialog = view.structure_dialog.as_ref().unwrap();
             assert_eq!(dialog.parent, "");
-            assert!(!dialog.destination_required);
+            assert!(!dialog.curl.as_ref().unwrap().destination_required);
             assert_eq!(
                 dialog.curl.as_ref().unwrap().command,
                 "curl https://reselected.test"

@@ -45,6 +45,8 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.destination_scroll = ScrollHandle::new();
+        self.revealed_destination = None;
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -115,6 +117,8 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.destination_scroll = ScrollHandle::new();
+        self.revealed_destination = None;
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -132,6 +136,8 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.destination_scroll = ScrollHandle::new();
+        self.revealed_destination = None;
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -266,13 +272,73 @@ impl ProbeApp {
         );
     }
 
+    fn structure_target_is_current(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((edits_destination, destination_required, parent, rename)) =
+            self.structure_dialog.as_ref().map(|dialog| {
+                (
+                    dialog.edits_destination(),
+                    dialog.destination_required
+                        || dialog
+                            .curl
+                            .as_ref()
+                            .is_some_and(|curl| curl.destination_required),
+                    dialog.parent.clone(),
+                    match &dialog.mode {
+                        StructureDialogMode::Rename { kind, selector } => {
+                            Some((*kind, selector.clone()))
+                        }
+                        _ => None,
+                    },
+                )
+            })
+        else {
+            return false;
+        };
+        if edits_destination && destination_required {
+            return false;
+        }
+        if edits_destination && !parent.is_empty() {
+            let missing = self
+                .loaded_workspace
+                .as_ref()
+                .is_none_or(|loaded| loaded.folder_key(&parent).is_none());
+            if missing {
+                if let Some(dialog) = self.structure_dialog.as_mut() {
+                    dialog.parent.clear();
+                    dialog.destination_required = true;
+                    if let Some(curl) = dialog.curl.as_mut() {
+                        curl.destination_required = true;
+                    }
+                }
+                self.show_toast(ToastIntent::Warning, DESTINATION_RESELECTION_MESSAGE, cx);
+                return false;
+            }
+        }
+        if let Some((kind, selector)) = rename {
+            let missing = self
+                .loaded_workspace
+                .as_ref()
+                .is_none_or(|loaded| loaded.item_key(kind, &selector).is_none());
+            if missing {
+                self.structure_dialog = None;
+                self.show_toast(
+                    ToastIntent::Warning,
+                    "The item could not be identified. It was not renamed.",
+                    cx,
+                );
+                return false;
+            }
+        }
+        true
+    }
+
     pub(super) fn submit_structure_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.structure_target_is_current(cx) {
+            return;
+        }
         let Some(dialog) = self.structure_dialog.as_ref() else {
             return;
         };
-        if dialog.destination_required && dialog.edits_destination() {
-            return;
-        }
         if matches!(dialog.mode, StructureDialogMode::ImportCurl) {
             if self.curl_import_disabled() {
                 return;
@@ -383,6 +449,9 @@ impl ProbeApp {
         }
         dialog.parent = parent;
         dialog.destination_required = false;
+        if let Some(curl) = dialog.curl.as_mut() {
+            curl.destination_required = false;
+        }
         cx.notify();
     }
 
@@ -659,19 +728,12 @@ impl ProbeApp {
                 Some((located.key(), baseline))
             })
             .collect::<Vec<_>>();
-        let (key_remaps, cancelled_pending_action) = self.install_reloaded_workspace(
+        let key_remaps = self.install_reloaded_workspace(
             workspace,
             baselines,
             &key_remaps,
             &result.selector_remaps,
         );
-        if cancelled_pending_action {
-            self.show_toast(
-                ToastIntent::Warning,
-                crate::app::workspace::CANCELLED_PENDING_ACTION,
-                cx,
-            );
-        }
         self.sync_save_dialog_after_structure(operation, &result);
         if matches!(operation, StructureOperation::CreateFolder { .. })
             && matches!(
@@ -789,6 +851,17 @@ impl ProbeApp {
         }
         self.expand_destination_ancestors();
         self.drop_missing_save_dialog_folders();
+    }
+
+    /// Queue a minimal reveal for the next layout, after expanded rows exist.
+    pub(super) fn reveal_destination(&self) {
+        let (Some(dialog), Some(loaded)) = (&self.structure_dialog, &self.loaded_workspace) else {
+            return;
+        };
+        let rows = save_destination_rows(loaded, &dialog.expanded_folders);
+        if let Some(index) = rows.iter().position(|row| row.selector == dialog.parent) {
+            self.destination_scroll.scroll_to_item(index);
+        }
     }
 
     pub(super) fn expand_destination_ancestors(&mut self) {

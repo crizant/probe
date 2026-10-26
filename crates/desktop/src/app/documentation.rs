@@ -5,6 +5,8 @@ use probe_core::{Documentation, FieldPatch};
 pub(crate) enum OverviewTarget {
     Collection,
     Folder(String),
+    /// Text kept after an external reload. It does not address a folder.
+    Detached(u64),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -13,20 +15,10 @@ pub(super) struct OverviewContent {
     pub(super) docs: Option<Documentation>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum FolderDraftNotice {
-    /// The folder selector no longer addresses a folder.
-    Deleted,
-    /// The selector would now address a different folder, so the draft was detached.
-    Unidentified,
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct OverviewDraft {
     pub(super) original: OverviewContent,
     pub(super) current: OverviewContent,
-    /// Set after a reload has already explained that this draft cannot be saved.
-    pub(super) orphan_notice: Option<FolderDraftNotice>,
 }
 
 impl OverviewContent {
@@ -93,6 +85,7 @@ impl ProbeApp {
                     docs: folder.docs.clone(),
                 })
             }
+            OverviewTarget::Detached(_) => None,
         }
     }
 
@@ -119,7 +112,6 @@ impl ProbeApp {
             .or_insert_with(|| OverviewDraft {
                 current: original.clone(),
                 original,
-                orphan_notice: None,
             });
         edit_documentation(
             if docs {
@@ -145,8 +137,23 @@ impl ProbeApp {
         target: &OverviewTarget,
         submitted: &OverviewContent,
     ) {
+        let key = if self.overview_drafts.contains_key(target) {
+            target.clone()
+        } else {
+            let detached: Vec<_> = self
+                .overview_drafts
+                .keys()
+                .filter(|key| matches!(key, OverviewTarget::Detached(_)))
+                .cloned()
+                .collect();
+            if detached.len() == 1 {
+                detached.into_iter().next().expect("one detached draft")
+            } else {
+                target.clone()
+            }
+        };
         if let Some(saved) = self.overview_content(target)
-            && let Some(current) = self.overview_drafts.get_mut(target)
+            && let Some(current) = self.overview_drafts.get_mut(&key)
         {
             if current.current.first == submitted.first {
                 current.current.first = saved.first.clone();
@@ -224,7 +231,7 @@ impl ProbeApp {
         };
         let Some(current) = self.overview_content(&target) else {
             self.fail_documentation_save(
-                "The folder could not be identified. This documentation draft was not saved. Discard it to continue.",
+                "This documentation draft was not saved. Discard it to continue.",
                 cx,
             );
             return ControlFlow::Break(());
@@ -246,6 +253,13 @@ impl ProbeApp {
                     summary: patch(&draft.original.summary(), &draft.current.summary()),
                     docs: patch(&draft.original.docs, &draft.current.docs),
                 })
+            }
+            OverviewTarget::Detached(_) => {
+                self.fail_documentation_save(
+                    "This documentation draft was not saved. Discard it to continue.",
+                    cx,
+                );
+                return ControlFlow::Break(());
             }
             OverviewTarget::Folder(selector) => loaded.prepare_folder_save(
                 selector,

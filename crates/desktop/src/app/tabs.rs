@@ -751,6 +751,7 @@ impl ProbeApp {
                         .as_ref()
                         .and_then(|loaded| loaded.folder_key(&selector))
                         .map(crate::shell::OverviewTab::Folder),
+                    OverviewTarget::Detached(_) => None,
                 };
                 if let Some(tab) = tab {
                     self.shell.close_overview(tab);

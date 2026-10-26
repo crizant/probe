@@ -1380,10 +1380,10 @@ fn writable_structure_fixture(suffix: &str) -> PathBuf {
 
 mod assertions;
 mod curl_import;
-mod destination_identity;
 mod environments;
 mod graphql;
 mod interactions;
+mod reload_safety;
 mod response;
 mod websocket;
 mod websocket_lifecycle;

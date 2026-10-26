@@ -259,9 +259,7 @@ fn tree_context_menu_duplicate_restores_tree_focus_for_delete_shortcut(cx: &mut 
 }
 
 #[gpui_kit::test]
-fn tree_context_menu_duplicate_keeps_keyboard_rename_dialog_open_after_reconcile(
-    cx: &mut TestAppContext,
-) {
+fn tree_context_menu_duplicate_closes_keyboard_rename_after_reconcile(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
@@ -321,15 +319,13 @@ fn tree_context_menu_duplicate_keeps_keyboard_rename_dialog_open_after_reconcile
     cx.run_until_parked();
 
     window
-        .update(cx, |view, window, cx| {
-            assert!(matches!(
-                view.structure_dialog,
-                Some(crate::structure_editor::StructureDialog {
-                    mode: StructureDialogMode::Rename { .. },
-                    ..
-                })
+        .update(cx, |view, _, _| {
+            assert!(view.structure_dialog.is_none());
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "pending action was cancelled"
             ));
-            assert_ne!(window.focused(cx), Some(view.tree_focus_handle.clone()));
         })
         .expect("test window should remain open");
     fs::remove_file(fixture).unwrap();

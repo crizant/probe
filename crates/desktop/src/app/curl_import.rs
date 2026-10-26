@@ -45,6 +45,8 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.destination_scroll = ScrollHandle::new();
+        self.revealed_destination = None;
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -101,11 +103,11 @@ impl ProbeApp {
         self.loading
             || self.has_active_workspace_write()
             || self.structure_dialog.as_ref().is_none_or(|dialog| {
-                let destination_required = dialog.destination_required;
-                dialog.name.trim().is_empty()
+                dialog.destination_required
+                    || dialog.name.trim().is_empty()
                     || dialog.curl.as_ref().is_none_or(|curl| {
                         curl.committed
-                            || destination_required
+                            || curl.destination_required
                             || !matches!(curl.parsed, Some(Ok(_)))
                     })
             })
@@ -218,7 +220,7 @@ impl ProbeApp {
                     .child("Request name is required."),
             );
         }
-        if dialog.destination_required {
+        if dialog.destination_required || curl.destination_required {
             form = form.child(
                 div()
                     .text_size(px(theme.typography.caption_size))
