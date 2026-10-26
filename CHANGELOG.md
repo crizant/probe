@@ -46,13 +46,16 @@ Release dates use Australia/Brisbane time (UTC+10).
   changed. In a bundled collection, any external change clears every folder
   destination, unsaved folder documentation, and the sidebar folder selection.
   Directory collections identify folders by path; any external change cancels
-  a pending folder Delete or Rename there. A reload that changes the file also
-  cancels pending Close and Close Other Tabs confirmations without discarding
-  unsaved work. An unchanged reload keeps a request Close confirmation.
+  a pending folder Delete or Rename there. A bundled collection cancels folder
+  Unsaved confirmations whenever the file changes, whether or not a
+  documentation draft was detached. Any external change also cancels Close,
+  Close Other Tabs, Close Workspace, Close Window, and Quit confirmations
+  without discarding unsaved work. An unchanged reload keeps those
+  confirmations and updates the request or folder they refer to.
   Unsaved folder documentation is kept and cannot be saved into another folder,
   and a finished save does not drop edits made after that save started.
-  Collapsed folders reset when the
-  folder structure changes. An unchanged reload leaves those confirmations,
+  Collapsed folders reset when the folder structure changes. An unchanged
+  reload leaves those confirmations,
   drafts, and the chosen destination in place.
 
 ### Removed

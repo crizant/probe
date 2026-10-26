@@ -872,6 +872,7 @@ fn swapped_folder_branches_cancel_close_other_tabs_without_dropping_drafts(
         ));
     });
     move_folder(&workspace, cx);
+    assert!(workspace.toast(cx, ToastIntent::Warning, "Close Other Tabs was cancelled."));
     workspace.update(cx, |view, window, cx| {
         assert!(view.application_dialog.is_none());
         assert!(view.pending_close.is_none());
@@ -942,6 +943,98 @@ fn unchanged_reload_keeps_a_request_close_confirmation(cx: &mut TestAppContext) 
     });
     assert_eq!(workspace.names(false), ["Alpha", "Beta"]);
     assert!(!workspace.urls().iter().any(|url| url.contains("unsaved")));
+}
+
+#[gpui_kit::test]
+fn unchanged_reload_discards_only_the_other_folder_draft(cx: &mut TestAppContext) {
+    let workspace = Workspace::open(cx, "keep-folder", COLLECTION);
+    workspace.update(cx, |view, window, cx| {
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        let keep = loaded.folder_key("items/0").unwrap();
+        let other = loaded.folder_key("items/1").unwrap();
+        view.shell
+            .open_overview(crate::shell::OverviewTab::Folder(keep));
+        view.shell
+            .open_overview(crate::shell::OverviewTab::Folder(other));
+        view.edit_overview(
+            OverviewTarget::Folder("items/0".into()),
+            true,
+            "Keep notes".into(),
+            cx,
+        );
+        view.edit_overview(
+            OverviewTarget::Folder("items/1".into()),
+            true,
+            "Other notes".into(),
+            cx,
+        );
+        view.request_close_other_tabs(crate::shell::OverviewTab::Folder(keep), window, cx);
+    });
+    workspace.reconcile_same(cx);
+    workspace.update(cx, |view, window, cx| {
+        assert!(matches!(
+            view.application_dialog,
+            Some(ApplicationDialog::Unsaved {
+                pending: PendingClose::OtherTabs { .. },
+                ..
+            })
+        ));
+        view.handle_application_dialog_action(ApplicationDialogAction::Discard, window, cx);
+        let notes: Vec<_> = view
+            .overview_drafts
+            .values()
+            .map(|draft| draft.current.docs.clone())
+            .collect();
+        assert!(notes.contains(&Some(note("Keep notes"))));
+        assert!(!notes.contains(&Some(note("Other notes"))));
+    });
+}
+
+#[gpui_kit::test]
+fn source_change_cancels_close_workspace_and_a_later_save_works(cx: &mut TestAppContext) {
+    let workspace = Workspace::open(cx, "close-workspace", REQUESTS);
+    open_dirty_request_pair(&workspace, cx);
+    workspace.update(cx, |view, window, cx| {
+        view.request_close_workspace(window, cx);
+        assert!(matches!(
+            view.application_dialog,
+            Some(ApplicationDialog::Unsaved {
+                pending: PendingClose::Workspace,
+                ..
+            })
+        ));
+    });
+    let source = fs::read_to_string(&workspace.path)
+        .unwrap()
+        .replace("https://example.test/beta", "https://example.test/beta2");
+    workspace.reconcile_text(cx, &source);
+    assert!(workspace.toast(
+        cx,
+        ToastIntent::Warning,
+        "Closing the workspace was cancelled."
+    ));
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.application_dialog.is_none());
+        assert!(view.pending_close.is_none());
+        let key = view
+            .loaded_workspace
+            .as_ref()
+            .unwrap()
+            .request_key("items/0")
+            .unwrap();
+        view.edit_request(
+            key,
+            |request| request.url = Some("https://example.test/saved".to_owned()),
+            cx,
+        );
+        view.persistence.enqueue([key]);
+        view.pump_workspace_writes(window, cx);
+    });
+    cx.run_until_parked();
+    let urls = workspace.urls();
+    assert!(urls.contains(&"https://example.test/saved".to_owned()));
+    assert!(urls.contains(&"https://example.test/beta2".to_owned()));
+    assert!(!urls.iter().any(|url| url.contains("unsaved")));
 }
 
 #[gpui_kit::test]
