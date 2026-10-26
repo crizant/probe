@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use probe_core::{FolderKey, ItemKind, RequestKey, RequestProtocol, Workspace, WorkspaceItemRef};
+use probe_core::{
+    FolderKey, ItemKind, Request, RequestKey, RequestProtocol, Workspace, WorkspaceItemRef,
+};
 use probe_opencollection::{ItemLocator, LoadedWorkspace, StructureOperation};
 
 pub(crate) const ROOT_PARENT: &str = "";
@@ -15,7 +17,7 @@ pub(crate) struct CurlImport {
     pub(crate) destination_required: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum StructureDialogMode {
     CreateRequest(RequestProtocol),
     ImportCurl,
@@ -30,6 +32,8 @@ pub(crate) enum StructureDialogMode {
         opened_name: String,
         /// Set for requests so a reload can follow the request by content.
         request: Option<RequestKey>,
+        /// Saved content when the dialog opened.
+        baseline: Option<Box<Request>>,
     },
 }
 
@@ -99,6 +103,7 @@ impl StructureDialog {
         selector: String,
         name: String,
         request: Option<RequestKey>,
+        baseline: Option<Request>,
     ) -> Self {
         Self {
             mode: StructureDialogMode::Rename {
@@ -106,6 +111,7 @@ impl StructureDialog {
                 selector,
                 opened_name: name.clone(),
                 request,
+                baseline: baseline.map(Box::new),
             },
             name,
             parent: String::new(),

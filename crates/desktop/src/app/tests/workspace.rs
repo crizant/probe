@@ -1558,7 +1558,7 @@ fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
             dialog.name = "Kept".to_owned();
             dialog.parent = "not-a-folder".to_owned();
             dialog.expanded_folders.insert("items/1".to_owned());
-            view.clear_structure_destination();
+            view.clear_structure_destination(false);
             let dialog = view
                 .structure_dialog
                 .as_ref()
@@ -3105,6 +3105,7 @@ fn application_dialogs_queue_without_repeating_the_same_filesystem_conflict(
                     name: "List products".to_owned(),
                     detail: "This cannot be undone.".to_owned(),
                     request: None,
+                    baseline: None,
                 },
                 window,
                 cx,

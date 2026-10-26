@@ -237,13 +237,17 @@ impl ProbeApp {
         else {
             return ControlFlow::Continue(());
         };
-        if let OverviewTarget::Detached(_) = &target {
-            self.fail_documentation_save(
-                "This documentation was kept after the folders changed, so it was not saved. Discard the draft to continue.",
-                cx,
-            );
-            return ControlFlow::Break(());
-        }
+        let folder_selector = match &target {
+            OverviewTarget::Detached(_) => {
+                self.fail_documentation_save(
+                    "This documentation was kept after the folders changed, so it was not saved. Discard the draft to continue.",
+                    cx,
+                );
+                return ControlFlow::Break(());
+            }
+            OverviewTarget::Collection => None,
+            OverviewTarget::Folder(selector) => Some(selector.clone()),
+        };
         let Some(current) = self.overview_content(&target) else {
             self.fail_documentation_save(
                 "This folder is no longer in the collection, so its documentation was not saved. Discard the draft to continue.",
@@ -262,21 +266,12 @@ impl ProbeApp {
             .loaded_workspace
             .as_ref()
             .expect("overview content requires a workspace");
-        let prepared = match &target {
-            OverviewTarget::Collection => {
-                loaded.prepare_collection_save(probe_core::CollectionUpdate {
-                    summary: patch(&draft.original.summary(), &draft.current.summary()),
-                    docs: patch(&draft.original.docs, &draft.current.docs),
-                })
-            }
-            OverviewTarget::Detached(_) => {
-                self.fail_documentation_save(
-                    "This documentation was kept after the folders changed, so it was not saved. Discard the draft to continue.",
-                    cx,
-                );
-                return ControlFlow::Break(());
-            }
-            OverviewTarget::Folder(selector) => loaded.prepare_folder_save(
+        let prepared = match &folder_selector {
+            None => loaded.prepare_collection_save(probe_core::CollectionUpdate {
+                summary: patch(&draft.original.summary(), &draft.current.summary()),
+                docs: patch(&draft.original.docs, &draft.current.docs),
+            }),
+            Some(selector) => loaded.prepare_folder_save(
                 selector,
                 probe_core::FolderUpdate {
                     description: patch(&draft.original.first, &draft.current.first),

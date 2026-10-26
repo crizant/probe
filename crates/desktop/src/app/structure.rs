@@ -142,6 +142,25 @@ impl ProbeApp {
         cx.notify();
     }
 
+    fn selected_request(&self, kind: ItemKind) -> (Option<RequestKey>, Option<Request>) {
+        let Some(key) = self.selected_request_key(kind) else {
+            return (None, None);
+        };
+        let baseline = self.persistence.saved_request(key).cloned().or_else(|| {
+            self.loaded_workspace
+                .as_ref()
+                .and_then(|loaded| loaded.workspace().request(key).cloned())
+        });
+        (Some(key), baseline)
+    }
+
+    fn selected_request_key(&self, kind: ItemKind) -> Option<RequestKey> {
+        match (kind, self.selected_tree_item) {
+            (ItemKind::Request, Some(WorkspaceItemRef::Request(key))) => Some(key),
+            _ => None,
+        }
+    }
+
     pub(super) fn selected_item_details(&self) -> Option<(ItemKind, String, String)> {
         let loaded = self.loaded_workspace.as_ref()?;
         let item = self.selected_tree_item?;
@@ -160,11 +179,10 @@ impl ProbeApp {
         let Some((kind, selector, name)) = self.selected_item_details() else {
             return;
         };
-        let request = match (kind, self.selected_tree_item) {
-            (ItemKind::Request, Some(WorkspaceItemRef::Request(key))) => Some(key),
-            _ => None,
-        };
-        self.structure_dialog = Some(StructureDialog::rename(kind, selector, name, request));
+        let (request, baseline) = self.selected_request(kind);
+        self.structure_dialog = Some(StructureDialog::rename(
+            kind, selector, name, request, baseline,
+        ));
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -261,10 +279,7 @@ impl ProbeApp {
                 "This will discard unsaved changes in {dirty_count} request(s) and cannot be undone."
             )
         };
-        let request = match (kind, self.selected_tree_item) {
-            (ItemKind::Request, Some(WorkspaceItemRef::Request(key))) => Some(key),
-            _ => None,
-        };
+        let (request, baseline) = self.selected_request(kind);
         self.show_application_dialog(
             ApplicationDialog::Delete {
                 kind,
@@ -272,6 +287,7 @@ impl ProbeApp {
                 name,
                 detail,
                 request,
+                baseline: baseline.map(Box::new),
             },
             window,
             cx,
@@ -279,7 +295,7 @@ impl ProbeApp {
     }
 
     fn structure_target_is_current(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some((edits_destination, destination_required, parent, rename)) =
+        let Some((edits_destination, destination_required, parent)) =
             self.structure_dialog.as_ref().map(|dialog| {
                 (
                     dialog.edits_destination(),
@@ -289,15 +305,6 @@ impl ProbeApp {
                             .as_ref()
                             .is_some_and(|curl| curl.destination_required),
                     dialog.parent.clone(),
-                    match &dialog.mode {
-                        StructureDialogMode::Rename {
-                            kind,
-                            selector,
-                            opened_name,
-                            ..
-                        } => Some((*kind, selector.clone(), opened_name.clone())),
-                        _ => None,
-                    },
                 )
             })
         else {
@@ -320,20 +327,6 @@ impl ProbeApp {
                     }
                 }
                 self.show_toast(ToastIntent::Warning, DESTINATION_RESELECTION_MESSAGE, cx);
-                return false;
-            }
-        }
-        if let Some((kind, selector, opened_name)) = rename {
-            let matches = self.loaded_workspace.as_ref().is_some_and(|loaded| {
-                super::workspace::item_matches(loaded, kind, &selector, &opened_name)
-            });
-            if !matches {
-                self.structure_dialog = None;
-                self.show_toast(
-                    ToastIntent::Warning,
-                    format!("Rename “{opened_name}” was cancelled."),
-                    cx,
-                );
                 return false;
             }
         }

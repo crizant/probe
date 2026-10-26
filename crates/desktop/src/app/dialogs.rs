@@ -1,7 +1,9 @@
 use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
 
 use gpui_kit::Action;
-use probe_core::{Environment, ImportDiagnostic, ImportDiagnosticSeverity, ItemKind, RequestKey};
+use probe_core::{
+    Environment, ImportDiagnostic, ImportDiagnosticSeverity, ItemKind, Request, RequestKey,
+};
 use probe_yaak::{YaakImportPreview, YaakWorkspaceSummary};
 
 use crate::{components, session::SessionState, user_config::ThemeMode};
@@ -272,6 +274,8 @@ pub(crate) enum ApplicationDialog {
         detail: String,
         /// Set for requests so a reload can follow the request by content.
         request: Option<RequestKey>,
+        /// Saved content when the dialog opened. A reload follows this request.
+        baseline: Option<Box<Request>>,
     },
     DeleteEnvironment {
         name: String,
