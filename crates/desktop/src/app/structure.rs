@@ -793,6 +793,13 @@ impl ProbeApp {
         }
     }
 
+    pub(super) fn destination_row_index(&self) -> Option<usize> {
+        let selector = self.destination_selected_selector()?;
+        self.destination_rows()
+            .iter()
+            .position(|row| row.selector == selector)
+    }
+
     /// Scrolls the destination list the minimum amount that shows the selected
     /// folder. Callers invoke this when the selection changes. Later frames do
     /// not repeat it, so a manual scroll stands.

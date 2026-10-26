@@ -32,8 +32,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 - Destination folder trees in Save Request, New HTTP Request, New GraphQL
   Request, New Folder, and Import from cURL scroll the selected folder into
-  view when the dialog opens and again when the selection changes by click,
-  keyboard, or reload. Arrow keys move through every folder, including folders
+  view when the dialog opens and again when the selection changes by click or
+  keyboard, or when a reload moves the selected folder's row. Arrow keys move
+  through every folder, including folders
   below the viewport. Left and Right collapse and expand folders the same way
   as the collection sidebar.
 - Destination tree hierarchy guides no longer run through collapsed folder

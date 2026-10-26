@@ -1002,10 +1002,6 @@ impl ProbeApp {
     }
 
     pub(super) fn remap_structure_dialog(&mut self, remaps: &BTreeMap<String, String>) {
-        let previous_parent = self
-            .structure_dialog
-            .as_ref()
-            .map(|dialog| dialog.parent.clone());
         let Some(dialog) = self.structure_dialog.as_mut() else {
             return;
         };
@@ -1069,14 +1065,6 @@ impl ProbeApp {
                     self.structure_dialog = None;
                 }
             }
-        }
-        let parent_changed = self
-            .structure_dialog
-            .as_ref()
-            .map(|dialog| dialog.parent.clone())
-            != previous_parent;
-        if parent_changed {
-            self.scroll_selected_destination_into_view();
         }
     }
 
@@ -1180,6 +1168,7 @@ impl ProbeApp {
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
         let certificate_inputs_unchanged =
             old.workspace().environments() == reconciled.workspace.workspace().environments();
+        let previous_destination_index = self.destination_row_index();
         self.install_reloaded_workspace(
             reconciled.workspace,
             reconciled.baselines,
@@ -1187,6 +1176,12 @@ impl ProbeApp {
             &reconciled.selector_remaps,
         );
         self.remap_structure_dialog(&reconciled.selector_remaps);
+        // Directory collections keep a folder's selector when siblings are
+        // reordered. Scroll only when that moves the selected row, so a reload
+        // that leaves the row in place does not undo a manual scroll.
+        if self.destination_row_index() != previous_destination_index {
+            self.scroll_selected_destination_into_view();
+        }
         // The new-environment dialog is only a typed name. A refresh replaces
         // stored documents, and the next submit uses that refreshed workspace.
         self.sync_environment_manager_after_reload(

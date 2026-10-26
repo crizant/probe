@@ -5791,3 +5791,122 @@ fn destination_dialog_reopen_scrolls_to_the_new_selection(cx: &mut TestAppContex
     }
     fs::remove_file(path).expect("wide destination fixture should be removed");
 }
+
+fn write_directory_collection(root: &std::path::Path, folders: &[String]) {
+    fs::create_dir_all(root).unwrap();
+    fs::write(
+        root.join("opencollection.yml"),
+        "opencollection: 1.0.0\ninfo:\n  name: Reorder\nbundled: false\n",
+    )
+    .unwrap();
+    for name in folders {
+        let directory = root.join(name);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("folder.yml"),
+            format!("info:\n  name: {name}\n  type: folder\n"),
+        )
+        .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn destination_reload_scrolls_when_a_stable_selector_changes_row(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(1200.0)), ProbeApp::new);
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "probe-desktop-destination-reorder-{}-{unique}",
+        std::process::id()
+    ));
+    let original = (0..16)
+        .map(|index| format!("m{index:02}"))
+        .collect::<Vec<_>>();
+    write_directory_collection(&root, &original);
+    let workspace =
+        probe_opencollection::load_workspace(&root).expect("directory collection loads");
+    let selector = "m15";
+    let folder = workspace
+        .folder_key(selector)
+        .expect("selected folder should keep a path selector");
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(root.clone(), workspace);
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+            view.open_create_folder_dialog(window, cx);
+            assert_eq!(
+                view.structure_dialog.as_ref().expect("dialog").parent,
+                selector
+            );
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    let selected_bounds: &'static str = format!("save-destination-{selector}").leak();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(destination_row_is_visible(&mut visual, selected_bounds));
+        assert!(visual.debug_bounds("save-destination-root").is_none());
+    }
+    window
+        .update(cx, |view, _, cx| {
+            view.destination_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
+        })
+        .expect("test window should remain open");
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let fresh = probe_opencollection::load_workspace(&root).unwrap();
+            view.apply_reconciled_workspace(reconciled_workspace(fresh), cx);
+            assert_eq!(
+                view.structure_dialog.as_ref().expect("dialog").parent,
+                selector
+            );
+        })
+        .expect("test window should remain open");
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            destination_row_is_visible(&mut visual, "save-destination-root"),
+            "a reload that leaves the row in place should keep a manual scroll"
+        );
+        assert!(visual.debug_bounds(selected_bounds).is_none());
+    }
+
+    let mut reordered = (0..8)
+        .map(|index| format!("a{index:02}"))
+        .collect::<Vec<_>>();
+    reordered.extend(original);
+    write_directory_collection(&root, &reordered);
+    window
+        .update(cx, |view, _, cx| {
+            let fresh = probe_opencollection::load_workspace(&root).unwrap();
+            view.apply_reconciled_workspace(reconciled_workspace(fresh), cx);
+            assert_eq!(
+                view.structure_dialog.as_ref().expect("dialog").parent,
+                selector,
+                "the directory selector stays the same when earlier siblings appear"
+            );
+        })
+        .expect("test window should remain open");
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            destination_row_is_visible(&mut visual, selected_bounds),
+            "moving the selected row should scroll it back into view"
+        );
+        assert!(visual.debug_bounds("save-destination-root").is_none());
+    }
+    let _ = fs::remove_dir_all(root);
+}
