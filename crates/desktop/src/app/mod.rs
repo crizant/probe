@@ -187,6 +187,10 @@ gpui_kit::actions!(
         ExpandTreeItem,
         ActivateTreeItem,
         ActivateSaveDestination,
+        SelectPreviousDestination,
+        SelectNextDestination,
+        CollapseDestinationFolder,
+        ExpandDestinationFolder,
         SubmitSaveFolderDialog,
         CancelSaveFolderDialog,
         OpenImportSubmenu,
@@ -265,6 +269,7 @@ pub(crate) struct ProbeApp {
     focus_handle: FocusHandle,
     tree_focus_handle: FocusHandle,
     structure_dialog_focus: FocusHandle,
+    destination_tree_focus: FocusHandle,
     save_folder_dialog_focus: FocusHandle,
     create_environment_dialog_focus: FocusHandle,
     environment_manager_dialog_focus: FocusHandle,
@@ -417,6 +422,7 @@ impl ProbeApp {
         focus_handle.focus(window, cx);
         let tree_focus_handle = cx.focus_handle();
         let structure_dialog_focus = cx.focus_handle();
+        let destination_tree_focus = cx.focus_handle().tab_stop(true);
         let save_folder_dialog_focus = cx.focus_handle();
         let create_environment_dialog_focus = cx.focus_handle();
         let environment_manager_dialog_focus = cx.focus_handle();
@@ -433,6 +439,7 @@ impl ProbeApp {
             focus_handle,
             tree_focus_handle,
             structure_dialog_focus,
+            destination_tree_focus,
             save_folder_dialog_focus,
             create_environment_dialog_focus,
             environment_manager_dialog_focus,
@@ -883,6 +890,10 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("enter", SubmitStructureDialog, Some("StructureDialog")),
         KeyBinding::new("escape", CancelStructureDialog, Some("CurlImportDialog")),
         KeyBinding::new("enter", ActivateSaveDestination, Some("SaveDestination")),
+        KeyBinding::new("up", SelectPreviousDestination, Some("SaveDestination")),
+        KeyBinding::new("down", SelectNextDestination, Some("SaveDestination")),
+        KeyBinding::new("left", CollapseDestinationFolder, Some("SaveDestination")),
+        KeyBinding::new("right", ExpandDestinationFolder, Some("SaveDestination")),
         KeyBinding::new("enter", SubmitSaveFolderDialog, Some("SaveFolderDialog")),
         KeyBinding::new("escape", CancelSaveFolderDialog, Some("SaveFolderDialog")),
         KeyBinding::new(

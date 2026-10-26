@@ -282,6 +282,24 @@ impl Render for ProbeApp {
             .on_action(cx.listener(|view, _: &ActivateTreeItem, _, cx| {
                 view.activate_selected_tree_item(cx);
             }))
+            .on_action(
+                cx.listener(|view, _: &SelectPreviousDestination, window, cx| {
+                    view.move_destination_selection(-1, window, cx);
+                }),
+            )
+            .on_action(cx.listener(|view, _: &SelectNextDestination, window, cx| {
+                view.move_destination_selection(1, window, cx);
+            }))
+            .on_action(
+                cx.listener(|view, _: &CollapseDestinationFolder, window, cx| {
+                    view.collapse_destination_selection(window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &ExpandDestinationFolder, window, cx| {
+                    view.expand_destination_selection(window, cx);
+                }),
+            )
             .on_action(cx.listener(|view, _: &SubmitStructureDialog, window, cx| {
                 view.submit_structure_dialog(window, cx);
             }))

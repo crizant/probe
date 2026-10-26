@@ -44,8 +44,7 @@ impl ProbeApp {
         self.structure_dialog = Some(StructureDialog::import_curl(
             self.selected_parent_selector(),
         ));
-        self.expand_destination_ancestors();
-        self.scroll_selected_destination_into_view();
+        self.prepare_destination_dialog();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }

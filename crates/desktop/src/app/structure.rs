@@ -44,8 +44,7 @@ impl ProbeApp {
             name,
             self.selected_parent_selector(),
         ));
-        self.expand_destination_ancestors();
-        self.scroll_selected_destination_into_view();
+        self.prepare_destination_dialog();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -115,8 +114,7 @@ impl ProbeApp {
             protocol,
             self.selected_parent_selector(),
         ));
-        self.expand_destination_ancestors();
-        self.scroll_selected_destination_into_view();
+        self.prepare_destination_dialog();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -133,8 +131,7 @@ impl ProbeApp {
         self.structure_dialog = Some(StructureDialog::create_folder(
             self.selected_parent_selector(),
         ));
-        self.expand_destination_ancestors();
-        self.scroll_selected_destination_into_view();
+        self.prepare_destination_dialog();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -824,6 +821,115 @@ impl ProbeApp {
             .scroll_to_item(index, ScrollStrategy::Nearest);
     }
 
+    /// Starts a destination dialog from a fresh scroll offset, then reveals the
+    /// preselected folder. Replacing the handle keeps a previous dialog's
+    /// offset from showing up in the new one.
+    pub(super) fn prepare_destination_dialog(&mut self) {
+        self.destination_scroll = UniformListScrollHandle::new();
+        self.expand_destination_ancestors();
+        self.scroll_selected_destination_into_view();
+    }
+
+    pub(super) fn move_destination_selection(
+        &mut self,
+        offset: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.destination_picker_locked() {
+            return;
+        }
+        let rows = self.destination_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let current = self
+            .structure_dialog
+            .as_ref()
+            .and_then(|dialog| destination_selection_index(&rows, dialog));
+        let next = match current {
+            Some(index) => index
+                .checked_add_signed(offset)
+                .unwrap_or(0)
+                .min(rows.len() - 1),
+            None if offset < 0 => rows.len() - 1,
+            None => 0,
+        };
+        let selector = rows[next].selector.clone();
+        self.select_destination_parent(selector, cx);
+        self.destination_tree_focus.focus(window, cx);
+    }
+
+    pub(super) fn collapse_destination_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.destination_picker_locked() {
+            return;
+        }
+        let Some(selector) = self.destination_selected_selector() else {
+            return;
+        };
+        let rows = self.destination_rows();
+        let Some(row) = rows.iter().find(|row| row.selector == selector) else {
+            return;
+        };
+        if row.expandable && row.expanded {
+            self.toggle_destination_folder(selector, cx);
+        } else if !selector.is_empty() {
+            self.select_destination_parent(destination_parent_selector(&selector), cx);
+        }
+        self.destination_tree_focus.focus(window, cx);
+    }
+
+    pub(super) fn expand_destination_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.destination_picker_locked() {
+            return;
+        }
+        let Some(selector) = self.destination_selected_selector() else {
+            return;
+        };
+        let expandable = self
+            .destination_rows()
+            .into_iter()
+            .any(|row| row.selector == selector && row.expandable && !row.expanded);
+        if expandable {
+            self.toggle_destination_folder(selector, cx);
+        }
+        self.destination_tree_focus.focus(window, cx);
+    }
+
+    fn destination_rows(&self) -> Vec<SaveDestinationRow> {
+        let Some(dialog) = self.structure_dialog.as_ref() else {
+            return Vec::new();
+        };
+        if !dialog.edits_destination() {
+            return Vec::new();
+        }
+        let Some(loaded) = self.loaded_workspace.as_ref() else {
+            return Vec::new();
+        };
+        save_destination_rows(loaded, &dialog.expanded_folders)
+    }
+
+    fn destination_selected_selector(&self) -> Option<String> {
+        let dialog = self.structure_dialog.as_ref()?;
+        if !dialog.edits_destination()
+            || dialog
+                .curl
+                .as_ref()
+                .is_some_and(|curl| curl.destination_required)
+        {
+            return None;
+        }
+        Some(dialog.parent.clone())
+    }
+
     pub(super) fn expand_destination_ancestors(&mut self) {
         let Some(parent) = self.structure_dialog.as_ref().and_then(|dialog| {
             dialog
@@ -989,5 +1095,28 @@ impl ProbeApp {
             self.persist_session(cx);
             cx.notify();
         }
+    }
+}
+
+fn destination_selection_index(
+    rows: &[SaveDestinationRow],
+    dialog: &StructureDialog,
+) -> Option<usize> {
+    if dialog
+        .curl
+        .as_ref()
+        .is_some_and(|curl| curl.destination_required)
+    {
+        return None;
+    }
+    rows.iter().position(|row| row.selector == dialog.parent)
+}
+
+/// Parent folder selector for a destination row. Top-level folders return the
+/// collection root.
+fn destination_parent_selector(selector: &str) -> String {
+    match selector.rsplit_once("/items/") {
+        Some((parent, _)) => parent.to_owned(),
+        None => String::new(),
     }
 }

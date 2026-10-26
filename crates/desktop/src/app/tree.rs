@@ -220,18 +220,23 @@ fn tree_row_button(
         .cursor_pointer()
 }
 
+pub(crate) struct DestinationTreeControls<'a> {
+    pub(crate) scroll: &'a UniformListScrollHandle,
+    pub(crate) focus: &'a gpui_kit::FocusHandle,
+}
+
 /// A destination picker shared by structure dialogs. State and callbacks belong
 /// to the caller, independently of the sidebar's expansion and selection.
 ///
 /// Rows use a uniform list so the caller can reveal a selected folder with
-/// [`UniformListScrollHandle::scroll_to_item`], the same nearest-item scroll the
-/// sidebar uses. The list keeps the previous max height and hugs shorter trees.
+/// the same nearest-item scroll the sidebar uses. The list keeps the previous
+/// max height and hugs shorter trees.
 pub(crate) fn destination_tree(
     theme: Theme,
     rows: &[crate::structure_editor::SaveDestinationRow],
     selected_parent: Option<&str>,
     disabled: bool,
-    scroll: &UniformListScrollHandle,
+    controls: DestinationTreeControls<'_>,
     on_select: impl Fn(String, &mut gpui_kit::App) + Clone + 'static,
     on_toggle: impl Fn(String, &mut gpui_kit::App) + Clone + 'static,
 ) -> gpui_kit::UniformList {
@@ -260,7 +265,10 @@ pub(crate) fn destination_tree(
     )
     .with_sizing_behavior(ListSizingBehavior::Infer)
     .debug_selector(|| "save-destination-tree".into())
-    .track_scroll(scroll)
+    .track_scroll(controls.scroll)
+    .track_focus(controls.focus)
+    .tab_stop(true)
+    .key_context("SaveDestination")
     .w_full()
     .max_h(px(theme.metrics.tree_row_height * 8.0))
     .py(px(theme.metrics.spacing_1))

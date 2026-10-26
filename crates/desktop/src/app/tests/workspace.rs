@@ -5478,8 +5478,32 @@ fn nested_destination_collection(depth: usize) -> PathBuf {
     path
 }
 
-fn destination_scroll_y(view: &ProbeApp) -> gpui_kit::Pixels {
-    view.destination_scroll.0.borrow().base_handle.offset().y
+fn wide_destination_collection(folders: usize) -> PathBuf {
+    let mut yaml = String::from(
+        "opencollection: 1.0.0\ninfo:\n  name: Wide destination\nbundled: true\nitems:\n",
+    );
+    for index in 0..folders {
+        yaml.push_str(&format!(
+            "  - info:\n      name: Folder {index}\n      type: folder\n"
+        ));
+        if index + 1 == folders {
+            yaml.push_str(
+                "    items:\n      - info:\n          name: Child\n          type: folder\n        items: []\n",
+            );
+        } else {
+            yaml.push_str("    items: []\n");
+        }
+    }
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "probe-desktop-destination-wide-{}-{unique}.yml",
+        std::process::id()
+    ));
+    fs::write(&path, yaml).expect("wide destination fixture should be written");
+    path
 }
 
 fn destination_row_is_visible(visual: &mut VisualTestContext, selector: &'static str) -> bool {
@@ -5556,35 +5580,26 @@ fn destination_dialogs_reveal_a_preselected_folder(cx: &mut TestAppContext) {
                 "{mode}: collection root should stay outside the destination viewport"
             );
         }
-        window
-            .update(cx, |view, _, _| {
-                assert!(
-                    destination_scroll_y(view) < px(0.0),
-                    "{mode}: the destination list should scroll to the preselected folder"
-                );
-            })
-            .expect("test window should remain open");
-
         if mode != "http" {
             continue;
         }
 
-        let offset = window
+        window
             .update(cx, |view, _, cx| {
-                let before = destination_scroll_y(view);
                 view.select_destination_parent(parent_selector.clone(), cx);
-                before
             })
             .expect("test window should remain open");
         cx.run_until_parked();
         {
             let mut visual = VisualTestContext::from_window(window.into(), cx);
             assert!(destination_row_is_visible(&mut visual, parent_bounds));
-            assert!(destination_row_is_visible(&mut visual, selected_bounds));
+            assert!(
+                destination_row_is_visible(&mut visual, selected_bounds),
+                "choosing an already visible folder should leave both rows on screen"
+            );
         }
         window
             .update(cx, |view, _, cx| {
-                assert_eq!(destination_scroll_y(view), offset);
                 view.destination_scroll
                     .0
                     .borrow()
@@ -5597,17 +5612,16 @@ fn destination_dialogs_reveal_a_preselected_folder(cx: &mut TestAppContext) {
         {
             let mut visual = VisualTestContext::from_window(window.into(), cx);
             assert!(
-                visual.debug_bounds(selected_bounds).is_none(),
-                "scrolling away from the selection should stand"
+                destination_row_is_visible(&mut visual, "save-destination-root"),
+                "a manual scroll toward the top should stand"
             );
-            assert!(destination_row_is_visible(
-                &mut visual,
-                "save-destination-root"
-            ));
+            assert!(
+                visual.debug_bounds(selected_bounds).is_none(),
+                "manual scrolling should leave the deep folder outside the viewport"
+            );
         }
         window
             .update(cx, |view, _, cx| {
-                assert_eq!(destination_scroll_y(view), px(0.0));
                 view.select_destination_parent(selector.clone(), cx);
             })
             .expect("test window should remain open");
@@ -5620,4 +5634,160 @@ fn destination_dialogs_reveal_a_preselected_folder(cx: &mut TestAppContext) {
     }
 
     fs::remove_file(path).expect("deep destination fixture should be removed");
+}
+
+#[gpui_kit::test]
+fn destination_keyboard_reaches_an_offscreen_folder(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    const FOLDERS: usize = 12;
+    let path = wide_destination_collection(FOLDERS);
+    let target = format!("items/{}", FOLDERS - 1);
+    let child = format!("{target}/items/0");
+    let window = cx.open_window(size(px(900.0), px(1200.0)), ProbeApp::new);
+    let workspace = probe_opencollection::load_workspace(&path).expect("wide collection loads");
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(path.clone(), workspace);
+            view.selected_tree_item = None;
+            view.open_create_request_dialog(probe_core::RequestProtocol::Http, window, cx);
+            assert_eq!(view.structure_dialog.as_ref().expect("dialog").parent, "");
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+
+    let target_bounds: &'static str = format!("save-destination-{target}").leak();
+    let child_bounds: &'static str = format!("save-destination-{child}").leak();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(destination_row_is_visible(
+        &mut visual,
+        "save-destination-root"
+    ));
+    assert!(
+        visual.debug_bounds(target_bounds).is_none(),
+        "the last folder starts outside the eight-row viewport"
+    );
+    visual.simulate_keystrokes("tab");
+    visual.run_until_parked();
+    window
+        .update(cx, |_, window, _| {
+            assert!(
+                window
+                    .context_stack()
+                    .iter()
+                    .any(|context| context.contains("SaveDestination")),
+                "tab should land in the destination tree"
+            );
+        })
+        .expect("test window should remain open");
+    for _ in 0..FOLDERS {
+        visual.simulate_keystrokes("down");
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.structure_dialog.as_ref().expect("dialog").parent,
+                target
+            );
+        })
+        .expect("test window should remain open");
+    assert!(destination_row_is_visible(&mut visual, target_bounds));
+    assert!(visual.debug_bounds("save-destination-root").is_none());
+
+    visual.simulate_keystrokes("right");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view.structure_dialog.as_ref().expect("dialog");
+            assert!(dialog.expanded_folders.contains(&target));
+            assert_eq!(dialog.parent, target);
+        })
+        .expect("test window should remain open");
+    visual.simulate_keystrokes("down");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.structure_dialog.as_ref().expect("dialog").parent,
+                child
+            );
+        })
+        .expect("test window should remain open");
+    assert!(destination_row_is_visible(&mut visual, child_bounds));
+
+    visual.simulate_keystrokes("left");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.structure_dialog.as_ref().expect("dialog").parent,
+                target
+            );
+        })
+        .expect("test window should remain open");
+    visual.simulate_keystrokes("left");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view.structure_dialog.as_ref().expect("dialog");
+            assert_eq!(dialog.parent, target);
+            assert!(!dialog.expanded_folders.contains(&target));
+        })
+        .expect("test window should remain open");
+    assert!(visual.debug_bounds(child_bounds).is_none());
+    fs::remove_file(path).expect("wide destination fixture should be removed");
+}
+
+#[gpui_kit::test]
+fn destination_dialog_reopen_scrolls_to_the_new_selection(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    const FOLDERS: usize = 12;
+    let path = wide_destination_collection(FOLDERS);
+    let target = format!("items/{}", FOLDERS - 1);
+    let window = cx.open_window(size(px(900.0), px(1200.0)), ProbeApp::new);
+    let workspace = probe_opencollection::load_workspace(&path).expect("wide collection loads");
+    let folder = workspace
+        .folder_key(&target)
+        .expect("last folder should exist");
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(path.clone(), workspace);
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+            view.open_create_request_dialog(probe_core::RequestProtocol::Http, window, cx);
+        })
+        .expect("test window should be open");
+    cx.run_until_parked();
+    let target_bounds: &'static str = format!("save-destination-{target}").leak();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(destination_row_is_visible(&mut visual, target_bounds));
+        assert!(visual.debug_bounds("save-destination-root").is_none());
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_dialog.is_none());
+            view.selected_tree_item = None;
+            view.open_create_folder_dialog(window, cx);
+            assert_eq!(view.structure_dialog.as_ref().expect("dialog").parent, "");
+        })
+        .expect("test window should remain open");
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            destination_row_is_visible(&mut visual, "save-destination-root"),
+            "reopening at Collection root should start at the top of the tree"
+        );
+        assert!(
+            visual.debug_bounds(target_bounds).is_none(),
+            "the previous dialog's scroll offset should not remain"
+        );
+    }
+    fs::remove_file(path).expect("wide destination fixture should be removed");
 }

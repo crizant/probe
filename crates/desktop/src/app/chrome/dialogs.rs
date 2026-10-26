@@ -481,7 +481,10 @@ impl ProbeApp {
                 .is_some_and(|curl| curl.destination_required))
             .then_some(parent.as_str()),
             locked,
-            &self.destination_scroll,
+            super::super::tree::DestinationTreeControls {
+                scroll: &self.destination_scroll,
+                focus: &self.destination_tree_focus,
+            },
             move |selector, cx| {
                 let _ = select_view.update(cx, |view, cx| {
                     view.select_destination_parent(selector, cx);
