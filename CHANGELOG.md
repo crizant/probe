@@ -41,10 +41,10 @@ Release dates use Australia/Brisbane time (UTC+10).
   from cURL. The typed form stays open, the destination is cleared, and the
   item is not created until a destination is selected again. Delete and Rename
   confirmations close instead of changing whichever item now occupies the old
-  position. Two requests that share a name stay with the request that was
-  chosen. A folder delete or rename is cancelled when the file changed and that
-  folder has a same-named sibling, and that folder's destination or unsaved
-  documentation is cleared as well. Close Other Tabs and other unsaved-folder confirmations are
+  position.   Two requests that share a name stay with the request that was
+  chosen. A folder delete or rename is cancelled when the collection file
+  changed. If that folder has a same-named sibling, its destination and unsaved
+  documentation are cleared as well. Close Other Tabs and other unsaved-folder confirmations are
   cancelled without discarding unsaved work. Unsaved folder documentation is
   kept and cannot be saved into another folder. Collapsed folders and the
   sidebar selection reset when the folder structure changes. An unchanged
