@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
 
-use probe_core::{
-    FolderKey, ItemKind, Request, RequestKey, RequestProtocol, Workspace, WorkspaceItemRef,
-};
+use probe_core::{FolderKey, ItemKind, RequestKey, RequestProtocol, Workspace, WorkspaceItemRef};
 use probe_opencollection::{ItemLocator, LoadedWorkspace, StructureOperation};
 
 pub(crate) const ROOT_PARENT: &str = "";
@@ -22,19 +20,8 @@ pub(crate) enum StructureDialogMode {
     CreateRequest(RequestProtocol),
     ImportCurl,
     CreateFolder,
-    SaveDetachedRequest {
-        key: RequestKey,
-    },
-    Rename {
-        kind: ItemKind,
-        selector: String,
-        /// Name of the item when the dialog opened. The editable field may differ.
-        opened_name: String,
-        /// Set for requests so a reload can follow the request by content.
-        request: Option<RequestKey>,
-        /// Saved content when the dialog opened.
-        baseline: Option<Box<Request>>,
-    },
+    SaveDetachedRequest { key: RequestKey },
+    Rename { kind: ItemKind, selector: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -98,21 +85,9 @@ impl StructureDialog {
         }
     }
 
-    pub(crate) fn rename(
-        kind: ItemKind,
-        selector: String,
-        name: String,
-        request: Option<RequestKey>,
-        baseline: Option<Request>,
-    ) -> Self {
+    pub(crate) fn rename(kind: ItemKind, selector: String, name: String) -> Self {
         Self {
-            mode: StructureDialogMode::Rename {
-                kind,
-                selector,
-                opened_name: name.clone(),
-                request,
-                baseline: baseline.map(Box::new),
-            },
+            mode: StructureDialogMode::Rename { kind, selector },
             name,
             parent: String::new(),
             expanded_folders: BTreeSet::new(),
@@ -238,7 +213,7 @@ impl StructureDialog {
                     name: name.to_owned(),
                 })
             }
-            StructureDialogMode::Rename { kind, selector, .. } => {
+            StructureDialogMode::Rename { kind, selector } => {
                 if name.is_empty() {
                     return Err("Name is required.".to_owned());
                 }

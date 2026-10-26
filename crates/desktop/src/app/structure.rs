@@ -142,25 +142,6 @@ impl ProbeApp {
         cx.notify();
     }
 
-    fn selected_request(&self, kind: ItemKind) -> (Option<RequestKey>, Option<Request>) {
-        let Some(key) = self.selected_request_key(kind) else {
-            return (None, None);
-        };
-        let baseline = self.persistence.saved_request(key).cloned().or_else(|| {
-            self.loaded_workspace
-                .as_ref()
-                .and_then(|loaded| loaded.workspace().request(key).cloned())
-        });
-        (Some(key), baseline)
-    }
-
-    fn selected_request_key(&self, kind: ItemKind) -> Option<RequestKey> {
-        match (kind, self.selected_tree_item) {
-            (ItemKind::Request, Some(WorkspaceItemRef::Request(key))) => Some(key),
-            _ => None,
-        }
-    }
-
     pub(super) fn selected_item_details(&self) -> Option<(ItemKind, String, String)> {
         let loaded = self.loaded_workspace.as_ref()?;
         let item = self.selected_tree_item?;
@@ -179,10 +160,7 @@ impl ProbeApp {
         let Some((kind, selector, name)) = self.selected_item_details() else {
             return;
         };
-        let (request, baseline) = self.selected_request(kind);
-        self.structure_dialog = Some(StructureDialog::rename(
-            kind, selector, name, request, baseline,
-        ));
+        self.structure_dialog = Some(StructureDialog::rename(kind, selector, name));
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -279,15 +257,12 @@ impl ProbeApp {
                 "This will discard unsaved changes in {dirty_count} request(s) and cannot be undone."
             )
         };
-        let (request, baseline) = self.selected_request(kind);
         self.show_application_dialog(
             ApplicationDialog::Delete {
                 kind,
                 selector,
                 name,
                 detail,
-                request,
-                baseline: baseline.map(Box::new),
             },
             window,
             cx,

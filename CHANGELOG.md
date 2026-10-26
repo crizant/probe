@@ -41,22 +41,21 @@ Release dates use Australia/Brisbane time (UTC+10).
   from cURL. The typed form stays open, the destination is cleared, and the
   item is not created until a destination is selected again. Delete and Rename
   confirmations close instead of changing whichever item now occupies the old
-  position. Two requests that share a name stay with the request that was
-  chosen. A folder delete or rename is cancelled when the collection file
-  changed. In a bundled collection, any external change clears every folder
-  destination, unsaved folder documentation, and the sidebar folder selection.
-  Directory collections identify folders by path; any external change cancels
-  a pending folder Delete or Rename there. A bundled collection cancels folder
-  Unsaved confirmations whenever the file changes, whether or not a
-  documentation draft was detached. Any external change also cancels Close,
-  Close Other Tabs, Close Workspace, Close Window, and Quit confirmations
-  without discarding unsaved work. An unchanged reload keeps those
-  confirmations and updates the request or folder they refer to.
-  Unsaved folder documentation is kept and cannot be saved into another folder,
-  and a finished save does not drop edits made after that save started.
-  Collapsed folders reset when the folder structure changes. An unchanged
-  reload leaves those confirmations,
-  drafts, and the chosen destination in place.
+  position. Delete and Rename are cancelled when the collection file
+  changed, so a request is not removed or renamed because its old content
+  moved. In a bundled collection, any external change clears every folder
+  destination, unsaved folder documentation, and the sidebar folder selection,
+  and cancels folder Unsaved confirmations whether or not a documentation
+  draft was detached. Directory collections identify folders by path; any
+  external change cancels a pending folder Delete or Rename there. Any
+  external change also cancels Close, Close Other Tabs, Close Workspace,
+  Close Window, Quit, Open, Create, and Import confirmations without
+  discarding unsaved work. An unchanged reload keeps those confirmations,
+  updates the request or folder they refer to, and leaves drafts and the
+  chosen destination in place. Unsaved folder documentation is kept and
+  cannot be saved into another folder, and a finished save does not drop
+  edits made after that save started. Collapsed folders reset when the
+  folder structure changes.
 
 ### Removed
 

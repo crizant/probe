@@ -320,8 +320,6 @@ fn destructive_only_dialogs_do_not_take_enter_as_primary_action() {
         selector: "products/list".to_owned(),
         name: "List products".to_owned(),
         detail: "This cannot be undone.".to_owned(),
-        request: None,
-        baseline: None,
     };
 
     assert_eq!(dialog.primary_action(), None);

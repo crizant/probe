@@ -607,6 +607,15 @@ impl ProbeApp {
                     .disabled(busy),
                 )),
         )
+        .when(destination_required, |content| {
+            content.child(
+                div()
+                    .mt(px(theme.metrics.spacing_3))
+                    .text_size(px(theme.typography.caption_size))
+                    .text_color(theme.colors.status.error)
+                    .child(DESTINATION_RESELECTION_MESSAGE),
+            )
+        })
         .child(
             components::dialog_actions(theme)
                 .child(components::dialog_action_button(

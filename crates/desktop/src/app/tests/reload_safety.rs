@@ -11,8 +11,6 @@ const REQUESTS: &str = "opencollection: 1.0.0\ninfo: {name: Requests}\nbundled: 
 const TWINS: &str = "opencollection: 1.0.0\ninfo: {name: Twins}\nbundled: true\nitems:\n- {info: {name: Same, type: folder}, items: []}\n- {info: {name: Same, type: folder}, items: [{info: {name: Marker, type: http}, http: {method: GET, url: https://example.test/marker}}]}\n";
 const DUPLICATES: &str = "opencollection: 1.0.0\ninfo: {name: Duplicates}\nbundled: true\nitems:\n- {info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/one}}\n- {info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/two}}\n";
 const TWIN_FOLDERS: &str = "opencollection: 1.0.0\ninfo: {name: Twin folders}\nbundled: true\nitems:\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: http}, http: {method: GET, url: https://example.test/one}}]}\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: http}, http: {method: GET, url: https://example.test/two}}]}\n";
-const NESTED_DUPS: &str = "opencollection: 1.0.0\ninfo: {name: Nested}\nbundled: true\nitems:\n- {info: {name: Group, type: folder}, items: [{info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/one}}, {info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/two}}]}\n";
-const NESTED_SWAPPED: &str = "opencollection: 1.0.0\ninfo: {name: Nested}\nbundled: true\nitems:\n- {info: {name: Group, type: folder}, items: [{info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/two}}, {info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/oneX}}]}\n";
 const NESTED_PARENTS: &str = "opencollection: 1.0.0\ninfo: {name: Parents}\nbundled: true\nitems:\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: folder}, items: [{info: {name: One, type: http}, http: {method: GET, url: https://example.test/one}}]}]}\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: folder}, items: [{info: {name: One, type: http}, http: {method: GET, url: https://example.test/two}}]}]}\n";
 const SAME_BRANCHES: &str = "opencollection: 1.0.0\ninfo: {name: Branches}\nbundled: true\nitems:\n- {info: {name: Same, type: folder}, items: [{info: {name: Note, type: http}, http: {method: GET, url: https://example.test/one}}]}\n- {info: {name: Same, type: folder}, items: [{info: {name: Note, type: http}, http: {method: GET, url: https://example.test/two}}]}\n";
 
@@ -263,116 +261,31 @@ enum Pending {
     Rename(Option<&'static str>),
 }
 
-enum Change {
-    MoveTo(usize),
-    Replace(&'static str),
-}
-
 struct RequestCase {
     label: &'static str,
     source: &'static str,
     selector: &'static str,
     pending: Pending,
-    change: Change,
-    cancelled: bool,
-    urls: Option<&'static [&'static str]>,
-    names: Option<&'static [&'static str]>,
-    pairs: &'static [(&'static str, &'static str)],
+    index: usize,
+    names: &'static [&'static str],
 }
 
-fn req(
-    label: &'static str,
-    source: &'static str,
-    selector: &'static str,
-    pending: Pending,
-    change: Change,
-) -> RequestCase {
-    RequestCase {
-        label,
-        source,
-        selector,
-        pending,
-        change,
-        cancelled: false,
-        urls: None,
-        names: None,
-        pairs: &[],
-    }
-}
-
-impl RequestCase {
-    fn cancelled(mut self, names: &'static [&'static str]) -> Self {
-        self.cancelled = true;
-        self.names = Some(names);
-        self
-    }
-
-    fn urls(mut self, urls: &'static [&'static str]) -> Self {
-        self.urls = Some(urls);
-        self
-    }
-
-    fn pairs(mut self, pairs: &'static [(&'static str, &'static str)]) -> Self {
-        self.pairs = pairs;
-        self
-    }
-}
-
-/// Open a request Delete or Rename, apply one external change, confirm when the
-/// dialog should survive, and check the collection on disk.
+/// Open a request Delete or Rename, reorder it externally, and check that the
+/// confirmation was cancelled without writing.
 fn confirm_request(cx: &mut TestAppContext, case: &RequestCase) {
     let workspace = Workspace::open(cx, case.label, case.source);
     workspace.select(cx, ItemKind::Request, case.selector);
-    let rename = match case.pending {
-        Pending::Delete => {
-            workspace.delete(cx);
-            false
-        }
-        Pending::Rename(name) => {
-            workspace.rename(cx, name);
-            true
-        }
-    };
-    let disk = match case.change {
-        Change::MoveTo(index) => {
-            workspace.reconcile_move(cx, ItemKind::Request, case.selector, index)
-        }
-        Change::Replace(source) => workspace.reconcile_text(cx, source),
-    };
-    let open = workspace.update(cx, |view, _, _| match rename {
-        true => matches!(
-            view.structure_dialog.as_ref().map(|dialog| &dialog.mode),
-            Some(StructureDialogMode::Rename { .. })
-        ),
-        false => matches!(
-            view.application_dialog,
-            Some(ApplicationDialog::Delete { .. })
-        ),
+    match case.pending {
+        Pending::Delete => workspace.delete(cx),
+        Pending::Rename(name) => workspace.rename(cx, name),
+    }
+    let disk = workspace.reconcile_move(cx, ItemKind::Request, case.selector, case.index);
+    workspace.update(cx, |view, _, _| {
+        assert!(view.application_dialog.is_none(), "{}", case.label);
+        assert!(view.structure_dialog.is_none(), "{}", case.label);
     });
-    assert_eq!(open, !case.cancelled, "{}", case.label);
-    if case.cancelled {
-        assert_eq!(workspace.bytes(), disk, "{}", case.label);
-    } else if rename {
-        workspace.submit(cx);
-        cx.run_until_parked();
-    } else {
-        workspace.confirm_delete(cx);
-        cx.run_until_parked();
-    }
-    if let Some(urls) = case.urls {
-        assert_eq!(workspace.urls(), urls, "{}", case.label);
-    }
-    if let Some(names) = case.names {
-        assert_eq!(workspace.names(false), names, "{}", case.label);
-    }
-    let rows = workspace.name_url();
-    for pair in case.pairs {
-        assert!(
-            rows.contains(&(pair.0.into(), pair.1.into())),
-            "{} missing {pair:?} in {rows:?}",
-            case.label
-        );
-    }
+    assert_eq!(workspace.bytes(), disk, "{}", case.label);
+    assert_eq!(workspace.names(false), case.names, "{}", case.label);
 }
 
 fn move_folder(workspace: &Workspace, cx: &mut TestAppContext) -> Vec<u8> {
@@ -622,24 +535,23 @@ fn documentation_save_matches_its_own_detached_draft(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn request_reorder_does_not_delete_or_rename_the_other_request(cx: &mut TestAppContext) {
-    let names = &["Beta", "Alpha"][..];
     for case in [
-        req(
-            "reorder-delete",
-            REQUESTS,
-            "items/0",
-            Pending::Delete,
-            Change::MoveTo(1),
-        )
-        .cancelled(names),
-        req(
-            "reorder-rename",
-            REQUESTS,
-            "items/0",
-            Pending::Rename(None),
-            Change::MoveTo(1),
-        )
-        .cancelled(names),
+        RequestCase {
+            label: "reorder-delete",
+            source: REQUESTS,
+            selector: "items/0",
+            pending: Pending::Delete,
+            index: 1,
+            names: &["Beta", "Alpha"],
+        },
+        RequestCase {
+            label: "reorder-rename",
+            source: REQUESTS,
+            selector: "items/0",
+            pending: Pending::Rename(None),
+            index: 1,
+            names: &["Beta", "Alpha"],
+        },
     ] {
         confirm_request(cx, &case);
     }
@@ -677,35 +589,6 @@ fn same_name_folder_swap_does_not_touch_the_other_folder(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
-fn swapped_same_name_requests_follow_the_chosen_request(cx: &mut TestAppContext) {
-    confirm_request(
-        cx,
-        &req(
-            "dup-delete",
-            DUPLICATES,
-            "items/0",
-            Pending::Delete,
-            Change::MoveTo(1),
-        )
-        .urls(&["https://example.test/two"]),
-    );
-    confirm_request(
-        cx,
-        &req(
-            "dup-rename",
-            DUPLICATES,
-            "items/0",
-            Pending::Rename(Some("Renamed")),
-            Change::MoveTo(1),
-        )
-        .pairs(&[
-            ("Dup", "https://example.test/two"),
-            ("Renamed", "https://example.test/one"),
-        ]),
-    );
-}
-
-#[gpui_kit::test]
 fn swapped_same_name_folders_do_not_delete_the_other_folder(cx: &mut TestAppContext) {
     let workspace = Workspace::open(cx, "twin-folders", TWIN_FOLDERS);
     workspace.select(cx, ItemKind::Folder, "items/0");
@@ -736,18 +619,35 @@ fn swapped_same_name_folders_do_not_delete_the_other_folder(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
-fn edited_and_swapped_duplicate_delete_keeps_the_other_request(cx: &mut TestAppContext) {
-    confirm_request(
-        cx,
-        &req(
-            "n1b-delete",
-            NESTED_DUPS,
-            "items/0/items/1",
-            Pending::Delete,
-            Change::Replace(NESTED_SWAPPED),
-        )
-        .urls(&["https://example.test/oneX"]),
+fn in_place_url_change_cancels_request_delete_and_rename(cx: &mut TestAppContext) {
+    let swapped = DUPLICATES
+        .replace("https://example.test/one", "https://example.test/hold")
+        .replace("https://example.test/two", "https://example.test/one")
+        .replace("https://example.test/hold", "https://example.test/c");
+    let workspace = Workspace::open(cx, "url-identity", DUPLICATES);
+    workspace.select(cx, ItemKind::Request, "items/0");
+    workspace.delete(cx);
+    let disk = workspace.reconcile_text(cx, &swapped);
+    workspace.confirm_delete(cx);
+    cx.run_until_parked();
+    assert!(workspace.update(cx, |view, _, _| view.application_dialog.is_none()));
+    assert!(workspace.toast(cx, ToastIntent::Warning, "Delete “Dup”"));
+    assert_eq!(
+        workspace.urls(),
+        ["https://example.test/c", "https://example.test/one"]
     );
+    assert_eq!(workspace.bytes(), disk);
+
+    workspace.reset(cx, DUPLICATES);
+    workspace.select(cx, ItemKind::Request, "items/0");
+    workspace.rename(cx, Some("Renamed"));
+    let disk = workspace.reconcile_text(cx, &swapped);
+    workspace.submit(cx);
+    cx.run_until_parked();
+    assert!(workspace.update(cx, |view, _, _| view.structure_dialog.is_none()));
+    assert!(workspace.toast(cx, ToastIntent::Warning, "Rename “Renamed”"));
+    assert_eq!(workspace.names(false), ["Dup", "Dup"]);
+    assert_eq!(workspace.bytes(), disk);
 }
 
 #[gpui_kit::test]
@@ -1060,22 +960,4 @@ fn completing_a_detached_save_keeps_newer_edits(cx: &mut TestAppContext) {
             .expect("newer edits stay");
         assert!(draft.save_token.is_none());
     });
-}
-
-#[gpui_kit::test]
-fn edited_and_swapped_duplicate_rename_leaves_the_other_request(cx: &mut TestAppContext) {
-    confirm_request(
-        cx,
-        &req(
-            "n1b-rename",
-            NESTED_DUPS,
-            "items/0/items/1",
-            Pending::Rename(Some("Renamed")),
-            Change::Replace(NESTED_SWAPPED),
-        )
-        .pairs(&[
-            ("Dup", "https://example.test/oneX"),
-            ("Renamed", "https://example.test/two"),
-        ]),
-    );
 }

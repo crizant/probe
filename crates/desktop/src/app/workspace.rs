@@ -1045,7 +1045,7 @@ impl ProbeApp {
     /// Unsaved folder documentation stays in memory under a target that cannot
     /// be saved. Each returned string is one warning.
     fn detach_reloaded_folder_state(&mut self) -> Vec<String> {
-        let mut warnings = self.cancel_reloaded_confirmations(true);
+        let mut warnings = self.cancel_reloaded_confirmations();
         if self.detach_all_folder_drafts() {
             warnings.push(
                 "Unsaved folder documentation was kept and was not saved. Discard it to continue."
@@ -1059,36 +1059,15 @@ impl ProbeApp {
         warnings
     }
 
-    /// The file changed without a tree change. Requests follow captured content.
-    /// Bundled folder selectors are positional, so every folder destination,
-    /// documentation draft, and sidebar folder selection is dropped.
-    fn apply_external_source_change(
-        &mut self,
-        key_remaps: &BTreeMap<RequestKey, RequestKey>,
-    ) -> Vec<String> {
-        // Request deletes stay so they can follow captured content. Every
-        // Unsaved confirmation is cancelled, including Close Workspace.
-        let mut warnings = self.cancel_reloaded_confirmations(false);
-        if let Some(message) = self.retarget_rename_request(key_remaps) {
+    /// The file changed without a tree change. Pending Delete and Rename
+    /// confirmations are cancelled. Bundled folder selectors are positional, so
+    /// every folder destination, documentation draft, and sidebar folder
+    /// selection is dropped.
+    fn apply_external_source_change(&mut self) -> Vec<String> {
+        let mut warnings = self.cancel_reloaded_confirmations();
+        if let Some(message) = self.cancel_open_rename() {
             warnings.push(message);
         }
-        let visible = self.application_dialog.take();
-        let mut kept_visible = None;
-        if let Some(dialog) = visible {
-            match self.retarget_delete_dialog(dialog, key_remaps) {
-                Ok(dialog) => kept_visible = Some(dialog),
-                Err(message) => warnings.push(message),
-            }
-        }
-        let queued = std::mem::take(&mut self.pending_application_dialogs);
-        for dialog in queued {
-            match self.retarget_delete_dialog(dialog, key_remaps) {
-                Ok(dialog) => self.pending_application_dialogs.push_back(dialog),
-                Err(message) => warnings.push(message),
-            }
-        }
-        self.application_dialog =
-            kept_visible.or_else(|| self.pending_application_dialogs.pop_front());
         if self
             .loaded_workspace
             .as_ref()
@@ -1126,30 +1105,24 @@ impl ProbeApp {
         }
     }
 
-    /// Drops confirmations whose targets were issued by the previous workspace.
-    /// `include_deletes` is set for a structural reload. A source-only change
-    /// leaves request deletes to `retarget_delete_dialog`.
-    fn cancel_reloaded_confirmations(&mut self, include_deletes: bool) -> Vec<String> {
+    /// Drops confirmations whose captured targets belong to the previous load.
+    /// An unchanged reload does not call this; that reload remaps request and
+    /// folder identities instead.
+    fn cancel_reloaded_confirmations(&mut self) -> Vec<String> {
         let mut warnings = Vec::new();
-        if self
-            .pending_close
-            .as_ref()
-            .is_some_and(reload_cancels_pending)
-            && let Some(pending) = self.pending_close.take()
-        {
+        if let Some(pending) = self.pending_close.take() {
             warnings.push(pending_cancel_message(&pending));
         }
-        let cancelled = |dialog: &ApplicationDialog| {
-            confirmation_cancelled_by_reload(dialog)
-                && (include_deletes || !matches!(dialog, ApplicationDialog::Delete { .. }))
-        };
-        let visible_cancelled = self.application_dialog.as_ref().is_some_and(cancelled);
+        let visible_cancelled = self
+            .application_dialog
+            .as_ref()
+            .is_some_and(confirmation_cancelled_by_reload);
         if visible_cancelled && let Some(dialog) = self.application_dialog.take() {
             warnings.push(confirmation_message(&dialog));
         }
         let queued = std::mem::take(&mut self.pending_application_dialogs);
         for dialog in queued {
-            if cancelled(&dialog) {
+            if confirmation_cancelled_by_reload(&dialog) {
                 warnings.push(confirmation_message(&dialog));
             } else {
                 self.pending_application_dialogs.push_back(dialog);
@@ -1159,103 +1132,6 @@ impl ProbeApp {
             self.application_dialog = self.pending_application_dialogs.pop_front();
         }
         warnings
-    }
-
-    /// `Ok` keeps the dialog. `Err` is a warning and the dialog is dropped.
-    /// Non-delete dialogs pass through.
-    fn retarget_delete_dialog(
-        &self,
-        mut dialog: ApplicationDialog,
-        key_remaps: &BTreeMap<RequestKey, RequestKey>,
-    ) -> Result<ApplicationDialog, String> {
-        let ApplicationDialog::Delete {
-            kind,
-            selector,
-            name,
-            request,
-            baseline,
-            ..
-        } = &mut dialog
-        else {
-            return Ok(dialog);
-        };
-        if *kind == ItemKind::Request {
-            let cancelled = format!("Delete “{name}” was cancelled.");
-            let key = (*request).ok_or_else(|| cancelled.clone())?;
-            let baseline = baseline.as_deref().ok_or(cancelled.clone())?;
-            let (new_key, new_selector) = self
-                .resolve_request(key_remaps, key, baseline)
-                .map_err(|()| cancelled)?;
-            *selector = new_selector;
-            *request = Some(new_key);
-            return Ok(dialog);
-        }
-        Err(format!("Delete “{name}” was cancelled."))
-    }
-
-    /// A folder rename is cancelled here when the tree did not change.
-    fn retarget_rename_request(
-        &mut self,
-        key_remaps: &BTreeMap<RequestKey, RequestKey>,
-    ) -> Option<String> {
-        let (kind, opened_name, request, baseline) =
-            match self.structure_dialog.as_ref().map(|dialog| &dialog.mode) {
-                Some(StructureDialogMode::Rename {
-                    kind,
-                    opened_name,
-                    request,
-                    baseline,
-                    ..
-                }) => (*kind, opened_name.clone(), *request, baseline.clone()),
-                _ => return None,
-            };
-        if kind != ItemKind::Request {
-            self.structure_dialog = None;
-            return Some(format!("Rename “{opened_name}” was cancelled."));
-        }
-        let resolved = request
-            .zip(baseline.as_ref())
-            .ok_or(())
-            .and_then(|(key, baseline)| self.resolve_request(key_remaps, key, baseline));
-        let Ok((new_key, new_selector)) = resolved else {
-            self.structure_dialog = None;
-            return Some(format!("Rename “{opened_name}” was cancelled."));
-        };
-        if let Some(dialog) = self.structure_dialog.as_mut()
-            && let StructureDialogMode::Rename {
-                selector, request, ..
-            } = &mut dialog.mode
-        {
-            *selector = new_selector;
-            *request = Some(new_key);
-        }
-        None
-    }
-
-    fn resolve_request(
-        &self,
-        key_remaps: &BTreeMap<RequestKey, RequestKey>,
-        key: RequestKey,
-        baseline: &Request,
-    ) -> Result<(RequestKey, String), ()> {
-        let loaded = self.loaded_workspace.as_ref().ok_or(())?;
-        if let Some(new_key) = key_remaps.get(&key).copied()
-            && loaded
-                .workspace()
-                .request(new_key)
-                .is_some_and(|request| request == baseline)
-        {
-            let selector = loaded.request_selector(new_key).ok_or(())?.to_owned();
-            return Ok((new_key, selector));
-        }
-        let mut found = loaded.requests().iter().filter_map(|located| {
-            let request = loaded.workspace().request(located.key())?;
-            (request == baseline).then(|| (located.key(), located.selector().to_owned()))
-        });
-        match (found.next(), found.next()) {
-            (Some(only), None) => Ok(only),
-            _ => Err(()),
-        }
     }
 
     fn detach_folder_drafts(&mut self, selectors: &[String]) -> bool {
@@ -1419,7 +1295,7 @@ impl ProbeApp {
             }
             warnings
         } else if source_changed {
-            self.apply_external_source_change(&key_remaps)
+            self.apply_external_source_change()
         } else {
             Vec::new()
         };
@@ -1514,18 +1390,6 @@ fn confirmation_message(dialog: &ApplicationDialog) -> String {
         ApplicationDialog::Unsaved { pending, .. } => pending_cancel_message(pending),
         _ => "The pending action was cancelled.".to_owned(),
     }
-}
-
-fn reload_cancels_pending(pending: &PendingClose) -> bool {
-    matches!(
-        pending,
-        PendingClose::Tab(_)
-            | PendingClose::OtherTabs { .. }
-            | PendingClose::Overview(_)
-            | PendingClose::Workspace
-            | PendingClose::Window
-            | PendingClose::Quit
-    )
 }
 
 fn confirmation_cancelled_by_reload(dialog: &ApplicationDialog) -> bool {
