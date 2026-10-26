@@ -358,11 +358,12 @@ pub(crate) struct FolderAnchor {
     children: Vec<ChildIdentity>,
     selector: String,
     /// Whether any other folder shared [`Self::names`] when this anchor was captured.
-    ///
-    /// A later reload may leave only one folder with that name path. That survivor
-    /// is the captured folder only when the path was already unique; otherwise the
-    /// child structure has to match.
     name_path_unique: bool,
+    /// Whether any other folder shared both the name path and the child structure.
+    ///
+    /// Identical folders cannot be separated after one disappears, so a shared
+    /// identity never resolves.
+    identity_unique: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -525,11 +526,18 @@ impl FolderIndex {
             .filter(|other| other.names == folder.names)
             .count()
             == 1;
+        let identity_unique = self
+            .folders
+            .iter()
+            .filter(|other| other.names == folder.names && other.children == folder.children)
+            .count()
+            == 1;
         Some(FolderAnchor {
             names: folder.names.clone(),
             children: folder.children.clone(),
             selector: folder.selector.clone(),
             name_path_unique,
+            identity_unique,
         })
     }
 
@@ -539,8 +547,14 @@ impl FolderIndex {
             .iter()
             .filter(|folder| folder.names == anchor.names)
             .collect();
+        // A unique name path is followed even when its children change. Deleting
+        // that folder and renaming or creating a different folder onto the same
+        // name path in the same reload can therefore resolve to the replacement.
         if anchor.name_path_unique && name_matches.len() == 1 {
             return ResolvedFolder::Found(name_matches[0].selector.clone());
+        }
+        if !anchor.identity_unique {
+            return ResolvedFolder::Unresolved;
         }
         let distinguished: Vec<_> = name_matches
             .into_iter()
@@ -549,9 +563,6 @@ impl FolderIndex {
         if distinguished.len() == 1 {
             return ResolvedFolder::Found(distinguished[0].selector.clone());
         }
-        // The name path was shared, or it no longer matches a single folder whose
-        // children are the captured ones. A lone survivor with different children
-        // is a different folder.
         ResolvedFolder::Unresolved
     }
 }
@@ -1345,9 +1356,34 @@ mod tests {
             "  - info: {name: Before, type: folder}\n    items: []\n  - info: {name: After, type: folder}\n    items:\n      - info: {name: Target, type: folder}\n        items:\n          - info: {name: Marker, type: http}\n            http: {method: GET, url: https://example.test/marker}\n",
         );
         assert_eq!(resolved(&moved, &target), ResolvedFolder::Unresolved);
-        assert_ne!(
-            resolved(&moved, &target),
-            ResolvedFolder::Found("items/0/items/0".into())
+    }
+
+    #[test]
+    fn deleting_one_of_two_identical_folders_is_unresolved() {
+        let empty = bundled(
+            "  - info: {name: Twin, type: folder}\n    items: []\n  - info: {name: Twin, type: folder}\n    items: []\n",
+        );
+        let (_, empty_twin) = anchor_parent(&empty, "items/1");
+        assert_eq!(
+            resolved(
+                &bundled("  - info: {name: Twin, type: folder}\n    items: []\n"),
+                &empty_twin
+            ),
+            ResolvedFolder::Unresolved
+        );
+
+        let filled = bundled(
+            "  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Same, type: http}\n        http: {method: GET, url: https://example.test/same}\n  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Same, type: http}\n        http: {method: GET, url: https://example.test/same}\n",
+        );
+        let (_, filled_twin) = anchor_parent(&filled, "items/1");
+        assert_eq!(
+            resolved(
+                &bundled(
+                    "  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Same, type: http}\n        http: {method: GET, url: https://example.test/same}\n"
+                ),
+                &filled_twin
+            ),
+            ResolvedFolder::Unresolved
         );
     }
 
