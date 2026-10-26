@@ -284,9 +284,11 @@ impl ProbeApp {
                             .is_some_and(|curl| curl.destination_required),
                     dialog.parent.clone(),
                     match &dialog.mode {
-                        StructureDialogMode::Rename { kind, selector } => {
-                            Some((*kind, selector.clone()))
-                        }
+                        StructureDialogMode::Rename {
+                            kind,
+                            selector,
+                            opened_name,
+                        } => Some((*kind, selector.clone(), opened_name.clone())),
                         _ => None,
                     },
                 )
@@ -314,16 +316,15 @@ impl ProbeApp {
                 return false;
             }
         }
-        if let Some((kind, selector)) = rename {
-            let missing = self
-                .loaded_workspace
-                .as_ref()
-                .is_none_or(|loaded| loaded.item_key(kind, &selector).is_none());
-            if missing {
+        if let Some((kind, selector, opened_name)) = rename {
+            let matches = self.loaded_workspace.as_ref().is_some_and(|loaded| {
+                super::workspace::item_matches(loaded, kind, &selector, &opened_name)
+            });
+            if !matches {
                 self.structure_dialog = None;
                 self.show_toast(
                     ToastIntent::Warning,
-                    "The item could not be identified. It was not renamed.",
+                    format!("Rename “{opened_name}” was cancelled."),
                     cx,
                 );
                 return false;

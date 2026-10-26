@@ -20,8 +20,15 @@ pub(crate) enum StructureDialogMode {
     CreateRequest(RequestProtocol),
     ImportCurl,
     CreateFolder,
-    SaveDetachedRequest { key: RequestKey },
-    Rename { kind: ItemKind, selector: String },
+    SaveDetachedRequest {
+        key: RequestKey,
+    },
+    Rename {
+        kind: ItemKind,
+        selector: String,
+        /// Name of the item when the dialog opened. The editable field may differ.
+        opened_name: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -87,7 +94,11 @@ impl StructureDialog {
 
     pub(crate) fn rename(kind: ItemKind, selector: String, name: String) -> Self {
         Self {
-            mode: StructureDialogMode::Rename { kind, selector },
+            mode: StructureDialogMode::Rename {
+                kind,
+                selector,
+                opened_name: name.clone(),
+            },
             name,
             parent: String::new(),
             expanded_folders: BTreeSet::new(),
@@ -213,7 +224,7 @@ impl StructureDialog {
                     name: name.to_owned(),
                 })
             }
-            StructureDialogMode::Rename { kind, selector } => {
+            StructureDialogMode::Rename { kind, selector, .. } => {
                 if name.is_empty() {
                     return Err("Name is required.".to_owned());
                 }

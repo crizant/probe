@@ -148,6 +148,10 @@ impl ProbeApp {
         else {
             return;
         };
+        if matches!(key, OverviewTarget::Detached(_)) {
+            self.overview_drafts.remove(&key);
+            return;
+        }
         if let Some(saved) = self.overview_content(target)
             && let Some(current) = self.overview_drafts.get_mut(&key)
         {
@@ -158,6 +162,9 @@ impl ProbeApp {
                 current.current.docs = saved.docs.clone();
             }
             current.original = saved;
+            current.save_token = None;
+        } else if let Some(current) = self.overview_drafts.get_mut(&key) {
+            current.save_token = None;
         }
     }
 
@@ -326,6 +333,12 @@ impl ProbeApp {
     }
 
     fn fail_documentation_save(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        let token = self.documentation_save_token;
+        for draft in self.overview_drafts.values_mut() {
+            if draft.save_token == Some(token) {
+                draft.save_token = None;
+            }
+        }
         self.pending_close = None;
         self.pending_documentation_saves.clear();
         self.show_toast(ToastIntent::Error, message, cx);

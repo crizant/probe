@@ -49,15 +49,38 @@ fn reset_collection(
 }
 
 fn move_target(path: &Path) -> probe_opencollection::LoadedWorkspace {
+    move_item(path, ItemKind::Folder, "items/1", 0)
+}
+
+fn move_item(
+    path: &Path,
+    kind: ItemKind,
+    selector: &str,
+    index: usize,
+) -> probe_opencollection::LoadedWorkspace {
     let mut external = probe_opencollection::load_workspace(path).unwrap();
     external
         .apply_structure(StructureOperation::Move {
-            target: ItemLocator::new(ItemKind::Folder, "items/1"),
+            target: ItemLocator::new(kind, selector),
             parent: None,
-            index: Some(0),
+            index: Some(index),
         })
         .unwrap();
     external
+}
+
+fn request_names(path: &Path) -> Vec<String> {
+    let loaded = probe_opencollection::load_workspace(path).unwrap();
+    loaded
+        .requests()
+        .iter()
+        .filter_map(|request| {
+            loaded
+                .workspace()
+                .request(request.key())
+                .and_then(|request| request.metadata.name.clone())
+        })
+        .collect()
 }
 
 fn reconcile(
@@ -477,16 +500,203 @@ fn documentation_save_matches_its_own_detached_draft(cx: &mut TestAppContext) {
                 other.original.docs,
                 Some(probe_core::Documentation::Text("other-baseline".into()))
             );
-            let saved = view
-                .overview_drafts
-                .values()
-                .find(|draft| draft.save_token == Some(7))
-                .unwrap();
-            assert_ne!(
-                saved.original.docs,
-                Some(probe_core::Documentation::Text("saved-baseline".into()))
+            assert!(
+                view.overview_drafts
+                    .values()
+                    .all(|draft| draft.save_token != Some(7)),
+                "the saved draft is removed once it is detached"
             );
         })
         .unwrap();
     fs::remove_file(path).unwrap();
+}
+
+const REQUESTS: &str = r#"opencollection: 1.0.0
+info:
+  name: Requests
+bundled: true
+items:
+  - info: {name: Alpha, type: http}
+    http: {method: GET, url: https://example.test/alpha}
+  - info: {name: Beta, type: http}
+    http: {method: GET, url: https://example.test/beta}
+"#;
+
+#[gpui_kit::test]
+fn request_reorder_does_not_delete_or_rename_the_other_request(cx: &mut TestAppContext) {
+    let window = open_app(cx);
+    let path = temp_collection("requests");
+    fs::write(&path, REQUESTS).unwrap();
+    reset_source(window, cx, &path, REQUESTS);
+    window
+        .update(cx, |view, window, cx| {
+            let alpha = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .request_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Request(alpha), cx);
+            view.request_delete_selected(window, cx);
+        })
+        .unwrap();
+    let fresh = move_item(&path, ItemKind::Request, "items/0", 1);
+    let after_move = fs::read(&path).unwrap();
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.application_dialog.is_none());
+            view.show_application_dialog(
+                ApplicationDialog::Delete {
+                    kind: ItemKind::Request,
+                    selector: "items/0".into(),
+                    name: "Alpha".into(),
+                    detail: "This cannot be undone.".into(),
+                },
+                window,
+                cx,
+            );
+            view.handle_application_dialog_action(ApplicationDialogAction::Delete, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(request_names(&path), ["Beta", "Alpha"]);
+    assert_eq!(fs::read(&path).unwrap(), after_move);
+
+    reset_source(window, cx, &path, REQUESTS);
+    window
+        .update(cx, |view, window, cx| {
+            let alpha = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .request_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Request(alpha), cx);
+            view.open_rename_dialog(window, cx);
+        })
+        .unwrap();
+    let fresh = move_item(&path, ItemKind::Request, "items/0", 1);
+    let after_move = fs::read(&path).unwrap();
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_dialog.is_none());
+            view.structure_dialog = Some(crate::structure_editor::StructureDialog::rename(
+                ItemKind::Request,
+                "items/0".into(),
+                "Alpha".into(),
+            ));
+            view.structure_dialog.as_mut().unwrap().name = "Gamma".into();
+            view.submit_structure_dialog(window, cx);
+            assert!(view.structure_task.is_none());
+        })
+        .unwrap();
+    assert_eq!(request_names(&path), ["Beta", "Alpha"]);
+    assert_eq!(fs::read(&path).unwrap(), after_move);
+    fs::remove_file(path).unwrap();
+}
+
+const TWINS: &str = r#"opencollection: 1.0.0
+info:
+  name: Twins
+bundled: true
+items:
+  - info: {name: Same, type: folder}
+    items: []
+  - info: {name: Same, type: folder}
+    items:
+      - info: {name: Marker, type: http}
+        http: {method: GET, url: https://example.test/marker}
+"#;
+
+#[gpui_kit::test]
+fn same_name_folder_swap_does_not_touch_the_other_folder(cx: &mut TestAppContext) {
+    let window = open_app(cx);
+    let path = temp_collection("twins");
+    reset_source(window, cx, &path, TWINS);
+    window
+        .update(cx, |view, window, cx| {
+            let empty = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(empty), cx);
+            view.request_delete_selected(window, cx);
+        })
+        .unwrap();
+    let fresh = move_item(&path, ItemKind::Folder, "items/1", 0);
+    let after_move = fs::read(&path).unwrap();
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.application_dialog.is_none());
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "Delete “Same”"
+            ));
+        })
+        .unwrap();
+    assert_eq!(request_names(&path), ["Marker"]);
+    assert_eq!(folder_names(&path), ["Same", "Same"]);
+    assert_eq!(fs::read(&path).unwrap(), after_move);
+
+    reset_source(window, cx, &path, TWINS);
+    window
+        .update(cx, |view, window, cx| {
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            let empty = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/0")
+                .unwrap();
+            view.select_tree_item(WorkspaceItemRef::Folder(empty), cx);
+            view.open_save_detached_request_dialog(key, window, cx);
+            view.edit_overview(
+                OverviewTarget::Folder("items/0".into()),
+                true,
+                "Empty notes".into(),
+                cx,
+            );
+        })
+        .unwrap();
+    let fresh = move_item(&path, ItemKind::Folder, "items/1", 0);
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view.structure_dialog.as_ref().expect("form stays open");
+            assert!(dialog.parent.is_empty());
+            assert!(dialog.destination_required);
+            assert!(view.overview_drafts.iter().any(|(target, draft)| {
+                matches!(target, OverviewTarget::Detached(_))
+                    && draft.current.docs
+                        == Some(probe_core::Documentation::Text("Empty notes".into()))
+            }));
+            assert!(!view.overview_drafts.keys().any(|target| {
+                matches!(target, OverviewTarget::Folder(selector) if selector == "items/0")
+            }));
+        })
+        .unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+fn reset_source(
+    window: gpui_kit::WindowHandle<ProbeApp>,
+    cx: &mut TestAppContext,
+    path: &Path,
+    source: &str,
+) {
+    fs::write(path, source).unwrap();
+    let loaded = probe_opencollection::load_workspace(path).unwrap();
+    window
+        .update(cx, |view, _, _| {
+            view.session_store = None;
+            view.set_workspace(path.to_path_buf(), loaded);
+        })
+        .unwrap();
 }

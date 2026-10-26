@@ -702,15 +702,23 @@ impl ProbeApp {
             (ApplicationDialog::UnsavedEnvironment, ApplicationDialogAction::Discard) => {
                 self.close_environment_manager_dialog(window, cx);
             }
-            (ApplicationDialog::Delete { kind, selector, .. }, ApplicationDialogAction::Delete) => {
-                if self
+            (
+                ApplicationDialog::Delete {
+                    kind,
+                    selector,
+                    name,
+                    ..
+                },
+                ApplicationDialogAction::Delete,
+            ) => {
+                let matches = self
                     .loaded_workspace
                     .as_ref()
-                    .is_none_or(|loaded| loaded.item_key(kind, &selector).is_none())
-                {
+                    .is_some_and(|loaded| item_matches(loaded, kind, &selector, &name));
+                if !matches {
                     self.show_toast(
                         ToastIntent::Warning,
-                        "The item could not be identified. It was not deleted.",
+                        format!("Delete “{name}” was cancelled."),
                         cx,
                     );
                     return;
@@ -1213,7 +1221,7 @@ impl ProbeApp {
         let projection_warning = (old.diagnostics() != reconciled.workspace.diagnostics())
             .then(|| projection_warning(&reconciled.workspace))
             .flatten();
-        let old_folders = folder_structure(old);
+        let old_tree = tree_structure(old);
         let key_remaps =
             request_key_remaps(old, &reconciled.workspace, &reconciled.selector_remaps);
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
@@ -1228,7 +1236,7 @@ impl ProbeApp {
         let structure_changed = self
             .loaded_workspace
             .as_ref()
-            .is_none_or(|loaded| folder_structure(loaded) != old_folders);
+            .is_none_or(|loaded| tree_structure(loaded) != old_tree);
         if structure_changed {
             let mut warnings = self.detach_reloaded_folder_state();
             if let Some(message) = self.clear_structure_destination() {
@@ -1272,24 +1280,53 @@ impl ProbeApp {
     }
 }
 
-/// Selectors and names only. Documentation and request edits do not count,
-/// so a save of one folder does not detach another folder's draft.
-fn folder_structure(loaded: &LoadedWorkspace) -> Vec<(String, Option<String>)> {
-    let mut folders: Vec<_> = loaded
-        .folders()
-        .iter()
-        .map(|folder| {
-            (
-                folder.selector().to_owned(),
-                loaded
+/// Tree order of every folder and request. Documentation, bodies, and other
+/// field edits do not appear, so a content save does not look like a move.
+fn tree_structure(loaded: &LoadedWorkspace) -> Vec<(ItemKind, String, Option<String>)> {
+    fn walk(
+        loaded: &LoadedWorkspace,
+        items: &[WorkspaceItemRef],
+        out: &mut Vec<(ItemKind, String, Option<String>)>,
+    ) {
+        for &item in items {
+            let Some(selector) = loaded.item_selector(item) else {
+                continue;
+            };
+            let name = loaded
+                .workspace()
+                .item_metadata(item)
+                .and_then(|metadata| metadata.name.clone());
+            out.push((item.kind(), selector.to_owned(), name));
+            if let WorkspaceItemRef::Folder(key) = item {
+                let children = loaded
                     .workspace()
-                    .folder(folder.key())
-                    .and_then(|folder| folder.metadata.name.clone()),
-            )
-        })
-        .collect();
-    folders.sort();
-    folders
+                    .folder(key)
+                    .map(|folder| folder.children.clone())
+                    .unwrap_or_default();
+                walk(loaded, &children, out);
+            }
+        }
+    }
+    let mut items = Vec::new();
+    walk(loaded, loaded.workspace().root_items(), &mut items);
+    items
+}
+
+pub(super) fn item_matches(
+    loaded: &LoadedWorkspace,
+    kind: ItemKind,
+    selector: &str,
+    name: &str,
+) -> bool {
+    let Some(item) = loaded.item_key(kind, selector) else {
+        return false;
+    };
+    let live = loaded
+        .workspace()
+        .item_metadata(item)
+        .and_then(|metadata| metadata.name.clone())
+        .unwrap_or_else(|| format!("Untitled {}", kind.as_str()));
+    live == name
 }
 
 fn pending_cancel_message(pending: &PendingClose) -> String {
