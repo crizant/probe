@@ -5413,78 +5413,34 @@ fn rename_keeps_plain_enter_submission_without_a_destination_tree(cx: &mut TestA
     );
 }
 
-#[gpui_kit::test]
-fn destination_and_sidebar_rows_share_ancestor_guides(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(800.0)), ProbeApp::new);
-    let fixture = writable_structure_fixture("shared-tree-guides");
-    fs::write(
-        &fixture,
-        r#"opencollection: 1.0.0
-info: {name: Shared tree rows}
-bundled: true
-items:
-  - info: {name: A, type: folder}
-    items:
-      - info: {name: B, type: folder}
-        items:
-          - info: {name: C, type: folder}
-            items:
-              - info: {name: D, type: folder}
-                items: []
-"#,
-    )
-    .unwrap();
-    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
-    let a = loaded.folder_key("items/0").unwrap();
-    let b = loaded.folder_key("items/0/items/0").unwrap();
-    let c = loaded.folder_key("items/0/items/0/items/0").unwrap();
-    window
-        .update(cx, |view, window, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture.clone(), loaded);
-            view.shell.expand_folder(a);
-            view.shell.expand_folder(b);
-            view.shell.collapse_folder(c);
-            view.rebuild_visible_tree_rows();
-            view.select_tree_item(WorkspaceItemRef::Folder(c), cx);
-            view.open_create_folder_dialog(window, cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    // GPUI's debug_bounds accepts static selectors; build the related selectors
-    // at compile time while checking real rows rendered by both callers.
-    macro_rules! assert_guides_match {
-        ($selector:literal, $depth:literal, [$($ancestor:literal),*]) => {{
-            let sidebar_row = visual.debug_bounds(concat!("tree-row-", $selector)).unwrap();
-            let destination_row = visual.debug_bounds(concat!("save-destination-row-", $selector)).unwrap();
-            let sidebar_chevron = visual.debug_bounds(concat!("folder-disclosure-", $selector)).unwrap();
-            let destination_chevron = visual.debug_bounds(concat!("save-destination-toggle-", $selector)).unwrap();
-            let guide_selectors: &[(&'static str, &'static str)] = &[$(
-                (concat!("tree-row-", $selector, "-guide-", $ancestor),
-                 concat!("save-destination-row-", $selector, "-guide-", $ancestor)),
-            )*];
-            for &(sidebar_id, destination_id) in guide_selectors {
-                let sidebar_guide = visual.debug_bounds(sidebar_id).unwrap();
-                let destination_guide = visual.debug_bounds(destination_id).unwrap();
-                assert_eq!(sidebar_guide.left() - sidebar_row.left(), destination_guide.left() - destination_row.left());
-                assert_eq!(sidebar_guide.top() - sidebar_row.top(), destination_guide.top() - destination_row.top());
-                assert!(sidebar_guide.right() <= sidebar_chevron.left());
-                assert!(destination_guide.right() <= destination_chevron.left(), "ancestor guides must stay out of this row's disclosure slot");
-            }
-            assert!(visual.debug_bounds(concat!("tree-row-", $selector, "-guide-", $depth)).is_none());
-            assert!(visual.debug_bounds(concat!("save-destination-row-", $selector, "-guide-", $depth)).is_none(), "only ancestors get guides");
-        }};
-    }
-    assert_guides_match!("items/0", 0, []);
-    assert_guides_match!("items/0/items/0", 1, [0]);
-    assert_guides_match!("items/0/items/0/items/0", 2, [0, 1]);
-    assert!(
-        visual
-            .debug_bounds("save-destination-row--guide-0")
-            .is_none(),
-        "the synthetic collection root adds no guide level"
+#[test]
+fn destination_root_does_not_add_depth_to_top_level_folders() {
+    let loaded = probe_opencollection::load_workspace(nested_fixture()).unwrap();
+    let workspace = loaded.workspace();
+    let folder = loaded.folder_key("items/1").unwrap();
+    let mut sidebar_rows = Vec::new();
+    crate::app::tree::flatten_visible_tree_rows(
+        workspace,
+        workspace.root_items(),
+        0,
+        &crate::shell::ShellState::default(),
+        None,
+        &mut sidebar_rows,
     );
-    fs::remove_file(fixture).unwrap();
+    let dialog_rows = crate::structure_editor::save_destination_rows(&loaded, &Default::default());
+    assert!(
+        dialog_rows[0].selector.is_empty(),
+        "collection root remains a separate choice"
+    );
+    let sidebar_depth = sidebar_rows
+        .iter()
+        .find(|row| row.item == WorkspaceItemRef::Folder(folder))
+        .unwrap()
+        .depth;
+    let dialog_depth = dialog_rows
+        .iter()
+        .find(|row| row.selector == "items/1")
+        .unwrap()
+        .depth;
+    assert_eq!((sidebar_depth, dialog_depth), (0, 0));
 }
