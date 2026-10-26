@@ -177,7 +177,10 @@ impl ProbeApp {
         popup.into_any_element()
     }
 
-    pub(super) fn desktop_menu_definition(&self, menu: DesktopMenu) -> DesktopMenuDefinition {
+    pub(in crate::app) fn desktop_menu_definition(
+        &self,
+        menu: DesktopMenu,
+    ) -> DesktopMenuDefinition {
         match menu {
             DesktopMenu::File => DesktopMenuDefinition {
                 id: "desktop-file-menu-popup",
@@ -193,7 +196,10 @@ impl ProbeApp {
                             id: "desktop-import-menu-popup",
                             label: "Import",
                             width: 210.0,
-                            items: vec![DesktopMenuItem::action("Yaak Export…", ImportYaakExport)],
+                            items: vec![
+                                DesktopMenuItem::action("Yaak Export…", ImportYaakExport),
+                                DesktopMenuItem::action("cURL…", ImportCurl),
+                            ],
                         },
                     ),
                     DesktopMenuItem::Separator,

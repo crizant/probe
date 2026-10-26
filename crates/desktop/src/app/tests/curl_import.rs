@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::{DesktopMenuItem, ImportCurl};
 
 const COMMAND: &str = "curl -X POST 'https://example.test/import?q=1' -H 'Authorization: Bearer example' -b 'session=example' --data-raw 'payload'";
 
@@ -310,6 +311,50 @@ fn curl_import_blocks_active_save_and_reload_and_ignores_obsolete_parse(cx: &mut
         })
         .unwrap();
     assert_eq!(fs::read(&path).unwrap(), before);
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn curl_import_file_menu_opens_dialog_for_an_open_collection(cx: &mut TestAppContext) {
+    let (window, path) = import_window(cx, "curl-file-menu");
+    window
+        .update(cx, |view, window, cx| {
+            let file_menu = view.desktop_menu_definition(DesktopMenu::File);
+            let action = file_menu
+                .items
+                .into_iter()
+                .find_map(|item| match item {
+                    DesktopMenuItem::Submenu("Import From…", _, submenu) => {
+                        submenu.items.into_iter().find_map(|item| match item {
+                            DesktopMenuItem::Action("cURL…", action, _) => Some(action),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                })
+                .expect("File > Import From includes cURL");
+            window.dispatch_action(action, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.structure_dialog.as_ref().unwrap().curl.is_some());
+        })
+        .unwrap();
+    cx.simulate_keystrokes(window.into(), "escape");
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_dialog.is_none());
+            view.loaded_workspace = None;
+            window.dispatch_action(Box::new(ImportCurl), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| assert!(view.structure_dialog.is_none()))
+        .unwrap();
     fs::remove_file(path).unwrap();
 }
 

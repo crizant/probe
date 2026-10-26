@@ -14,7 +14,8 @@ Release dates use Australia/Brisbane time (UTC+10).
   plaintext OpenCollection YAML.
 
 - Import an HTTP request from a pasted cURL command through the desktop sidebar
-  Add menu, with a parsed preview, validation, and plaintext credential warnings.
+  Add menu or File → Import From → cURL, with a parsed preview, validation, and
+  plaintext credential warnings.
 
 ## [2.1.1] - 2026-10-25
 

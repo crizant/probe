@@ -314,6 +314,16 @@ pub(crate) fn collection_icon(theme: Theme) -> gpui_kit::Div {
     library_icon("lucide-library", &LIBRARY_SVG, theme.metrics.icon_standard)
 }
 
+pub(crate) fn menu_curl_import_icon(theme: Theme) -> gpui_kit::Div {
+    svg_icon(
+        "probe-import-curl",
+        include_bytes!("../../assets/icons/actions/import-curl.svg"),
+        theme.metrics.icon_standard,
+        theme.metrics.icon_standard,
+    )
+    .text_color(theme.colors.text.muted)
+}
+
 pub(crate) fn menu_folder_icon(theme: Theme) -> gpui_kit::Div {
     folder_icon(theme, false, false, 14.0)
 }

@@ -148,6 +148,7 @@ gpui_kit::actions!(
         NewCollection,
         ImportPostmanExport,
         ImportYaakExport,
+        ImportCurl,
         SaveEditor,
         SendRequest,
         SendWebSocketMessage,
@@ -811,6 +812,7 @@ fn system_menus(pane_layout: PaneLayout) -> [Menu; 5] {
             MenuItem::submenu(Menu::new("Import From…").items([
                 MenuItem::action("Postman Export…", ImportPostmanExport),
                 MenuItem::action("Yaak Export…", ImportYaakExport),
+                MenuItem::action("cURL…", ImportCurl),
             ])),
             MenuItem::separator(),
             MenuItem::action("Save", SaveEditor),

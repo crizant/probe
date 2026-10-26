@@ -765,7 +765,9 @@ fn macos_system_menu_delegates_services_to_the_operating_system() {
                         [
                             MenuItem::Action { name: postman, .. },
                             MenuItem::Action { name: yaak, .. },
+                            MenuItem::Action { name: curl, .. },
                         ] if postman == "Postman Export…" && yaak == "Yaak Export…"
+                            && curl == "cURL…"
                     )
         )
     }));

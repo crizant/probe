@@ -151,6 +151,11 @@ impl Render for ProbeApp {
                     view.request_import(ImportSource::Yaak, window, cx);
                 }
             }))
+            .on_action(cx.listener(|view, _: &ImportCurl, window, cx| {
+                if view.application_dialog.is_none() {
+                    view.open_curl_import_dialog(window, cx);
+                }
+            }))
             .on_action(cx.listener(|view, _: &OpenImportSubmenu, window, cx| {
                 if view.transient.workspace_switcher_open {
                     view.transient.workspace_import_submenu_open = true;

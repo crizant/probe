@@ -299,7 +299,9 @@ existing theme tokens and controls; text buttons and tabs retain an explicit
 
 ### Import from cURL
 
-The sidebar Add (+) menu offers **Import from cURL…** for an open collection.
+The sidebar Add (+) menu offers **cURL** with a terminal outline
+icon for an open collection. **File → Import From… → cURL…** opens the same dialog
+and requires an open collection.
 Its compact dialog contains a request name, destination folder (initially the
 selected folder or selected request's parent, otherwise collection root), and a
 multiline POSIX cURL command. Folder labels include their unique collection

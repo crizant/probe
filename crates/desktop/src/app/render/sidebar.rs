@@ -635,11 +635,15 @@ impl ProbeApp {
                     });
                 },
             ))
-            .child(components::menu_button(
+            .child(components::menu_button_with_leading(
                 theme,
                 "tree-import-curl",
-                "Import from cURL…",
-                None,
+                "cURL",
+                "Import from cURL",
+                components::menu_leading_slot(
+                    ADD_MENU_MARKER_WIDTH,
+                    components::menu_curl_import_icon(theme),
+                ),
                 move |window, cx| {
                     let _ = curl_view.update(cx, |view, cx| {
                         view.transient.structure_add_menu_open = false;
