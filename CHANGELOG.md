@@ -6,6 +6,13 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- Refine the app icon’s handle and grey collar with subtle shading, defined
+  edges, curved grip rings, and a narrow band at the front guard.
+
+## [2.2.0] - 2026-10-26
+
 ### Added
 
 - Import a cURL command from stdin or a file into an existing bundled or unbundled
@@ -726,6 +733,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[2.2.0]: https://github.com/crizant/probe/releases/tag/v2.2.0
 [2.1.1]: https://github.com/crizant/probe/releases/tag/v2.1.1
 [2.1.0]: https://github.com/crizant/probe/releases/tag/v2.1.0
 [2.0.0]: https://github.com/crizant/probe/releases/tag/v2.0.0
