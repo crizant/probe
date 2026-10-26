@@ -1558,7 +1558,7 @@ fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
             dialog.name = "Kept".to_owned();
             dialog.parent = "not-a-folder".to_owned();
             dialog.expanded_folders.insert("items/1".to_owned());
-            view.clear_structure_destination(false);
+            view.clear_structure_destination();
             let dialog = view
                 .structure_dialog
                 .as_ref()
@@ -4405,13 +4405,19 @@ fn committed_documentation_save_keeps_drafts_until_recovery_integrates(cx: &mut 
                 assert!(!view.loading);
                 assert!(view.documentation_save_task.is_none());
                 let draft_key = if view.overview_drafts.contains_key(&target) {
-                    target.clone()
+                    Some(target.clone())
                 } else {
                     view.overview_drafts
                         .keys()
                         .find(|key| matches!(key, OverviewTarget::Detached(_)))
                         .cloned()
-                        .expect("unsaved folder documentation stays in memory")
+                };
+                let Some(draft_key) = draft_key else {
+                    assert!(
+                        folder && !reload_fails && !later_edit,
+                        "only a finished folder save with no newer edits can drop the draft"
+                    );
+                    return;
                 };
                 let draft = &view.overview_drafts[&draft_key];
                 assert_eq!(

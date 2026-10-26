@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
 use crate::app::OverviewTarget;
-use probe_core::ItemKind;
+use probe_core::{ItemKind, RequestKey};
 use probe_opencollection::{ItemLocator, StructureOperation};
 
 const COLLECTION: &str = "opencollection: 1.0.0\ninfo: {name: Destinations}\nbundled: true\nitems:\n- {info: {name: Before, type: folder}, items: []}\n- {info: {name: Target, type: folder}, items: [{info: {name: Marker, type: http}, http: {method: GET, url: https://example.test/marker}}]}\n- {info: {name: After, type: folder}, items: []}\n";
@@ -13,6 +13,7 @@ const DUPLICATES: &str = "opencollection: 1.0.0\ninfo: {name: Duplicates}\nbundl
 const TWIN_FOLDERS: &str = "opencollection: 1.0.0\ninfo: {name: Twin folders}\nbundled: true\nitems:\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: http}, http: {method: GET, url: https://example.test/one}}]}\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: http}, http: {method: GET, url: https://example.test/two}}]}\n";
 const NESTED_DUPS: &str = "opencollection: 1.0.0\ninfo: {name: Nested}\nbundled: true\nitems:\n- {info: {name: Group, type: folder}, items: [{info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/one}}, {info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/two}}]}\n";
 const NESTED_SWAPPED: &str = "opencollection: 1.0.0\ninfo: {name: Nested}\nbundled: true\nitems:\n- {info: {name: Group, type: folder}, items: [{info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/two}}, {info: {name: Dup, type: http}, http: {method: GET, url: https://example.test/oneX}}]}\n";
+const NESTED_PARENTS: &str = "opencollection: 1.0.0\ninfo: {name: Parents}\nbundled: true\nitems:\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: folder}, items: [{info: {name: One, type: http}, http: {method: GET, url: https://example.test/one}}]}]}\n- {info: {name: Same, type: folder}, items: [{info: {name: Child, type: folder}, items: [{info: {name: One, type: http}, http: {method: GET, url: https://example.test/two}}]}]}\n";
 
 fn next_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -551,13 +552,19 @@ fn unchanged_or_content_reload_keeps_folder_state(cx: &mut TestAppContext) {
     workspace.save_into(cx, "items/1", Some("Kept"));
     workspace.reconcile_text(cx, &source);
     workspace.update(cx, |view, _, _| {
-        let dialog = view.structure_dialog.as_ref().expect("destination stays");
-        assert_eq!(dialog.parent, "items/1");
-        assert!(!dialog.destination_required);
+        let dialog = view.structure_dialog.as_ref().expect("form stays open");
+        assert!(dialog.parent.is_empty() && dialog.destination_required);
         assert!(
             view.overview_drafts
+                .keys()
+                .any(|target| matches!(target, OverviewTarget::Detached(_)))
+        );
+        assert!(
+            !view
+                .overview_drafts
                 .contains_key(&OverviewTarget::Folder("items/0".into()))
         );
+        assert!(view.selected_tree_item.is_none());
         assert_eq!(view.shell.collapsed_folders().count(), 1);
     });
 }
@@ -740,6 +747,118 @@ fn edited_and_swapped_duplicate_delete_keeps_the_other_request(cx: &mut TestAppC
         )
         .urls(&["https://example.test/oneX"]),
     );
+}
+
+#[gpui_kit::test]
+fn swapped_same_named_parents_do_not_keep_the_child_folder(cx: &mut TestAppContext) {
+    let workspace = Workspace::open(cx, "parents", NESTED_PARENTS);
+    workspace.save_into(cx, "items/0/items/0", Some("Placed"));
+    workspace.edit_docs(cx, "items/0/items/0", "Child notes");
+    let disk = move_folder(&workspace, cx);
+    workspace.update(cx, |view, window, cx| {
+        let dialog = view.structure_dialog.as_ref().expect("form stays open");
+        assert!(dialog.parent.is_empty() && dialog.destination_required);
+        assert!(view.selected_tree_item.is_none());
+        assert!(view.overview_drafts.iter().any(|(target, draft)| {
+            matches!(target, OverviewTarget::Detached(_))
+                && draft.current.docs == Some(note("Child notes"))
+        }));
+        assert!(
+            !view
+                .overview_drafts
+                .contains_key(&OverviewTarget::Folder("items/0/items/0".into()))
+        );
+        view.submit_structure_dialog(window, cx);
+        assert!(view.structure_task.is_none());
+    });
+    assert_eq!(workspace.bytes(), disk);
+    assert_eq!(
+        workspace.urls(),
+        ["https://example.test/one", "https://example.test/two"]
+    );
+}
+
+fn open_dirty_request_pair(
+    workspace: &Workspace,
+    cx: &mut TestAppContext,
+) -> (RequestKey, RequestKey) {
+    workspace.update(cx, |view, _, cx| {
+        let keys: Vec<_> = view
+            .loaded_workspace
+            .as_ref()
+            .unwrap()
+            .requests()
+            .iter()
+            .map(|request| request.key())
+            .collect();
+        view.select_request(keys[0], cx);
+        view.select_request(keys[1], cx);
+        view.edit_request(
+            keys[0],
+            |request| request.url = Some("https://unsaved.example".to_owned()),
+            cx,
+        );
+        (keys[0], keys[1])
+    })
+}
+
+fn structural_reload_keeps_both_request_tabs(workspace: &Workspace, cx: &mut TestAppContext) {
+    let disk = workspace.reconcile_move(cx, ItemKind::Request, "items/0", 1);
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.application_dialog.is_none());
+        view.handle_application_dialog_action(ApplicationDialogAction::Discard, window, cx);
+        assert_eq!(view.shell.open_tabs().len(), 2);
+    });
+    assert_eq!(workspace.names(false), ["Beta", "Alpha"]);
+    assert_eq!(workspace.bytes(), disk);
+    assert!(!workspace.urls().iter().any(|url| url.contains("unsaved")));
+}
+
+#[gpui_kit::test]
+fn structural_reload_cancels_pending_request_close(cx: &mut TestAppContext) {
+    let workspace = Workspace::open(cx, "close-tab", REQUESTS);
+    let (dirty, _) = open_dirty_request_pair(&workspace, cx);
+    workspace.update(cx, |view, window, cx| {
+        view.request_close_tab(dirty, window, cx)
+    });
+    structural_reload_keeps_both_request_tabs(&workspace, cx);
+    assert!(workspace.toast(cx, ToastIntent::Warning, "Closing the tab was cancelled."));
+}
+
+#[gpui_kit::test]
+fn structural_reload_cancels_pending_close_other_tabs(cx: &mut TestAppContext) {
+    let workspace = Workspace::open(cx, "close-others", REQUESTS);
+    let (_, keep) = open_dirty_request_pair(&workspace, cx);
+    workspace.update(cx, |view, window, cx| {
+        view.request_close_other_tabs(keep, window, cx);
+    });
+    structural_reload_keeps_both_request_tabs(&workspace, cx);
+    assert!(workspace.toast(cx, ToastIntent::Warning, "Close Other Tabs was cancelled."));
+}
+
+#[gpui_kit::test]
+fn completing_a_detached_save_keeps_newer_edits(cx: &mut TestAppContext) {
+    let workspace = Workspace::open(cx, "newer-doc", COLLECTION);
+    workspace.edit_docs(cx, "items/0", "Original notes");
+    let submitted = workspace.update(cx, |view, _, _| {
+        let draft = view
+            .overview_drafts
+            .get_mut(&OverviewTarget::Folder("items/0".into()))
+            .unwrap();
+        draft.save_token = Some(3);
+        draft.current.clone()
+    });
+    workspace.edit_docs(cx, "items/0", "Newer notes");
+    move_folder(&workspace, cx);
+    workspace.update(cx, |view, _, _| {
+        view.complete_overview_draft_save(&OverviewTarget::Folder("items/0".into()), &submitted, 3);
+        let draft = view
+            .overview_drafts
+            .values()
+            .find(|draft| draft.current.docs == Some(note("Newer notes")))
+            .expect("newer edits stay");
+        assert!(draft.save_token.is_none());
+    });
 }
 
 #[gpui_kit::test]

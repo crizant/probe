@@ -149,7 +149,15 @@ impl ProbeApp {
             return;
         };
         if matches!(key, OverviewTarget::Detached(_)) {
-            self.overview_drafts.remove(&key);
+            let submitted_matches = self
+                .overview_drafts
+                .get(&key)
+                .is_some_and(|draft| draft.current == *submitted);
+            if submitted_matches {
+                self.overview_drafts.remove(&key);
+            } else if let Some(draft) = self.overview_drafts.get_mut(&key) {
+                draft.save_token = None;
+            }
             return;
         }
         if let Some(saved) = self.overview_content(target)

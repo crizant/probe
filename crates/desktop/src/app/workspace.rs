@@ -1004,36 +1004,11 @@ impl ProbeApp {
         remaps
     }
 
-    /// Clears a destination or closes Rename after the folder structure changed.
-    /// Typed form state stays. Returns a warning when an open dialog was affected.
-    pub(super) fn clear_structure_destination(&mut self, only_ambiguous: bool) -> Option<String> {
+    /// Clears a chosen folder after an external reload. Typed form state stays.
+    /// Request renames are left for the caller.
+    pub(super) fn clear_structure_destination(&mut self) -> Option<String> {
         if self.loaded_workspace.is_none() {
             self.structure_dialog = None;
-            return None;
-        }
-        // Same-name reloads retarget a request rename before they get here.
-        // Closing it again would drop that remap. Structural reloads pass
-        // `only_ambiguous: false` and still cancel every rename.
-        if !only_ambiguous
-            && matches!(
-                self.structure_dialog.as_ref().map(|dialog| &dialog.mode),
-                Some(StructureDialogMode::Rename { .. })
-            )
-        {
-            let name = self
-                .structure_dialog
-                .as_ref()
-                .map(|dialog| dialog.name.clone())
-                .unwrap_or_default();
-            self.structure_dialog = None;
-            return Some(format!("Rename “{name}” was cancelled."));
-        }
-        let ambiguous = self.structure_dialog.as_ref().is_some_and(|dialog| {
-            dialog.edits_destination()
-                && !dialog.parent.is_empty()
-                && folder_name_is_ambiguous(self.loaded_workspace.as_ref(), &dialog.parent)
-        });
-        if only_ambiguous && !ambiguous {
             return None;
         }
         let dialog = self.structure_dialog.as_mut()?;
@@ -1048,6 +1023,21 @@ impl ProbeApp {
             curl.destination_required = true;
         }
         Some(format!("{title} needs a destination folder again."))
+    }
+
+    fn cancel_open_rename(&mut self) -> Option<String> {
+        let name = matches!(
+            self.structure_dialog.as_ref().map(|dialog| &dialog.mode),
+            Some(StructureDialogMode::Rename { .. })
+        )
+        .then(|| {
+            self.structure_dialog
+                .as_ref()
+                .map(|dialog| dialog.name.clone())
+                .unwrap_or_default()
+        })?;
+        self.structure_dialog = None;
+        Some(format!("Rename “{name}” was cancelled."))
     }
 
     /// Drops outstanding folder selections and confirmations after the folder
@@ -1082,16 +1072,7 @@ impl ProbeApp {
         if visible_cancelled {
             self.application_dialog = self.pending_application_dialogs.pop_front();
         }
-        let folder_drafts: Vec<String> = self
-            .overview_drafts
-            .keys()
-            .filter_map(|target| match target {
-                OverviewTarget::Folder(selector) => Some(selector.clone()),
-                _ => None,
-            })
-            .collect();
-        let drafts_detached = self.detach_folder_drafts(&folder_drafts);
-        if drafts_detached {
+        if self.detach_all_folder_drafts() {
             warnings.push(
                 "Unsaved folder documentation was kept and was not saved. Discard it to continue."
                     .to_owned(),
@@ -1100,16 +1081,14 @@ impl ProbeApp {
         for key in self.shell.collapsed_folders().collect::<Vec<_>>() {
             self.shell.expand_folder(key);
         }
-        if matches!(self.selected_tree_item, Some(WorkspaceItemRef::Folder(_))) {
-            self.selected_tree_item = None;
-        }
+        self.clear_selected_folder();
         warnings
     }
 
-    /// Same names can swap without changing `(kind, selector, name)`. Requests
-    /// follow the content remap. Folder deletes, renames, ambiguous destinations,
-    /// and ambiguous documentation drafts are cancelled.
-    fn fail_closed_same_name_source_change(
+    /// The file changed without a tree change. Requests follow captured content.
+    /// Bundled folder selectors are positional, so every folder destination,
+    /// documentation draft, and sidebar folder selection is dropped.
+    fn apply_external_source_change(
         &mut self,
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
     ) -> Vec<String> {
@@ -1134,28 +1113,41 @@ impl ProbeApp {
         }
         self.application_dialog =
             kept_visible.or_else(|| self.pending_application_dialogs.pop_front());
-        if let Some(message) = self.clear_structure_destination(true) {
-            warnings.push(message);
+        if self
+            .loaded_workspace
+            .as_ref()
+            .is_some_and(|loaded| !loaded.uses_path_locators())
+        {
+            if let Some(message) = self.clear_structure_destination() {
+                warnings.push(message);
+            }
+            if self.detach_all_folder_drafts() {
+                warnings.push(
+                    "Unsaved folder documentation was kept and was not saved. Discard it to continue."
+                        .to_owned(),
+                );
+            }
+            self.clear_selected_folder();
         }
-        let ambiguous_drafts: Vec<String> = self
+        warnings
+    }
+
+    fn detach_all_folder_drafts(&mut self) -> bool {
+        let selectors: Vec<String> = self
             .overview_drafts
             .keys()
             .filter_map(|target| match target {
-                OverviewTarget::Folder(selector)
-                    if folder_name_is_ambiguous(self.loaded_workspace.as_ref(), selector) =>
-                {
-                    Some(selector.clone())
-                }
+                OverviewTarget::Folder(selector) => Some(selector.clone()),
                 _ => None,
             })
             .collect();
-        if self.detach_folder_drafts(&ambiguous_drafts) {
-            warnings.push(
-                "Unsaved folder documentation was kept and was not saved. Discard it to continue."
-                    .to_owned(),
-            );
+        self.detach_folder_drafts(&selectors)
+    }
+
+    fn clear_selected_folder(&mut self) {
+        if matches!(self.selected_tree_item, Some(WorkspaceItemRef::Folder(_))) {
+            self.selected_tree_item = None;
         }
-        warnings
     }
 
     /// `Ok` keeps the dialog. `Err` is a warning and the dialog is dropped.
@@ -1401,12 +1393,15 @@ impl ProbeApp {
             .is_none_or(|loaded| tree_structure(loaded) != old_tree);
         let mut warnings = if structure_changed {
             let mut warnings = self.detach_reloaded_folder_state();
-            if let Some(message) = self.clear_structure_destination(false) {
+            if let Some(message) = self
+                .cancel_open_rename()
+                .or_else(|| self.clear_structure_destination())
+            {
                 warnings.insert(0, message);
             }
             warnings
         } else if source_changed {
-            self.fail_closed_same_name_source_change(&key_remaps)
+            self.apply_external_source_change(&key_remaps)
         } else {
             Vec::new()
         };
@@ -1479,48 +1474,13 @@ fn tree_structure(loaded: &LoadedWorkspace) -> Vec<(ItemKind, String, Option<Str
     items
 }
 
-fn parent_selector(selector: &str) -> &str {
-    selector
-        .rfind("/items/")
-        .map(|index| &selector[..index])
-        .unwrap_or("")
-}
-
-/// Another folder with the same parent and name. A swap of those folders keeps
-/// `(kind, selector, name)` unchanged.
-fn folder_name_is_ambiguous(loaded: Option<&LoadedWorkspace>, selector: &str) -> bool {
-    let Some(loaded) = loaded else {
-        return true;
-    };
-    let Some(key) = loaded.folder_key(selector) else {
-        return true;
-    };
-    let name = loaded
-        .workspace()
-        .folder(key)
-        .and_then(|folder| folder.metadata.name.clone());
-    let parent = parent_selector(selector);
-    loaded
-        .folders()
-        .iter()
-        .filter(|folder| {
-            parent_selector(folder.selector()) == parent
-                && loaded
-                    .workspace()
-                    .folder(folder.key())
-                    .and_then(|folder| folder.metadata.name.clone())
-                    == name
-        })
-        .count()
-        > 1
-}
-
 pub(super) fn displayed_item_name(name: Option<String>, kind: ItemKind) -> String {
     name.unwrap_or_else(|| format!("Untitled {}", kind.as_str()))
 }
 
 fn pending_cancel_message(pending: &PendingClose) -> String {
     match pending {
+        PendingClose::Tab(_) => "Closing the tab was cancelled.".to_owned(),
         PendingClose::OtherTabs { .. } => "Close Other Tabs was cancelled.".to_owned(),
         PendingClose::Overview(_) => "Closing a folder was cancelled.".to_owned(),
         _ => "The pending action was cancelled.".to_owned(),
@@ -1556,7 +1516,13 @@ fn pending_holds_folder(pending: &PendingClose) -> bool {
 fn confirmation_cancelled_by_reload(dialog: &ApplicationDialog) -> bool {
     match dialog {
         ApplicationDialog::Delete { .. } => true,
-        ApplicationDialog::Unsaved { pending, .. } => pending_holds_folder(pending),
+        ApplicationDialog::Unsaved { pending, .. } => {
+            pending_holds_folder(pending)
+                || matches!(
+                    pending,
+                    PendingClose::Tab(_) | PendingClose::OtherTabs { .. }
+                )
+        }
         _ => false,
     }
 }
