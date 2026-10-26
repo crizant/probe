@@ -357,6 +357,12 @@ pub(crate) struct FolderAnchor {
     names: Vec<Option<String>>,
     children: Vec<ChildIdentity>,
     selector: String,
+    /// Whether any other folder shared [`Self::names`] when this anchor was captured.
+    ///
+    /// A later reload may leave only one folder with that name path. That survivor
+    /// is the captured folder only when the path was already unique; otherwise the
+    /// child structure has to match.
+    name_path_unique: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -381,11 +387,10 @@ pub(crate) struct DialogFolderAnchors {
 }
 
 impl DialogFolderAnchors {
-    pub(crate) fn capture(dialog: Option<&StructureDialog>, loaded: &LoadedWorkspace) -> Self {
+    pub(crate) fn capture(dialog: Option<&StructureDialog>, index: &FolderIndex) -> Self {
         let Some(dialog) = dialog.filter(|dialog| dialog.edits_destination()) else {
             return Self::default();
         };
-        let index = FolderIndex::build(loaded);
         Self {
             parent: (!dialog.parent.is_empty())
                 .then(|| index.anchor(&dialog.parent))
@@ -410,9 +415,11 @@ pub(crate) enum ParentUpdate {
 pub(crate) struct DialogDestination {
     pub(crate) expanded: BTreeSet<String>,
     pub(crate) parent: ParentUpdate,
-    /// The stored selector now addresses a folder that was not identified as
-    /// the user's choice. Keeping it would create the item there.
-    pub(crate) clear_positional_parent: bool,
+    /// Unresolved only. True when the stored parent selector still addresses a
+    /// folder, so keeping it would create the item in a folder the user did not
+    /// choose. False when that selector addresses no folder: it is kept so the
+    /// collection root is not treated as the chosen destination.
+    pub(crate) clear_live_parent: bool,
 }
 
 pub(crate) fn resolve_dialog_destination(
@@ -420,41 +427,53 @@ pub(crate) fn resolve_dialog_destination(
     anchors: &DialogFolderAnchors,
     remaps: &BTreeMap<String, String>,
     loaded: &LoadedWorkspace,
+    index: &FolderIndex,
 ) -> DialogDestination {
-    let index = FolderIndex::build(loaded);
     let expanded = anchors
         .expanded
         .iter()
-        .filter_map(|anchor| relocate_folder(anchor, remaps, loaded, &index))
+        .filter_map(|anchor| relocate_folder(anchor, remaps, loaded, index))
         .collect();
     if dialog.parent.is_empty() {
+        // An empty selector is the collection root only when the user chose it.
+        // A previous reload may have cleared the parent because the folder could
+        // not be identified; that still requires an explicit selection.
+        if dialog.destination_required {
+            return DialogDestination {
+                expanded,
+                parent: ParentUpdate::Unresolved,
+                clear_live_parent: false,
+            };
+        }
         return DialogDestination {
             expanded,
             parent: ParentUpdate::Root,
-            clear_positional_parent: false,
+            clear_live_parent: false,
         };
     }
     let parent = anchors
         .parent
         .as_ref()
-        .and_then(|anchor| relocate_folder(anchor, remaps, loaded, &index));
+        .and_then(|anchor| relocate_folder(anchor, remaps, loaded, index));
     match parent {
         Some(selector) => DialogDestination {
             expanded,
             parent: ParentUpdate::Folder(selector),
-            clear_positional_parent: false,
+            clear_live_parent: false,
         },
         None => DialogDestination {
             expanded,
             parent: ParentUpdate::Unresolved,
-            clear_positional_parent: loaded.folder_key(&dialog.parent).is_some(),
+            clear_live_parent: loaded.folder_key(&dialog.parent).is_some(),
         },
     }
 }
 
-/// Follows a filesystem rename hint when it still addresses a folder, then the
-/// captured folder identity. Bundled external reloads do not remap folder
-/// selectors, so identity is what keeps a moved folder.
+/// Follows a directory rename hint when it still addresses a folder, then the
+/// captured folder identity.
+///
+/// Bundled collections never produce those hints. Their reload maps are request
+/// selectors, so a bundled folder falls through to [`FolderIndex::resolve`].
 pub(crate) fn relocate_folder(
     anchor: &FolderAnchor,
     remaps: &BTreeMap<String, String>,
@@ -496,14 +515,22 @@ impl FolderIndex {
     }
 
     pub(crate) fn anchor(&self, selector: &str) -> Option<FolderAnchor> {
-        self.folders
+        let folder = self
+            .folders
             .iter()
-            .find(|folder| folder.selector == selector)
-            .map(|folder| FolderAnchor {
-                names: folder.names.clone(),
-                children: folder.children.clone(),
-                selector: folder.selector.clone(),
-            })
+            .find(|folder| folder.selector == selector)?;
+        let name_path_unique = self
+            .folders
+            .iter()
+            .filter(|other| other.names == folder.names)
+            .count()
+            == 1;
+        Some(FolderAnchor {
+            names: folder.names.clone(),
+            children: folder.children.clone(),
+            selector: folder.selector.clone(),
+            name_path_unique,
+        })
     }
 
     pub(crate) fn resolve(&self, anchor: &FolderAnchor) -> ResolvedFolder {
@@ -512,7 +539,7 @@ impl FolderIndex {
             .iter()
             .filter(|folder| folder.names == anchor.names)
             .collect();
-        if name_matches.len() == 1 {
+        if anchor.name_path_unique && name_matches.len() == 1 {
             return ResolvedFolder::Found(name_matches[0].selector.clone());
         }
         let distinguished: Vec<_> = name_matches
@@ -522,8 +549,9 @@ impl FolderIndex {
         if distinguished.len() == 1 {
             return ResolvedFolder::Found(distinguished[0].selector.clone());
         }
-        // Several folders share the name path and child structure. The old
-        // selector can now address a different one of them.
+        // The name path was shared, or it no longer matches a single folder whose
+        // children are the captured ones. A lone survivor with different children
+        // is a different folder.
         ResolvedFolder::Unresolved
     }
 }
@@ -1209,9 +1237,16 @@ mod tests {
         let mut dialog = StructureDialog::create_folder(Some("items/1".into()));
         dialog.expanded_folders.insert("items/0".into());
         dialog.expanded_folders.insert("items/1".into());
-        let anchors = DialogFolderAnchors::capture(Some(&dialog), &original);
+        let anchors =
+            DialogFolderAnchors::capture(Some(&dialog), &super::FolderIndex::build(&original));
         let fresh = load(&bundled(&format!("{TARGET}{BEFORE}{AFTER}")));
-        let resolved = resolve_dialog_destination(&dialog, &anchors, &BTreeMap::new(), &fresh);
+        let resolved = resolve_dialog_destination(
+            &dialog,
+            &anchors,
+            &BTreeMap::new(),
+            &fresh,
+            &super::FolderIndex::build(&fresh),
+        );
         assert_eq!(resolved.parent, ParentUpdate::Folder("items/0".into()));
         assert_eq!(
             resolved.expanded,
@@ -1219,20 +1254,114 @@ mod tests {
                 .into_iter()
                 .collect()
         );
-        assert!(!resolved.clear_positional_parent);
+        assert!(!resolved.clear_live_parent);
 
         let identical = load(&bundled(
             "  - info: {name: Twin, type: folder}\n    items: []\n  - info: {name: Twin, type: folder}\n    items: []\n",
         ));
         dialog.parent = "items/1".into();
         dialog.expanded_folders.clear();
-        let anchors = DialogFolderAnchors::capture(Some(&dialog), &identical);
+        let anchors =
+            DialogFolderAnchors::capture(Some(&dialog), &super::FolderIndex::build(&identical));
         let swapped = load(&bundled(
             "  - info: {name: Twin, type: folder}\n    items: []\n  - info: {name: Twin, type: folder}\n    items: []\n",
         ));
-        let resolved = resolve_dialog_destination(&dialog, &anchors, &BTreeMap::new(), &swapped);
+        let resolved = resolve_dialog_destination(
+            &dialog,
+            &anchors,
+            &BTreeMap::new(),
+            &swapped,
+            &super::FolderIndex::build(&swapped),
+        );
         assert_eq!(resolved.parent, ParentUpdate::Unresolved);
-        assert!(resolved.clear_positional_parent);
+        assert!(resolved.clear_live_parent);
+    }
+
+    const LEFT_TWIN: &str = "  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Left, type: http}\n        http: {method: GET, url: https://example.test/left}\n";
+    const RIGHT_TWIN: &str = "  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Right, type: http}\n        http: {method: GET, url: https://example.test/right}\n";
+
+    #[test]
+    fn deleting_or_renaming_one_of_two_same_named_folders_is_unresolved() {
+        let original = bundled(&format!("{LEFT_TWIN}{RIGHT_TWIN}"));
+        let (_, right) = anchor_parent(&original, "items/1");
+        assert_eq!(
+            resolved(&bundled(LEFT_TWIN), &right),
+            ResolvedFolder::Unresolved,
+            "the remaining twin is not the deleted folder"
+        );
+        assert_eq!(
+            resolved(
+                &bundled(&format!(
+                    "{LEFT_TWIN}  - info: {{name: Renamed, type: folder}}\n    items:\n      - info: {{name: Right, type: http}}\n        http: {{method: GET, url: https://example.test/right}}\n"
+                )),
+                &right
+            ),
+            ResolvedFolder::Unresolved
+        );
+    }
+
+    #[test]
+    fn a_shared_name_path_does_not_follow_a_twin_whose_children_changed() {
+        let original = bundled(&format!("{LEFT_TWIN}{RIGHT_TWIN}"));
+        let (_, right) = anchor_parent(&original, "items/1");
+        let changed = bundled(
+            "  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Left, type: http}\n        http: {method: GET, url: https://example.test/left}\n  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Renamed, type: http}\n        http: {method: GET, url: https://example.test/right}\n",
+        );
+        assert_eq!(resolved(&changed, &right), ResolvedFolder::Unresolved);
+
+        let (_, unique) = anchor_parent(&bundled(TARGET), "items/0");
+        let with_child = bundled(
+            "  - info: {name: Target, type: folder}\n    items:\n      - info: {name: Marker, type: http}\n        http: {method: GET, url: https://example.test/marker}\n      - info: {name: Extra, type: http}\n        http: {method: GET, url: https://example.test/extra}\n",
+        );
+        assert_eq!(
+            resolved(&with_child, &unique),
+            ResolvedFolder::Found("items/0".into()),
+            "a unique name path still matches after its children change"
+        );
+    }
+
+    #[test]
+    fn nested_duplicate_folders_are_not_confused_when_one_is_deleted() {
+        let original = bundled(
+            "  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Inner, type: folder}\n        items:\n          - info: {name: Left, type: http}\n            http: {method: GET, url: https://example.test/left}\n  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Inner, type: folder}\n        items:\n          - info: {name: Right, type: http}\n            http: {method: GET, url: https://example.test/right}\n",
+        );
+        let (_, right_inner) = anchor_parent(&original, "items/1/items/0");
+        let survivor = bundled(
+            "  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Inner, type: folder}\n        items:\n          - info: {name: Left, type: http}\n            http: {method: GET, url: https://example.test/left}\n",
+        );
+        assert_eq!(
+            resolved(&survivor, &right_inner),
+            ResolvedFolder::Unresolved
+        );
+    }
+
+    #[test]
+    fn moving_a_folder_to_another_parent_is_not_the_old_position() {
+        let original = bundled(
+            "  - info: {name: Before, type: folder}\n    items:\n      - info: {name: Target, type: folder}\n        items:\n          - info: {name: Marker, type: http}\n            http: {method: GET, url: https://example.test/marker}\n  - info: {name: After, type: folder}\n    items: []\n",
+        );
+        let (_, target) = anchor_parent(&original, "items/0/items/0");
+        let moved = bundled(
+            "  - info: {name: Before, type: folder}\n    items: []\n  - info: {name: After, type: folder}\n    items:\n      - info: {name: Target, type: folder}\n        items:\n          - info: {name: Marker, type: http}\n            http: {method: GET, url: https://example.test/marker}\n",
+        );
+        assert_eq!(resolved(&moved, &target), ResolvedFolder::Unresolved);
+        assert_ne!(
+            resolved(&moved, &target),
+            ResolvedFolder::Found("items/0/items/0".into())
+        );
+    }
+
+    #[test]
+    fn a_cleared_destination_stays_unresolved_on_the_next_reload() {
+        let fresh = load(&bundled(&format!("{BEFORE}{TARGET}")));
+        let mut dialog = StructureDialog::create_folder(None);
+        dialog.destination_required = true;
+        let index = super::FolderIndex::build(&fresh);
+        let anchors = DialogFolderAnchors::capture(Some(&dialog), &index);
+        let resolved =
+            resolve_dialog_destination(&dialog, &anchors, &BTreeMap::new(), &fresh, &index);
+        assert_eq!(resolved.parent, ParentUpdate::Unresolved);
+        assert!(!resolved.clear_live_parent);
     }
 
     #[test]

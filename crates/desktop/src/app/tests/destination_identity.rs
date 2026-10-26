@@ -361,6 +361,31 @@ items:
         })
         .unwrap();
     assert_eq!(fs::read(&path).unwrap(), after_move);
+
+    let fresh = external_edit(
+        &path,
+        StructureOperation::CreateFolder {
+            parent: None,
+            index: Some(0),
+            name: "Notes".into(),
+        },
+    );
+    let after_unrelated = fs::read(&path).unwrap();
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            let dialog = view.structure_dialog.as_ref().expect("dialog stays open");
+            assert!(
+                dialog.destination_required,
+                "a later reload must not treat the cleared destination as collection root"
+            );
+            assert!(dialog.parent.is_empty());
+            view.submit_structure_dialog(window, cx);
+            assert!(view.structure_task.is_none());
+            assert!(view.structure_dialog.is_some());
+        })
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), after_unrelated);
     fs::remove_file(path).unwrap();
 }
 

@@ -1557,11 +1557,13 @@ fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
             dialog.name = "Kept".to_owned();
             dialog.parent = "not-a-folder".to_owned();
             dialog.expanded_folders.insert("items/1".to_owned());
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let folders = crate::structure_editor::FolderIndex::build(loaded);
             let anchors = crate::structure_editor::DialogFolderAnchors::capture(
                 view.structure_dialog.as_ref(),
-                view.loaded_workspace.as_ref().unwrap(),
+                &folders,
             );
-            view.remap_structure_dialog(&BTreeMap::new(), anchors);
+            view.remap_structure_dialog(&BTreeMap::new(), anchors, &folders);
             let dialog = view
                 .structure_dialog
                 .as_ref()

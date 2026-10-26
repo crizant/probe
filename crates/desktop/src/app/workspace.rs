@@ -890,7 +890,11 @@ impl ProbeApp {
         self.request_editor.clear();
     }
 
-    pub(super) fn snapshot_shell_selectors(&self, old: &LoadedWorkspace) -> ShellSelectors {
+    pub(super) fn snapshot_shell_selectors(
+        &self,
+        old: &LoadedWorkspace,
+        folders: &FolderIndex,
+    ) -> ShellSelectors {
         ShellSelectors {
             ordered_tabs: self
                 .shell
@@ -903,16 +907,14 @@ impl ProbeApp {
                 Some(PendingClose::OtherTabs { keep }) => Some(*keep),
                 _ => None,
             },
-            folder_anchors: {
-                let index = FolderIndex::build(old);
-                self.shell
-                    .collapsed_folders()
-                    .filter_map(|key| {
-                        old.folder_selector(key)
-                            .and_then(|selector| index.anchor(selector))
-                    })
-                    .collect()
-            },
+            folder_anchors: self
+                .shell
+                .collapsed_folders()
+                .filter_map(|key| {
+                    old.folder_selector(key)
+                        .and_then(|selector| folders.anchor(selector))
+                })
+                .collect(),
             selected: self.selected_tree_item.and_then(|item| {
                 old.item_selector(item)
                     .map(|selector| (item.kind(), selector.to_owned()))
@@ -922,15 +924,39 @@ impl ProbeApp {
 
     pub(super) fn install_reloaded_workspace(
         &mut self,
-        mut workspace: LoadedWorkspace,
+        workspace: LoadedWorkspace,
         baselines: Vec<(RequestKey, Request)>,
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
         selector_remaps: &BTreeMap<String, String>,
     ) -> BTreeMap<RequestKey, RequestKey> {
+        let old_folders = FolderIndex::build(
+            self.loaded_workspace
+                .as_ref()
+                .expect("workspace must exist before reload"),
+        );
+        self.install_reloaded_workspace_indexed(
+            workspace,
+            baselines,
+            key_remaps,
+            selector_remaps,
+            &old_folders,
+        )
+        .0
+    }
+
+    fn install_reloaded_workspace_indexed(
+        &mut self,
+        mut workspace: LoadedWorkspace,
+        baselines: Vec<(RequestKey, Request)>,
+        key_remaps: &BTreeMap<RequestKey, RequestKey>,
+        selector_remaps: &BTreeMap<String, String>,
+        old_folders: &FolderIndex,
+    ) -> (BTreeMap<RequestKey, RequestKey>, FolderIndex) {
         let selectors = self.snapshot_shell_selectors(
             self.loaded_workspace
                 .as_ref()
                 .expect("workspace must exist before reload"),
+            old_folders,
         );
         let detached = self
             .detached_requests
@@ -997,25 +1023,31 @@ impl ProbeApp {
             }
             _ => {}
         }
-        self.restore_shell_selectors(selector_remaps, &remaps, selectors);
+        let new_folders = FolderIndex::build(
+            self.loaded_workspace
+                .as_ref()
+                .expect("workspace was replaced"),
+        );
+        self.restore_shell_selectors(selector_remaps, &remaps, selectors, &new_folders);
         for (old_key, selection) in certificate_overrides {
             if let Some(key) = remaps.get(&old_key) {
                 self.shell.set_certificate_override(*key, selection);
             }
         }
-        remaps
+        (remaps, new_folders)
     }
 
     pub(super) fn remap_structure_dialog(
         &mut self,
         remaps: &BTreeMap<String, String>,
         anchors: DialogFolderAnchors,
+        folders: &FolderIndex,
     ) {
         if self.loaded_workspace.is_none() {
             self.structure_dialog = None;
             return;
         }
-        let Some(plan) = self.structure_dialog_remap_plan(remaps, &anchors) else {
+        let Some(plan) = self.structure_dialog_remap_plan(remaps, &anchors, folders) else {
             return;
         };
         if plan.close {
@@ -1033,25 +1065,28 @@ impl ProbeApp {
         let Some(DialogDestination {
             expanded,
             parent,
-            clear_positional_parent,
+            clear_live_parent,
         }) = plan.destination
         else {
             return;
         };
         dialog.expanded_folders = expanded;
         let expand_ancestors = match parent {
-            ParentUpdate::Root => {
-                dialog.destination_required = false;
-                false
-            }
+            ParentUpdate::Root => false,
             ParentUpdate::Folder(selector) => {
-                dialog.parent = selector;
-                dialog.destination_required = false;
-                true
+                // A reload must not accept a folder, or enable submit, after the
+                // destination was already cleared as unidentified.
+                if dialog.destination_required {
+                    false
+                } else {
+                    dialog.parent = selector;
+                    dialog.destination_required = false;
+                    true
+                }
             }
             ParentUpdate::Unresolved => {
                 dialog.destination_required = true;
-                if clear_positional_parent {
+                if clear_live_parent {
                     dialog.parent.clear();
                 }
                 false
@@ -1066,6 +1101,7 @@ impl ProbeApp {
         &self,
         remaps: &BTreeMap<String, String>,
         anchors: &DialogFolderAnchors,
+        folders: &FolderIndex,
     ) -> Option<StructureDialogRemap> {
         let loaded = self.loaded_workspace.as_ref()?;
         let dialog = self.structure_dialog.as_ref()?;
@@ -1091,7 +1127,7 @@ impl ProbeApp {
         };
         let destination = dialog
             .edits_destination()
-            .then(|| resolve_dialog_destination(dialog, anchors, remaps, loaded));
+            .then(|| resolve_dialog_destination(dialog, anchors, remaps, loaded, folders));
         Some(StructureDialogRemap {
             close: false,
             rename_selector,
@@ -1104,6 +1140,7 @@ impl ProbeApp {
         remaps: &BTreeMap<String, String>,
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
         selectors: ShellSelectors,
+        folders: &FolderIndex,
     ) {
         let loaded = self
             .loaded_workspace
@@ -1163,9 +1200,8 @@ impl ProbeApp {
         {
             *pending_keep = keep;
         }
-        let folder_index = FolderIndex::build(loaded);
         for anchor in selectors.folder_anchors {
-            let Some(selector) = relocate_folder(&anchor, remaps, loaded, &folder_index) else {
+            let Some(selector) = relocate_folder(&anchor, remaps, loaded, folders) else {
                 continue;
             };
             if let Some(key) = loaded.folder_key(&selector) {
@@ -1200,14 +1236,17 @@ impl ProbeApp {
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
         let certificate_inputs_unchanged =
             old.workspace().environments() == reconciled.workspace.workspace().environments();
-        let dialog_anchors = DialogFolderAnchors::capture(self.structure_dialog.as_ref(), old);
-        self.install_reloaded_workspace(
+        let old_folders = FolderIndex::build(old);
+        let dialog_anchors =
+            DialogFolderAnchors::capture(self.structure_dialog.as_ref(), &old_folders);
+        let (_key_remaps, new_folders) = self.install_reloaded_workspace_indexed(
             reconciled.workspace,
             reconciled.baselines,
             &key_remaps,
             &reconciled.selector_remaps,
+            &old_folders,
         );
-        self.remap_structure_dialog(&reconciled.selector_remaps, dialog_anchors);
+        self.remap_structure_dialog(&reconciled.selector_remaps, dialog_anchors, &new_folders);
         // The new-environment dialog is only a typed name. A refresh replaces
         // stored documents, and the next submit uses that refreshed workspace.
         self.sync_environment_manager_after_reload(
