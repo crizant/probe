@@ -18,6 +18,12 @@
       <stop offset=".55" stop-color="#FF9800"/>
       <stop offset="1" stop-color="#E98100"/>
     </linearGradient>
+    <!-- Keep a solid highlight with a narrow blend into the orange face. -->
+    <linearGradient id="handle-highlight" x1="500" y1="516" x2="513.5" y2="529.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC43D"/>
+      <stop offset=".78" stop-color="#FFC43D"/>
+      <stop offset="1" stop-color="#FF9800"/>
+    </linearGradient>
     <clipPath id="handle-clip">
       <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z"/>
     </clipPath>
@@ -47,13 +53,13 @@
     <!-- Clean color faces follow the original highlight and shadow boundaries. -->
     <g clip-path="url(#handle-clip)">
       <rect x="475" y="195" width="410" height="415" fill="#FF9800"/>
-      <path d="M350 664L950 64V78L350 678Z" fill="#FFB21A"/>
-      <path d="M350 678L950 78V101L350 701Z" fill="#FFC43D"/>
+      <path d="M350 664L950 64V66L350 666Z" fill="#FFB21A"/>
+      <path d="M350 666L950 66V93L350 693Z" fill="url(#handle-highlight)"/>
       <path d="M350 770L950 170V215L350 815Z" fill="#E98100"/>
       <!-- The three original grip rings, measured along the diagonal axis. -->
       <g clip-path="url(#bands-clip)">
         <rect x="475" y="195" width="410" height="415" fill="#C96201"/>
-        <path d="M350 664L950 64V101L350 701Z" fill="#E78A00"/>
+        <path d="M350 664L950 64V89L350 689Z" fill="#E78A00"/>
         <path d="M350 770L950 170V215L350 815Z" fill="#AF5000"/>
       </g>
     </g>
