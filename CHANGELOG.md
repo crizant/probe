@@ -41,7 +41,9 @@ Release dates use Australia/Brisbane time (UTC+10).
   folder follows that folder, or the selection is cleared when it cannot be
   identified. An open folder Overview tab and its unsaved documentation follow
   that folder as well; if the folder cannot be identified, the draft is kept
-  but cannot be saved into a different folder. Expanded folders in the dialog
+  but cannot be saved into a different folder. An Unsaved Changes confirmation
+  that is already open follows the same folder, and confirming it does not
+  write the draft into a different one. Expanded folders in the dialog
   and collapsed folders in the sidebar follow the folder rather than its
   previous position. The Save Request
   New Folder sheet explains when the destination must be chosen again and does

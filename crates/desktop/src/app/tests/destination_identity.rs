@@ -860,10 +860,162 @@ items:
             assert!(has_active_toast(
                 view,
                 ToastIntent::Error,
-                "The folder no longer exists"
+                "could not be identified"
             ));
             assert!(view.overview_drafts.values().any(|draft| {
                 draft.current.docs == Some(probe_core::Documentation::Text("Secret notes".into()))
+            }));
+        })
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before_save);
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn unsaved_folder_dialog_follows_an_external_reorder(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let path = temp_collection("unsaved-dialog", COLLECTION);
+    reset_collection(window, cx, &path, COLLECTION);
+    window
+        .update(cx, |view, window, cx| {
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(folder));
+            view.edit_overview(
+                crate::app::documentation::OverviewTarget::Folder("items/1".into()),
+                true,
+                "Target notes".into(),
+                cx,
+            );
+            view.request_close_overview(crate::shell::OverviewTab::Folder(folder), window, cx);
+            assert!(matches!(
+                view.application_dialog,
+                Some(ApplicationDialog::Unsaved { .. })
+            ));
+        })
+        .unwrap();
+    let fresh = external_edit(
+        &path,
+        StructureOperation::Move {
+            target: ItemLocator::new(ItemKind::Folder, "items/1"),
+            parent: None,
+            index: Some(0),
+        },
+    );
+    reconcile(window, cx, fresh);
+    window
+        .update(cx, |view, window, cx| {
+            match &view.application_dialog {
+                Some(ApplicationDialog::Unsaved {
+                    pending:
+                        PendingClose::Overview(crate::app::documentation::OverviewTarget::Folder(
+                            selector,
+                        )),
+                    ..
+                }) => assert_eq!(selector, "items/0"),
+                _ => panic!("unsaved dialog should keep the moved folder"),
+            }
+            view.handle_application_dialog_action(ApplicationDialogAction::Save, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let saved = probe_opencollection::load_workspace(&path).unwrap();
+    assert_eq!(
+        saved
+            .workspace()
+            .folder(saved.folder_key("items/0").unwrap())
+            .unwrap()
+            .docs,
+        Some(probe_core::Documentation::Text("Target notes".into()))
+    );
+    assert_eq!(
+        saved
+            .workspace()
+            .folder(saved.folder_key("items/1").unwrap())
+            .unwrap()
+            .docs,
+        None
+    );
+
+    let identical = r#"opencollection: 1.0.0
+info:
+  name: Twins
+bundled: true
+items:
+  - info: {name: Twin, type: folder}
+    items: []
+  - info: {name: Twin, type: folder}
+    items: []
+"#;
+    reset_collection(window, cx, &path, identical);
+    window
+        .update(cx, |view, window, cx| {
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/1")
+                .unwrap();
+            view.shell
+                .open_overview(crate::shell::OverviewTab::Folder(folder));
+            view.edit_overview(
+                crate::app::documentation::OverviewTarget::Folder("items/1".into()),
+                true,
+                "Secret notes".into(),
+                cx,
+            );
+            view.request_close_overview(crate::shell::OverviewTab::Folder(folder), window, cx);
+        })
+        .unwrap();
+    let fresh = probe_opencollection::load_workspace(&path).unwrap();
+    reconcile(window, cx, fresh);
+    let before_save = fs::read(&path).unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "could not be identified"
+            ));
+            let selector = match &view.application_dialog {
+                Some(ApplicationDialog::Unsaved {
+                    pending:
+                        PendingClose::Overview(crate::app::documentation::OverviewTarget::Folder(
+                            selector,
+                        )),
+                    ..
+                }) => selector.clone(),
+                _ => panic!("unsaved dialog should stay open"),
+            };
+            assert!(
+                view.loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .folder_key(&selector)
+                    .is_none()
+            );
+            view.handle_application_dialog_action(ApplicationDialogAction::Save, window, cx);
+            assert!(has_active_toast(view, ToastIntent::Error, "was not saved"));
+            assert!(view.overview_drafts.values().any(|draft| {
+                draft.current.docs == Some(probe_core::Documentation::Text("Secret notes".into()))
+            }));
+            view.prompt_unsaved(
+                Vec::new(),
+                PendingClose::Overview(crate::app::documentation::OverviewTarget::Folder(selector)),
+                window,
+                cx,
+            );
+            view.handle_application_dialog_action(ApplicationDialogAction::Discard, window, cx);
+            assert!(view.overview_drafts.values().all(|draft| {
+                draft.current.docs != Some(probe_core::Documentation::Text("Secret notes".into()))
             }));
         })
         .unwrap();

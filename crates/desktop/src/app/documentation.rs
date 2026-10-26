@@ -213,7 +213,7 @@ impl ProbeApp {
         };
         let Some(current) = self.overview_content(&target) else {
             self.fail_documentation_save(
-                "The folder no longer exists. Discard this documentation draft to continue.",
+                "The folder could not be identified. This documentation draft was not saved. Discard it to continue.",
                 cx,
             );
             return ControlFlow::Break(());

@@ -963,7 +963,18 @@ impl ProbeApp {
             }
             _ => None,
         };
-        open_tabs.chain(drafts).chain(pending).chain(closing)
+        let prompted = match &self.application_dialog {
+            Some(ApplicationDialog::Unsaved {
+                pending: PendingClose::Overview(OverviewTarget::Folder(selector)),
+                ..
+            }) => Some(selector.clone()),
+            _ => None,
+        };
+        open_tabs
+            .chain(drafts)
+            .chain(pending)
+            .chain(closing)
+            .chain(prompted)
     }
 
     pub(super) fn install_reloaded_workspace(
@@ -1209,6 +1220,21 @@ impl ProbeApp {
         if let Some(PendingClose::Overview(target)) = self.pending_close.as_mut() {
             *target = retarget_overview_target(target.clone(), &retarget);
         }
+        let prompted = match &self.application_dialog {
+            Some(ApplicationDialog::Unsaved {
+                pending: PendingClose::Overview(OverviewTarget::Folder(selector)),
+                ..
+            }) => Some(retarget(selector)),
+            _ => None,
+        };
+        if let Some(selector) = prompted
+            && let Some(ApplicationDialog::Unsaved {
+                pending: PendingClose::Overview(OverviewTarget::Folder(current)),
+                ..
+            }) = self.application_dialog.as_mut()
+        {
+            *current = selector;
+        }
         let restored: Vec<_> = selectors
             .ordered_tabs
             .iter()
@@ -1291,6 +1317,13 @@ impl ProbeApp {
             &old_folders,
         );
         self.remap_structure_dialog(&reconciled.selector_remaps, dialog_anchors, &new_folders);
+        if orphaned_folder_documentation_draft(self) {
+            self.show_toast(
+                ToastIntent::Warning,
+                "A folder could not be identified. Its unsaved documentation was kept and was not saved.",
+                cx,
+            );
+        }
         // The new-environment dialog is only a typed name. A refresh replaces
         // stored documents, and the next submit uses that refreshed workspace.
         self.sync_environment_manager_after_reload(
@@ -1331,6 +1364,19 @@ impl ProbeApp {
 /// A stale selector is left unchanged: saving it already fails because the
 /// folder is gone. A selector that now addresses a different folder is detached
 /// so the draft text remains but cannot be written there.
+fn orphaned_folder_documentation_draft(view: &ProbeApp) -> bool {
+    let Some(loaded) = view.loaded_workspace.as_ref() else {
+        return false;
+    };
+    view.overview_drafts.iter().any(|(target, draft)| {
+        draft.is_dirty()
+            && matches!(
+                target,
+                OverviewTarget::Folder(selector) if loaded.folder_key(selector).is_none()
+            )
+    })
+}
+
 fn retarget_folder_selector(
     selector: &str,
     anchors: &BTreeMap<String, FolderAnchor>,
