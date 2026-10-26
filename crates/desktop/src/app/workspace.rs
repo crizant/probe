@@ -1002,6 +1002,10 @@ impl ProbeApp {
     }
 
     pub(super) fn remap_structure_dialog(&mut self, remaps: &BTreeMap<String, String>) {
+        let previous_parent = self
+            .structure_dialog
+            .as_ref()
+            .map(|dialog| dialog.parent.clone());
         let Some(dialog) = self.structure_dialog.as_mut() else {
             return;
         };
@@ -1065,6 +1069,14 @@ impl ProbeApp {
                     self.structure_dialog = None;
                 }
             }
+        }
+        let parent_changed = self
+            .structure_dialog
+            .as_ref()
+            .map(|dialog| dialog.parent.clone())
+            != previous_parent;
+        if parent_changed {
+            self.scroll_selected_destination_into_view();
         }
     }
 

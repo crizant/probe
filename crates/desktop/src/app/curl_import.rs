@@ -45,6 +45,7 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.scroll_selected_destination_into_view();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }

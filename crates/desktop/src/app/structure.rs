@@ -45,6 +45,7 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.scroll_selected_destination_into_view();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -115,6 +116,7 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.scroll_selected_destination_into_view();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -132,6 +134,7 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.scroll_selected_destination_into_view();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -382,6 +385,7 @@ impl ProbeApp {
         if let Some(curl) = dialog.curl.as_mut() {
             curl.destination_required = false;
         }
+        self.scroll_selected_destination_into_view();
         cx.notify();
     }
 
@@ -742,6 +746,10 @@ impl ProbeApp {
         operation: &StructureOperation,
         result: &StructureResult,
     ) {
+        let previous_parent = self
+            .structure_dialog
+            .as_ref()
+            .map(|dialog| dialog.parent.clone());
         let created_folder = matches!(operation, StructureOperation::CreateFolder { .. })
             .then(|| result.selector.clone())
             .flatten();
@@ -778,6 +786,42 @@ impl ProbeApp {
         }
         self.expand_destination_ancestors();
         self.drop_missing_save_dialog_folders();
+        let parent_changed = self
+            .structure_dialog
+            .as_ref()
+            .map(|dialog| dialog.parent.clone())
+            != previous_parent;
+        if parent_changed {
+            self.scroll_selected_destination_into_view();
+        }
+    }
+
+    /// Scrolls the destination list the minimum amount that shows the selected
+    /// folder. Callers invoke this when the selection changes. Later frames do
+    /// not repeat it, so a manual scroll stands.
+    pub(super) fn scroll_selected_destination_into_view(&self) {
+        let Some(dialog) = self.structure_dialog.as_ref() else {
+            return;
+        };
+        if !dialog.edits_destination() {
+            return;
+        }
+        if dialog
+            .curl
+            .as_ref()
+            .is_some_and(|curl| curl.destination_required)
+        {
+            return;
+        }
+        let Some(loaded) = self.loaded_workspace.as_ref() else {
+            return;
+        };
+        let rows = save_destination_rows(loaded, &dialog.expanded_folders);
+        let Some(index) = rows.iter().position(|row| row.selector == dialog.parent) else {
+            return;
+        };
+        self.destination_scroll
+            .scroll_to_item(index, ScrollStrategy::Nearest);
     }
 
     pub(super) fn expand_destination_ancestors(&mut self) {

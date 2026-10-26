@@ -5444,3 +5444,180 @@ fn destination_root_does_not_add_depth_to_top_level_folders() {
         .depth;
     assert_eq!((sidebar_depth, dialog_depth), (0, 0));
 }
+
+fn nested_folder_selector(depth: usize) -> String {
+    (0..depth).map(|_| "items/0").collect::<Vec<_>>().join("/")
+}
+
+fn nested_destination_collection(depth: usize) -> PathBuf {
+    let mut yaml = String::from(
+        "opencollection: 1.0.0\ninfo:\n  name: Deep destination\nbundled: true\nitems:\n",
+    );
+    for level in 0..depth {
+        let item_indent = "  ".repeat(level + 1);
+        let key_indent = "  ".repeat(level + 2);
+        let field_indent = "  ".repeat(level + 3);
+        yaml.push_str(&format!(
+            "{item_indent}- info:\n{field_indent}name: Folder {level}\n{field_indent}type: folder\n"
+        ));
+        if level + 1 == depth {
+            yaml.push_str(&format!("{key_indent}items: []\n"));
+        } else {
+            yaml.push_str(&format!("{key_indent}items:\n"));
+        }
+    }
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "probe-desktop-destination-scroll-{}-{unique}.yml",
+        std::process::id()
+    ));
+    fs::write(&path, yaml).expect("deep destination fixture should be written");
+    path
+}
+
+fn destination_scroll_y(view: &ProbeApp) -> gpui_kit::Pixels {
+    view.destination_scroll.0.borrow().base_handle.offset().y
+}
+
+fn destination_row_is_visible(visual: &mut VisualTestContext, selector: &'static str) -> bool {
+    let Some(tree) = visual.debug_bounds("save-destination-tree") else {
+        return false;
+    };
+    let Some(row) = visual.debug_bounds(selector) else {
+        return false;
+    };
+    row.top() >= tree.top() - px(1.0) && row.bottom() <= tree.bottom() + px(1.0)
+}
+
+#[gpui_kit::test]
+fn destination_dialogs_reveal_a_preselected_folder(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    const DEPTH: usize = 16;
+    let path = nested_destination_collection(DEPTH);
+    let selector = nested_folder_selector(DEPTH);
+    let parent_selector = nested_folder_selector(DEPTH - 1);
+
+    for mode in ["http", "graphql", "folder", "save", "curl"] {
+        let window = cx.open_window(size(px(900.0), px(1200.0)), ProbeApp::new);
+        let workspace = probe_opencollection::load_workspace(&path).expect("deep collection loads");
+        let folder = workspace
+            .folder_key(&selector)
+            .expect("deep folder should exist");
+        window
+            .update(cx, |view, window, cx| {
+                view.session_store = None;
+                view.set_workspace(path.clone(), workspace);
+                view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+                match mode {
+                    "http" => view.open_create_request_dialog(
+                        probe_core::RequestProtocol::Http,
+                        window,
+                        cx,
+                    ),
+                    "graphql" => view.open_create_request_dialog(
+                        probe_core::RequestProtocol::Graphql,
+                        window,
+                        cx,
+                    ),
+                    "folder" => view.open_create_folder_dialog(window, cx),
+                    "save" => {
+                        view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
+                        view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
+                        view.open_save_detached_request_dialog(
+                            view.shell.active_tab().expect("detached request"),
+                            window,
+                            cx,
+                        );
+                    }
+                    "curl" => view.open_curl_import_dialog(window, cx),
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    view.structure_dialog.as_ref().expect("dialog").parent,
+                    selector
+                );
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let selected_bounds: &'static str = format!("save-destination-{selector}").leak();
+        let parent_bounds: &'static str = format!("save-destination-{parent_selector}").leak();
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(
+                destination_row_is_visible(&mut visual, selected_bounds),
+                "{mode}: preselected folder should be inside the destination tree"
+            );
+            assert!(
+                visual.debug_bounds("save-destination-root").is_none(),
+                "{mode}: collection root should stay outside the destination viewport"
+            );
+        }
+        window
+            .update(cx, |view, _, _| {
+                assert!(
+                    destination_scroll_y(view) < px(0.0),
+                    "{mode}: the destination list should scroll to the preselected folder"
+                );
+            })
+            .expect("test window should remain open");
+
+        if mode != "http" {
+            continue;
+        }
+
+        let offset = window
+            .update(cx, |view, _, cx| {
+                let before = destination_scroll_y(view);
+                view.select_destination_parent(parent_selector.clone(), cx);
+                before
+            })
+            .expect("test window should remain open");
+        cx.run_until_parked();
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(destination_row_is_visible(&mut visual, parent_bounds));
+            assert!(destination_row_is_visible(&mut visual, selected_bounds));
+        }
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(destination_scroll_y(view), offset);
+                view.destination_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.0), px(0.0)));
+                cx.notify();
+            })
+            .expect("test window should remain open");
+        cx.run_until_parked();
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(
+                visual.debug_bounds(selected_bounds).is_none(),
+                "scrolling away from the selection should stand"
+            );
+            assert!(destination_row_is_visible(
+                &mut visual,
+                "save-destination-root"
+            ));
+        }
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(destination_scroll_y(view), px(0.0));
+                view.select_destination_parent(selector.clone(), cx);
+            })
+            .expect("test window should remain open");
+        cx.run_until_parked();
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(destination_row_is_visible(&mut visual, selected_bounds));
+            assert!(visual.debug_bounds("save-destination-root").is_none());
+        }
+    }
+
+    fs::remove_file(path).expect("deep destination fixture should be removed");
+}

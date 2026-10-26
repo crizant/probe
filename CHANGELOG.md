@@ -30,6 +30,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Destination folder trees in Save Request, New HTTP Request, New GraphQL
+  Request, New Folder, and Import from cURL scroll a preselected folder into
+  view when the dialog opens.
 - Destination tree hierarchy guides no longer run through collapsed folder
   chevrons; top-level folders align with the collection sidebar.
 
