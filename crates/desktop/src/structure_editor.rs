@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use probe_core::{FolderKey, ItemKind, RequestKey, RequestProtocol, Workspace, WorkspaceItemRef};
 use probe_opencollection::{ItemLocator, LoadedWorkspace, StructureOperation};
@@ -12,8 +12,11 @@ pub(crate) struct CurlImport {
     pub(crate) parsed: Option<Result<probe_core::Request, probe_application::CurlParseError>>,
     pub(crate) error: Option<String>,
     pub(crate) committed: bool,
-    pub(crate) destination_required: bool,
 }
+
+/// Shown when a reload cannot prove the chosen folder is still the same one.
+pub(crate) const DESTINATION_RESELECTION_MESSAGE: &str =
+    "The destination folder could not be identified. Select a destination before continuing.";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StructureDialogMode {
@@ -30,10 +33,14 @@ pub(crate) struct StructureDialog {
     pub(crate) curl: Option<CurlImport>,
     pub(crate) name: String,
     pub(crate) parent: String,
+    /// The chosen folder could not be identified after a reload. Submit stays
+    /// disabled until the user selects a destination again.
+    pub(crate) destination_required: bool,
     /// Folder selectors expanded in the dialog destination tree.
     ///
     /// This is independent of the sidebar so collapsing a destination does not
-    /// collapse the collection tree.
+    /// collapse the collection tree. Selectors are re-resolved to the same
+    /// folders after an external reload.
     pub(crate) expanded_folders: BTreeSet<String>,
     /// `Some` while the save dialog's New Folder sheet is open.
     pub(crate) new_folder_name: Option<String>,
@@ -49,6 +56,7 @@ impl StructureDialog {
             mode: StructureDialogMode::SaveDetachedRequest { key },
             name,
             parent: parent.unwrap_or_default(),
+            destination_required: false,
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
             curl: None,
@@ -59,6 +67,7 @@ impl StructureDialog {
             mode: StructureDialogMode::CreateRequest(protocol),
             name: String::new(),
             parent: parent.unwrap_or_default(),
+            destination_required: false,
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
             curl: None,
@@ -70,6 +79,7 @@ impl StructureDialog {
             mode: StructureDialogMode::CreateFolder,
             name: String::new(),
             parent: parent.unwrap_or_default(),
+            destination_required: false,
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
             curl: None,
@@ -81,6 +91,7 @@ impl StructureDialog {
             mode: StructureDialogMode::Rename { kind, selector },
             name,
             parent: String::new(),
+            destination_required: false,
             expanded_folders: BTreeSet::new(),
             new_folder_name: None,
             curl: None,
@@ -332,6 +343,234 @@ fn folder_label(loaded: &LoadedWorkspace, key: FolderKey) -> String {
         .folder(key)
         .and_then(|folder| folder.metadata.name.clone())
         .unwrap_or_else(|| "Untitled folder".to_owned())
+}
+
+/// Identity of one folder, captured before a workspace reload.
+///
+/// Bundled selectors such as `items/1` are positions. A name path finds the
+/// folder again after a reorder, and the child structure separates same-named
+/// siblings. The captured selector is only a key for filesystem rename hints;
+/// it is not used to choose among identical siblings, because a swap would
+/// make that position address the other folder.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FolderAnchor {
+    names: Vec<Option<String>>,
+    children: Vec<ChildIdentity>,
+    selector: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ChildIdentity {
+    Request(Option<String>),
+    Folder {
+        name: Option<String>,
+        children: Vec<ChildIdentity>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ResolvedFolder {
+    Found(String),
+    Unresolved,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DialogFolderAnchors {
+    pub(crate) parent: Option<FolderAnchor>,
+    pub(crate) expanded: Vec<FolderAnchor>,
+}
+
+impl DialogFolderAnchors {
+    pub(crate) fn capture(dialog: Option<&StructureDialog>, loaded: &LoadedWorkspace) -> Self {
+        let Some(dialog) = dialog.filter(|dialog| dialog.edits_destination()) else {
+            return Self::default();
+        };
+        let index = FolderIndex::build(loaded);
+        Self {
+            parent: (!dialog.parent.is_empty())
+                .then(|| index.anchor(&dialog.parent))
+                .flatten(),
+            expanded: dialog
+                .expanded_folders
+                .iter()
+                .filter_map(|selector| index.anchor(selector))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ParentUpdate {
+    Root,
+    Folder(String),
+    Unresolved,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DialogDestination {
+    pub(crate) expanded: BTreeSet<String>,
+    pub(crate) parent: ParentUpdate,
+    /// The stored selector now addresses a folder that was not identified as
+    /// the user's choice. Keeping it would create the item there.
+    pub(crate) clear_positional_parent: bool,
+}
+
+pub(crate) fn resolve_dialog_destination(
+    dialog: &StructureDialog,
+    anchors: &DialogFolderAnchors,
+    remaps: &BTreeMap<String, String>,
+    loaded: &LoadedWorkspace,
+) -> DialogDestination {
+    let index = FolderIndex::build(loaded);
+    let expanded = anchors
+        .expanded
+        .iter()
+        .filter_map(|anchor| relocate_folder(anchor, remaps, loaded, &index))
+        .collect();
+    if dialog.parent.is_empty() {
+        return DialogDestination {
+            expanded,
+            parent: ParentUpdate::Root,
+            clear_positional_parent: false,
+        };
+    }
+    let parent = anchors
+        .parent
+        .as_ref()
+        .and_then(|anchor| relocate_folder(anchor, remaps, loaded, &index));
+    match parent {
+        Some(selector) => DialogDestination {
+            expanded,
+            parent: ParentUpdate::Folder(selector),
+            clear_positional_parent: false,
+        },
+        None => DialogDestination {
+            expanded,
+            parent: ParentUpdate::Unresolved,
+            clear_positional_parent: loaded.folder_key(&dialog.parent).is_some(),
+        },
+    }
+}
+
+/// Follows a filesystem rename hint when it still addresses a folder, then the
+/// captured folder identity. Bundled external reloads do not remap folder
+/// selectors, so identity is what keeps a moved folder.
+pub(crate) fn relocate_folder(
+    anchor: &FolderAnchor,
+    remaps: &BTreeMap<String, String>,
+    loaded: &LoadedWorkspace,
+    index: &FolderIndex,
+) -> Option<String> {
+    if let Some(mapped) = remaps.get(&anchor.selector)
+        && loaded.folder_key(mapped).is_some()
+    {
+        return Some(mapped.clone());
+    }
+    match index.resolve(anchor) {
+        ResolvedFolder::Found(selector) => Some(selector),
+        ResolvedFolder::Unresolved => None,
+    }
+}
+
+pub(crate) struct FolderIndex {
+    folders: Vec<IndexedFolder>,
+}
+
+struct IndexedFolder {
+    selector: String,
+    names: Vec<Option<String>>,
+    children: Vec<ChildIdentity>,
+}
+
+impl FolderIndex {
+    pub(crate) fn build(loaded: &LoadedWorkspace) -> Self {
+        let mut folders = Vec::new();
+        let mut names = Vec::new();
+        index_folders(
+            loaded,
+            loaded.workspace().root_items(),
+            &mut names,
+            &mut folders,
+        );
+        Self { folders }
+    }
+
+    pub(crate) fn anchor(&self, selector: &str) -> Option<FolderAnchor> {
+        self.folders
+            .iter()
+            .find(|folder| folder.selector == selector)
+            .map(|folder| FolderAnchor {
+                names: folder.names.clone(),
+                children: folder.children.clone(),
+                selector: folder.selector.clone(),
+            })
+    }
+
+    pub(crate) fn resolve(&self, anchor: &FolderAnchor) -> ResolvedFolder {
+        let name_matches: Vec<_> = self
+            .folders
+            .iter()
+            .filter(|folder| folder.names == anchor.names)
+            .collect();
+        if name_matches.len() == 1 {
+            return ResolvedFolder::Found(name_matches[0].selector.clone());
+        }
+        let distinguished: Vec<_> = name_matches
+            .into_iter()
+            .filter(|folder| folder.children == anchor.children)
+            .collect();
+        if distinguished.len() == 1 {
+            return ResolvedFolder::Found(distinguished[0].selector.clone());
+        }
+        // Several folders share the name path and child structure. The old
+        // selector can now address a different one of them.
+        ResolvedFolder::Unresolved
+    }
+}
+
+fn index_folders(
+    loaded: &LoadedWorkspace,
+    items: &[WorkspaceItemRef],
+    names: &mut Vec<Option<String>>,
+    folders: &mut Vec<IndexedFolder>,
+) -> Vec<ChildIdentity> {
+    let mut children = Vec::new();
+    for item in items {
+        match *item {
+            WorkspaceItemRef::Request(key) => {
+                children.push(ChildIdentity::Request(item_name(
+                    loaded.workspace().request(key),
+                )));
+            }
+            WorkspaceItemRef::Folder(key) => {
+                let Some(selector) = loaded.folder_selector(key).map(str::to_owned) else {
+                    continue;
+                };
+                let name = loaded
+                    .workspace()
+                    .folder(key)
+                    .and_then(|folder| folder.metadata.name.clone());
+                names.push(name.clone());
+                let nested = folder_children(loaded, key);
+                let nested_children = index_folders(loaded, &nested, names, folders);
+                folders.push(IndexedFolder {
+                    selector,
+                    names: names.clone(),
+                    children: nested_children.clone(),
+                });
+                names.pop();
+                children.push(ChildIdentity::Folder {
+                    name,
+                    children: nested_children,
+                });
+            }
+        }
+    }
+    children
+}
+
+fn item_name(request: Option<&probe_core::Request>) -> Option<String> {
+    request.and_then(|request| request.metadata.name.clone())
 }
 
 pub(crate) fn item_position(
@@ -849,5 +1088,196 @@ mod tests {
             Some("items/1"),
             |_| true
         ));
+    }
+
+    use std::collections::BTreeMap;
+
+    use probe_opencollection::LoadedWorkspace;
+
+    use super::{DialogFolderAnchors, ParentUpdate, ResolvedFolder, resolve_dialog_destination};
+
+    fn load(source: &str) -> LoadedWorkspace {
+        probe_opencollection::load_workspace_from_str(source).unwrap()
+    }
+
+    fn bundled(items: &str) -> String {
+        format!(
+            "opencollection: 1.0.0\ninfo:\n  name: Destinations\nbundled: true\nitems:\n{items}"
+        )
+    }
+
+    const BEFORE: &str = "  - info: {name: Before, type: folder}\n    items: []\n";
+    const TARGET: &str = "  - info: {name: Target, type: folder}\n    items:\n      - info: {name: Marker, type: http}\n        http: {method: GET, url: https://example.test/marker}\n";
+    const AFTER: &str = "  - info: {name: After, type: folder}\n    items: []\n";
+
+    fn anchor_parent(source: &str, selector: &str) -> (LoadedWorkspace, super::FolderAnchor) {
+        let loaded = load(source);
+        let anchor = super::FolderIndex::build(&loaded)
+            .anchor(selector)
+            .expect("folder");
+        (loaded, anchor)
+    }
+
+    fn resolved(source: &str, anchor: &super::FolderAnchor) -> ResolvedFolder {
+        super::FolderIndex::build(&load(source)).resolve(anchor)
+    }
+
+    #[test]
+    fn folder_identity_follows_a_reordered_inserted_removed_or_renamed_sibling() {
+        let original = bundled(&format!("{BEFORE}{TARGET}{AFTER}"));
+        let (_, anchor) = anchor_parent(&original, "items/1");
+        assert_eq!(
+            resolved(&bundled(&format!("{TARGET}{BEFORE}{AFTER}")), &anchor),
+            ResolvedFolder::Found("items/0".into()),
+            "reordering must not keep the old position"
+        );
+        assert_eq!(
+            resolved(
+                &bundled(&format!(
+                    "  - info: {{name: Inserted, type: folder}}\n    items: []\n{BEFORE}{TARGET}{AFTER}"
+                )),
+                &anchor
+            ),
+            ResolvedFolder::Found("items/2".into())
+        );
+        assert_eq!(
+            resolved(&bundled(&format!("{TARGET}{AFTER}")), &anchor),
+            ResolvedFolder::Found("items/0".into())
+        );
+        let renamed_sibling = bundled(&format!(
+            "  - info: {{name: Renamed, type: folder}}\n    items: []\n{TARGET}{AFTER}"
+        ));
+        assert_eq!(
+            resolved(&renamed_sibling, &anchor),
+            ResolvedFolder::Found("items/1".into())
+        );
+    }
+
+    #[test]
+    fn renaming_the_chosen_folder_is_not_treated_as_the_same_position() {
+        let original = bundled(&format!("{BEFORE}{TARGET}"));
+        let (_, anchor) = anchor_parent(&original, "items/1");
+        let renamed = bundled(
+            "  - info: {name: Before, type: folder}\n    items: []\n  - info: {name: Renamed, type: folder}\n    items:\n      - info: {name: Marker, type: http}\n        http: {method: GET, url: https://example.test/marker}\n",
+        );
+        assert_eq!(resolved(&renamed, &anchor), ResolvedFolder::Unresolved);
+    }
+
+    #[test]
+    fn same_named_siblings_follow_child_identity_and_identical_ones_stay_unresolved() {
+        let distinguished = bundled(
+            "  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Left, type: http}\n        http: {method: GET, url: https://example.test/left}\n  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Right, type: http}\n        http: {method: GET, url: https://example.test/right}\n",
+        );
+        let (_, right) = anchor_parent(&distinguished, "items/1");
+        let swapped = bundled(
+            "  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Right, type: http}\n        http: {method: GET, url: https://example.test/right}\n  - info: {name: Twin, type: folder}\n    items:\n      - info: {name: Left, type: http}\n        http: {method: GET, url: https://example.test/left}\n",
+        );
+        assert_eq!(
+            resolved(&swapped, &right),
+            ResolvedFolder::Found("items/0".into())
+        );
+
+        let identical = bundled(
+            "  - info: {name: Twin, type: folder}\n    items: []\n  - info: {name: Twin, type: folder}\n    items: []\n",
+        );
+        let (_, second) = anchor_parent(&identical, "items/1");
+        assert_eq!(
+            resolved(&identical, &second),
+            ResolvedFolder::Unresolved,
+            "identical siblings cannot be told apart by position"
+        );
+    }
+
+    #[test]
+    fn nested_folder_identity_follows_its_parent() {
+        let original = bundled(
+            "  - info: {name: Outer, type: folder}\n    items:\n      - info: {name: Inner, type: folder}\n        items: []\n  - info: {name: Other, type: folder}\n    items: []\n",
+        );
+        let (_, inner) = anchor_parent(&original, "items/0/items/0");
+        let moved = bundled(
+            "  - info: {name: Other, type: folder}\n    items: []\n  - info: {name: Outer, type: folder}\n    items:\n      - info: {name: Inner, type: folder}\n        items: []\n",
+        );
+        assert_eq!(
+            resolved(&moved, &inner),
+            ResolvedFolder::Found("items/1/items/0".into())
+        );
+    }
+
+    #[test]
+    fn dialog_destination_clears_a_positional_selector_that_now_points_elsewhere() {
+        let original = load(&bundled(&format!("{BEFORE}{TARGET}{AFTER}")));
+        let mut dialog = StructureDialog::create_folder(Some("items/1".into()));
+        dialog.expanded_folders.insert("items/0".into());
+        dialog.expanded_folders.insert("items/1".into());
+        let anchors = DialogFolderAnchors::capture(Some(&dialog), &original);
+        let fresh = load(&bundled(&format!("{TARGET}{BEFORE}{AFTER}")));
+        let resolved = resolve_dialog_destination(&dialog, &anchors, &BTreeMap::new(), &fresh);
+        assert_eq!(resolved.parent, ParentUpdate::Folder("items/0".into()));
+        assert_eq!(
+            resolved.expanded,
+            ["items/0".to_owned(), "items/1".to_owned()]
+                .into_iter()
+                .collect()
+        );
+        assert!(!resolved.clear_positional_parent);
+
+        let identical = load(&bundled(
+            "  - info: {name: Twin, type: folder}\n    items: []\n  - info: {name: Twin, type: folder}\n    items: []\n",
+        ));
+        dialog.parent = "items/1".into();
+        dialog.expanded_folders.clear();
+        let anchors = DialogFolderAnchors::capture(Some(&dialog), &identical);
+        let swapped = load(&bundled(
+            "  - info: {name: Twin, type: folder}\n    items: []\n  - info: {name: Twin, type: folder}\n    items: []\n",
+        ));
+        let resolved = resolve_dialog_destination(&dialog, &anchors, &BTreeMap::new(), &swapped);
+        assert_eq!(resolved.parent, ParentUpdate::Unresolved);
+        assert!(resolved.clear_positional_parent);
+    }
+
+    #[test]
+    fn filesystem_rename_hint_relocates_a_folder_whose_name_changed() {
+        let original = load(&bundled(
+            "  - info: {name: Users, type: folder}\n    items: []\n",
+        ));
+        let anchor = super::FolderIndex::build(&original)
+            .anchor("items/0")
+            .unwrap();
+        let renamed = load(&bundled(
+            "  - info: {name: People, type: folder}\n    items: []\n",
+        ));
+        let remaps = BTreeMap::from([("items/0".to_owned(), "items/0".to_owned())]);
+        assert_eq!(
+            super::relocate_folder(
+                &anchor,
+                &remaps,
+                &renamed,
+                &super::FolderIndex::build(&renamed)
+            )
+            .as_deref(),
+            Some("items/0")
+        );
+        assert_eq!(
+            super::FolderIndex::build(&renamed).resolve(&anchor),
+            ResolvedFolder::Unresolved
+        );
+    }
+
+    #[test]
+    fn a_remap_onto_a_request_falls_through_to_folder_identity() {
+        let original = load(&bundled(&format!("{BEFORE}{TARGET}")));
+        let anchor = super::FolderIndex::build(&original)
+            .anchor("items/1")
+            .unwrap();
+        let fresh = load(&bundled(
+            "  - info: {name: Kept, type: http}\n    http: {method: GET, url: https://example.test}\n  - info: {name: Target, type: folder}\n    items:\n      - info: {name: Marker, type: http}\n        http: {method: GET, url: https://example.test/marker}\n",
+        ));
+        let remaps = BTreeMap::from([("items/1".to_owned(), "items/0".to_owned())]);
+        assert!(fresh.folder_key("items/0").is_none());
+        assert_eq!(
+            super::relocate_folder(&anchor, &remaps, &fresh, &super::FolderIndex::build(&fresh))
+                .as_deref(),
+            Some("items/1")
+        );
     }
 }

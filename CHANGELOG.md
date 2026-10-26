@@ -30,6 +30,13 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Save Request, New HTTP Request, New GraphQL Request, New Folder, and Import
+  from cURL keep the chosen folder when a bundled collection reloads while the
+  dialog is open. If that folder cannot be identified, including when a
+  same-named sibling cannot be distinguished, the destination is cleared and
+  must be selected again instead of creating the item in a different folder.
+  Expanded folders in the dialog and collapsed folders in the sidebar follow
+  the folder rather than its previous position.
 - Destination tree hierarchy guides no longer run through collapsed folder
   chevrons; top-level folders align with the collection sidebar.
 

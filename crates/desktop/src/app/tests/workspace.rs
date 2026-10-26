@@ -1557,7 +1557,11 @@ fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
             dialog.name = "Kept".to_owned();
             dialog.parent = "not-a-folder".to_owned();
             dialog.expanded_folders.insert("items/1".to_owned());
-            view.remap_structure_dialog(&BTreeMap::new());
+            let anchors = crate::structure_editor::DialogFolderAnchors::capture(
+                view.structure_dialog.as_ref(),
+                view.loaded_workspace.as_ref().unwrap(),
+            );
+            view.remap_structure_dialog(&BTreeMap::new(), anchors);
             let dialog = view
                 .structure_dialog
                 .as_ref()
@@ -1567,8 +1571,14 @@ fn missing_save_destination_keeps_the_save_dialog(cx: &mut TestAppContext) {
             };
             assert_eq!(dialog_key, key);
             assert_eq!(dialog.name, "Kept");
-            assert!(dialog.parent.is_empty());
+            assert_eq!(dialog.parent, "not-a-folder");
+            assert!(dialog.destination_required);
             assert!(dialog.expanded_folders.contains("items/1"));
+            view.submit_structure_dialog(window, cx);
+            assert!(
+                view.structure_dialog.is_some(),
+                "a missing destination must not save at the collection root"
+            );
         })
         .unwrap();
 }

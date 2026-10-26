@@ -903,11 +903,16 @@ impl ProbeApp {
                 Some(PendingClose::OtherTabs { keep }) => Some(*keep),
                 _ => None,
             },
-            folder_selectors: self
-                .shell
-                .collapsed_folders()
-                .filter_map(|key| old.folder_selector(key).map(str::to_owned))
-                .collect(),
+            folder_anchors: {
+                let index = FolderIndex::build(old);
+                self.shell
+                    .collapsed_folders()
+                    .filter_map(|key| {
+                        old.folder_selector(key)
+                            .and_then(|selector| index.anchor(selector))
+                    })
+                    .collect()
+            },
             selected: self.selected_tree_item.and_then(|item| {
                 old.item_selector(item)
                     .map(|selector| (item.kind(), selector.to_owned()))
@@ -1001,71 +1006,97 @@ impl ProbeApp {
         remaps
     }
 
-    pub(super) fn remap_structure_dialog(&mut self, remaps: &BTreeMap<String, String>) {
+    pub(super) fn remap_structure_dialog(
+        &mut self,
+        remaps: &BTreeMap<String, String>,
+        anchors: DialogFolderAnchors,
+    ) {
+        if self.loaded_workspace.is_none() {
+            self.structure_dialog = None;
+            return;
+        }
+        let Some(plan) = self.structure_dialog_remap_plan(remaps, &anchors) else {
+            return;
+        };
+        if plan.close {
+            self.structure_dialog = None;
+            return;
+        }
         let Some(dialog) = self.structure_dialog.as_mut() else {
             return;
         };
-        let Some(loaded) = self.loaded_workspace.as_ref() else {
-            self.structure_dialog = None;
+        if let (StructureDialogMode::Rename { selector, .. }, Some(mapped)) =
+            (&mut dialog.mode, plan.rename_selector)
+        {
+            *selector = mapped;
+        }
+        let Some(DialogDestination {
+            expanded,
+            parent,
+            clear_positional_parent,
+        }) = plan.destination
+        else {
             return;
         };
+        dialog.expanded_folders = expanded;
+        let expand_ancestors = match parent {
+            ParentUpdate::Root => {
+                dialog.destination_required = false;
+                false
+            }
+            ParentUpdate::Folder(selector) => {
+                dialog.parent = selector;
+                dialog.destination_required = false;
+                true
+            }
+            ParentUpdate::Unresolved => {
+                dialog.destination_required = true;
+                if clear_positional_parent {
+                    dialog.parent.clear();
+                }
+                false
+            }
+        };
+        if expand_ancestors {
+            self.expand_destination_ancestors();
+        }
+    }
 
-        let mut target_exists = true;
-        match &mut dialog.mode {
+    fn structure_dialog_remap_plan(
+        &self,
+        remaps: &BTreeMap<String, String>,
+        anchors: &DialogFolderAnchors,
+    ) -> Option<StructureDialogRemap> {
+        let loaded = self.loaded_workspace.as_ref()?;
+        let dialog = self.structure_dialog.as_ref()?;
+        let rename_selector = match &dialog.mode {
+            StructureDialogMode::Rename { kind, selector } => {
+                let mapped = remaps
+                    .get(selector)
+                    .map(String::as_str)
+                    .unwrap_or(selector.as_str());
+                if loaded.item_key(*kind, mapped).is_none() {
+                    return Some(StructureDialogRemap {
+                        close: true,
+                        rename_selector: None,
+                        destination: None,
+                    });
+                }
+                Some(mapped.to_owned())
+            }
             StructureDialogMode::ImportCurl
             | StructureDialogMode::CreateRequest(_)
             | StructureDialogMode::SaveDetachedRequest { .. }
-            | StructureDialogMode::CreateFolder => {}
-            StructureDialogMode::Rename { kind, selector } => {
-                if let Some(mapped) = remaps.get(selector) {
-                    selector.clone_from(mapped);
-                }
-                target_exists = loaded.item_key(*kind, selector).is_some();
-            }
-        }
-
-        if !target_exists {
-            self.structure_dialog = None;
-            return;
-        }
-
-        if dialog.edits_destination() {
-            let expanded = std::mem::take(&mut dialog.expanded_folders);
-            dialog.expanded_folders = expanded
-                .into_iter()
-                .filter_map(|selector| {
-                    let mapped = remaps
-                        .get(&selector)
-                        .map(String::as_str)
-                        .unwrap_or(selector.as_str());
-                    loaded
-                        .folder_key(mapped)
-                        .is_some()
-                        .then(|| mapped.to_owned())
-                })
-                .collect();
-        }
-
-        if !dialog.parent.is_empty() {
-            if let Some(mapped) = remaps.get(&dialog.parent) {
-                dialog.parent.clone_from(mapped);
-            }
-            if loaded.folder_key(&dialog.parent).is_none() {
-                if matches!(
-                    dialog.mode,
-                    StructureDialogMode::SaveDetachedRequest { .. }
-                        | StructureDialogMode::ImportCurl
-                ) {
-                    if let Some(curl) = dialog.curl.as_mut() {
-                        curl.destination_required = true;
-                    } else {
-                        dialog.parent.clear();
-                    }
-                } else {
-                    self.structure_dialog = None;
-                }
-            }
-        }
+            | StructureDialogMode::CreateFolder => None,
+        };
+        let destination = dialog
+            .edits_destination()
+            .then(|| resolve_dialog_destination(dialog, anchors, remaps, loaded));
+        Some(StructureDialogRemap {
+            close: false,
+            rename_selector,
+            destination,
+        })
     }
 
     pub(super) fn restore_shell_selectors(
@@ -1132,11 +1163,12 @@ impl ProbeApp {
         {
             *pending_keep = keep;
         }
-        for selector in selectors.folder_selectors {
-            let selector = remaps
-                .get(&selector)
-                .map_or(selector.as_str(), String::as_str);
-            if let Some(key) = loaded.folder_key(selector) {
+        let folder_index = FolderIndex::build(loaded);
+        for anchor in selectors.folder_anchors {
+            let Some(selector) = relocate_folder(&anchor, remaps, loaded, &folder_index) else {
+                continue;
+            };
+            if let Some(key) = loaded.folder_key(&selector) {
                 self.shell.collapse_folder(key);
             }
         }
@@ -1168,13 +1200,14 @@ impl ProbeApp {
         let environment_manager_reload = self.environment_manager_reload_snapshot(old);
         let certificate_inputs_unchanged =
             old.workspace().environments() == reconciled.workspace.workspace().environments();
+        let dialog_anchors = DialogFolderAnchors::capture(self.structure_dialog.as_ref(), old);
         self.install_reloaded_workspace(
             reconciled.workspace,
             reconciled.baselines,
             &key_remaps,
             &reconciled.selector_remaps,
         );
-        self.remap_structure_dialog(&reconciled.selector_remaps);
+        self.remap_structure_dialog(&reconciled.selector_remaps, dialog_anchors);
         // The new-environment dialog is only a typed name. A refresh replaces
         // stored documents, and the next submit uses that refreshed workspace.
         self.sync_environment_manager_after_reload(
@@ -1207,6 +1240,12 @@ impl ProbeApp {
         }
         cx.notify();
     }
+}
+
+struct StructureDialogRemap {
+    close: bool,
+    rename_selector: Option<String>,
+    destination: Option<DialogDestination>,
 }
 
 pub(super) fn projection_warning(workspace: &LoadedWorkspace) -> Option<String> {

@@ -101,10 +101,11 @@ impl ProbeApp {
         self.loading
             || self.has_active_workspace_write()
             || self.structure_dialog.as_ref().is_none_or(|dialog| {
+                let destination_required = dialog.destination_required;
                 dialog.name.trim().is_empty()
                     || dialog.curl.as_ref().is_none_or(|curl| {
                         curl.committed
-                            || curl.destination_required
+                            || destination_required
                             || !matches!(curl.parsed, Some(Ok(_)))
                     })
             })
@@ -217,9 +218,13 @@ impl ProbeApp {
                     .child("Request name is required."),
             );
         }
-        if curl.destination_required {
-            form = form.child(div().text_size(px(theme.typography.caption_size)).text_color(theme.colors.status.error)
-                .child("The destination folder was removed. Select a destination before importing."));
+        if dialog.destination_required {
+            form = form.child(
+                div()
+                    .text_size(px(theme.typography.caption_size))
+                    .text_color(theme.colors.status.error)
+                    .child(DESTINATION_RESELECTION_MESSAGE),
+            );
         }
         if let Some(error) = &curl.error {
             form = form.child(

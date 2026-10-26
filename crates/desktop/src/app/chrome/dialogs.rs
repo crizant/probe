@@ -390,7 +390,16 @@ impl ProbeApp {
         if dialog.edits_destination() {
             form = form.child(self.render_destination_picker(theme, cx));
         }
+        if dialog.destination_required {
+            form = form.child(
+                div()
+                    .text_size(px(theme.typography.caption_size))
+                    .text_color(theme.colors.status.error)
+                    .child(DESTINATION_RESELECTION_MESSAGE),
+            );
+        }
         let submit_label = dialog.submit_label();
+        let destination_required = dialog.destination_required;
         let content =
             components::dialog_surface(theme, "structure-dialog", components::COMPACT_DIALOG_WIDTH)
                 .child(components::dialog_title(theme, dialog.title()))
@@ -428,7 +437,7 @@ impl ProbeApp {
                                 &SubmitStructureDialog,
                                 dialog.key_context(),
                             ),
-                            save_busy,
+                            save_busy || destination_required,
                             move |_, window, cx| {
                                 let _ = submit_view.update(cx, |view, cx| {
                                     view.submit_structure_dialog(window, cx);
@@ -456,6 +465,7 @@ impl ProbeApp {
         };
         let parent = dialog.parent.clone();
         let expanded = dialog.expanded_folders.clone();
+        let destination_required = dialog.destination_required;
         let locked = self.destination_picker_locked();
         let rows = self
             .loaded_workspace
@@ -475,11 +485,7 @@ impl ProbeApp {
         let tree = super::super::tree::destination_tree(
             theme,
             &rows,
-            (!dialog
-                .curl
-                .as_ref()
-                .is_some_and(|curl| curl.destination_required))
-            .then_some(parent.as_str()),
+            (!destination_required).then_some(parent.as_str()),
             locked,
             move |selector, cx| {
                 let _ = select_view.update(cx, |view, cx| {

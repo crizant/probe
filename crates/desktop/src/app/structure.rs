@@ -270,6 +270,9 @@ impl ProbeApp {
         let Some(dialog) = self.structure_dialog.as_ref() else {
             return;
         };
+        if dialog.destination_required && dialog.edits_destination() {
+            return;
+        }
         if matches!(dialog.mode, StructureDialogMode::ImportCurl) {
             if self.curl_import_disabled() {
                 return;
@@ -379,9 +382,7 @@ impl ProbeApp {
             return;
         }
         dialog.parent = parent;
-        if let Some(curl) = dialog.curl.as_mut() {
-            curl.destination_required = false;
-        }
+        dialog.destination_required = false;
         cx.notify();
     }
 
@@ -415,6 +416,9 @@ impl ProbeApp {
             return;
         };
         if !matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
+            return;
+        }
+        if dialog.destination_required {
             return;
         }
         let Some(name) = dialog.new_folder_name.as_deref() else {

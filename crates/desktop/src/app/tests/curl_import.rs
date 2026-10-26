@@ -754,7 +754,7 @@ fn curl_import_removed_destination_requires_explicit_reselection(cx: &mut TestAp
             assert!(view.reconcile_filesystem_workspace(external, BTreeMap::new(), window, cx));
             let dialog = view.structure_dialog.as_ref().unwrap();
             assert_eq!(dialog.parent, "items/1", "do not silently select the root");
-            assert!(dialog.curl.as_ref().unwrap().destination_required);
+            assert!(dialog.destination_required);
             assert_eq!(dialog.curl.as_ref().unwrap().command, COMMAND);
             assert_eq!(dialog.name, "Imported");
             assert!(view.curl_import_disabled());
@@ -788,7 +788,7 @@ fn curl_import_removed_destination_requires_explicit_reselection(cx: &mut TestAp
         .update(cx, |view, window, cx| {
             let dialog = view.structure_dialog.as_ref().unwrap();
             assert_eq!(dialog.parent, "");
-            assert!(!dialog.curl.as_ref().unwrap().destination_required);
+            assert!(!dialog.destination_required);
             assert_eq!(
                 dialog.curl.as_ref().unwrap().command,
                 "curl https://reselected.test"

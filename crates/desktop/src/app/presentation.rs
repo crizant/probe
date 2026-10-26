@@ -1,7 +1,8 @@
 use gpui_kit::{IntoElement as _, ParentElement as _, Styled as _, div, px};
 
 use crate::{
-    response_inspector::InspectSelection, response_viewer::PreparedDocument, theme::Theme,
+    response_inspector::InspectSelection, response_viewer::PreparedDocument,
+    structure_editor::FolderAnchor, theme::Theme,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,6 +125,6 @@ pub(crate) struct ShellSelectors {
     pub(crate) ordered_tabs: Vec<(crate::shell::OpenTab, Option<crate::session::TabLocator>)>,
     pub(crate) active_tab: Option<crate::shell::OpenTab>,
     pub(crate) pending_keep: Option<crate::shell::OpenTab>,
-    pub(crate) folder_selectors: Vec<String>,
+    pub(crate) folder_anchors: Vec<FolderAnchor>,
     pub(crate) selected: Option<(probe_core::ItemKind, String)>,
 }

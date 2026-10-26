@@ -115,10 +115,12 @@ use crate::{
     session::{SessionState, SessionStore},
     shell::{PaneLayout, ResizePane, ShellState},
     structure_editor::{
-        DropIndicator, DropReject, ROOT_PARENT, SaveDestinationRow, StructureDialog,
+        DESTINATION_RESELECTION_MESSAGE, DialogDestination, DialogFolderAnchors, DropIndicator,
+        DropReject, FolderIndex, ParentUpdate, ROOT_PARENT, SaveDestinationRow, StructureDialog,
         StructureDialogMode, TreeDropIntent, descendant_requests, drop_intent, drop_zone,
-        folder_ancestor_selectors, hovered_row_index, item_position, save_destination_rows,
-        structure_operation_for_drop, validate_tree_drop, would_duplicate_path,
+        folder_ancestor_selectors, hovered_row_index, item_position, relocate_folder,
+        resolve_dialog_destination, save_destination_rows, structure_operation_for_drop,
+        validate_tree_drop, would_duplicate_path,
     },
     synchronization::{
         LocalRequestState, ReconcileResult, ReconciledWorkspace, SynchronizationConflict, reconcile,
