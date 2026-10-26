@@ -556,11 +556,20 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.curl_import_in_progress() {
+            self.show_toast(
+                ToastIntent::Warning,
+                "Wait for the request import to finish before opening another dialog.",
+                cx,
+            );
+            return;
+        }
         if self.application_dialog.is_some() {
             self.enqueue_application_dialog(dialog);
             return;
         }
         self.structure_dialog = None;
+        self.curl_parse_task = None;
         self.create_environment_dialog = None;
         self.dismiss_transient_surfaces();
         self.application_dialog = Some(dialog);
@@ -869,6 +878,7 @@ impl ProbeApp {
         self.documentation_save_task = None;
         self.selected_tree_item = None;
         self.structure_dialog = None;
+        self.curl_parse_task = None;
         self.create_environment_dialog = None;
         self.discard_environment_manager_dialog();
         self.application_dialog = None;
@@ -1002,7 +1012,8 @@ impl ProbeApp {
 
         let mut target_exists = true;
         match &mut dialog.mode {
-            StructureDialogMode::CreateRequest(_)
+            StructureDialogMode::ImportCurl
+            | StructureDialogMode::CreateRequest(_)
             | StructureDialogMode::SaveDetachedRequest { .. }
             | StructureDialogMode::CreateFolder => {}
             StructureDialogMode::Rename { kind, selector }
@@ -1041,8 +1052,16 @@ impl ProbeApp {
                 dialog.parent.clone_from(mapped);
             }
             if loaded.folder_key(&dialog.parent).is_none() {
-                if matches!(dialog.mode, StructureDialogMode::SaveDetachedRequest { .. }) {
-                    dialog.parent.clear();
+                if matches!(
+                    dialog.mode,
+                    StructureDialogMode::SaveDetachedRequest { .. }
+                        | StructureDialogMode::ImportCurl
+                ) {
+                    if let Some(curl) = dialog.curl.as_mut() {
+                        curl.destination_required = true;
+                    } else {
+                        dialog.parent.clear();
+                    }
                 } else {
                     self.structure_dialog = None;
                 }

@@ -64,6 +64,10 @@ impl PersistenceState {
         Some(key)
     }
 
+    pub(crate) fn queued_requests(&self) -> impl Iterator<Item = RequestKey> + '_ {
+        self.queue.iter().copied()
+    }
+
     pub(crate) fn has_outstanding_saves(&self) -> bool {
         !self.queue.is_empty() || !self.saving.is_empty()
     }

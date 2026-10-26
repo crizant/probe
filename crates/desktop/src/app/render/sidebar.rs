@@ -576,6 +576,7 @@ impl ProbeApp {
     pub(super) fn render_sidebar(&self, theme: Theme, cx: &mut Context<Self>) -> gpui_kit::Div {
         let new_http_request_view = cx.weak_entity();
         let new_graphql_request_view = cx.weak_entity();
+        let curl_view = cx.weak_entity();
         let new_folder_view = cx.weak_entity();
         let new_collection_view = cx.weak_entity();
         let open_collection_view = cx.weak_entity();
@@ -588,7 +589,7 @@ impl ProbeApp {
         let sidebar_import_popup_focus = self.transient.sidebar_import_popup_focus.clone();
         let can_edit = self.loaded_workspace.is_some() && self.structure_task.is_none();
         let add_menu_state_view = cx.weak_entity();
-        let add_popup = components::popup_surface(theme, "tree-add-menu-popup", 160.0)
+        let add_popup = components::popup_surface(theme, "tree-add-menu-popup", 200.0)
             .child(components::menu_button_with_leading(
                 theme,
                 "tree-new-http-request",
@@ -631,6 +632,18 @@ impl ProbeApp {
                             window,
                             cx,
                         );
+                    });
+                },
+            ))
+            .child(components::menu_button(
+                theme,
+                "tree-import-curl",
+                "Import from cURL…",
+                None,
+                move |window, cx| {
+                    let _ = curl_view.update(cx, |view, cx| {
+                        view.transient.structure_add_menu_open = false;
+                        view.open_curl_import_dialog(window, cx);
                     });
                 },
             ))

@@ -48,6 +48,37 @@ pub(crate) fn documentation_text_input(
     .into_any_element()
 }
 
+pub(crate) fn curl_command_input(
+    theme: Theme,
+    id: ElementId,
+    value: String,
+    readonly: bool,
+    on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+) -> gpui_kit::AnyElement {
+    ProbeEditor {
+        theme,
+        id,
+        value: value.into(),
+        placeholder: "curl 'https://example.com'".into(),
+        decorations: Vec::new(),
+        language: SharedString::default(),
+        readonly,
+        disabled_appearance: false,
+        min_height: Some(120.0),
+        padding: EditorInsets::standard(theme),
+        soft_wrap: true,
+        text_color: theme.colors.text.primary,
+        scroll_to_range: None,
+        on_change: Some(Rc::new(on_value_change)),
+        on_mouse_down: None,
+        on_visible_range: None,
+        extra_context_menu_actions: Vec::new(),
+        debug_selector: Some("curl-command-input"),
+        variables: None,
+    }
+    .into_any_element()
+}
+
 pub(crate) fn websocket_composer(
     theme: Theme,
     id: ElementId,

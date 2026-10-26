@@ -290,6 +290,16 @@ impl ProbeApp {
         let Some(dialog) = self.structure_dialog.as_ref() else {
             return;
         };
+        if matches!(dialog.mode, StructureDialogMode::ImportCurl) {
+            if self.curl_import_disabled() {
+                return;
+            }
+            match dialog.operation() {
+                Ok(operation) => self.apply_structure(operation, window, cx),
+                Err(error) => self.set_curl_import_error(error, cx),
+            }
+            return;
+        }
         if let StructureDialogMode::SaveDetachedRequest { key } = dialog.mode {
             if self.structure_task.is_some() {
                 return;
@@ -467,7 +477,20 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let importing = self
+            .structure_dialog
+            .as_ref()
+            .is_some_and(|dialog| matches!(dialog.mode, StructureDialogMode::ImportCurl));
+        if importing && self.loading {
+            return;
+        }
         if self.has_dirty_overviews() {
+            if importing {
+                self.set_curl_import_error(
+                    "Save or discard documentation changes before importing.".into(),
+                    cx,
+                );
+            }
             self.show_toast(
                 ToastIntent::Warning,
                 "Save or discard documentation changes before changing collection structure.",
@@ -495,6 +518,9 @@ impl ProbeApp {
         let prepared = match loaded.prepare_structure(operation.clone()) {
             Ok(prepared) => prepared,
             Err(error) => {
+                if importing {
+                    self.set_curl_import_error(format!("Could not import request: {error}. Resolve the collection error and try again."), cx);
+                }
                 self.show_toast(
                     ToastIntent::Error,
                     format!("Could not edit collection structure: {error}"),
@@ -507,7 +533,7 @@ impl ProbeApp {
         self.structure_task = Some(cx.spawn_in(window, async move |view, window| {
             let result = window
                 .background_spawn(
-                    async move { prepared.execute().map_err(|error| error.to_string()) },
+                    async move { prepared.execute().map_err(|error| (matches!(error, probe_opencollection::StructureError::CommittedRefreshFailed { .. }), error.to_string())) },
                 )
                 .await;
             let _ = view.update_in(window, |view, window, cx| {
@@ -515,15 +541,37 @@ impl ProbeApp {
                 view.loading = false;
                 match result {
                     Ok((result, workspace)) => {
-                        view.apply_structure_result(
+                        if importing {
+                            view.structure_dialog = None;
+                            view.curl_parse_task = None;
+                            view.focus_handle.focus(window, cx);
+                        }
+                        let queued = if importing { view.persistence.queued_requests().collect::<Vec<_>>() } else { Vec::new() };
+                        let remaps = view.apply_structure_result(
                             workspace,
                             result,
                             (&operation, None),
                             window,
                             cx,
                         );
+                        // Installing fresh persistence baselines clears its queue.
+                        // Carry saves queued while the import was writing to the
+                        // new runtime keys before resuming the shared write pump.
+                        if importing {
+                            view.persistence.enqueue(queued.into_iter().filter_map(|key| remaps.get(&key).copied()));
+                        }
                     }
-                    Err(error) => {
+                    Err((committed, error)) => {
+                        if importing {
+                            if let Some(curl) = view.structure_dialog.as_mut().and_then(|dialog| dialog.curl.as_mut()) {
+                                curl.committed = committed;
+                            }
+                            view.set_curl_import_error(if committed {
+                                format!("Request was written, but refresh failed: {error}. Reopen the collection before importing again.")
+                            } else {
+                                format!("Could not import request: {error}. Resolve the collection error and try again.")
+                            }, cx);
+                        }
                         view.show_toast(
                             ToastIntent::Error,
                             format!("Could not edit collection structure: {error}"),
@@ -531,6 +579,7 @@ impl ProbeApp {
                         );
                     }
                 }
+                if importing { view.pump_workspace_writes(window, cx); }
                 cx.notify();
             });
         }));

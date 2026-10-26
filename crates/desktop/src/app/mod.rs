@@ -43,6 +43,7 @@ mod active_certificate;
 mod certificates;
 mod chrome;
 use certificates::{CertificateEditor, EnvironmentTab};
+mod curl_import;
 mod detached_requests;
 mod dialogs;
 mod documentation;
@@ -291,6 +292,7 @@ pub(crate) struct ProbeApp {
     // edit before they can be attempted again automatically.
     failed_environment_saves: BTreeSet<(String, String)>,
     structure_task: Option<Task<()>>,
+    curl_parse_task: Option<Task<()>>,
     filesystem_watcher: Option<notify::RecommendedWatcher>,
     filesystem_watch_task: Option<Task<()>>,
     persistence: PersistenceState,
@@ -455,6 +457,7 @@ impl ProbeApp {
             pending_environment_saves: BTreeSet::new(),
             failed_environment_saves: BTreeSet::new(),
             structure_task: None,
+            curl_parse_task: None,
             filesystem_watcher: None,
             filesystem_watch_task: None,
             persistence: PersistenceState::default(),
@@ -876,6 +879,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
         KeyBinding::new("alt-up", MoveTreeItemUp, Some("RequestTree")),
         KeyBinding::new("alt-down", MoveTreeItemDown, Some("RequestTree")),
         KeyBinding::new("enter", SubmitStructureDialog, Some("StructureDialog")),
+        KeyBinding::new("escape", CancelStructureDialog, Some("CurlImportDialog")),
         KeyBinding::new("enter", ActivateSaveDestination, Some("SaveDestination")),
         KeyBinding::new("enter", SubmitSaveFolderDialog, Some("SaveFolderDialog")),
         KeyBinding::new("escape", CancelSaveFolderDialog, Some("SaveFolderDialog")),
@@ -1010,6 +1014,17 @@ fn bind_platform_hotkeys(cx: &mut App) {
         ),
         KeyBinding::new("ctrl-w", CloseActiveTab, None),
     ]);
+
+    // A modal import owns command+Enter even when its multiline input is focused.
+    cx.bind_keys([KeyBinding::new(
+        if cfg!(target_os = "macos") {
+            "cmd-enter"
+        } else {
+            "ctrl-enter"
+        },
+        SubmitStructureDialog,
+        Some("(CurlImportDialog > Input) || CurlImportDialog"),
+    )]);
 
     // Register after the platform send bindings so Settings owns its submit shortcut.
     cx.bind_keys([KeyBinding::new(

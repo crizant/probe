@@ -89,10 +89,9 @@ impl Render for ProbeApp {
             .flex_col()
             .on_action(cx.listener(|view, _: &SaveEditor, window, cx| {
                 if view.application_dialog.is_some()
-                    || view
-                        .structure_dialog
-                        .as_ref()
-                        .is_some_and(|dialog| dialog.new_folder_name.is_some())
+                    || view.structure_dialog.as_ref().is_some_and(|dialog| {
+                        dialog.curl.is_some() || dialog.new_folder_name.is_some()
+                    })
                 {
                     return;
                 }
@@ -180,6 +179,10 @@ impl Render for ProbeApp {
             }))
             .on_action(cx.listener(|view, _: &CloseActiveTab, window, cx| {
                 if view.application_dialog.is_none()
+                    && view
+                        .structure_dialog
+                        .as_ref()
+                        .is_none_or(|dialog| dialog.curl.is_none())
                     && let Some(tab) = view.shell.active_open_tab()
                 {
                     view.request_close_open_tab(tab, window, cx);
@@ -325,6 +328,15 @@ impl Render for ProbeApp {
                 }),
             )
             .on_action(cx.listener(|view, _: &CancelStructureDialog, window, cx| {
+                if view.structure_task.is_some()
+                    && view
+                        .structure_dialog
+                        .as_ref()
+                        .is_some_and(|dialog| dialog.curl.is_some())
+                {
+                    return;
+                }
+                view.curl_parse_task = None;
                 if matches!(
                     view.structure_dialog.as_ref().map(|dialog| &dialog.mode),
                     Some(StructureDialogMode::SaveDetachedRequest { .. })

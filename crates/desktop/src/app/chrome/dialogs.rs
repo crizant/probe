@@ -336,6 +336,9 @@ impl ProbeApp {
         let Some(dialog) = self.structure_dialog.as_ref() else {
             return div().into_any_element();
         };
+        if dialog.curl.is_some() {
+            return self.render_curl_import_dialog(theme, window, cx);
+        }
         let name_view = cx.weak_entity();
         let name_enter_view = cx.weak_entity();
         let cancel_view = cx.weak_entity();
