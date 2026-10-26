@@ -45,6 +45,8 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.destination_scroll = ScrollHandle::new();
+        self.revealed_destination = None;
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }

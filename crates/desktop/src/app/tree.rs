@@ -227,11 +227,14 @@ pub(crate) fn destination_tree(
     rows: &[crate::structure_editor::SaveDestinationRow],
     selected_parent: Option<&str>,
     disabled: bool,
+    scroll: &gpui_kit::ScrollHandle,
     on_select: impl Fn(String, &mut gpui_kit::App) + Clone + 'static,
     on_toggle: impl Fn(String, &mut gpui_kit::App) + Clone + 'static,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
     let mut tree = div()
         .id("save-destination-tree")
+        .debug_selector(|| "save-destination-tree".into())
+        .track_scroll(scroll)
         .w_full()
         .max_h(px(theme.metrics.tree_row_height * 8.0))
         .overflow_y_scroll()
