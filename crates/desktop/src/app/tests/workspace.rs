@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::{NewGraphqlRequest, NewRequest, documentation::OverviewTarget};
+use crate::structure_editor::{ROOT_PARENT, save_destination_rows};
 use probe_core::ItemKind;
 use probe_opencollection::ItemLocator;
 
@@ -5443,4 +5444,170 @@ fn destination_root_does_not_add_depth_to_top_level_folders() {
         .unwrap()
         .depth;
     assert_eq!((sidebar_depth, dialog_depth), (0, 0));
+}
+
+#[gpui_kit::test]
+fn destination_dialogs_reveal_selection_and_reset_scroll(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    for bundled in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = directory.path().join("opencollection.yml");
+        let mut source = format!(
+            "opencollection: 1.0.0\ninfo:\n  name: Destination scroll\nbundled: {bundled}\n"
+        );
+        let mut parent = directory.path().to_path_buf();
+        let mut selector = String::new();
+        for depth in 0..12 {
+            if bundled {
+                let indent = "    ".repeat(depth);
+                source.push_str(&format!(
+                    "{indent}items:\n{indent}  - info:\n{indent}      name: Folder {depth}\n{indent}      type: folder\n"
+                ));
+                selector.push_str(if depth == 0 { "items/0" } else { "/items/0" });
+            } else {
+                parent = parent.join(format!("folder{depth}"));
+                fs::create_dir(&parent).unwrap();
+                fs::write(
+                    parent.join("folder.yml"),
+                    format!("info:\n  name: Folder {depth}\n  type: folder\n"),
+                )
+                .unwrap();
+                if depth > 0 {
+                    selector.push('/');
+                }
+                selector.push_str(&format!("folder{depth}"));
+            }
+        }
+        fs::write(&fixture, source).unwrap();
+        let workspace_path = if bundled {
+            fixture
+        } else {
+            directory.path().to_path_buf()
+        };
+        for mode in ["http", "graphql", "folder", "save", "curl"] {
+            let workspace = probe_opencollection::load_workspace(&workspace_path).unwrap();
+            let selected = workspace.folder_key(&selector).unwrap();
+            let window = cx.open_window(size(px(900.0), px(800.0)), ProbeApp::new);
+            window
+                .update(cx, |view, window, cx| {
+                    view.session_store = None;
+                    view.set_workspace(workspace_path.clone(), workspace);
+                    view.select_tree_item(WorkspaceItemRef::Folder(selected), cx);
+                    match mode {
+                        "http" => view.open_create_request_dialog(
+                            probe_core::RequestProtocol::Http,
+                            window,
+                            cx,
+                        ),
+                        "graphql" => view.open_create_request_dialog(
+                            probe_core::RequestProtocol::Graphql,
+                            window,
+                            cx,
+                        ),
+                        "folder" => view.open_create_folder_dialog(window, cx),
+                        "curl" => view.open_curl_import_dialog(window, cx),
+                        "save" => {
+                            view.new_detached_request(
+                                probe_core::RequestProtocol::Http,
+                                window,
+                                cx,
+                            );
+                            view.select_tree_item(WorkspaceItemRef::Folder(selected), cx);
+                            view.open_save_detached_request_dialog(
+                                view.shell.active_tab().unwrap(),
+                                window,
+                                cx,
+                            );
+                        }
+                        _ => unreachable!(),
+                    }
+                })
+                .unwrap();
+            cx.run_until_parked();
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual.update(|window, cx| window.simulate_next_frame(cx));
+            let viewport = visual.debug_bounds("save-destination-tree").unwrap();
+            window
+                .update(&mut visual, |view, _, _| {
+                    let row = view.destination_scroll.bounds_for_item(12).unwrap();
+                    let offset = view.destination_scroll.offset().y;
+                    assert!(
+                        row.top() + offset >= viewport.top()
+                            && row.bottom() + offset <= viewport.bottom(),
+                        "{bundled}/{mode}: selected folder must be visible: row={row:?}, viewport={viewport:?}, offset={offset:?}"
+                    );
+                })
+                .unwrap();
+            let offset = window
+                .update(&mut visual, |view, _, cx| {
+                    let dialog = view.structure_dialog.as_ref().unwrap();
+                    let rows = save_destination_rows(
+                        view.loaded_workspace.as_ref().unwrap(),
+                        &dialog.expanded_folders,
+                    );
+                    let offset = view.destination_scroll.offset();
+                    view.select_destination_parent(rows[11].selector.clone(), cx);
+                    offset
+                })
+                .unwrap();
+            visual.update(|window, cx| window.simulate_next_frame(cx));
+            visual.run_until_parked();
+            window
+                .update(&mut visual, |view, _, cx| {
+                    assert_eq!(
+                        view.destination_scroll.offset(),
+                        offset,
+                        "choosing a visible row must not jump"
+                    );
+                    view.select_destination_parent(selector.clone(), cx);
+                })
+                .unwrap();
+            visual.update(|window, cx| window.simulate_next_frame(cx));
+            visual.run_until_parked();
+            window
+                .update(&mut visual, |view, _, cx| {
+                    assert!(view.destination_scroll.offset().y < px(0.0));
+                    // Ordinary renders and reselecting the same destination leave manual scrolling alone.
+                    view.destination_scroll
+                        .set_offset(gpui_kit::Point::default());
+                    view.select_destination_parent(selector.clone(), cx);
+                })
+                .unwrap();
+            visual.update(|window, cx| window.simulate_next_frame(cx));
+            visual.run_until_parked();
+            window
+                .update(&mut visual, |view, _, cx| {
+                    assert_eq!(view.destination_scroll.offset().y, px(0.0));
+                    view.select_destination_parent(ROOT_PARENT.into(), cx);
+                })
+                .unwrap();
+            visual.update(|window, cx| window.simulate_next_frame(cx));
+            visual.run_until_parked();
+            window
+                .update(&mut visual, |view, _, cx| {
+                    view.select_destination_parent(selector.clone(), cx);
+                })
+                .unwrap();
+            visual.update(|window, cx| window.simulate_next_frame(cx));
+            visual.run_until_parked();
+            window
+                .update(&mut visual, |view, window, cx| {
+                    assert!(view.destination_scroll.offset().y < px(0.0));
+                    view.selected_tree_item = None;
+                    view.open_create_folder_dialog(window, cx);
+                })
+                .unwrap();
+            visual.update(|window, cx| window.simulate_next_frame(cx));
+            visual.run_until_parked();
+            window
+                .update(&mut visual, |view, _, _| {
+                    assert_eq!(
+                        view.destination_scroll.offset().y,
+                        px(0.0),
+                        "fresh dialog starts at root"
+                    );
+                })
+                .unwrap();
+        }
+    }
 }

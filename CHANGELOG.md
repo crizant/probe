@@ -30,6 +30,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Destination folder trees reveal the preselected folder when a dialog opens and
+  keep newly selected destinations visible without resetting the user’s scroll.
+
 - Destination tree hierarchy guides no longer run through collapsed folder
   chevrons; top-level folders align with the collection sidebar.
 

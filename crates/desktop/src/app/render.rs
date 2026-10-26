@@ -57,6 +57,19 @@ impl Render for ProbeApp {
             self.tab_drop_target = None;
             self.tab_auto_scroll.stop();
         }
+        let destination = self
+            .structure_dialog
+            .as_ref()
+            .filter(|dialog| dialog.edits_destination())
+            .map(|dialog| dialog.parent.clone());
+        if destination.is_some() && self.revealed_destination != destination {
+            self.revealed_destination = destination;
+            // ScrollHandle needs the first layout to establish its viewport.
+            cx.on_next_frame(window, |this, _, cx| {
+                this.reveal_destination();
+                cx.notify();
+            });
+        }
         if self.pending_tab_reveal {
             self.pending_tab_reveal = false;
             cx.on_next_frame(window, |this, _, cx| {

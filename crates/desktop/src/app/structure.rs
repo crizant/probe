@@ -45,6 +45,8 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.destination_scroll = ScrollHandle::new();
+        self.revealed_destination = None;
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -115,6 +117,8 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.destination_scroll = ScrollHandle::new();
+        self.revealed_destination = None;
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -132,6 +136,8 @@ impl ProbeApp {
             self.selected_parent_selector(),
         ));
         self.expand_destination_ancestors();
+        self.destination_scroll = ScrollHandle::new();
+        self.revealed_destination = None;
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -778,6 +784,17 @@ impl ProbeApp {
         }
         self.expand_destination_ancestors();
         self.drop_missing_save_dialog_folders();
+    }
+
+    /// Queue a minimal reveal for the next layout, after expanded rows exist.
+    pub(super) fn reveal_destination(&self) {
+        let (Some(dialog), Some(loaded)) = (&self.structure_dialog, &self.loaded_workspace) else {
+            return;
+        };
+        let rows = save_destination_rows(loaded, &dialog.expanded_folders);
+        if let Some(index) = rows.iter().position(|row| row.selector == dialog.parent) {
+            self.destination_scroll.scroll_to_item(index);
+        }
     }
 
     pub(super) fn expand_destination_ancestors(&mut self) {
