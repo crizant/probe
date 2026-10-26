@@ -448,6 +448,17 @@ fn curl_import_protects_documentation_and_committed_refresh_failure(cx: &mut Tes
                 .as_mut()
                 .unwrap();
             curl.committed = true;
+            let expanded = view
+                .structure_dialog
+                .as_ref()
+                .unwrap()
+                .expanded_folders
+                .clone();
+            view.select_destination_parent("items/1".into(), cx);
+            view.toggle_destination_folder("items/1".into(), cx);
+            let dialog = view.structure_dialog.as_ref().unwrap();
+            assert_eq!(dialog.parent, "");
+            assert_eq!(dialog.expanded_folders, expanded);
             assert!(view.curl_import_disabled());
             view.submit_structure_dialog(window, cx);
             assert!(
@@ -591,7 +602,7 @@ fn curl_import_resumes_saves_queued_during_atomic_creation(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-fn curl_import_disambiguates_same_named_destination_folders(cx: &mut TestAppContext) {
+fn curl_import_tree_disambiguates_same_named_destination_folders(cx: &mut TestAppContext) {
     let (window, path) = import_window(cx, "curl-folder-labels");
     fs::write(
         &path,
@@ -612,31 +623,104 @@ items:
     )
     .unwrap();
     window
-        .update(cx, |view, window, cx| {
-            view.set_workspace(
-                path.clone(),
-                probe_opencollection::load_workspace(&path).unwrap(),
-            );
-            view.open_curl_import_dialog(window, cx);
-            let choices = view.curl_import_destinations();
-            let auth = choices
-                .iter()
-                .find(|(selector, _)| selector == "items/0/items/0")
-                .unwrap();
-            let payments = choices
-                .iter()
-                .find(|(selector, _)| selector == "items/1/items/0")
-                .unwrap();
-            assert!(auth.1.contains("Examples"));
-            assert!(payments.1.contains("Examples"));
-            assert_ne!(
-                auth.1, payments.1,
-                "same-named folders must be distinguishable"
-            );
-            assert!(auth.1.contains(&auth.0));
-            assert!(payments.1.contains(&payments.0));
+        .update(cx, |view, _, cx| {
+            let loaded = probe_opencollection::load_workspace(&path).unwrap();
+            let folder = loaded.folder_key("items/0/items/0").unwrap();
+            view.set_workspace(path.clone(), loaded);
+            view.select_tree_item(WorkspaceItemRef::Folder(folder), cx);
         })
         .unwrap();
+    fill_import(window, cx, COMMAND);
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view.structure_dialog.as_ref().unwrap();
+            assert_eq!(dialog.parent, "items/0/items/0");
+            assert!(dialog.expanded_folders.contains("items/0"));
+        })
+        .unwrap();
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    assert!(visual.debug_bounds("curl-parent-trigger").is_none());
+    assert!(visual.debug_bounds("save-destination-root").is_some());
+    assert!(
+        visual
+            .debug_bounds("save-destination-items/0/items/0")
+            .is_some()
+    );
+    assert!(
+        visual
+            .debug_bounds("save-destination-items/1/items/0")
+            .is_none()
+    );
+    let auth = visual
+        .debug_bounds("save-destination-toggle-items/0")
+        .unwrap();
+    visual.simulate_click(auth.center(), Modifiers::default());
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("save-destination-items/0/items/0")
+            .is_none()
+    );
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("save-destination-items/0/items/0")
+            .is_some()
+    );
+    let payments = visual
+        .debug_bounds("save-destination-toggle-items/1")
+        .unwrap();
+    visual.simulate_click(payments.center(), Modifiers::default());
+    visual.run_until_parked();
+    let examples = visual
+        .debug_bounds("save-destination-items/1/items/0")
+        .unwrap();
+    visual.simulate_click(examples.center(), Modifiers::default());
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let dialog = view.structure_dialog.as_mut().unwrap();
+            assert_eq!(dialog.parent, "items/1/items/0");
+            dialog.parent = "items/0/items/0".into();
+            cx.notify();
+        })
+        .unwrap();
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let dialog = view
+                .structure_dialog
+                .as_ref()
+                .expect("Enter selects without importing");
+            assert_eq!(dialog.parent, "items/1/items/0");
+            assert_eq!(dialog.name, "Imported");
+            assert_eq!(dialog.curl.as_ref().unwrap().command, COMMAND);
+            assert!(matches!(dialog.curl.as_ref().unwrap().parsed, Some(Ok(_))));
+            assert!(view.structure_task.is_none());
+        })
+        .unwrap();
+    visual.simulate_keystrokes(super::send_shortcut());
+    visual.run_until_parked();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(view.structure_dialog.is_none(), "{:?}", toast_debug(view));
+        })
+        .unwrap();
+    let loaded = probe_opencollection::load_workspace(&path).unwrap();
+    let imported = loaded.request_key("items/1/items/0/items/0").unwrap();
+    assert_eq!(
+        loaded
+            .workspace()
+            .request(imported)
+            .unwrap()
+            .metadata
+            .name
+            .as_deref(),
+        Some("Imported")
+    );
     fs::remove_file(path).unwrap();
 }
 
@@ -671,6 +755,8 @@ fn curl_import_removed_destination_requires_explicit_reselection(cx: &mut TestAp
             let dialog = view.structure_dialog.as_ref().unwrap();
             assert_eq!(dialog.parent, "items/1", "do not silently select the root");
             assert!(dialog.curl.as_ref().unwrap().destination_required);
+            assert_eq!(dialog.curl.as_ref().unwrap().command, COMMAND);
+            assert_eq!(dialog.name, "Imported");
             assert!(view.curl_import_disabled());
             view.submit_structure_dialog(window, cx);
             assert!(view.structure_task.is_none());
@@ -690,9 +776,9 @@ fn curl_import_removed_destination_requires_explicit_reselection(cx: &mut TestAp
     assert_eq!(fs::read(&path).unwrap(), before);
 
     // Explicitly choosing Collection root is permitted, even though its selector
-    // is empty. Exercise the actual dropdown callback rather than clearing a flag.
+    // is empty. Exercise the actual tree callback rather than clearing a flag.
     let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let destination = visual.debug_bounds("curl-parent-trigger").unwrap();
+    let destination = visual.debug_bounds("save-destination-root").unwrap();
     visual.simulate_click(destination.center(), Modifiers::default());
     drop(visual);
     cx.run_until_parked();
@@ -703,8 +789,13 @@ fn curl_import_removed_destination_requires_explicit_reselection(cx: &mut TestAp
             let dialog = view.structure_dialog.as_ref().unwrap();
             assert_eq!(dialog.parent, "");
             assert!(!dialog.curl.as_ref().unwrap().destination_required);
+            assert_eq!(
+                dialog.curl.as_ref().unwrap().command,
+                "curl https://reselected.test"
+            );
             assert!(!view.curl_import_disabled());
-            view.submit_structure_dialog(window, cx);
+            assert!(view.structure_task.is_none());
+            window.dispatch_action(Box::new(crate::app::SubmitStructureDialog), cx);
         })
         .unwrap();
     cx.run_until_parked();

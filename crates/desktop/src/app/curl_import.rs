@@ -44,6 +44,7 @@ impl ProbeApp {
         self.structure_dialog = Some(StructureDialog::import_curl(
             self.selected_parent_selector(),
         ));
+        self.expand_destination_ancestors();
         self.structure_dialog_focus.focus(window, cx);
         cx.notify();
     }
@@ -109,29 +110,6 @@ impl ProbeApp {
             })
     }
 
-    pub(super) fn curl_import_destinations(&self) -> Vec<(String, String)> {
-        let mut destinations = vec![(String::new(), "Collection root".to_owned())];
-        if let Some(loaded) = &self.loaded_workspace {
-            destinations.extend(loaded.folders().iter().filter_map(|folder| {
-                Some((
-                    folder.selector().to_owned(),
-                    format!(
-                        "{} — {}",
-                        loaded
-                            .workspace()
-                            .folder(folder.key())?
-                            .metadata
-                            .name
-                            .as_deref()
-                            .unwrap_or("Untitled folder"),
-                        folder.selector()
-                    ),
-                ))
-            }));
-        }
-        destinations
-    }
-
     pub(super) fn render_curl_import_dialog(
         &self,
         theme: Theme,
@@ -147,7 +125,6 @@ impl ProbeApp {
         let locked = busy || curl.committed;
         let name_view = cx.weak_entity();
         let command_view = cx.weak_entity();
-        let parent_view = cx.weak_entity();
         let cancel_view = cx.weak_entity();
         let submit_view = cx.weak_entity();
         let mut form = div()
@@ -176,33 +153,7 @@ impl ProbeApp {
                 )
                 .disabled(locked),
             ))
-            .child(components::dialog_field(
-                theme,
-                "Destination",
-                components::dropdown(
-                    theme,
-                    "curl-parent",
-                    "Choose a destination folder",
-                    (!curl.destination_required).then(|| dialog.parent.clone()),
-                    self.curl_import_destinations(),
-                    388.0,
-                    move |value, _, cx| {
-                        let _ = parent_view.update(cx, |view, cx| {
-                            if !locked
-                                && let Some(value) = value
-                                && let Some(dialog) = view.structure_dialog.as_mut()
-                            {
-                                dialog.parent.clone_from(value);
-                                if let Some(curl) = dialog.curl.as_mut() {
-                                    curl.destination_required = false;
-                                }
-                            }
-                            cx.notify();
-                        });
-                    },
-                )
-                .disabled(locked),
-            ))
+            .child(self.render_destination_picker(theme, cx))
             .child(components::dialog_field(
                 theme,
                 "cURL command",

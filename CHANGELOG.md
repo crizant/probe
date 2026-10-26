@@ -19,8 +19,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
-- Save Request, New HTTP Request, New GraphQL Request, and New Folder share a
-  destination folder tree styled like the collection sidebar.
+- Save Request, New HTTP Request, New GraphQL Request, New Folder, and Import
+  from cURL share a destination folder tree styled like the collection sidebar,
+  with Collection root at the left padding and the same indentation per level.
+  cURL imports preserve pasted commands and require an explicit destination
+  selection if the chosen folder disappears.
 - Save Request, New HTTP Request, New GraphQL Request, New Folder, and Add/Edit
   Certificate now submit with Cmd+Enter on macOS or Ctrl+Enter on Linux/Windows
   instead of plain Enter, with the shortcut shown on the submit button.

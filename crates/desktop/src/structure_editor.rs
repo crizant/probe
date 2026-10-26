@@ -121,13 +121,16 @@ impl StructureDialog {
         matches!(
             self.mode,
             StructureDialogMode::CreateRequest(_)
+                | StructureDialogMode::ImportCurl
                 | StructureDialogMode::CreateFolder
                 | StructureDialogMode::SaveDetachedRequest { .. }
         )
     }
 
     pub(crate) const fn key_context(&self) -> &'static str {
-        if self.edits_destination() {
+        if matches!(self.mode, StructureDialogMode::ImportCurl) {
+            "CurlImportDialog"
+        } else if self.edits_destination() {
             "TreeStructureDialog"
         } else {
             "StructureDialog"

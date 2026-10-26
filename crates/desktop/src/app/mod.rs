@@ -1026,7 +1026,7 @@ fn bind_platform_hotkeys(cx: &mut App) {
             "ctrl-enter"
         },
         SubmitStructureDialog,
-        Some("(CurlImportDialog > Input) || CurlImportDialog"),
+        Some("(CurlImportDialog > Input) || (CurlImportDialog > SaveDestination) || CurlImportDialog"),
     )]);
 
     // Register after the platform send bindings so Settings owns its submit shortcut.

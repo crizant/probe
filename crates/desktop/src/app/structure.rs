@@ -360,7 +360,18 @@ impl ProbeApp {
         cx.notify();
     }
 
+    pub(super) fn destination_picker_locked(&self) -> bool {
+        self.structure_task.is_some()
+            || self.structure_dialog.as_ref().is_some_and(|dialog| {
+                dialog.new_folder_name.is_some()
+                    || dialog.curl.as_ref().is_some_and(|curl| curl.committed)
+            })
+    }
+
     pub(super) fn select_destination_parent(&mut self, parent: String, cx: &mut Context<Self>) {
+        if self.destination_picker_locked() {
+            return;
+        }
         let Some(dialog) = self.structure_dialog.as_mut() else {
             return;
         };
@@ -368,10 +379,16 @@ impl ProbeApp {
             return;
         }
         dialog.parent = parent;
+        if let Some(curl) = dialog.curl.as_mut() {
+            curl.destination_required = false;
+        }
         cx.notify();
     }
 
     pub(super) fn toggle_destination_folder(&mut self, selector: String, cx: &mut Context<Self>) {
+        if self.destination_picker_locked() {
+            return;
+        }
         let Some(dialog) = self.structure_dialog.as_mut() else {
             return;
         };
@@ -763,7 +780,7 @@ impl ProbeApp {
         self.drop_missing_save_dialog_folders();
     }
 
-    fn expand_destination_ancestors(&mut self) {
+    pub(super) fn expand_destination_ancestors(&mut self) {
         let Some(parent) = self.structure_dialog.as_ref().and_then(|dialog| {
             dialog
                 .edits_destination()

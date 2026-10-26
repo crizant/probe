@@ -102,7 +102,8 @@ pub(crate) fn tree_row_button(
 pub(crate) fn destination_tree(
     theme: Theme,
     rows: &[crate::structure_editor::SaveDestinationRow],
-    selected_parent: &str,
+    selected_parent: Option<&str>,
+    disabled: bool,
     on_select: impl Fn(String, &mut gpui_kit::App) + Clone + 'static,
     on_toggle: impl Fn(String, &mut gpui_kit::App) + Clone + 'static,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
@@ -122,7 +123,7 @@ pub(crate) fn destination_tree(
         .text_size(px(theme.typography.body_size))
         .text_color(theme.colors.text.primary);
     for (index, row) in rows.iter().enumerate() {
-        let selected = row.selector == selected_parent;
+        let selected = selected_parent == Some(row.selector.as_str());
         let select_id = if row.selector.is_empty() {
             "save-destination-root".to_owned()
         } else {
@@ -148,6 +149,7 @@ pub(crate) fn destination_tree(
                         row.name,
                     ))
                     .key_context("SaveDestination")
+                    .disabled(disabled)
                     .w(px(tree_disclosure_width(theme)))
                     .h(px(theme.metrics.tree_row_height))
                     .flex_none()
@@ -161,21 +163,30 @@ pub(crate) fn destination_tree(
                     )
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
-                        toggle(selector.clone(), cx);
+                        if !disabled {
+                            toggle(selector.clone(), cx);
+                        }
                     })
                     .on_action(move |_: &super::ActivateSaveDestination, _, cx| {
                         cx.stop_propagation();
-                        toggle_action(action_selector.clone(), cx);
+                        if !disabled {
+                            toggle_action(action_selector.clone(), cx);
+                        }
                     }),
             );
-        } else {
+        } else if row.depth > 0 {
             marker = marker.child(div().flex_none().w(px(tree_disclosure_width(theme))));
         }
         marker = marker.child(components::tree_icon_slot(
             theme,
             components::tree_folder_icon(theme, row.expanded, false),
         ));
+        // The synthetic collection root has no disclosure slot. For folder rows,
+        // that slot supplies the first level; deeper levels use the sidebar step.
+        let indent = row.depth.saturating_sub(1) as f32 * tree_disclosure_width(theme);
         let button = tree_row_button(theme, select_id.clone(), row.depth, selected)
+            .pl(px(indent))
+            .disabled(disabled)
             .debug_selector(move || select_id.clone())
             .accessibility_label(if row.selector.is_empty() {
                 "Collection root".to_owned()
@@ -183,10 +194,16 @@ pub(crate) fn destination_tree(
                 format!("Folder {}", row.name)
             })
             .key_context("SaveDestination")
-            .on_click(move |_, _, cx| select(selector.clone(), cx))
+            .on_click(move |_, _, cx| {
+                if !disabled {
+                    select(selector.clone(), cx);
+                }
+            })
             .on_action(move |_: &super::ActivateSaveDestination, _, cx| {
                 cx.stop_propagation();
-                activate(action_selector.clone(), cx);
+                if !disabled {
+                    activate(action_selector.clone(), cx);
+                }
             })
             .child(marker)
             .child(
@@ -202,7 +219,10 @@ pub(crate) fn destination_tree(
                 .h(px(theme.metrics.tree_row_height))
                 .child(button)
                 .when(row.depth > 0, |line| {
-                    line.child(tree_hierarchy_guides(theme, row.depth, selected))
+                    line.child(
+                        tree_hierarchy_guides(theme, row.depth, selected)
+                            .left(px(-theme.metrics.spacing_1)),
+                    )
                 }),
         );
     }

@@ -446,13 +446,17 @@ impl ProbeApp {
         .into_any_element()
     }
 
-    fn render_destination_picker(&self, theme: Theme, cx: &mut Context<Self>) -> gpui_kit::Div {
+    pub(in crate::app) fn render_destination_picker(
+        &self,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::Div {
         let Some(dialog) = self.structure_dialog.as_ref() else {
             return div();
         };
         let parent = dialog.parent.clone();
         let expanded = dialog.expanded_folders.clone();
-        let busy = self.structure_task.is_some() || dialog.new_folder_name.is_some();
+        let locked = self.destination_picker_locked();
         let rows = self
             .loaded_workspace
             .as_ref()
@@ -471,7 +475,12 @@ impl ProbeApp {
         let tree = super::super::tree::destination_tree(
             theme,
             &rows,
-            &parent,
+            (!dialog
+                .curl
+                .as_ref()
+                .is_some_and(|curl| curl.destination_required))
+            .then_some(parent.as_str()),
+            locked,
             move |selector, cx| {
                 let _ = select_view.update(cx, |view, cx| {
                     view.select_destination_parent(selector, cx);
@@ -516,7 +525,7 @@ impl ProbeApp {
                                         view.open_save_folder_dialog(window, cx);
                                     });
                                 })
-                                .when(busy, |button| {
+                                .when(locked, |button| {
                                     button
                                         .disabled(true)
                                         .text_color(theme.colors.actions.disabled_foreground)
