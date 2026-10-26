@@ -3,6 +3,11 @@
   <title id="title">Probe app icon</title>
   <desc id="description">A close-up of the orange probe tip touching a concentric target, with the finger guard and three burnt-orange grip rings filling the upper-right edge.</desc>
   <defs>
+    <radialGradient id="background" cx="1024" cy="1024" r="1200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EBD9B7"/>
+      <stop offset=".5" stop-color="#F5EAD7"/>
+      <stop offset="1" stop-color="#FAFAF8"/>
+    </radialGradient>
     <pattern id="grid" x="1" y="1" width="64" height="64" patternUnits="userSpaceOnUse">
       <path d="M64 0H0V64" fill="none" stroke="#E7E2DC" stroke-width="1.5"/>
     </pattern>
@@ -18,6 +23,12 @@
       <stop offset=".55" stop-color="#F08000"/>
       <stop offset="1" stop-color="#D76400"/>
     </linearGradient>
+    <!-- Keep a solid highlight with a narrow blend into the orange face. -->
+    <linearGradient id="handle-highlight" x1="500" y1="516" x2="513.5" y2="529.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFB72B"/>
+      <stop offset=".78" stop-color="#FFB72B"/>
+      <stop offset="1" stop-color="#F08000"/>
+    </linearGradient>
     <clipPath id="handle-clip">
       <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z"/>
     </clipPath>
@@ -29,8 +40,8 @@
     </clipPath>
   </defs>
 
-  <!-- Keep the original porcelain field and 64px grid cadence. -->
-  <rect width="1024" height="1024" fill="#F8F6F2"/>
+  <!-- Keep the upper-left field neutral; concentrate cream warmth at the lower right. -->
+  <rect width="1024" height="1024" fill="url(#background)"/>
   <rect width="1024" height="1024" fill="url(#grid)"/>
 
   <!-- Frame the tip and grip rings; the rest of the handle is outside the canvas. -->
@@ -47,13 +58,13 @@
     <!-- Clean color faces follow the original highlight and shadow boundaries. -->
     <g clip-path="url(#handle-clip)">
       <rect x="475" y="195" width="410" height="415" fill="#F08000"/>
-      <path d="M350 664L950 64V78L350 678Z" fill="#FFA51C"/>
-      <path d="M350 678L950 78V101L350 701Z" fill="#FFB72B"/>
+      <path d="M350 664L950 64V66L350 666Z" fill="#FFA51C"/>
+      <path d="M350 666L950 66V93L350 693Z" fill="url(#handle-highlight)"/>
       <path d="M350 770L950 170V215L350 815Z" fill="#D76400"/>
       <!-- The three original grip rings, measured along the diagonal axis. -->
       <g clip-path="url(#bands-clip)">
         <rect x="475" y="195" width="410" height="415" fill="#B85000"/>
-        <path d="M350 664L950 64V101L350 701Z" fill="#D76400"/>
+        <path d="M350 664L950 64V89L350 689Z" fill="#D76400"/>
         <path d="M350 770L950 170V215L350 815Z" fill="#A14400"/>
       </g>
     </g>
