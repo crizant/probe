@@ -11,11 +11,11 @@
       <path d="M64 0H0V64" fill="none" stroke="#35363B" stroke-width="1.5"/>
     </pattern>
     <linearGradient id="metal" x1="0" y1="-10" x2="0" y2="10" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#B0B5B2"/>
-      <stop offset=".26" stop-color="#F0F3EF"/>
-      <stop offset=".44" stop-color="#FFFFFF"/>
-      <stop offset=".62" stop-color="#E2E6E2"/>
-      <stop offset="1" stop-color="#939B95"/>
+      <stop offset="0" stop-color="#F0F3EC"/>
+      <stop offset=".16" stop-color="#E9EDE4"/>
+      <stop offset=".34" stop-color="#CBD1C5"/>
+      <stop offset=".72" stop-color="#A8B1A1"/>
+      <stop offset="1" stop-color="#929D8B"/>
     </linearGradient>
     <linearGradient id="guard-fill" x1="441" y1="550" x2="528" y2="638" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FFB21A"/>
@@ -25,14 +25,60 @@
     <!-- Keep a solid highlight with a narrow blend into the orange face. -->
     <linearGradient id="handle-highlight" x1="500" y1="516" x2="513.5" y2="529.5" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FFC43D"/>
-      <stop offset=".78" stop-color="#FFC43D"/>
-      <stop offset="1" stop-color="#FF9800"/>
+      <stop offset=".52" stop-color="#FFC43D"/>
+      <stop offset="1" stop-color="#FFAD10"/>
+    </linearGradient>
+    <!-- Restrained shading stays inside the original bevel and shadow planes. -->
+    <linearGradient id="handle-fill" x1="513" y1="530" x2="551" y2="568" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFAD10"/>
+      <stop offset="0.5" stop-color="#FF9800"/>
+      <stop offset="1" stop-color="#F18C00"/>
+    </linearGradient>
+    <!-- Blend only the narrow edge where the face turns into shadow. -->
+    <linearGradient id="handle-shadow" x1="552" y1="562" x2="577" y2="587" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F18C00"/>
+      <stop offset=".38" stop-color="#E98100"/>
+      <stop offset="1" stop-color="#D87400"/>
+    </linearGradient>
+    <linearGradient id="bands-shadow" x1="552" y1="562" x2="577" y2="587" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C96201"/>
+      <stop offset=".38" stop-color="#AF5000"/>
+      <stop offset="1" stop-color="#AF5000"/>
+    </linearGradient>
+    <linearGradient id="collar-fill" x1="0" y1="-31" x2="0" y2="31" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9CA496"/>
+      <stop offset=".16" stop-color="#969F90"/>
+      <stop offset=".28" stop-color="#737E6D"/>
+      <stop offset=".65" stop-color="#606D59"/>
+      <stop offset="1" stop-color="#4D5A47"/>
+    </linearGradient>
+    <!-- The curved heel band describes the handle's circular cross-section. -->
+    <linearGradient id="heel-band" x1="552" y1="562" x2="577" y2="587" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E98100"/>
+      <stop offset=".2" stop-color="#E98100"/>
+      <stop offset="1" stop-color="#D87400"/>
+    </linearGradient>
+
+    <linearGradient id="bands-highlight" x1="500" y1="516" x2="513.5" y2="529.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E78A00"/>
+      <stop offset=".52" stop-color="#E78A00"/>
+      <stop offset="1" stop-color="#C96201"/>
+    </linearGradient>
+    <linearGradient id="guard-shadow" x1="478" y1="574" x2="492" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F28F00"/>
+      <stop offset=".65" stop-color="#E98100"/>
+      <stop offset="1" stop-color="#E98100"/>
+    </linearGradient>
+    <linearGradient id="guard-highlight" x1="438" y1="548" x2="455" y2="565" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC43D"/>
+      <stop offset=".35" stop-color="#FFC43D"/>
+      <stop offset="1" stop-color="#FFAA12"/>
     </linearGradient>
     <clipPath id="handle-clip">
       <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z"/>
     </clipPath>
     <clipPath id="bands-clip">
-      <path d="M470 430L670 630L680 620L480 420Z M498 402L698 602L707 593L507 393Z M526 374L726 574L735 565L535 365Z"/>
+      <path d="M515 475Q544 536 605 565L615 555Q554 526 525 465Z M543 447Q572 508 633 537L642 528Q581 499 552 438Z M571 419Q600 480 661 509L670 500Q609 471 580 410Z"/>
     </clipPath>
     <clipPath id="guard-clip">
       <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z"/>
@@ -47,24 +93,25 @@
   <g transform="translate(-275.5 -757.25) scale(1.9)">
     <!-- One shared axis aligns the steel tip and collar with the grip and target. -->
     <g transform="translate(290.25 792.25) rotate(-45)">
-      <path d="M0 0Q0-1.25 3-1.8L174-10V10L3 1.8Q0 1.25 0 0Z" fill="url(#metal)" stroke="#ADB4AE" stroke-width="1" stroke-linejoin="round"/>
-      <path d="M3-.4L174-3" fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
-      <path d="M168-13L251-31V31L168 13Z" fill="#434548"/>
-      <path d="M168-13L251-31V-18L168-5Z" fill="#7B7D7D"/>
-      <path d="M168-5L251-18V31L168 13Z" fill="#47494B"/>
+      <!-- Soft upper-left lighting continues across the tapered metal surfaces. -->
+      <path d="M0 0Q0-1.25 3-1.8L174-10V10L3 1.8Q0 1.25 0 0Z" fill="url(#metal)" stroke="#A0A699" stroke-width=".5" stroke-linejoin="round"/>
+      <path d="M168-13L251-31V31L168 13Z" fill="url(#collar-fill)"/>
     </g>
 
     <!-- Clean color faces follow the original highlight and shadow boundaries. -->
     <g clip-path="url(#handle-clip)">
-      <rect x="475" y="195" width="410" height="415" fill="#FF9800"/>
+      <rect x="475" y="195" width="410" height="415" fill="url(#handle-fill)"/>
+      <path d="M350 764L950 164V215L350 815Z" fill="url(#handle-shadow)"/>
+      <!-- Wrap the base of the grip with a narrow collar, behind the guard. -->
+      <path d="M504 510L498 516C476 541 478 564 501 585C522 603 547 605 567 584L573 578C553 599 528 597 507 579C484 558 482 535 504 510Z" fill="url(#heel-band)"/>
+      <!-- The lit plane continues over the heel; its shadow wraps underneath. -->
       <path d="M350 664L950 64V66L350 666Z" fill="#FFB21A"/>
       <path d="M350 666L950 66V93L350 693Z" fill="url(#handle-highlight)"/>
-      <path d="M350 770L950 170V215L350 815Z" fill="#E98100"/>
-      <!-- The three original grip rings, measured along the diagonal axis. -->
+      <!-- Grip rings bow around the same rounded cross-section as the heel band. -->
       <g clip-path="url(#bands-clip)">
         <rect x="475" y="195" width="410" height="415" fill="#C96201"/>
-        <path d="M350 664L950 64V89L350 689Z" fill="#E78A00"/>
-        <path d="M350 770L950 170V215L350 815Z" fill="#AF5000"/>
+        <path d="M350 664L950 64V93L350 693Z" fill="url(#bands-highlight)"/>
+        <path d="M350 764L950 164V215L350 815Z" fill="url(#bands-shadow)"/>
       </g>
     </g>
     <path d="M498 516L792 222C814 200 837 208 852 222C877 245 877 274 858 293L567 584C547 605 522 603 501 585C478 564 476 541 498 516Z" fill="none" stroke="#E98100" stroke-width="1"/>
@@ -72,8 +119,8 @@
     <!-- Preserve the narrower, slightly asymmetric original finger guard. -->
     <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="url(#guard-fill)"/>
     <g clip-path="url(#guard-clip)">
-      <path d="M404 496L579 671L593 657L418 482Z" fill="#E98100"/>
-      <path d="M429 553L438 544C446 537 457 537 465 544L469 548Q461 546 454 551L438 568L428 558Q426 556 429 553Z" fill="#FFC43D"/>
+      <path d="M404 496L579 671L593 657L418 482Z" fill="url(#guard-shadow)"/>
+      <path d="M429 553L438 544C446 537 457 537 465 544L469 548Q461 546 454 551L438 568L428 558Q426 556 429 553Z" fill="url(#guard-highlight)"/>
     </g>
     <path d="M429 553L438 544C446 537 457 537 465 544L534 613C544 623 544 634 535 644L529 650C520 658 509 657 500 649L432 582C421 571 422 562 429 553Z" fill="none" stroke="#E98100" stroke-width="1"/>
 

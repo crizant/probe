@@ -8,8 +8,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Changed
 
-- Refine the app icon’s handle and grey collar with subtle shading, defined
-  edges, curved grip rings, and a narrow band at the front guard.
+- Refine the app icon with consistent lighting across the handle, grey collar,
+  and needle, curved grip rings, and a narrow band at the front guard.
 
 ## [2.2.0] - 2026-10-26
 

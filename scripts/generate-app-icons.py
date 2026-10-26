@@ -66,7 +66,9 @@ def composer_layers():
             definitions = deepcopy(root.find(namespace + "defs"))
             # Unused pattern definitions also break Apple's SVG importer.
             required = {"background", "grid"} if name == "01-background-grid" else (
-                {"metal", "guard-fill", "handle-highlight",
+                {"metal", "guard-fill", "handle-highlight", "handle-fill",
+                 "handle-shadow", "bands-shadow", "collar-fill", "heel-band",
+                 "bands-highlight", "guard-shadow", "guard-highlight",
                  "handle-clip", "bands-clip", "guard-clip"}
                 if name == "02-probe" else set()
             )
