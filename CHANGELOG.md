@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-10-27
+
 ### Added
 
 - Response assertions support negative array indexes such as `users[-1].name`
@@ -738,6 +740,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[2.2.1]: https://github.com/crizant/probe/releases/tag/v2.2.1
 [2.2.0]: https://github.com/crizant/probe/releases/tag/v2.2.0
 [2.1.1]: https://github.com/crizant/probe/releases/tag/v2.1.1
 [2.1.0]: https://github.com/crizant/probe/releases/tag/v2.1.0
