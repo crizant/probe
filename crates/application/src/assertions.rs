@@ -474,6 +474,8 @@ fn resolve_expected<'a>(
 enum Segment<'a> {
     Property(&'a str),
     Index(usize),
+    IndexFromEnd(usize),
+    Length,
 }
 
 // None means status; Some(empty) means the complete JSON body.
@@ -486,6 +488,10 @@ fn parse_expression(input: &str) -> Result<Option<Vec<Segment<'_>>>, AssertionEr
         .ok_or(AssertionError::UnsupportedExpression)?;
     let mut path = Vec::new();
     while !rest.is_empty() {
+        if rest == ".length()" {
+            path.push(Segment::Length);
+            break;
+        }
         if let Some(property) = rest.strip_prefix('.') {
             let end = property
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
@@ -500,18 +506,24 @@ fn parse_expression(input: &str) -> Result<Option<Vec<Segment<'_>>>, AssertionEr
             let end = index
                 .find(']')
                 .ok_or(AssertionError::UnsupportedExpression)?;
-            let digits = &index[..end];
+            let raw = &index[..end];
+            let negative = raw.starts_with('-');
+            let digits = raw.strip_prefix('-').unwrap_or(raw);
             if digits.is_empty()
                 || !digits.bytes().all(|b| b.is_ascii_digit())
                 || (digits.len() > 1 && digits.starts_with('0'))
+                || (negative && digits == "0")
             {
                 return Err(AssertionError::UnsupportedExpression);
             }
-            path.push(Segment::Index(
-                digits
-                    .parse()
-                    .map_err(|_| AssertionError::UnsupportedExpression)?,
-            ));
+            let index_value = digits
+                .parse()
+                .map_err(|_| AssertionError::UnsupportedExpression)?;
+            path.push(if negative {
+                Segment::IndexFromEnd(index_value)
+            } else {
+                Segment::Index(index_value)
+            });
             rest = &index[end + 1..];
         } else {
             return Err(AssertionError::UnsupportedExpression);
@@ -530,10 +542,19 @@ fn select<'a>(body: &'a Value, path: &[Segment<'_>]) -> Result<Cow<'a, Value>, A
             (Segment::Index(index), Value::Array(array)) => {
                 array.get(*index).ok_or(AssertionError::MissingProperty)?
             }
-            (Segment::Property("length"), Value::Array(array)) if position + 1 == path.len() => {
+            (Segment::IndexFromEnd(offset), Value::Array(array)) => array
+                .len()
+                .checked_sub(*offset)
+                .and_then(|index| array.get(index))
+                .ok_or(AssertionError::MissingProperty)?,
+            (Segment::Property("length") | Segment::Length, Value::Array(array))
+                if position + 1 == path.len() =>
+            {
                 return Ok(Cow::Owned(Value::from(array.len())));
             }
-            (Segment::Property("length"), Value::String(string)) if position + 1 == path.len() => {
+            (Segment::Property("length") | Segment::Length, Value::String(string))
+                if position + 1 == path.len() =>
+            {
                 return Ok(Cow::Owned(Value::from(string.chars().count())));
             }
             _ => return Err(AssertionError::IncompatibleOperands),
