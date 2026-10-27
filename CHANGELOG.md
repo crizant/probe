@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Response assertions support negative array indexes such as `users[-1].name`
+  and terminal `.length()` for arrays and strings, alongside existing `.length`.
+
 ### Changed
 
 - Refine the app icon with consistent lighting across the handle, grey collar,

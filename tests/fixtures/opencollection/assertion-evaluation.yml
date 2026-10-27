@@ -51,6 +51,12 @@ items:
         - expression: response.body.users.length
           operator: greaterThan
           value: '0'
+        - expression: response.body.users[-1].name
+          operator: equals
+          value: Ada
+        - expression: response.body.users[-1].name.length()
+          operator: equals
+          value: '3'
   - info:
       name: GraphQL assertions
       type: graphql
@@ -69,3 +75,9 @@ items:
           value: Ada
         - expression: response.body.errors
           operator: isNull
+        - expression: response.body.data.users[-1].name
+          operator: equals
+          value: Ada
+        - expression: response.body.data.users.length()
+          operator: equals
+          value: '1'

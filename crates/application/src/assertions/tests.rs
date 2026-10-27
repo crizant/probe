@@ -72,7 +72,7 @@ fn http_and_graphql_use_the_same_api_without_mutating_declarations() {
         let response = response(body);
         let response_before = response.clone();
         let results = evaluate_assertions(assertions, &response, &resolution, &NoSecrets);
-        assert_eq!(results.len(), 3);
+        assert_eq!(results.len(), 5);
         for (index, result) in results.iter().enumerate() {
             assert_eq!(result.index, index);
             assert_eq!(result.outcome, AssertionOutcome::Passed);
@@ -103,6 +103,103 @@ fn paths_arrays_lengths_and_real_length_properties() {
     assert_eq!(
         outcome(b"[]", "response.body.length", "equals", Some("0")),
         AssertionOutcome::Passed
+    );
+}
+
+#[test]
+fn negative_indexes_select_from_the_end_and_preserve_length_properties() {
+    let body = br#"{"items":[{"name":"Ada","length":7},{"name":"Lin","length":9},{"name":"Jo"}],"nested":[[1,2],[3,4]]}"#;
+    for (path, expected) in [
+        ("response.body.items[0].name", "Ada"),
+        ("response.body.items[-1].name", "Jo"),
+        ("response.body.items[-2].name", "Lin"),
+        ("response.body.items[-3].name", "Ada"),
+        ("response.body.items[0].length", "7"),
+        ("response.body.items[1].length", "9"),
+        ("response.body.items[-2].length", "9"),
+        ("response.body.nested[-1][-2]", "3"),
+        ("response.body.nested[0][-1]", "2"),
+        ("response.body.nested[-1][0]", "3"),
+    ] {
+        assert_eq!(
+            outcome(body, path, "equals", Some(expected)),
+            AssertionOutcome::Passed,
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn index_bounds_and_incompatible_types_keep_their_error_categories() {
+    for body in [b"[]".as_slice(), b"[1,2,3]"] {
+        for index in [
+            "3".into(),
+            "-4".into(),
+            usize::MAX.to_string(),
+            format!("-{}", usize::MAX),
+        ] {
+            assert_eq!(
+                outcome(body, &format!("response.body[{index}]"), "isNotNull", None),
+                AssertionOutcome::Error(AssertionError::MissingProperty),
+                "{index}"
+            );
+        }
+    }
+    assert_eq!(
+        outcome(b"[]", "response.body[-1]", "isNull", None),
+        AssertionOutcome::Error(AssertionError::MissingProperty)
+    );
+    for body in [r#"{"-1":"value"}"#, "null", "true", "42", r#""text""#] {
+        assert_eq!(
+            outcome(body.as_bytes(), "response.body[-1]", "isNotNull", None),
+            AssertionOutcome::Error(AssertionError::IncompatibleOperands)
+        );
+    }
+}
+
+#[test]
+fn explicit_length_counts_arrays_and_unicode_scalars_but_never_object_properties() {
+    for (body, expected) in [
+        ("[]", "0"),
+        ("[1,2]", "2"),
+        (r#""""#, "0"),
+        (r#""a😀é""#, "4"),
+    ] {
+        for suffix in [".length", ".length()"] {
+            assert_eq!(
+                outcome(
+                    body.as_bytes(),
+                    &format!("response.body{suffix}"),
+                    "equals",
+                    Some(expected)
+                ),
+                AssertionOutcome::Passed
+            );
+        }
+    }
+    assert_eq!(
+        outcome(
+            br#"{"users":[{"name":"Ada"}]}"#,
+            "response.body.users[-1].name.length()",
+            "equals",
+            Some("3")
+        ),
+        AssertionOutcome::Passed
+    );
+    for body in [r#"{"length":42}"#, "{}", "null", "true", "42"] {
+        assert_eq!(
+            outcome(body.as_bytes(), "response.body.length()", "isNotNull", None),
+            AssertionOutcome::Error(AssertionError::IncompatibleOperands)
+        );
+    }
+    assert_eq!(
+        outcome(
+            br#"[{"length":42}]"#,
+            "response.body[0].length()",
+            "equals",
+            Some("42")
+        ),
+        AssertionOutcome::Error(AssertionError::IncompatibleOperands)
     );
 }
 
@@ -408,9 +505,21 @@ fn unsupported_syntax_and_operators_are_never_interpolated_or_executed() {
         "response.body..name",
         "response.body.",
         "response.body[01]",
-        "response.body[-1]",
+        "response.body[-0]",
+        "response.body[-01]",
+        "response.body[--1]",
+        "response.body[-]",
+        "response.body[]",
+        "response.body[ 1]",
+        "response.body[-1 ]",
         "response.body[+1]",
         "response.body[99999999999999999999999999]",
+        "response.body[-99999999999999999999999999]",
+        "response.body.length().foo",
+        "response.body.length()[0]",
+        "response.body.length().length()",
+        "response.body.length(1)",
+        "response.body.length( )",
         "response.body[0",
         "response.body['name']",
         "response.body[\"name\"]",
@@ -1283,6 +1392,60 @@ fn actuals_use_secrets_disclosed_later_and_redact_decoded_json_before_escaping()
     );
     assert_eq!(results[0].actual.as_deref(), Some("[REDACTED]"));
     assert!(!results[0].actual_truncated);
+}
+
+#[test]
+fn new_selector_syntax_shares_redaction_and_diagnostics() {
+    let loaded = fixture();
+    let resolution = RequestResolution {
+        environments: loaded.workspace().environments(),
+        environment: Some("child"),
+        workspace_identity: Some("fixture"),
+        ..RequestResolution::default()
+    };
+    let secret = "sensitive-token";
+    let provider = Provider {
+        value: Ok(Some(secret)),
+        calls: Cell::new(0),
+    };
+    let declarations = [
+        assertion("response.body[-1].name", "equals", Some(secret)),
+        assertion("response.body[-1].name.length()", "equals", Some("0")),
+        assertion("response.body[-1].name", "equals", Some("{{token}}")),
+        assertion("response.body[-1].length()", "equals", Some("0")),
+        assertion("response.body.length().foo", "equals", Some("0")),
+    ];
+    let results = evaluate_assertions(
+        &declarations,
+        &response(br#"[{"name":"sensitive-token-other"}]"#),
+        &resolution,
+        &provider,
+    );
+    assert_eq!(results[0].outcome, AssertionOutcome::Failed);
+    assert_eq!(results[0].actual.as_deref(), Some("[REDACTED]-other"));
+    assert_eq!(
+        results[0].diagnostic.as_deref(),
+        Some("response.body[-1].name equals [REDACTED]")
+    );
+    assert_eq!(results[1].outcome, AssertionOutcome::Failed);
+    assert_eq!(results[1].actual.as_deref(), Some("21"));
+    assert_eq!(
+        results[1].diagnostic.as_deref(),
+        Some("response.body[-1].name.length() equals 0")
+    );
+    assert_eq!(
+        results[3].outcome,
+        AssertionOutcome::Error(AssertionError::IncompatibleOperands)
+    );
+    assert_eq!(
+        results[3].diagnostic.as_deref(),
+        Some("response.body[-1].length() equals 0")
+    );
+    assert_eq!(
+        results[4].diagnostic.as_deref(),
+        Some("[REDACTED] equals 0")
+    );
+    assert!(!format!("{results:?}").contains(secret));
 }
 
 #[test]

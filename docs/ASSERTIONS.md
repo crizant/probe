@@ -35,6 +35,8 @@ Add more rows to check the sample body:
 | --- | --- | --- | --- |
 | There is at least one user | `response.body.users.length` | `greaterThan` | `0` |
 | The first user's name is Alice | `response.body.users[0].name` | `equals` | `Alice` |
+| The last user's name is Alice | `response.body.users[-1].name` | `equals` | `Alice` |
+| There is one user | `response.body.users.length()` | `equals` | `1` |
 | The name includes Ali | `response.body.users[0].name` | `contains` | `Ali` |
 | The first user is active | `response.body.users[0].active` | `equals` | `true` |
 | The first user's ID is not null | `response.body.users[0].id` | `isNotNull` | Leave empty |
@@ -47,8 +49,11 @@ All enabled checks must pass. Disable a row to skip it without deleting it.
 
 Start with `response.status` for the HTTP status or `response.body` for the JSON
 body. Use dots to select fields and zero-based indexes to select array entries:
-`response.body.users[0].name` reads the first user's name. Append `.length` to an
-array or string to check its length. For GraphQL, include the response's `data`
+`response.body.users[0].name` reads the first user's name. Negative indexes count
+from the end: `users[-1]` selects the last user, `users[-2]` the second-to-last,
+and `users[-3]` the third-to-last. Append `.length` or `.length()` to an array or
+string to check its length; `response.body.users[-1].name.length()` counts the
+last user's name. For GraphQL, include the response's `data`
 or `errors` field in the path, for example `response.body.data.users.length`.
 
 Expressions are paths, not JavaScript: enter `response.status`, choose `equals`,
@@ -125,18 +130,28 @@ Supported expressions:
 - Exactly `response.status`, yielding a JSON number.
 - `response.body`, yielding the JSON body, followed by zero or more `.property`
   or `[index]` segments. Properties use ASCII identifiers
-  `[A-Za-z_$][A-Za-z0-9_$]*`. Indexes are nonnegative decimal integers without
-  leading zeroes, bounded by the platform's `usize`.
+  `[A-Za-z_$][A-Za-z0-9_$]*`. Indexes are decimal integers without leading zeroes,
+  optionally prefixed with `-` to count from the end. Their magnitude is bounded
+  by the platform's `usize`; overflow returns `UnsupportedExpression`.
+  `[-0]`, `[-01]`, `[--1]`, `[+1]`, and `[-]` are invalid.
 - Terminal `.length` on arrays yields the element count; on strings it yields
   the Unicode scalar count. On objects, `length` is an ordinary property name.
+  This also applies after indexes: `response.body.items[1].length` accesses that
+  object's `length` property.
+- Terminal `.length()` yields the same array or string count, but never looks up
+  an object property. Objects, numbers, booleans, and null return
+  `IncompatibleOperands`. Chaining after it, such as `.length().foo` or
+  `.length()[0]`, returns `UnsupportedExpression`.
 
-Whitespace around expressions, quoted bracket properties, negative indexes,
-wildcards, filters, functions, arithmetic, response headers, and other roots are
+Whitespace around expressions, quoted bracket properties,
+wildcards (`[]` or `[*]`), filters, functions other than terminal `.length()`,
+arithmetic, response headers, and other roots are
 unsupported and return `UnsupportedExpression`. There is no JavaScript or
 general-purpose expression engine. Expression and operator strings are never
 interpolated. Unknown operators always return `UnsupportedOperator`.
 
-Absent properties and out-of-range indexes return `MissingProperty`, including
+Absent properties and out-of-range indexes (positive or negative, including on
+empty arrays) return `MissingProperty`, including
 for `isNull`, `isNotNull`, and negative comparisons. An existing JSON null is a
 value, not an absent property. Traversing incompatible types returns
 `IncompatibleOperands`.
