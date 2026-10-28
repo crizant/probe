@@ -966,6 +966,34 @@ impl ProbeApp {
         {
             self.selected_tree_item = None;
         }
+        let mut folder_remaps = selector_remaps.clone();
+        for folder in old.folders() {
+            if mapped_folder(folder.key()) {
+                folder_remaps
+                    .entry(folder.selector().to_owned())
+                    .or_insert_with(|| folder.selector().to_owned());
+            }
+        }
+        self.structure_dialog = self.structure_dialog.take().filter(|dialog| {
+            let safe = |selector: &str| selector.is_empty() || folder_remaps.contains_key(selector);
+            // Missing destinations already require reselection or cancel below.
+            (safe(&dialog.parent) || workspace.folder_key(&dialog.parent).is_none())
+                && match &dialog.mode {
+                    StructureDialogMode::Rename {
+                        kind: ItemKind::Folder,
+                        selector,
+                    } => safe(selector),
+                    StructureDialogMode::Rename { selector, .. } => {
+                        selector_remaps.contains_key(selector)
+                    }
+                    _ => true,
+                }
+        });
+        if let Some(dialog) = self.structure_dialog.as_mut() {
+            dialog
+                .expanded_folders
+                .retain(|selector| folder_remaps.contains_key(selector));
+        }
         let selectors = self.snapshot_shell_selectors(old);
         let detached = self
             .detached_requests
@@ -1032,7 +1060,7 @@ impl ProbeApp {
             }
             _ => {}
         }
-        self.restore_shell_selectors(selector_remaps, &remaps, selectors);
+        self.restore_shell_selectors(&folder_remaps, &remaps, selectors);
         for (old_key, selection) in certificate_overrides {
             if let Some(key) = remaps.get(&old_key) {
                 self.shell.set_certificate_override(*key, selection);
@@ -1118,29 +1146,51 @@ impl ProbeApp {
             .loaded_workspace
             .as_ref()
             .expect("workspace was replaced");
-        self.overview_drafts = std::mem::take(&mut self.overview_drafts)
-            .into_iter()
-            .map(|(mut target, draft)| {
-                if let OverviewTarget::Folder(selector) = &mut target
-                    && let Some(mapped) = remaps.get(selector)
-                {
-                    selector.clone_from(mapped);
-                }
-                (target, draft)
+        let mut detached = self
+            .overview_drafts
+            .keys()
+            .filter_map(|target| match target {
+                OverviewTarget::DetachedFolder(slot) => Some(slot + 1),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let targets: BTreeMap<_, _> = self
+            .overview_drafts
+            .keys()
+            .chain(self.pending_documentation_saves.iter())
+            .chain(match self.pending_close.as_ref() {
+                Some(PendingClose::Overview(target)) => Some(target),
+                _ => None,
+            })
+            .map(|target| {
+                let mapped = match target {
+                    OverviewTarget::Folder(selector) => match remaps.get(selector) {
+                        Some(mapped) => OverviewTarget::Folder(mapped.clone()),
+                        None => {
+                            let target = OverviewTarget::DetachedFolder(detached);
+                            detached += 1;
+                            target
+                        }
+                    },
+                    _ => target.clone(),
+                };
+                (target.clone(), mapped)
             })
             .collect();
+        self.overview_drafts = std::mem::take(&mut self.overview_drafts)
+            .into_iter()
+            .map(|(target, draft)| (targets[&target].clone(), draft))
+            .collect();
         for target in &mut self.pending_documentation_saves {
-            if let OverviewTarget::Folder(selector) = target
-                && let Some(mapped) = remaps.get(selector)
-            {
-                selector.clone_from(mapped);
+            if let Some(mapped) = targets.get(target) {
+                *target = mapped.clone();
             }
         }
-        if let Some(PendingClose::Overview(OverviewTarget::Folder(selector))) =
-            self.pending_close.as_mut()
-            && let Some(mapped) = remaps.get(selector)
+        if let Some(PendingClose::Overview(target)) = self.pending_close.as_mut()
+            && let Some(mapped) = targets.get(target)
         {
-            selector.clone_from(mapped);
+            *target = mapped.clone();
         }
         let restored: Vec<_> = selectors
             .ordered_tabs
@@ -1152,6 +1202,7 @@ impl ProbeApp {
                     }
                     crate::shell::OpenTab::Overview(_) => locator
                         .as_ref()
+                        .filter(|locator| !matches!(locator, crate::session::TabLocator::Folder(selector) if !remaps.contains_key(selector)))
                         .and_then(|locator| locator.remap(remaps).resolve(loaded)),
                 }?;
                 Some((*tab, resolved))
@@ -1178,9 +1229,9 @@ impl ProbeApp {
             *pending_keep = keep;
         }
         for selector in selectors.folder_selectors {
-            let selector = remaps
-                .get(&selector)
-                .map_or(selector.as_str(), String::as_str);
+            let Some(selector) = remaps.get(&selector) else {
+                continue;
+            };
             if let Some(key) = loaded.folder_key(selector) {
                 self.shell.collapse_folder(key);
             }

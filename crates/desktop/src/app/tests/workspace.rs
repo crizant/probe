@@ -4462,6 +4462,20 @@ fn committed_documentation_save_keeps_drafts_until_recovery_integrates(cx: &mut 
             .update(cx, |view, window, cx| {
                 assert!(!view.loading);
                 assert!(view.documentation_save_task.is_none());
+                if folder && !reload_fails {
+                    let (target, draft) = view.overview_drafts.iter().next().unwrap();
+                    assert!(matches!(target, OverviewTarget::DetachedFolder(_)));
+                    assert_eq!(draft.original, original);
+                    assert_eq!(
+                        crate::app::documentation::documentation_text(draft.current.docs.as_ref()),
+                        Some("Committed documentation")
+                    );
+                    assert!(
+                        draft.is_dirty(),
+                        "recovery cannot prove the folder identity"
+                    );
+                    return;
+                }
                 let draft = &view.overview_drafts[&target];
                 assert_eq!(
                     crate::app::documentation::documentation_text(draft.current.docs.as_ref()),
@@ -5671,4 +5685,83 @@ fn destination_dialogs_reveal_selection_and_reset_scroll(cx: &mut TestAppContext
                 .unwrap();
         }
     }
+}
+
+#[gpui_kit::test]
+fn filesystem_reload_detaches_stale_folder_state(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let path = writable_documentation_fixture("stale-folder-state");
+    let workspace = probe_opencollection::load_workspace(&path).unwrap();
+    window.update(cx, |view, window, cx| {
+        view.session_store = None;
+        let folder = workspace.folder_key("items/0").unwrap();
+        view.set_workspace(path.clone(), workspace);
+        view.shell.open_overview(crate::shell::OverviewTab::Folder(folder));
+        view.shell.collapse_folder(folder);
+        view.selected_tree_item = Some(WorkspaceItemRef::Folder(folder));
+        view.open_rename_dialog(window, cx);
+        assert!(view.structure_dialog.is_some());
+        let target = OverviewTarget::Folder("items/0".into());
+        view.edit_overview(target.clone(), true, "Keep my unsaved text".into(), cx);
+        view.enqueue_documentation_save(target.clone());
+        view.pending_close = Some(PendingClose::Overview(target));
+        let source = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+        // Identical documentation deliberately defeats content-only conflict checks.
+        let inserted = source.replacen("items:\n", "items:\n  - info:\n      name: Inserted\n      type: folder\n    docs: folder docs text\n", 1);
+        fs::write(&path, &inserted).unwrap();
+        let fresh = probe_opencollection::load_workspace(&path).unwrap();
+        assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+        assert!(view.structure_dialog.is_none());
+        assert!(view.shell.overview_tabs().next().is_none());
+        assert!(view.shell.collapsed_folders().next().is_none());
+        let (target, draft) = view.overview_drafts.iter().next().unwrap();
+        assert!(matches!(target, OverviewTarget::DetachedFolder(_)));
+        assert_eq!(draft.current.docs, Some(probe_core::Documentation::Text("Keep my unsaved text".into())));
+        assert!(draft.is_dirty());
+        assert!(matches!(view.pending_close, Some(PendingClose::Overview(OverviewTarget::DetachedFolder(_)))));
+        assert!(view.start_documentation_save(window, cx).is_break());
+        assert!(view.documentation_save_task.is_none());
+        assert!(view.has_dirty_overviews());
+        assert_eq!(fs::read_to_string(&path).unwrap(), inserted);
+    }).unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[gpui_kit::test]
+fn filesystem_reload_checks_folder_destination_identity(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let path = writable_documentation_fixture("stale-folder-destination");
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(
+                path.clone(),
+                probe_opencollection::load_workspace(&path).unwrap(),
+            );
+            view.new_detached_request(probe_core::RequestProtocol::Http, window, cx);
+            let key = view.shell.active_tab().unwrap();
+            view.open_save_detached_request_dialog(key, window, cx);
+            view.structure_dialog.as_mut().unwrap().parent = "items/0".into();
+            let fresh = probe_opencollection::load_workspace(&path).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            assert_eq!(view.structure_dialog.as_ref().unwrap().parent, "items/0");
+            let source = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+            let inserted = source.replacen(
+                "items:\n",
+                "items:\n  - info:\n      name: Inserted\n      type: folder\n",
+                1,
+            );
+            fs::write(&path, inserted).unwrap();
+            let fresh = probe_opencollection::load_workspace(&path).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            assert!(view.structure_dialog.is_none());
+            assert!(
+                view.detached_requests
+                    .contains(&view.shell.active_tab().unwrap())
+            );
+        })
+        .unwrap();
+    fs::remove_file(path).unwrap();
 }
