@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-28
+
 ### Added
 
 - Duplicate environments from the Environment Manager context menu or
@@ -755,6 +757,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[2.3.0]: https://github.com/crizant/probe/releases/tag/v2.3.0
 [2.2.1]: https://github.com/crizant/probe/releases/tag/v2.2.1
 [2.2.0]: https://github.com/crizant/probe/releases/tag/v2.2.0
 [2.1.1]: https://github.com/crizant/probe/releases/tag/v2.1.1
