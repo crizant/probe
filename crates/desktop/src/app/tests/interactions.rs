@@ -6,7 +6,7 @@ fn reload_context_menu_workspace(
     window: &mut gpui_kit::Window,
     cx: &mut gpui_kit::Context<ProbeApp>,
 ) {
-    let source = fs::read_to_string(nested_fixture()).unwrap().replacen(
+    let source = fs::read_to_string(nested_fixture()).unwrap().replace("\r\n", "\n").replacen(
         "items:\n",
         "items:\n  - info:\n      name: Added folder\n      type: folder\n    items: []\n  - info:\n      name: Added request\n      type: http\n    http:\n      method: GET\n      url: https://example.com/added\n",
         1,
@@ -110,7 +110,7 @@ fn folder_tree_context_menu_dismisses_positional_target_after_unhinted_insertion
     window.update(cx, |view, window, cx| {
         let crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) = folder else { panic!() };
         view.open_tree_context_menu(WorkspaceItemRef::Folder(key), point(px(250.0), px(150.0)), cx);
-        let mut source = fs::read_to_string(nested_fixture()).unwrap();
+        let mut source = fs::read_to_string(nested_fixture()).unwrap().replace("\r\n", "\n");
         source = source.replace("      name: Folder\n", "      name: Folder X\n      type: folder\n    items: []\n  - info:\n      name: Folder\n");
         let fresh = probe_opencollection::load_workspace_from_str(&source).unwrap();
         assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
@@ -129,7 +129,7 @@ fn folder_tab_context_menu_dismisses_positional_target_after_unhinted_insertion(
     let (window, [_, _, folder]) = mixed_tab_window(cx);
     window.update(cx, |view, window, cx| {
         view.open_tab_context_menu(folder, point(px(350.0), px(150.0)), cx);
-        let source = fs::read_to_string(nested_fixture()).unwrap().replace("      name: Folder\n", "      name: Folder X\n      type: folder\n    items: []\n  - info:\n      name: Folder\n");
+        let source = fs::read_to_string(nested_fixture()).unwrap().replace("\r\n", "\n").replace("      name: Folder\n", "      name: Folder X\n      type: folder\n    items: []\n  - info:\n      name: Folder\n");
         let fresh = probe_opencollection::load_workspace_from_str(&source).unwrap();
         assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
         let loaded = view.loaded_workspace.as_ref().unwrap();
@@ -211,7 +211,9 @@ fn reload_dismisses_context_menus_for_deleted_items_and_respects_manual_dismissa
             view.open_tree_context_menu(WorkspaceItemRef::Request(key), position, cx);
             view.open_tab_context_menu(key, position, cx);
             // Removing Alpha puts Nested into its old arena slot.
-            let mut source = fs::read_to_string(nested_fixture()).unwrap();
+            let mut source = fs::read_to_string(nested_fixture())
+                .unwrap()
+                .replace("\r\n", "\n");
             let start = source.find("  - info:\n      name: Alpha").unwrap();
             let end = source.find("  - info:\n      name: Folder").unwrap();
             source.replace_range(start..end, "");
@@ -230,7 +232,9 @@ fn reload_dismisses_context_menus_for_deleted_items_and_respects_manual_dismissa
             view.select_open_tab(tab, cx);
             view.open_tree_context_menu(WorkspaceItemRef::Folder(folder), position, cx);
             view.open_tab_context_menu(tab, position, cx);
-            let source = fs::read_to_string(nested_fixture()).unwrap();
+            let source = fs::read_to_string(nested_fixture())
+                .unwrap()
+                .replace("\r\n", "\n");
             let source = &source[..source.find("  - info:\n      name: Folder").unwrap()];
             let fresh = probe_opencollection::load_workspace_from_str(source).unwrap();
             assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));

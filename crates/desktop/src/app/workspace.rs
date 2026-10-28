@@ -930,11 +930,15 @@ impl ProbeApp {
             .loaded_workspace
             .as_ref()
             .expect("workspace must exist before reload");
-        // Bundled folder selectors are positions. Only an explicit remap can
-        // confirm a folder menu's identity; existence at the old position cannot.
+        // Directory selectors identify paths; bundled selectors identify positions.
+        // Without an explicit remap, only an existing directory path is safe.
         let mapped_folder = |key| {
-            old.folder_selector(key)
-                .is_some_and(|selector| selector_remaps.contains_key(selector))
+            old.folder_selector(key).is_some_and(|selector| {
+                selector_remaps.contains_key(selector)
+                    || (old.uses_path_locators()
+                        && workspace.uses_path_locators()
+                        && workspace.folder_key(selector).is_some())
+            })
         };
         self.transient.tree_context_menu =
             self.transient

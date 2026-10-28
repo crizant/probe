@@ -754,6 +754,65 @@ fn copy_unbundled_fixture(source: &std::path::Path, destination: &std::path::Pat
 }
 
 #[gpui_kit::test]
+fn directory_folder_context_menus_follow_existing_paths_and_dismiss_deleted_paths(
+    cx: &mut TestAppContext,
+) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = directory.path().join("collection");
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/opencollection/phase16-unbundled");
+    copy_unbundled_fixture(&source, &fixture);
+    let loaded = probe_opencollection::load_workspace(&fixture).unwrap();
+    let selector = loaded.folders()[0].selector().to_owned();
+    let folder = loaded.folder_key(&selector).unwrap();
+    let position = point(px(250.0), px(150.0));
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), loaded);
+            let tab = crate::shell::OpenTab::from(crate::shell::OverviewTab::Folder(folder));
+            view.select_open_tab(tab, cx);
+            view.open_tree_context_menu(WorkspaceItemRef::Folder(folder), position, cx);
+            view.open_tab_context_menu(tab, position, cx);
+
+            let request = fixture.join("alpha.yml");
+            let source = fs::read_to_string(&request).unwrap();
+            fs::write(
+                &request,
+                source.replace("https://example.com/alpha", "https://example.com/changed"),
+            )
+            .unwrap();
+            let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            let current = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key(&selector)
+                .unwrap();
+            assert_ne!(current, folder);
+            let tree_menu = view.transient.tree_context_menu.as_ref().unwrap();
+            assert_eq!(tree_menu.target, WorkspaceItemRef::Folder(current));
+            assert_eq!(tree_menu.position, position);
+            let tab_menu = view.transient.tab_context_menu.as_ref().unwrap();
+            assert_eq!(
+                tab_menu.target,
+                crate::shell::OverviewTab::Folder(current).into()
+            );
+            assert_eq!(tab_menu.position, position);
+
+            fs::remove_dir_all(fixture.join("group")).unwrap();
+            let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            assert!(view.transient.tree_context_menu.is_none());
+            assert!(view.transient.tab_context_menu.is_none());
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
 fn saving_detached_graphql_request_preserves_query(cx: &mut TestAppContext) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {

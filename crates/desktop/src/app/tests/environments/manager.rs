@@ -1632,7 +1632,9 @@ fn environment_manager_context_menu_dismisses_removed_target(cx: &mut TestAppCon
             point(px(300.0), px(200.0)),
             cx,
         );
-        let mut source = fs::read_to_string(&workspace.path).unwrap();
+        let mut source = fs::read_to_string(&workspace.path)
+            .unwrap()
+            .replace("\r\n", "\n");
         let start = source.find("    - name: development\n").unwrap();
         let end = source.find("items:\n").unwrap();
         source.replace_range(start..end, "");
