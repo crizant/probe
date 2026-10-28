@@ -983,6 +983,13 @@ impl ProbeApp {
                         kind: ItemKind::Folder,
                         selector,
                     } => safe(selector),
+                    StructureDialogMode::Rename { selector, .. } => {
+                        selector_remaps.contains_key(selector)
+                            || same_source
+                            || (old.uses_path_locators()
+                                && workspace.uses_path_locators()
+                                && workspace.request_key(selector).is_some())
+                    }
                     _ => true,
                 }
         });
@@ -1160,6 +1167,18 @@ impl ProbeApp {
                 Some(PendingClose::Overview(target)) => Some(target),
                 _ => None,
             })
+            .chain(
+                self.application_dialog
+                    .iter()
+                    .chain(self.pending_application_dialogs.iter())
+                    .filter_map(|dialog| match dialog {
+                        ApplicationDialog::Unsaved {
+                            pending: PendingClose::Overview(target),
+                            ..
+                        } => Some(target),
+                        _ => None,
+                    }),
+            )
             .map(|target| {
                 let mapped = match target {
                     OverviewTarget::Folder(selector) => match remaps.get(selector) {
@@ -1184,10 +1203,20 @@ impl ProbeApp {
                 *target = mapped.clone();
             }
         }
-        if let Some(PendingClose::Overview(target)) = self.pending_close.as_mut()
-            && let Some(mapped) = targets.get(target)
-        {
-            *target = mapped.clone();
+        for pending in self.pending_close.iter_mut().chain(
+            self.application_dialog
+                .iter_mut()
+                .chain(self.pending_application_dialogs.iter_mut())
+                .filter_map(|dialog| match dialog {
+                    ApplicationDialog::Unsaved { pending, .. } => Some(pending),
+                    _ => None,
+                }),
+        ) {
+            if let PendingClose::Overview(target) = pending
+                && let Some(mapped) = targets.get(target)
+            {
+                *target = mapped.clone();
+            }
         }
         let restored: Vec<_> = selectors
             .ordered_tabs
