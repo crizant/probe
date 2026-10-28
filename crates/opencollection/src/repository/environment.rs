@@ -29,6 +29,7 @@ pub(super) fn persist_bundled_environment_create(
     document_path: &Path,
     original_source: &[u8],
     environment: &Environment,
+    duplicate_value: Option<&Value>,
 ) -> Result<Vec<u8>, SaveError> {
     mutate_existing_document(document_path, original_source, |document| {
         let mapping = document.as_mapping_mut().ok_or_else(|| {
@@ -43,7 +44,11 @@ pub(super) fn persist_bundled_environment_create(
             .get_mut(&key)
             .and_then(Value::as_sequence_mut)
             .expect("environments sequence must exist after insertion");
-        environments.push(environment_value(environment));
+        environments.push(
+            duplicate_value
+                .cloned()
+                .unwrap_or_else(|| environment_value(environment)),
+        );
         Ok(())
     })
     .map(|(serialized, ())| serialized)
@@ -52,7 +57,20 @@ pub(super) fn persist_bundled_environment_create(
 pub(super) fn persist_unbundled_environment_create(
     root: &Path,
     environment: &Environment,
+    duplicate_value: Option<&Value>,
 ) -> Result<(PathBuf, Vec<u8>), SaveError> {
+    // Treat the environment name as one filename on every supported platform.
+    if matches!(environment.name.as_str(), "" | "." | "..")
+        || environment.name.contains(['/', '\\', ':', '\0'])
+    {
+        return Err(SaveError::Io {
+            path: root.join("environments"),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "environment name must be a single filename without path separators, ':' or NUL",
+            ),
+        });
+    }
     let directory = root.join("environments");
     if !directory.exists() {
         fs::create_dir_all(&directory).map_err(|source| SaveError::Io {
@@ -64,9 +82,13 @@ pub(super) fn persist_unbundled_environment_create(
     if document_path.exists() {
         return Err(SaveError::ConcurrentModification(document_path));
     }
-    let serialized = serde_yaml_ng::to_string(&environment_value(environment))
-        .map_err(SaveError::Serialize)?
-        .into_bytes();
+    let serialized = serde_yaml_ng::to_string(
+        &duplicate_value
+            .cloned()
+            .unwrap_or_else(|| environment_value(environment)),
+    )
+    .map_err(SaveError::Serialize)?
+    .into_bytes();
     write_new_environment_file(&document_path, &serialized)?;
     Ok((document_path, serialized))
 }

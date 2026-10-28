@@ -397,6 +397,7 @@ impl LoadedWorkspace {
                 Ok(PreparedEnvironmentCreate {
                     baseline: self.prepared_baseline(),
                     environment,
+                    duplicate_source: None,
                     kind: EnvironmentCreateKind::Bundled {
                         document_path,
                         original_source,
@@ -407,9 +408,69 @@ impl LoadedWorkspace {
             WorkspaceSource::Unbundled(root) => Ok(PreparedEnvironmentCreate {
                 baseline: self.prepared_baseline(),
                 environment,
+                duplicate_source: None,
                 kind: EnvironmentCreateKind::Unbundled { root: root.clone() },
             }),
         }
+    }
+
+    /// Copies a saved environment under an available name for background persistence.
+    /// Secret declarations are copied; credential-store values are not.
+    ///
+    /// Execution refuses a source whose in-memory fields differ from retained YAML.
+    /// As with prepared creation, revert the new environment if execution fails.
+    pub fn prepare_environment_duplicate(
+        &mut self,
+        source_name: &str,
+    ) -> Result<PreparedEnvironmentCreate, SaveError> {
+        let mut environment = self
+            .workspace
+            .environments()
+            .iter()
+            .find(|environment| environment.name == source_name)
+            .cloned()
+            .ok_or_else(|| {
+                SaveError::Environment(EnvironmentResolutionError::EnvironmentNotFound(
+                    source_name.to_owned(),
+                ))
+            })?;
+        let base = format!("{source_name} Copy");
+        let environments = self.workspace.environments();
+        // The source cannot occupy a copy name, so n candidates suffice for n environments.
+        let name = (1..=environments.len())
+            .map(|suffix| {
+                if suffix == 1 {
+                    base.clone()
+                } else {
+                    format!("{base} {suffix}")
+                }
+            })
+            .find(|candidate| {
+                !environments
+                    .iter()
+                    .any(|environment| &environment.name == candidate)
+            })
+            .expect("the source leaves at least one copy name available");
+        environment.name = name.clone();
+        let mut prepared =
+            self.prepare_environment_create(name.clone(), environment.extends.clone())?;
+        if let Err(error) = self
+            .workspace
+            .replace_environment(&name, environment.clone())
+        {
+            self.revert_created_environment(&name);
+            return Err(SaveError::Environment(error));
+        }
+        if let Some(persistence) = self.environment_persistence.get(source_name) {
+            prepared.duplicate_source = Some((
+                persistence.clone(),
+                self.documents[&persistence.document_path]
+                    .original_source
+                    .clone(),
+            ));
+        }
+        prepared.environment = environment;
+        Ok(prepared)
     }
 
     /// Records persistence metadata after a prepared environment create succeeds.
@@ -1332,6 +1393,7 @@ pub struct PreparedEnvironmentCreate {
     baseline: PreparedBaseline,
     environment: Environment,
     kind: EnvironmentCreateKind,
+    duplicate_source: Option<(EnvironmentPersistence, SourceBytes)>,
 }
 
 #[derive(Debug)]
@@ -1347,7 +1409,8 @@ enum EnvironmentCreateKind {
 }
 
 impl PreparedEnvironmentCreate {
-    fn environment_name(&self) -> &str {
+    /// Returns the name reserved for the new environment.
+    pub fn environment_name(&self) -> &str {
         &self.environment.name
     }
 
@@ -1355,6 +1418,34 @@ impl PreparedEnvironmentCreate {
     pub fn execute(self) -> Result<CompletedEnvironmentCreate, SaveError> {
         self.baseline.check_live()?;
         let name = self.environment.name.clone();
+        let duplicate_value = self
+            .duplicate_source
+            .map(|(persistence, source)| {
+                let mut document: Value = serde_yaml_ng::from_slice(&source)
+                    .map_err(|error| SaveError::InvalidDocument(error.to_string()))?;
+                let mut environment =
+                    environment_document_mut(&mut document, &persistence)?.clone();
+                let mapping = environment.as_mapping_mut().ok_or_else(|| {
+                    SaveError::InvalidDocument(
+                        "the environment document is not a mapping".to_owned(),
+                    )
+                })?;
+                mapping.insert(string_key("name"), Value::String(name.clone()));
+                let saved_environment = serde_yaml_ng::from_value::<EnvironmentDocument>(environment.clone())
+                    .and_then(EnvironmentDocument::into_domain)
+                    .map_err(|error| SaveError::InvalidDocument(error.to_string()))?;
+                if saved_environment != self.environment {
+                    return Err(SaveError::Io {
+                        path: persistence.document_path,
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "source environment has unsaved changes; save or discard them before duplicating",
+                        ),
+                    });
+                }
+                Ok::<_, SaveError>(environment)
+            })
+            .transpose()?;
         let (document_path, serialized, bundled_index) = match self.kind {
             EnvironmentCreateKind::Bundled {
                 document_path,
@@ -1365,12 +1456,16 @@ impl PreparedEnvironmentCreate {
                     &document_path,
                     &original_source,
                     &self.environment,
+                    duplicate_value.as_ref(),
                 )?;
                 (document_path, serialized, Some(bundled_index))
             }
             EnvironmentCreateKind::Unbundled { root } => {
-                let (document_path, serialized) =
-                    persist_unbundled_environment_create(&root, &self.environment)?;
+                let (document_path, serialized) = persist_unbundled_environment_create(
+                    &root,
+                    &self.environment,
+                    duplicate_value.as_ref(),
+                )?;
                 (document_path, serialized, None)
             }
         };

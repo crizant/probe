@@ -1043,6 +1043,8 @@ impl ProbeApp {
         let name = &context_menu.target;
         let position = context_menu.position;
         let busy = self.environment_save_task.is_some();
+        let duplicate_name = name.clone();
+        let duplicate_view = cx.weak_entity();
         let delete_name = name.clone();
         let delete_view = cx.weak_entity();
         let dismiss_view = cx.weak_entity();
@@ -1056,6 +1058,22 @@ impl ProbeApp {
                 });
             },
         )
+        .child(components::menu_button(
+            theme,
+            "environment-manager-duplicate",
+            "Duplicate",
+            components::shortcut_label_for_action_in_context(
+                window,
+                &DuplicateEnvironment,
+                "EnvironmentManagerDialog",
+            ),
+            move |window, cx| {
+                let _ = duplicate_view.update(cx, |view, cx| {
+                    view.close_environment_manager_context_menu(cx);
+                    view.duplicate_environment(duplicate_name.clone(), window, cx);
+                });
+            },
+        ))
         .child(components::destructive_menu_button(
             theme,
             "environment-manager-delete",

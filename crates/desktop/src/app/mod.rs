@@ -177,6 +177,7 @@ gpui_kit::actions!(
         NewGraphqlRequest,
         NewFolder,
         DuplicateRequest,
+        DuplicateEnvironment,
         RenameTreeItem,
         DeleteTreeItem,
         MoveTreeItemUp,
@@ -938,6 +939,11 @@ fn bind_platform_hotkeys(cx: &mut App) {
             Some("(WebSocketComposer > Input) || WebSocketComposer"),
         ),
         KeyBinding::new(
+            "cmd-d",
+            DuplicateEnvironment,
+            Some("EnvironmentManagerDialog"),
+        ),
+        KeyBinding::new(
             "cmd-s",
             SubmitEnvironmentManagerDialog,
             Some("EnvironmentManagerDialog"),
@@ -1013,6 +1019,11 @@ fn bind_platform_hotkeys(cx: &mut App) {
             "ctrl-enter",
             SendWebSocketMessage,
             Some("(WebSocketComposer > Input) || WebSocketComposer"),
+        ),
+        KeyBinding::new(
+            "ctrl-d",
+            DuplicateEnvironment,
+            Some("EnvironmentManagerDialog"),
         ),
         KeyBinding::new(
             "ctrl-s",

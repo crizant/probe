@@ -1221,3 +1221,186 @@ fn retained_source_comparison_ignores_local_edits_and_tracks_exact_saved_documen
             .unwrap();
     assert!(!memory.has_same_source(&memory));
 }
+
+#[test]
+fn duplicate_environment_round_trips_and_uses_available_names() {
+    for bundled in [true, false] {
+        let path = temporary_path(if bundled {
+            "duplicate-environment.yml"
+        } else {
+            "duplicate-environment"
+        });
+        if bundled {
+            fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+        } else {
+            copy_directory(&fixture("unbundled"), &path);
+        }
+        let document_path = if bundled {
+            path.to_path_buf()
+        } else {
+            path.join("environments/development.yml")
+        };
+        let text = fs::read_to_string(&document_path).unwrap();
+        let text = if bundled {
+            text.replace(
+                "    - name: development",
+                "    - name: development\n      vendor.example: retained",
+            )
+        } else {
+            format!("{text}vendor.example: retained\n")
+        };
+        fs::write(&document_path, text).unwrap();
+        let mut loaded = load_workspace(&path).unwrap();
+        let source = loaded.workspace().environments().last().unwrap().clone();
+        for suffix in [" Copy", " Copy 2", " Copy 3", " Copy 4"] {
+            let prepared = loaded.prepare_environment_duplicate(&source.name).unwrap();
+            let saved = prepared.execute().unwrap();
+            loaded.complete_environment_create(saved).unwrap();
+            let persisted = if bundled {
+                yaml(&path)["config"]["environments"]
+                    .as_sequence()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .clone()
+            } else {
+                yaml(&path.join(format!("environments/{}{suffix}.yml", source.name)))
+            };
+            assert_eq!(persisted["vendor.example"].as_str(), Some("retained"));
+            let reloaded = load_workspace(&path).unwrap();
+            let mut expected = source.clone();
+            expected.name.push_str(suffix);
+            assert_eq!(
+                reloaded
+                    .workspace()
+                    .environments()
+                    .iter()
+                    .find(|environment| environment.name == expected.name),
+                Some(&expected)
+            );
+            assert_eq!(
+                reloaded
+                    .workspace()
+                    .environments()
+                    .iter()
+                    .find(|environment| environment.name == source.name),
+                Some(&source)
+            );
+        }
+    }
+}
+
+#[test]
+fn unbundled_environment_create_rejects_path_names_without_writing_files() {
+    let sandbox = temporary_path("environment-create-path-names");
+    fs::create_dir(&sandbox).unwrap();
+    let root = sandbox.join("workspace");
+    copy_directory(&fixture("unbundled"), &root);
+    let mut loaded = load_workspace(&root).unwrap();
+    let original = loaded.workspace().environments().to_vec();
+    let absolute_name = sandbox.join("absolute").to_string_lossy().into_owned();
+    for name in [
+        "../outside",
+        "../../outside",
+        "nested/name",
+        r"..\outside",
+        r"nested\name",
+        "C:outside",
+        ".",
+        "..",
+        absolute_name.as_str(),
+    ] {
+        assert!(
+            matches!(
+                loaded.create_environment(name.to_owned(), None),
+                Err(SaveError::Io { source, .. }) if source.kind() == std::io::ErrorKind::InvalidInput
+            ),
+            "accepted environment name: {name}"
+        );
+        assert_eq!(loaded.workspace().environments(), original.as_slice());
+    }
+    assert!(!sandbox.join("outside.yml").exists());
+    assert!(!sandbox.join("absolute.yml").exists());
+    assert!(!root.join("outside.yml").exists());
+    assert!(!root.join("environments/nested").exists());
+    assert_eq!(
+        load_workspace(&root).unwrap().workspace().environments(),
+        original.as_slice()
+    );
+}
+
+#[test]
+fn unbundled_environment_duplicate_rejects_an_imported_path_name() {
+    let sandbox = temporary_path("environment-duplicate-path-name");
+    fs::create_dir(&sandbox).unwrap();
+    let root = sandbox.join("workspace");
+    copy_directory(&fixture("unbundled"), &root);
+    fs::write(
+        root.join("environments/imported.yml"),
+        "name: ../../outside\nvariables:\n  - name: token\n    value: original\n",
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&root).unwrap();
+    let original = loaded.workspace().environments().to_vec();
+    let prepared = loaded
+        .prepare_environment_duplicate("../../outside")
+        .unwrap();
+    let name = prepared.environment_name().to_owned();
+    assert!(matches!(
+        prepared.execute(),
+        Err(SaveError::Io { source, .. }) if source.kind() == std::io::ErrorKind::InvalidInput
+    ));
+    loaded.revert_created_environment(&name);
+    assert!(!sandbox.join("outside Copy.yml").exists());
+    assert_eq!(loaded.workspace().environments(), original.as_slice());
+    assert_eq!(
+        load_workspace(&root).unwrap().workspace().environments(),
+        original.as_slice()
+    );
+}
+
+#[test]
+fn duplicate_environment_refuses_unsaved_source() {
+    for bundled in [true, false] {
+        let path = temporary_path(if bundled {
+            "duplicate-unsaved-source.yml"
+        } else {
+            "duplicate-unsaved-source"
+        });
+        if bundled {
+            fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+        } else {
+            copy_directory(&fixture("unbundled"), &path);
+        }
+        let mut loaded = load_workspace(&path).unwrap();
+        loaded
+            .update_environment_variable("development", "token", "saved".into())
+            .unwrap();
+        let saved_environments = loaded.workspace().environments().to_vec();
+        loaded
+            .set_environment_variable("development", "token", "unsaved".into())
+            .unwrap();
+        let pending_environments = loaded.workspace().environments().to_vec();
+
+        let prepared = loaded.prepare_environment_duplicate("development").unwrap();
+        let name = prepared.environment_name().to_owned();
+        let error = prepared.execute().unwrap_err();
+        assert!(
+            matches!(&error, SaveError::Io { source, .. } if source.kind() == std::io::ErrorKind::InvalidInput)
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("source environment has unsaved changes")
+        );
+        loaded.revert_created_environment(&name);
+        assert_eq!(
+            loaded.workspace().environments(),
+            pending_environments.as_slice()
+        );
+        assert_eq!(
+            load_workspace(&path).unwrap().workspace().environments(),
+            saved_environments.as_slice()
+        );
+    }
+}

@@ -1839,6 +1839,7 @@ fn create_environment_dialog_cannot_close_while_persistence_is_running(cx: &mut 
 
 #[gpui_kit::test]
 fn creating_an_environment_from_the_switcher_persists_and_selects_it(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
     let workspace = EnvironmentWorkspace::writable(cx, "create-env");
     workspace.update(cx, |_, _, cx| cx.notify());
     cx.run_until_parked();
@@ -1858,13 +1859,15 @@ fn creating_an_environment_from_the_switcher_persists_and_selects_it(cx: &mut Te
     }
     cx.run_until_parked();
 
-    workspace.update(cx, |view, window, cx| {
+    workspace.update(cx, |view, _, cx| {
         *view
             .create_environment_dialog
             .as_mut()
             .expect("create dialog should open") = "staging".to_owned();
-        view.submit_create_environment_dialog(window, cx);
+        cx.notify();
     });
+    cx.run_until_parked();
+    cx.simulate_keystrokes(workspace.window.into(), "enter");
     cx.run_until_parked();
 
     workspace.update(cx, |view, _, _| {
@@ -2243,4 +2246,196 @@ fn missing_environment_is_not_restored(cx: &mut TestAppContext) {
             assert_eq!(view.shell.selected_environment(), None);
         })
         .unwrap();
+}
+
+#[gpui_kit::test]
+fn environment_manager_first_open_shortcut_duplicates_without_activating(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
+    let workspace = EnvironmentWorkspace::writable(cx, "manager-first-open-duplicate");
+    workspace.update(cx, |view, _, cx| {
+        assert_eq!(view.shell.selected_environment(), None);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    {
+        let mut visual = workspace.visual(cx);
+        let trigger = visual.debug_bounds("request-environment-trigger").unwrap();
+        visual.simulate_click(trigger.center(), Modifiers::default());
+        visual.run_until_parked();
+        let manage = visual.debug_bounds("request-environment-action-1").unwrap();
+        visual.simulate_click(manage.center(), Modifiers::default());
+        visual.run_until_parked();
+        workspace.update(&mut visual, |view, _, _| {
+            assert_eq!(manager_environment(view), Some("base"));
+        });
+        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-d"
+        } else {
+            "ctrl-d"
+        });
+        visual.run_until_parked();
+    }
+    cx.run_until_parked();
+    assert!(saved_environment(&workspace, "base Copy").is_some());
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(manager_environment(view), Some("base Copy"));
+        assert_eq!(view.shell.selected_environment(), None);
+        assert_eq!(view.session.selected_environment_for(&workspace.path), None);
+    });
+    cx.simulate_keystrokes(workspace.window.into(), "escape");
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(view.environment_manager_dialog.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn environment_manager_duplicate_menu_copies_context_target(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "manager-context-duplicate");
+    workspace.open_manager(cx, "development");
+    let original = saved_environment(&workspace, "base").unwrap();
+    {
+        let mut visual = workspace.visual(cx);
+        let dialog = visual.debug_bounds("environment-manager-dialog").unwrap();
+        workspace.update(&mut visual, |view, _, cx| {
+            view.open_environment_manager_context_menu("base".to_owned(), dialog.center(), cx);
+            assert_eq!(manager_environment(view), Some("development"));
+        });
+        visual.run_until_parked();
+        let duplicate = visual
+            .debug_bounds("environment-manager-duplicate")
+            .unwrap();
+        visual.simulate_click(duplicate.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    cx.run_until_parked();
+    let mut expected = original;
+    expected.name = "base Copy".to_owned();
+    assert_eq!(
+        saved_environment(&workspace, &expected.name),
+        Some(expected)
+    );
+    assert!(saved_environment(&workspace, "development Copy").is_none());
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(manager_environment(view), Some("base Copy"));
+        assert_eq!(view.shell.selected_environment(), Some("development"));
+        assert_eq!(
+            view.session.selected_environment_for(&workspace.path),
+            Some("development")
+        );
+        assert!(view.transient.environment_manager_context_menu.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn environment_manager_duplicate_shortcut_preserves_dirty_draft(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
+    let workspace = EnvironmentWorkspace::writable(cx, "manager-duplicate-dirty");
+    workspace.open_manager(cx, "development");
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.draft_mut().name = "unsaved".to_owned();
+        });
+    });
+    {
+        let mut visual = workspace.visual(cx);
+        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-d"
+        } else {
+            "ctrl-d"
+        });
+        visual.run_until_parked();
+    }
+    workspace.update(cx, |view, _, _| {
+        assert!(view.environment_save_task.is_none());
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft()
+                .name,
+            "unsaved"
+        );
+    });
+    assert!(saved_environment(&workspace, "development Copy").is_none());
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.draft_mut().name = "development".to_owned();
+        });
+        // The shortcut follows the manager selection even if request execution uses another environment.
+        view.select_environment(Some("base".to_owned()), cx);
+    });
+    {
+        let mut visual = workspace.visual(cx);
+        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-d"
+        } else {
+            "ctrl-d"
+        });
+        visual.run_until_parked();
+    }
+    cx.run_until_parked();
+    assert!(saved_environment(&workspace, "development Copy").is_some());
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(manager_environment(view), Some("development Copy"));
+        assert_eq!(view.shell.selected_environment(), Some("base"));
+        assert_eq!(
+            view.session.selected_environment_for(&workspace.path),
+            Some("base")
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn environment_manager_duplicate_blocks_pending_and_failed_variable_saves(cx: &mut TestAppContext) {
+    for failed in [false, true] {
+        let workspace =
+            EnvironmentWorkspace::writable(cx, &format!("manager-duplicate-pending-{failed}"));
+        let saved_source = saved_environment(&workspace, "development").unwrap();
+        let key = ("development".to_owned(), "token".to_owned());
+        let before = workspace.update(cx, |view, _, _| {
+            let loaded = view.loaded_workspace.as_mut().unwrap();
+            loaded
+                .set_environment_variable(&key.0, &key.1, "unsaved-token".into())
+                .unwrap();
+            let before = loaded.workspace().environments().to_vec();
+            view.pending_environment_saves.insert(key.clone());
+            if failed {
+                view.failed_environment_saves.insert(key.clone());
+            }
+            before
+        });
+        // A clean manager draft must still block duplicating a different context-menu target.
+        workspace.open_manager(cx, "development");
+        workspace.update(cx, |view, window, cx| {
+            view.duplicate_environment("base".to_owned(), window, cx);
+            assert!(!view.has_active_workspace_write());
+            assert_eq!(
+                view.loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .workspace()
+                    .environments(),
+                before.as_slice()
+            );
+            assert_eq!(manager_environment(view), Some("development"));
+            assert!(view.pending_environment_saves.contains(&key));
+            assert_eq!(view.failed_environment_saves.contains(&key), failed);
+            assert!(
+                has_active_toast(
+                    view,
+                    ToastIntent::Error,
+                    "Save or discard pending environment variable changes",
+                ),
+                "{:?}",
+                toast_debug(view)
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            saved_environment(&workspace, "development"),
+            Some(saved_source)
+        );
+        assert!(saved_environment(&workspace, "base Copy").is_none());
+    }
 }

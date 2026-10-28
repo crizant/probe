@@ -244,7 +244,9 @@ impl RenderOnce for DropdownActionItem {
             let controller = self.controller;
             let on_activate = self.on_activate;
             move |_, window, cx| {
-                controller.close_and_restore_trigger(window, cx);
+                controller.close(cx);
+                // Actions may open dialogs; restore focus before invoking them.
+                controller.trigger_focus.focus(window, cx);
                 on_activate(window, cx);
             }
         })
@@ -432,7 +434,8 @@ impl<T: Clone + Eq + 'static> RenderOnce for ProbeDropdown<T> {
                         on_value_change(Some(value), window, cx);
                         controller.close_and_restore_trigger(window, cx);
                     } else if let Some(action) = actions.get(index.saturating_sub(options.len())) {
-                        controller.close_and_restore_trigger(window, cx);
+                        controller.close(cx);
+                        controller.trigger_focus.focus(window, cx);
                         (action.on_activate)(window, cx);
                     }
                 }

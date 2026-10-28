@@ -309,6 +309,10 @@ impl Render for ProbeApp {
                     view.submit_create_environment_dialog(window, cx);
                 }),
             )
+            .on_action(cx.listener(|view, _: &DuplicateEnvironment, window, cx| {
+                view.close_environment_manager_context_menu(cx);
+                view.duplicate_selected_environment_from_manager(window, cx);
+            }))
             .on_action(
                 cx.listener(|view, _: &SubmitEnvironmentManagerDialog, window, cx| {
                     if view.environment_manager_save_disabled() {
