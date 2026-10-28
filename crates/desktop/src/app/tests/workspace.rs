@@ -5765,3 +5765,32 @@ fn filesystem_reload_checks_folder_destination_identity(cx: &mut TestAppContext)
         .unwrap();
     fs::remove_file(path).unwrap();
 }
+
+#[gpui_kit::test]
+fn filesystem_echo_reload_keeps_request_rename_dialog(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
+    let path = bundled_fixture().canonicalize().unwrap();
+    let workspace = probe_opencollection::load_workspace(&path).unwrap();
+    let key = workspace.requests()[0].key();
+    let selector = workspace.request_selector(key).unwrap().to_owned();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(path.clone(), workspace);
+            view.selected_tree_item = Some(WorkspaceItemRef::Request(key));
+            view.open_rename_dialog(window, cx);
+            view.structure_dialog.as_mut().unwrap().name = "Pending rename".into();
+            let fresh = probe_opencollection::load_workspace(&path).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            // Also cover installation with no selector remaps at all: normal
+            // reconciliation may supply identity mappings for unchanged requests.
+            let fresh = probe_opencollection::load_workspace(&path).unwrap();
+            view.install_reloaded_workspace(fresh, Vec::new(), &BTreeMap::new(), &BTreeMap::new());
+            view.remap_structure_dialog(&BTreeMap::new());
+            let dialog = view.structure_dialog.as_ref().expect("request Rename survives an echo reload");
+            assert!(matches!(&dialog.mode, StructureDialogMode::Rename { kind: ItemKind::Request, selector: current } if current == &selector));
+            assert_eq!(dialog.name, "Pending rename");
+        })
+        .unwrap();
+}

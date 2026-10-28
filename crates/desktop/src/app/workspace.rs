@@ -983,9 +983,6 @@ impl ProbeApp {
                         kind: ItemKind::Folder,
                         selector,
                     } => safe(selector),
-                    StructureDialogMode::Rename { selector, .. } => {
-                        selector_remaps.contains_key(selector)
-                    }
                     _ => true,
                 }
         });
