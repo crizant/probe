@@ -13,6 +13,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Cancel stale folder dialogs and dismiss stale folder views after external collection
+  changes; retain unsaved documentation without allowing writes to a different folder.
+
 - Reject unsafe filenames when creating or duplicating unbundled environments,
   preventing environment names from directing writes outside the environment directory.
 - Keep the sidebar folder selection from moving to a different folder when a

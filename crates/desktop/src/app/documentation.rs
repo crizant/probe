@@ -5,6 +5,8 @@ use probe_core::{Documentation, FieldPatch};
 pub(crate) enum OverviewTarget {
     Collection,
     Folder(String),
+    // A session-only draft slot, with no folder save target.
+    DetachedFolder(usize),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -69,6 +71,7 @@ impl ProbeApp {
     pub(super) fn overview_content(&self, target: &OverviewTarget) -> Option<OverviewContent> {
         let loaded = self.loaded_workspace.as_ref()?;
         match target {
+            OverviewTarget::DetachedFolder(_) => None,
             OverviewTarget::Collection => {
                 let metadata = loaded.workspace().metadata();
                 Some(OverviewContent {
@@ -213,7 +216,7 @@ impl ProbeApp {
         };
         let Some(current) = self.overview_content(&target) else {
             self.fail_documentation_save(
-                "The folder no longer exists. Discard this documentation draft to continue.",
+                "The folder can no longer be identified safely. Unsaved documentation is retained; discard this draft to continue.",
                 cx,
             );
             return ControlFlow::Break(());
@@ -230,6 +233,9 @@ impl ProbeApp {
             .as_ref()
             .expect("overview content requires a workspace");
         let prepared = match &target {
+            OverviewTarget::DetachedFolder(_) => {
+                unreachable!("detached drafts have no overview content")
+            }
             OverviewTarget::Collection => {
                 loaded.prepare_collection_save(probe_core::CollectionUpdate {
                     summary: patch(&draft.original.summary(), &draft.current.summary()),
