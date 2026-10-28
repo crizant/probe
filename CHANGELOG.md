@@ -15,6 +15,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 - Reject unsafe filenames when creating or duplicating unbundled environments,
   preventing environment names from directing writes outside the environment directory.
+- Keep the sidebar folder selection from moving to a different folder when a
+  collection changes on disk, so keyboard rename and delete cannot act on the wrong folder.
 
 ## [2.2.1] - 2026-10-27
 

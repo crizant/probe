@@ -80,6 +80,7 @@ fn folder_tree_context_menu_follows_reloaded_target(cx: &mut TestAppContext) {
             let menu = view.transient.tree_context_menu.as_ref().unwrap();
             assert_eq!(menu.target, WorkspaceItemRef::Folder(target));
             assert_eq!(menu.position, position);
+            assert_eq!(view.selected_tree_item, Some(menu.target));
         })
         .unwrap();
 }
@@ -128,6 +129,29 @@ fn bundled_folder_context_menus_dismiss_positional_targets_after_unhinted_insert
             );
             assert!(view.transient.tree_context_menu.is_none());
             assert!(view.transient.tab_context_menu.is_none());
+            assert!(view.selected_tree_item.is_none());
+            view.open_rename_dialog(window, cx);
+            view.request_delete_selected(window, cx);
+            assert!(view.structure_dialog.is_none());
+            assert!(view.application_dialog.is_none());
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn unchanged_bundled_reload_keeps_folder_selection(cx: &mut TestAppContext) {
+    let (window, _) = mixed_tab_window(cx);
+    window
+        .update(cx, |view, window, cx| {
+            let fixture = nested_fixture().canonicalize().unwrap();
+            let fresh = probe_opencollection::load_workspace(fixture).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let folder = loaded.folder_key("items/1").unwrap();
+            assert_eq!(
+                view.selected_tree_item,
+                Some(WorkspaceItemRef::Folder(folder))
+            );
         })
         .unwrap();
 }
