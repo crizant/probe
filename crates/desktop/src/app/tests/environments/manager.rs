@@ -1839,6 +1839,7 @@ fn create_environment_dialog_cannot_close_while_persistence_is_running(cx: &mut 
 
 #[gpui_kit::test]
 fn creating_an_environment_from_the_switcher_persists_and_selects_it(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
     let workspace = EnvironmentWorkspace::writable(cx, "create-env");
     workspace.update(cx, |_, _, cx| cx.notify());
     cx.run_until_parked();
@@ -1858,13 +1859,15 @@ fn creating_an_environment_from_the_switcher_persists_and_selects_it(cx: &mut Te
     }
     cx.run_until_parked();
 
-    workspace.update(cx, |view, window, cx| {
+    workspace.update(cx, |view, _, cx| {
         *view
             .create_environment_dialog
             .as_mut()
             .expect("create dialog should open") = "staging".to_owned();
-        view.submit_create_environment_dialog(window, cx);
+        cx.notify();
     });
+    cx.run_until_parked();
+    cx.simulate_keystrokes(workspace.window.into(), "enter");
     cx.run_until_parked();
 
     workspace.update(cx, |view, _, _| {
@@ -2246,6 +2249,47 @@ fn missing_environment_is_not_restored(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn environment_manager_first_open_shortcut_duplicates_without_activating(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
+    let workspace = EnvironmentWorkspace::writable(cx, "manager-first-open-duplicate");
+    workspace.update(cx, |view, _, cx| {
+        assert_eq!(view.shell.selected_environment(), None);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    {
+        let mut visual = workspace.visual(cx);
+        let trigger = visual.debug_bounds("request-environment-trigger").unwrap();
+        visual.simulate_click(trigger.center(), Modifiers::default());
+        visual.run_until_parked();
+        let manage = visual.debug_bounds("request-environment-action-1").unwrap();
+        visual.simulate_click(manage.center(), Modifiers::default());
+        visual.run_until_parked();
+        workspace.update(&mut visual, |view, _, _| {
+            assert_eq!(manager_environment(view), Some("base"));
+        });
+        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-d"
+        } else {
+            "ctrl-d"
+        });
+        visual.run_until_parked();
+    }
+    cx.run_until_parked();
+    assert!(saved_environment(&workspace, "base Copy").is_some());
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(manager_environment(view), Some("base Copy"));
+        assert_eq!(view.shell.selected_environment(), None);
+        assert_eq!(view.session.selected_environment_for(&workspace.path), None);
+    });
+    cx.simulate_keystrokes(workspace.window.into(), "escape");
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(view.environment_manager_dialog.is_none());
+    });
+}
+
+#[gpui_kit::test]
 fn environment_manager_duplicate_menu_copies_context_target(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-context-duplicate");
     workspace.open_manager(cx, "development");
@@ -2274,6 +2318,11 @@ fn environment_manager_duplicate_menu_copies_context_target(cx: &mut TestAppCont
     assert!(saved_environment(&workspace, "development Copy").is_none());
     workspace.update(cx, |view, _, _| {
         assert_eq!(manager_environment(view), Some("base Copy"));
+        assert_eq!(view.shell.selected_environment(), Some("development"));
+        assert_eq!(
+            view.session.selected_environment_for(&workspace.path),
+            Some("development")
+        );
         assert!(view.transient.environment_manager_context_menu.is_none());
     });
 }
@@ -2329,6 +2378,11 @@ fn environment_manager_duplicate_shortcut_preserves_dirty_draft(cx: &mut TestApp
     assert!(saved_environment(&workspace, "development Copy").is_some());
     workspace.update(cx, |view, _, _| {
         assert_eq!(manager_environment(view), Some("development Copy"));
+        assert_eq!(view.shell.selected_environment(), Some("base"));
+        assert_eq!(
+            view.session.selected_environment_for(&workspace.path),
+            Some("base")
+        );
     });
 }
 

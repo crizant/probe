@@ -919,7 +919,9 @@ impl ProbeApp {
                                 .iter()
                                 .find(|environment| environment.name == name)
                                 .map(EnvironmentManagerDialog::new);
-                            view.select_environment(Some(name), cx);
+                            if !duplicate {
+                                view.select_environment(Some(name), cx);
+                            }
                         }
                         view.environment_save_workspace_path = None;
                         view.create_environment_dialog = None;
