@@ -1294,3 +1294,72 @@ fn duplicate_environment_round_trips_and_uses_available_names() {
         }
     }
 }
+
+#[test]
+fn unbundled_environment_create_rejects_path_names_without_writing_files() {
+    let sandbox = temporary_path("environment-create-path-names");
+    fs::create_dir(&sandbox).unwrap();
+    let root = sandbox.join("workspace");
+    copy_directory(&fixture("unbundled"), &root);
+    let mut loaded = load_workspace(&root).unwrap();
+    let original = loaded.workspace().environments().to_vec();
+    let absolute_name = sandbox.join("absolute").to_string_lossy().into_owned();
+    for name in [
+        "../outside",
+        "../../outside",
+        "nested/name",
+        r"..\outside",
+        r"nested\name",
+        "C:outside",
+        ".",
+        "..",
+        absolute_name.as_str(),
+    ] {
+        assert!(
+            matches!(
+                loaded.create_environment(name.to_owned(), None),
+                Err(SaveError::Io { source, .. }) if source.kind() == std::io::ErrorKind::InvalidInput
+            ),
+            "accepted environment name: {name}"
+        );
+        assert_eq!(loaded.workspace().environments(), original.as_slice());
+    }
+    assert!(!sandbox.join("outside.yml").exists());
+    assert!(!sandbox.join("absolute.yml").exists());
+    assert!(!root.join("outside.yml").exists());
+    assert!(!root.join("environments/nested").exists());
+    assert_eq!(
+        load_workspace(&root).unwrap().workspace().environments(),
+        original.as_slice()
+    );
+}
+
+#[test]
+fn unbundled_environment_duplicate_rejects_an_imported_path_name() {
+    let sandbox = temporary_path("environment-duplicate-path-name");
+    fs::create_dir(&sandbox).unwrap();
+    let root = sandbox.join("workspace");
+    copy_directory(&fixture("unbundled"), &root);
+    fs::write(
+        root.join("environments/imported.yml"),
+        "name: ../../outside\nvariables:\n  - name: token\n    value: original\n",
+    )
+    .unwrap();
+    let mut loaded = load_workspace(&root).unwrap();
+    let original = loaded.workspace().environments().to_vec();
+    let prepared = loaded
+        .prepare_environment_duplicate("../../outside")
+        .unwrap();
+    let name = prepared.environment_name().to_owned();
+    assert!(matches!(
+        prepared.execute(),
+        Err(SaveError::Io { source, .. }) if source.kind() == std::io::ErrorKind::InvalidInput
+    ));
+    loaded.revert_created_environment(&name);
+    assert!(!sandbox.join("outside Copy.yml").exists());
+    assert_eq!(loaded.workspace().environments(), original.as_slice());
+    assert_eq!(
+        load_workspace(&root).unwrap().workspace().environments(),
+        original.as_slice()
+    );
+}

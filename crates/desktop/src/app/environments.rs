@@ -815,6 +815,24 @@ impl ProbeApp {
             return;
         };
         let name = dialog.original_name.clone();
+        self.duplicate_environment(name, window, cx);
+    }
+
+    pub(super) fn duplicate_environment(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.pending_environment_saves.is_empty() {
+            self.show_environment_dialog_error(
+                "Save or discard pending environment variable changes before duplicating an environment.",
+                EnvironmentDialogErrorResolution::SavesIdle,
+                cx,
+            );
+            cx.notify();
+            return;
+        }
         self.create_or_duplicate_environment(name, true, window, cx);
     }
 

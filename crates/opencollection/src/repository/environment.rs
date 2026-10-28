@@ -59,6 +59,18 @@ pub(super) fn persist_unbundled_environment_create(
     environment: &Environment,
     duplicate_value: Option<&Value>,
 ) -> Result<(PathBuf, Vec<u8>), SaveError> {
+    // Treat the environment name as one filename on every supported platform.
+    if matches!(environment.name.as_str(), "" | "." | "..")
+        || environment.name.contains(['/', '\\', ':', '\0'])
+    {
+        return Err(SaveError::Io {
+            path: root.join("environments"),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "environment name must be a single filename without path separators, ':' or NUL",
+            ),
+        });
+    }
     let directory = root.join("environments");
     if !directory.exists() {
         fs::create_dir_all(&directory).map_err(|source| SaveError::Io {

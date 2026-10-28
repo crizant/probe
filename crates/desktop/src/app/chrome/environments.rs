@@ -1043,6 +1043,7 @@ impl ProbeApp {
         let name = &context_menu.target;
         let position = context_menu.position;
         let busy = self.environment_save_task.is_some();
+        let duplicate_name = name.clone();
         let duplicate_view = cx.weak_entity();
         let delete_name = name.clone();
         let delete_view = cx.weak_entity();
@@ -1069,7 +1070,7 @@ impl ProbeApp {
             move |window, cx| {
                 let _ = duplicate_view.update(cx, |view, cx| {
                     view.close_environment_manager_context_menu(cx);
-                    view.duplicate_selected_environment_from_manager(window, cx);
+                    view.duplicate_environment(duplicate_name.clone(), window, cx);
                 });
             },
         ))

@@ -2246,19 +2246,16 @@ fn missing_environment_is_not_restored(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn environment_manager_duplicate_menu_copies_selected_environment(cx: &mut TestAppContext) {
+fn environment_manager_duplicate_menu_copies_context_target(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-context-duplicate");
     workspace.open_manager(cx, "development");
-    let original = saved_environment(&workspace, "development").unwrap();
+    let original = saved_environment(&workspace, "base").unwrap();
     {
         let mut visual = workspace.visual(cx);
         let dialog = visual.debug_bounds("environment-manager-dialog").unwrap();
         workspace.update(&mut visual, |view, _, cx| {
-            view.open_environment_manager_context_menu(
-                "development".to_owned(),
-                dialog.center(),
-                cx,
-            );
+            view.open_environment_manager_context_menu("base".to_owned(), dialog.center(), cx);
+            assert_eq!(manager_environment(view), Some("development"));
         });
         visual.run_until_parked();
         let duplicate = visual
@@ -2269,13 +2266,14 @@ fn environment_manager_duplicate_menu_copies_selected_environment(cx: &mut TestA
     }
     cx.run_until_parked();
     let mut expected = original;
-    expected.name = "development Copy".to_owned();
+    expected.name = "base Copy".to_owned();
     assert_eq!(
         saved_environment(&workspace, &expected.name),
         Some(expected)
     );
+    assert!(saved_environment(&workspace, "development Copy").is_none());
     workspace.update(cx, |view, _, _| {
-        assert_eq!(manager_environment(view), Some("development Copy"));
+        assert_eq!(manager_environment(view), Some("base Copy"));
         assert!(view.transient.environment_manager_context_menu.is_none());
     });
 }
@@ -2332,4 +2330,79 @@ fn environment_manager_duplicate_shortcut_preserves_dirty_draft(cx: &mut TestApp
     workspace.update(cx, |view, _, _| {
         assert_eq!(manager_environment(view), Some("development Copy"));
     });
+}
+
+#[gpui_kit::test]
+fn environment_manager_duplicate_blocks_pending_and_failed_variable_saves(cx: &mut TestAppContext) {
+    for failed in [false, true] {
+        for context_target in [false, true] {
+            let workspace = EnvironmentWorkspace::writable(
+                cx,
+                &format!("manager-duplicate-pending-{failed}-{context_target}"),
+            );
+            let saved_source = saved_environment(&workspace, "development").unwrap();
+            workspace.update(cx, |view, _, _| {
+                view.loaded_workspace
+                    .as_mut()
+                    .unwrap()
+                    .set_environment_variable("development", "token", "unsaved-token".into())
+                    .unwrap();
+                let key = ("development".to_owned(), "token".to_owned());
+                view.pending_environment_saves.insert(key.clone());
+                if failed {
+                    view.failed_environment_saves.insert(key);
+                }
+            });
+            // Opening after the edit makes a clean manager draft, while the
+            // workspace still differs from retained YAML and has no active write.
+            workspace.open_manager(cx, "development");
+            workspace.update(cx, |view, window, cx| {
+                assert!(!view.environment_manager_is_dirty());
+                assert!(!view.has_active_workspace_write());
+                let before = view
+                    .loaded_workspace
+                    .as_ref()
+                    .unwrap()
+                    .workspace()
+                    .environments()
+                    .to_vec();
+                if context_target {
+                    view.duplicate_environment("base".to_owned(), window, cx);
+                } else {
+                    view.duplicate_selected_environment_from_manager(window, cx);
+                }
+                assert!(!view.has_active_workspace_write());
+                assert_eq!(
+                    view.loaded_workspace
+                        .as_ref()
+                        .unwrap()
+                        .workspace()
+                        .environments(),
+                    before.as_slice()
+                );
+                assert_eq!(manager_environment(view), Some("development"));
+                assert!(
+                    view.pending_environment_saves
+                        .contains(&("development".into(), "token".into()))
+                );
+                assert_eq!(view.failed_environment_saves.is_empty(), !failed);
+                assert!(
+                    has_active_toast(
+                        view,
+                        ToastIntent::Error,
+                        "Save or discard pending environment variable changes",
+                    ),
+                    "{:?}",
+                    toast_debug(view)
+                );
+            });
+            cx.run_until_parked();
+            assert_eq!(
+                saved_environment(&workspace, "development"),
+                Some(saved_source)
+            );
+            assert!(saved_environment(&workspace, "development Copy").is_none());
+            assert!(saved_environment(&workspace, "base Copy").is_none());
+        }
+    }
 }
