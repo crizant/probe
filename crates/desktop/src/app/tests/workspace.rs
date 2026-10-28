@@ -27,16 +27,12 @@ pub(super) fn tab_response() -> HttpResponse {
 
 #[gpui_kit::test]
 fn closing_saved_request_unloads_response_and_reopening_starts_fresh(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
-    let fixture = bundled_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let key = workspace.requests()[0].key();
-    let other = workspace.requests()[1].key();
+    let (window, keys) = bundled_workspace_window(cx);
+    let key = keys[0];
+    let other = keys[1];
+
     window
         .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
             view.select_request(key, cx);
             let (cancel, _) = oneshot::channel();
             let generation = view.execution.begin(key, cancel);
@@ -86,15 +82,11 @@ fn closing_saved_request_unloads_response_and_reopening_starts_fresh(cx: &mut Te
 
 #[gpui_kit::test]
 fn closing_saved_request_cancels_execution_and_ignores_late_completion(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
-    let fixture = bundled_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let key = workspace.requests()[0].key();
+    let (window, keys) = bundled_workspace_window(cx);
+    let key = keys[0];
+
     window
         .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
             view.select_request(key, cx);
             let (cancel, mut cancelled) = oneshot::channel();
             let generation = view.execution.begin(key, cancel);
@@ -113,7 +105,7 @@ fn closing_saved_request_cancels_execution_and_ignores_late_completion(cx: &mut 
         .unwrap();
 }
 
-fn response_tab_window(
+fn bundled_workspace_window(
     cx: &mut TestAppContext,
 ) -> (
     gpui_kit::WindowHandle<ProbeApp>,
@@ -141,7 +133,7 @@ fn response_tab_window(
 fn close_other_tabs_unloads_other_responses_and_preserves_the_kept_response(
     cx: &mut TestAppContext,
 ) {
-    let (window, keys) = response_tab_window(cx);
+    let (window, keys) = bundled_workspace_window(cx);
     window
         .update(cx, |view, _, cx| {
             for &key in &keys {
@@ -185,7 +177,7 @@ fn close_other_tabs_unloads_other_responses_and_preserves_the_kept_response(
 
 #[gpui_kit::test]
 fn closing_response_tab_unloads_image_and_encoded_documents(cx: &mut TestAppContext) {
-    let (window, keys) = response_tab_window(cx);
+    let (window, keys) = bundled_workspace_window(cx);
     let key = keys[0];
     window
         .update(cx, |view, _, cx| {
@@ -243,7 +235,7 @@ fn closing_response_tab_unloads_image_and_encoded_documents(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn response_jobs_finishing_after_tab_close_do_not_recreate_documents(cx: &mut TestAppContext) {
-    let (window, keys) = response_tab_window(cx);
+    let (window, keys) = bundled_workspace_window(cx);
     let key = keys[0];
     window
         .update(cx, |view, _, cx| {
@@ -2309,13 +2301,15 @@ fn simulate_tree_drag(
     visual.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
 }
 
-#[gpui_kit::test]
-fn tree_drag_moves_a_request_into_a_folder(cx: &mut TestAppContext) {
+fn tree_drag_window(
+    cx: &mut TestAppContext,
+    name: &str,
+) -> (gpui_kit::WindowHandle<ProbeApp>, PathBuf) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
         ProbeApp::new(window, cx)
     });
-    let fixture = writable_structure_fixture("tree-drag-move");
+    let fixture = writable_structure_fixture(name);
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
     window
         .update(cx, |view, _, cx| {
@@ -2325,6 +2319,13 @@ fn tree_drag_moves_a_request_into_a_folder(cx: &mut TestAppContext) {
         })
         .unwrap();
     cx.run_until_parked();
+
+    (window, fixture)
+}
+
+#[gpui_kit::test]
+fn tree_drag_moves_a_request_into_a_folder(cx: &mut TestAppContext) {
+    let (window, fixture) = tree_drag_window(cx, "tree-drag-move");
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let source = visual
@@ -2355,20 +2356,7 @@ fn tree_drag_moves_a_request_into_a_folder(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn tree_drag_reorders_a_folder_before_its_sibling(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = writable_structure_fixture("tree-drag-reorder");
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    window
-        .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture.clone(), workspace);
-            cx.notify();
-        })
-        .unwrap();
-    cx.run_until_parked();
+    let (window, fixture) = tree_drag_window(cx, "tree-drag-reorder");
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let folder = visual
@@ -2403,20 +2391,7 @@ fn tree_drag_reorders_a_folder_before_its_sibling(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn tree_drag_moves_a_nested_request_to_root_end(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = writable_structure_fixture("tree-drag-root-end");
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    window
-        .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture.clone(), workspace);
-            cx.notify();
-        })
-        .unwrap();
-    cx.run_until_parked();
+    let (window, fixture) = tree_drag_window(cx, "tree-drag-root-end");
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let nested = visual
@@ -2457,20 +2432,7 @@ fn tree_drag_moves_a_nested_request_to_root_end(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn tree_drag_rejects_dropping_a_folder_into_itself(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = writable_structure_fixture("tree-drag-invalid");
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    window
-        .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture.clone(), workspace);
-            cx.notify();
-        })
-        .unwrap();
-    cx.run_until_parked();
+    let (window, fixture) = tree_drag_window(cx, "tree-drag-invalid");
 
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let folder = visual
@@ -4800,19 +4762,12 @@ fn wait_for_shortcut_request(
 fn send_request_shortcut_sends_the_active_request(cx: &mut TestAppContext) {
     // Real HTTP runs on Tokio; permit external wakes before dispatching Send.
     cx.executor().allow_parking();
-    cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = bundled_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let request_key = workspace.requests()[0].key();
+    let (window, keys) = bundled_workspace_window(cx);
+    let request_key = keys[0];
 
     window
         .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
             view.select_request(request_key, cx);
             view.edit_request(
                 request_key,
@@ -4843,19 +4798,12 @@ fn send_request_shortcut_sends_the_active_request(cx: &mut TestAppContext) {
 fn send_request_shortcut_works_when_input_focused(cx: &mut TestAppContext) {
     // Real HTTP runs on Tokio; permit external wakes before dispatching Send.
     cx.executor().allow_parking();
-    cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = bundled_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let request_key = workspace.requests()[0].key();
+    let (window, keys) = bundled_workspace_window(cx);
+    let request_key = keys[0];
 
     window
         .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
             view.select_request(request_key, cx);
             view.edit_request(
                 request_key,
@@ -4890,19 +4838,11 @@ fn send_request_shortcut_works_when_input_focused(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn send_request_shortcut_does_nothing_on_overview_tab(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = bundled_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let requests = workspace.requests().to_vec();
+    let (window, keys) = bundled_workspace_window(cx);
 
     window
         .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
             view.select_open_tab(crate::shell::OverviewTab::Collection.into(), cx);
             assert!(view.shell.active_tab().is_none());
         })
@@ -4914,8 +4854,8 @@ fn send_request_shortcut_does_nothing_on_overview_tab(cx: &mut TestAppContext) {
 
     window
         .update(cx, |view, _, _| {
-            for located in &requests {
-                assert!(view.execution.response(located.key()).is_none());
+            for &key in &keys {
+                assert!(view.execution.response(key).is_none());
             }
         })
         .unwrap();
@@ -4923,19 +4863,12 @@ fn send_request_shortcut_does_nothing_on_overview_tab(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn send_request_shortcut_does_nothing_when_dialog_is_open(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = bundled_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let request_key = workspace.requests()[0].key();
+    let (window, keys) = bundled_workspace_window(cx);
+    let request_key = keys[0];
 
     window
         .update(cx, |view, window, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
             view.select_request(request_key, cx);
             window.dispatch_action(Box::new(NewRequest), cx);
         })
@@ -4962,19 +4895,12 @@ fn send_request_shortcut_does_nothing_when_dialog_is_open(cx: &mut TestAppContex
 fn send_request_shortcut_does_nothing_when_create_environment_dialog_is_open(
     cx: &mut TestAppContext,
 ) {
-    cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = bundled_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let request_key = workspace.requests()[0].key();
+    let (window, keys) = bundled_workspace_window(cx);
+    let request_key = keys[0];
 
     window
         .update(cx, |view, window, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
             view.select_request(request_key, cx);
             view.open_create_environment_dialog(window, cx);
             assert!(view.create_environment_dialog.is_some());
@@ -4994,20 +4920,13 @@ fn send_request_shortcut_does_nothing_when_create_environment_dialog_is_open(
 
 #[gpui_kit::test]
 fn send_request_shortcut_does_not_duplicate_when_already_running(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
     cx.update(bind_platform_hotkeys);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
-    let fixture = bundled_fixture().canonicalize().unwrap();
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-    let request_key = workspace.requests()[0].key();
+    let (window, keys) = bundled_workspace_window(cx);
+    let request_key = keys[0];
     let (cancellation_sender, mut cancellation_receiver) = oneshot::channel();
 
     window
         .update(cx, |view, _, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture, workspace);
             view.select_request(request_key, cx);
             view.edit_request(
                 request_key,

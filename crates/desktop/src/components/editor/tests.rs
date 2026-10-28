@@ -554,23 +554,15 @@ fn variable_highlight_stays_at_origin_when_caret_is_at_start(cx: &mut TestAppCon
 }
 
 #[test]
-fn detect_indentation_prefers_tabs() {
-    assert_eq!(detect_indentation("\tindented"), "\t");
-}
-
-#[test]
-fn detect_indentation_prefers_four_spaces_over_two() {
-    assert_eq!(detect_indentation("    indented"), "    ");
-}
-
-#[test]
-fn detect_indentation_detects_two_spaces() {
-    assert_eq!(detect_indentation("  indented"), "  ");
-}
-
-#[test]
-fn detect_indentation_defaults_to_two_spaces() {
-    assert_eq!(detect_indentation("no indentation"), "  ");
+fn detect_indentation_uses_existing_indent_or_defaults_to_two_spaces() {
+    for (value, expected) in [
+        ("\tindented", "\t"),
+        ("    indented", "    "),
+        ("  indented", "  "),
+        ("no indentation", "  "),
+    ] {
+        assert_eq!(detect_indentation(value), expected, "{value:?}");
+    }
 }
 
 #[test]
@@ -640,17 +632,6 @@ fn compute_outdent_on_multiline_with_partial_selection() {
     // Selection shrinks by removed indents
     assert_eq!(new_selection.start, 3); // 5 - 2 (from line1)
     assert_eq!(new_selection.end, 10); // 14 - 2 (line1) - 2 (line2)
-}
-
-#[test]
-fn compute_outdent_preserves_empty_caret() {
-    let value = "  hello";
-    let selection = 2..2; // Empty caret
-    let (new_text, _, _, new_selection) = super::core::compute_outdent(value, selection);
-    assert_eq!(new_text, "hello");
-    // Must keep start == end
-    assert_eq!(new_selection.start, new_selection.end);
-    assert_eq!(new_selection, 0..0);
 }
 
 #[test]

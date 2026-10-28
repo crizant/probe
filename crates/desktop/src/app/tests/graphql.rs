@@ -241,58 +241,61 @@ fn graphql_variables_extensions_and_operation_name_persist(cx: &mut TestAppConte
     fs::remove_file(fixture).unwrap();
 }
 
-#[gpui_kit::test]
-fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) {
+fn http_and_graphql_requests(
+    cx: &mut TestAppContext,
+    fixture: &std::path::Path,
+) -> (
+    gpui_kit::WindowHandle<ProbeApp>,
+    probe_core::RequestKey,
+    probe_core::RequestKey,
+) {
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
         ProbeApp::new(window, cx)
     });
-    let fixture = writable_bundled_fixture("graphql-section-remap");
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let workspace = probe_opencollection::load_workspace(fixture).unwrap();
 
     window
-        .update(cx, |view, window, cx| {
+        .update(cx, |view, _, _| {
             view.session_store = None;
-            view.set_workspace(fixture.clone(), workspace);
-            view.apply_structure(
-                StructureOperation::CreateRequest {
-                    parent: None,
-                    index: None,
-                    name: "HTTP".to_owned(),
-                    method: Some("GET".to_owned()),
-                    url: Some("https://api.example.com".to_owned()),
-                    settings: None,
-                    protocol: RequestProtocol::Http,
-                    graphql: None,
-                    update: None,
-                },
-                window,
-                cx,
-            );
+            view.set_workspace(fixture.to_path_buf(), workspace);
         })
         .unwrap();
-    cx.run_until_parked();
-
-    window
-        .update(cx, |view, window, cx| {
-            view.apply_structure(
-                StructureOperation::CreateRequest {
-                    parent: None,
-                    index: None,
-                    name: "GraphQL".to_owned(),
-                    method: Some("POST".to_owned()),
-                    url: Some("https://api.example.com/graphql".to_owned()),
-                    settings: None,
-                    protocol: RequestProtocol::Graphql,
-                    graphql: None,
-                    update: None,
-                },
-                window,
-                cx,
-            );
-        })
-        .unwrap();
-    cx.run_until_parked();
+    for (name, method, url, protocol) in [
+        (
+            "HTTP",
+            "GET",
+            "https://api.example.com",
+            RequestProtocol::Http,
+        ),
+        (
+            "GraphQL",
+            "POST",
+            "https://api.example.com/graphql",
+            RequestProtocol::Graphql,
+        ),
+    ] {
+        window
+            .update(cx, |view, window, cx| {
+                view.apply_structure(
+                    StructureOperation::CreateRequest {
+                        parent: None,
+                        index: None,
+                        name: name.to_owned(),
+                        method: Some(method.to_owned()),
+                        url: Some(url.to_owned()),
+                        settings: None,
+                        protocol,
+                        graphql: None,
+                        update: None,
+                    },
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
 
     let (http_key, graphql_key) = window
         .update(cx, |view, _, _| {
@@ -303,6 +306,14 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
             )
         })
         .unwrap();
+
+    (window, http_key, graphql_key)
+}
+
+#[gpui_kit::test]
+fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) {
+    let fixture = writable_bundled_fixture("graphql-section-remap");
+    let (window, http_key, graphql_key) = http_and_graphql_requests(cx, &fixture);
 
     window
         .update(cx, |view, _, cx| {
@@ -336,66 +347,8 @@ fn selecting_request_resets_unavailable_editor_section(cx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn closing_graphql_tab_resets_unavailable_editor_section(cx: &mut TestAppContext) {
-    cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
     let fixture = writable_bundled_fixture("graphql-section-remap-close-tab");
-    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
-
-    window
-        .update(cx, |view, window, cx| {
-            view.session_store = None;
-            view.set_workspace(fixture.clone(), workspace);
-            view.apply_structure(
-                StructureOperation::CreateRequest {
-                    parent: None,
-                    index: None,
-                    name: "HTTP".to_owned(),
-                    method: Some("GET".to_owned()),
-                    url: Some("https://api.example.com".to_owned()),
-                    settings: None,
-                    protocol: RequestProtocol::Http,
-                    graphql: None,
-                    update: None,
-                },
-                window,
-                cx,
-            );
-        })
-        .unwrap();
-    cx.run_until_parked();
-
-    window
-        .update(cx, |view, window, cx| {
-            view.apply_structure(
-                StructureOperation::CreateRequest {
-                    parent: None,
-                    index: None,
-                    name: "GraphQL".to_owned(),
-                    method: Some("POST".to_owned()),
-                    url: Some("https://api.example.com/graphql".to_owned()),
-                    settings: None,
-                    protocol: RequestProtocol::Graphql,
-                    graphql: None,
-                    update: None,
-                },
-                window,
-                cx,
-            );
-        })
-        .unwrap();
-    cx.run_until_parked();
-
-    let (http_key, graphql_key) = window
-        .update(cx, |view, _, _| {
-            let requests = view.loaded_workspace.as_ref().unwrap().requests();
-            (
-                requests[requests.len() - 2].key(),
-                requests.last().unwrap().key(),
-            )
-        })
-        .unwrap();
+    let (window, http_key, graphql_key) = http_and_graphql_requests(cx, &fixture);
 
     window
         .update(cx, |view, _, cx| {

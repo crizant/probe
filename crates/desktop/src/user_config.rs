@@ -550,35 +550,24 @@ mod tests {
         );
     }
 
-    fn load_theme(contents: &str) -> ThemeMode {
-        let root = TempDir::new();
-        let path = root.0.join("config.toml");
-        fs::write(&path, contents).unwrap();
-        UserConfig::load_from(&path).unwrap().theme
-    }
-
     #[test]
-    fn missing_theme_defaults_to_system() {
-        assert_eq!(
-            load_theme("# Probe user configuration\n"),
-            ThemeMode::System
-        );
+    fn theme_loading_uses_system_by_default_and_accepts_each_mode() {
         assert_eq!(UserConfig::default().theme, ThemeMode::System);
-    }
-
-    #[test]
-    fn theme_system_loads() {
-        assert_eq!(load_theme("theme = \"system\"\n"), ThemeMode::System);
-    }
-
-    #[test]
-    fn theme_light_loads() {
-        assert_eq!(load_theme("theme = \"light\"\n"), ThemeMode::Light);
-    }
-
-    #[test]
-    fn theme_dark_loads() {
-        assert_eq!(load_theme("theme = \"dark\"\n"), ThemeMode::Dark);
+        for (contents, expected) in [
+            ("# Probe user configuration\n", ThemeMode::System),
+            ("theme = \"system\"\n", ThemeMode::System),
+            ("theme = \"light\"\n", ThemeMode::Light),
+            ("theme = \"dark\"\n", ThemeMode::Dark),
+        ] {
+            let root = TempDir::new();
+            let path = root.0.join("config.toml");
+            fs::write(&path, contents).unwrap();
+            assert_eq!(
+                UserConfig::load_from(&path).unwrap().theme,
+                expected,
+                "{contents:?}"
+            );
+        }
     }
 
     #[test]

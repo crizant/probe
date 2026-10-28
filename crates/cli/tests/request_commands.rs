@@ -750,51 +750,32 @@ fn graphql_operation_name_rejects_non_string() {
 }
 
 #[test]
-fn graphql_set_rejects_non_object_variables() {
-    let output = probe()
-        .args(["request", "set"])
-        .arg(fixture("phase1-round-trip.yml"))
-        .args([
-            "items/0",
-            "--graphql-query",
-            "query Viewer { viewer { login } }",
-            "--graphql-variables",
-            "[]",
-            "--json",
-        ])
-        .output()
-        .expect("GraphQL set command should run");
+fn graphql_set_rejects_invalid_variables_and_http_targets() {
+    for (extra, message) in [
+        (
+            &["--graphql-variables", "[]"][..],
+            "GraphQL variables must be a JSON object or null",
+        ),
+        (&[][..], "request is not a native GraphQL request"),
+    ] {
+        let output = probe()
+            .args(["request", "set"])
+            .arg(fixture("phase1-round-trip.yml"))
+            .args([
+                "items/0",
+                "--graphql-query",
+                "query Viewer { viewer { login } }",
+            ])
+            .args(extra)
+            .arg("--json")
+            .output()
+            .expect("GraphQL set command should run");
 
-    assert_eq!(output.status.code(), Some(2));
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["error"]["category"], "invalid_arguments");
-    assert_eq!(
-        value["error"]["message"],
-        "GraphQL variables must be a JSON object or null"
-    );
-}
-
-#[test]
-fn graphql_set_rejects_http_requests() {
-    let output = probe()
-        .args(["request", "set"])
-        .arg(fixture("phase1-round-trip.yml"))
-        .args([
-            "items/0",
-            "--graphql-query",
-            "query Viewer { viewer { login } }",
-            "--json",
-        ])
-        .output()
-        .expect("GraphQL set command should run");
-
-    assert_eq!(output.status.code(), Some(2));
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["error"]["category"], "invalid_arguments");
-    assert_eq!(
-        value["error"]["message"],
-        "request is not a native GraphQL request"
-    );
+        assert_eq!(output.status.code(), Some(2), "{extra:?}: {output:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments", "{extra:?}");
+        assert_eq!(value["error"]["message"], message, "{extra:?}");
+    }
 }
 
 #[test]
