@@ -926,11 +926,35 @@ impl ProbeApp {
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
         selector_remaps: &BTreeMap<String, String>,
     ) -> BTreeMap<RequestKey, RequestKey> {
-        let selectors = self.snapshot_shell_selectors(
-            self.loaded_workspace
-                .as_ref()
-                .expect("workspace must exist before reload"),
-        );
+        let old = self
+            .loaded_workspace
+            .as_ref()
+            .expect("workspace must exist before reload");
+        // Bundled folder selectors are positions. Only an explicit remap can
+        // confirm a folder menu's identity; existence at the old position cannot.
+        let mapped_folder = |key| {
+            old.folder_selector(key)
+                .is_some_and(|selector| selector_remaps.contains_key(selector))
+        };
+        self.transient.tree_context_menu =
+            self.transient
+                .tree_context_menu
+                .take()
+                .filter(|menu| match menu.target {
+                    WorkspaceItemRef::Folder(key) => mapped_folder(key),
+                    WorkspaceItemRef::Request(_) => true,
+                });
+        self.transient.tab_context_menu =
+            self.transient
+                .tab_context_menu
+                .take()
+                .filter(|menu| match menu.target {
+                    crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) => {
+                        mapped_folder(key)
+                    }
+                    _ => true,
+                });
+        let selectors = self.snapshot_shell_selectors(old);
         let detached = self
             .detached_requests
             .iter()

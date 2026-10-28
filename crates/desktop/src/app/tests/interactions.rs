@@ -103,6 +103,44 @@ fn folder_tree_context_menu_follows_reloaded_target_and_delete_action(cx: &mut T
 }
 
 #[gpui_kit::test]
+fn folder_tree_context_menu_dismisses_positional_target_after_unhinted_insertion(
+    cx: &mut TestAppContext,
+) {
+    let (window, [_, _, folder]) = mixed_tab_window(cx);
+    window.update(cx, |view, window, cx| {
+        let crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) = folder else { panic!() };
+        view.open_tree_context_menu(WorkspaceItemRef::Folder(key), point(px(250.0), px(150.0)), cx);
+        let mut source = fs::read_to_string(nested_fixture()).unwrap();
+        source = source.replace("      name: Folder\n", "      name: Folder X\n      type: folder\n    items: []\n  - info:\n      name: Folder\n");
+        let fresh = probe_opencollection::load_workspace_from_str(&source).unwrap();
+        assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        let replacement = loaded.folder_key("items/1").unwrap();
+        assert_eq!(loaded.workspace().folder(replacement).unwrap().metadata.name.as_deref(), Some("Folder X"));
+        assert!(loaded.folder_key("items/2").is_some(), "the original folder still exists");
+        assert!(view.transient.tree_context_menu.is_none());
+    }).unwrap();
+}
+
+#[gpui_kit::test]
+fn folder_tab_context_menu_dismisses_positional_target_after_unhinted_insertion(
+    cx: &mut TestAppContext,
+) {
+    let (window, [_, _, folder]) = mixed_tab_window(cx);
+    window.update(cx, |view, window, cx| {
+        view.open_tab_context_menu(folder, point(px(350.0), px(150.0)), cx);
+        let source = fs::read_to_string(nested_fixture()).unwrap().replace("      name: Folder\n", "      name: Folder X\n      type: folder\n    items: []\n  - info:\n      name: Folder\n");
+        let fresh = probe_opencollection::load_workspace_from_str(&source).unwrap();
+        assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+        let loaded = view.loaded_workspace.as_ref().unwrap();
+        let replacement = loaded.folder_key("items/1").unwrap();
+        assert_eq!(loaded.workspace().folder(replacement).unwrap().metadata.name.as_deref(), Some("Folder X"));
+        assert!(loaded.folder_key("items/2").is_some(), "the original folder still exists");
+        assert!(view.transient.tab_context_menu.is_none());
+    }).unwrap();
+}
+
+#[gpui_kit::test]
 fn tab_context_menu_follows_each_restored_tab_and_close_actions(cx: &mut TestAppContext) {
     for index in 0..3 {
         let (window, tabs) = mixed_tab_window(cx);
