@@ -372,54 +372,34 @@ mod tests {
     }
 
     #[test]
-    fn version_one_active_tabs_migrate_to_their_workspace() {
-        let store = store();
-        std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
-        std::fs::write(
-            store.path(),
-            r#"{
-            "schema_version": 1,
-            "active_collection": "/tmp/old",
-            "open_tabs": ["first", "second"],
-            "active_tab": "first",
-            "collapsed_folders": ["folder"]
-        }"#,
-        )
-        .unwrap();
+    fn legacy_tabs_migrate_to_their_workspace() {
+        for version in [Some(1), None] {
+            let store = store();
+            let mut source = serde_json::json!({
+                "active_collection": "/tmp/old",
+                "open_tabs": ["first", "second"],
+                "active_tab": "first",
+                "collapsed_folders": ["folder"]
+            });
+            if let Some(version) = version {
+                source["schema_version"] = version.into();
+            }
+            std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+            std::fs::write(store.path(), source.to_string()).unwrap();
 
-        let restored = store.load().unwrap();
-        assert_eq!(restored.schema_version, 2);
-        let workspace = &restored.workspaces[Path::new("/tmp/old")];
-        assert_eq!(workspace.open_tabs, ["first", "second"]);
-        assert_eq!(workspace.active_tab.as_deref(), Some("first"));
-        assert_eq!(workspace.collapsed_folders, ["folder"]);
-        store.save(&restored).unwrap();
-        assert_eq!(store.load().unwrap(), restored);
-    }
-
-    #[test]
-    fn unversioned_legacy_tabs_migrate_to_their_workspace() {
-        let store = store();
-        std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
-        std::fs::write(
-            store.path(),
-            r#"{
-            "active_collection": "/tmp/old",
-            "open_tabs": ["first", "second"],
-            "active_tab": "first",
-            "collapsed_folders": ["folder"]
-        }"#,
-        )
-        .unwrap();
-
-        let restored = store.load().unwrap();
-        assert_eq!(restored.schema_version, 2);
-        let workspace = &restored.workspaces[Path::new("/tmp/old")];
-        assert_eq!(workspace.open_tabs, ["first", "second"]);
-        assert_eq!(workspace.active_tab.as_deref(), Some("first"));
-        assert_eq!(workspace.collapsed_folders, ["folder"]);
-        store.save(&restored).unwrap();
-        assert_eq!(store.load().unwrap(), restored);
+            let restored = store.load().unwrap();
+            assert_eq!(restored.schema_version, 2, "legacy version: {version:?}");
+            let workspace = &restored.workspaces[Path::new("/tmp/old")];
+            assert_eq!(workspace.open_tabs, ["first", "second"], "{version:?}");
+            assert_eq!(
+                workspace.active_tab.as_deref(),
+                Some("first"),
+                "{version:?}"
+            );
+            assert_eq!(workspace.collapsed_folders, ["folder"], "{version:?}");
+            store.save(&restored).unwrap();
+            assert_eq!(store.load().unwrap(), restored, "{version:?}");
+        }
     }
 
     #[test]

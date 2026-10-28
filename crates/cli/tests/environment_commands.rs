@@ -477,41 +477,24 @@ fn environment_delete_and_rename_have_stable_errors() {
         assert_eq!(fs::read(&workspace).unwrap(), original);
     }
 
-    let missing_environment = probe()
-        .args(["environment", "delete"])
-        .arg(&workspace)
-        .arg("--json")
-        .output()
-        .unwrap();
-    assert_eq!(missing_environment.status.code(), Some(2));
-    assert!(missing_environment.stderr.is_empty());
-    let value: Value = serde_json::from_slice(&missing_environment.stdout).unwrap();
-    assert_eq!(value["error"]["category"], "invalid_arguments");
-    assert_eq!(value["error"]["exitCode"], 2);
-
-    let missing_name = probe()
-        .args(["environment", "rename"])
-        .arg(&workspace)
-        .args(["--environment", "development", "--json"])
-        .output()
-        .unwrap();
-    assert_eq!(missing_name.status.code(), Some(2));
-    assert!(missing_name.stderr.is_empty());
-    let value: Value = serde_json::from_slice(&missing_name.stdout).unwrap();
-    assert_eq!(value["error"]["category"], "invalid_arguments");
-    assert_eq!(value["error"]["exitCode"], 2);
-
-    let missing_rename_environment = probe()
-        .args(["environment", "rename"])
-        .arg(&workspace)
-        .args(["--name", "staging", "--json"])
-        .output()
-        .unwrap();
-    assert_eq!(missing_rename_environment.status.code(), Some(2));
-    assert!(missing_rename_environment.stderr.is_empty());
-    let value: Value = serde_json::from_slice(&missing_rename_environment.stdout).unwrap();
-    assert_eq!(value["error"]["category"], "invalid_arguments");
-    assert_eq!(value["error"]["exitCode"], 2);
+    for args in [
+        &["delete"][..],
+        &["rename", "--environment", "development"][..],
+        &["rename", "--name", "staging"][..],
+    ] {
+        let output = probe()
+            .arg("environment")
+            .args(args)
+            .arg(&workspace)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "invalid_arguments", "{args:?}");
+        assert_eq!(value["error"]["exitCode"], 2, "{args:?}");
+    }
 
     fs::remove_file(workspace).unwrap();
 }
@@ -587,90 +570,42 @@ fn sets_and_unsets_environment_description() {
         "NAME         EXTENDS\nbase\ndevelopment  base\n"
     );
 
-    let object = run_environment(
-        &workspace,
-        &[
-            "set",
-            "--environment",
-            "development",
+    // Keep the sequence: a text edit of an object must retain its media type,
+    // while explicit JSON replaces the representation, including with YAML null.
+    for (flag, input, expected) in [
+        (
             "--description-json",
             r#"{"content":"Local development","type":"text/markdown"}"#,
-        ],
-    );
-    assert_eq!(object["description"]["content"], "Local development");
-    assert_eq!(object["description"]["type"], "text/markdown");
-    let environment = &yaml_document(&workspace)["config"]["environments"][1];
-    assert_eq!(
-        environment["description"]["content"].as_str(),
-        Some("Local development")
-    );
-    assert_eq!(
-        environment["description"]["type"].as_str(),
-        Some("text/markdown")
-    );
-    assert!(environment["description"].as_str().is_none());
-    let listed = run_environment(&workspace, &["list"]);
-    assert_eq!(
-        listed["environments"][1]["description"]["content"],
-        "Local development"
-    );
-    assert_eq!(
-        listed["environments"][1]["description"]["type"],
-        "text/markdown"
-    );
-
-    let edited = run_environment(
-        &workspace,
-        &[
-            "set",
-            "--environment",
-            "development",
+            serde_json::json!({"content": "Local development", "type": "text/markdown"}),
+        ),
+        (
             "--description",
             "**Updated development**",
-        ],
-    );
-    assert_eq!(edited["description"]["content"], "**Updated development**");
-    assert_eq!(edited["description"]["type"], "text/markdown");
-    let environment = &yaml_document(&workspace)["config"]["environments"][1];
-    assert_eq!(
-        environment["description"]["content"].as_str(),
-        Some("**Updated development**")
-    );
-    assert_eq!(
-        environment["description"]["type"].as_str(),
-        Some("text/markdown")
-    );
-
-    let explicit = run_environment(
-        &workspace,
-        &[
-            "set",
-            "--environment",
-            "development",
+            serde_json::json!({"content": "**Updated development**", "type": "text/markdown"}),
+        ),
+        (
             "--description-json",
             r#""Explicit environment string""#,
-        ],
-    );
-    assert_eq!(explicit["description"], "Explicit environment string");
-    assert_eq!(
-        yaml_document(&workspace)["config"]["environments"][1]["description"].as_str(),
-        Some("Explicit environment string")
-    );
-
-    let null = run_environment(
-        &workspace,
-        &[
-            "set",
-            "--environment",
-            "development",
-            "--description-json",
-            "null",
-        ],
-    );
-    assert!(null["description"].is_null());
-    assert!(yaml_document(&workspace)["config"]["environments"][1]["description"].is_null());
-    let listed = run_environment(&workspace, &["list"]);
-    assert!(listed["environments"][1]["description"].is_null());
+            serde_json::json!("Explicit environment string"),
+        ),
+        ("--description-json", "null", Value::Null),
+    ] {
+        let set = run_environment(
+            &workspace,
+            &["set", "--environment", "development", flag, input],
+        );
+        assert_eq!(set["description"], expected, "{flag} {input}");
+        assert_eq!(
+            yaml_document(&workspace)["config"]["environments"][1]["description"],
+            serde_yaml_ng::to_value(&expected).unwrap(),
+            "{flag} {input}"
+        );
+        let listed = run_environment(&workspace, &["list"]);
+        assert_eq!(
+            listed["environments"][1]["description"], expected,
+            "{flag} {input}"
+        );
+    }
 
     let unset = run_environment(
         &workspace,
