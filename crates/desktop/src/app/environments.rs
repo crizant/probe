@@ -205,7 +205,19 @@ impl ProbeApp {
                 });
             });
         }
-        self.transient.environment_manager_context_menu = None;
+        self.transient.environment_manager_context_menu = self
+            .transient
+            .environment_manager_context_menu
+            .take()
+            .filter(|menu| {
+                self.loaded_workspace.as_ref().is_some_and(|loaded| {
+                    loaded
+                        .workspace()
+                        .environments()
+                        .iter()
+                        .any(|environment| environment.name == menu.target)
+                })
+            });
         let Some(disk) = self.loaded_workspace.as_ref().and_then(|loaded| {
             loaded
                 .workspace()

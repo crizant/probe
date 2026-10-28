@@ -126,4 +126,5 @@ pub(crate) struct ShellSelectors {
     pub(crate) pending_keep: Option<crate::shell::OpenTab>,
     pub(crate) folder_selectors: Vec<String>,
     pub(crate) selected: Option<(probe_core::ItemKind, String)>,
+    pub(crate) tree_context_target: Option<(probe_core::ItemKind, String)>,
 }
