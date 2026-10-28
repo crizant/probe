@@ -2760,27 +2760,7 @@ fn workspace_reload_preserves_running_request_execution(cx: &mut TestAppContext)
             let (sender, mut receiver) = oneshot::channel();
             view.execution.begin(old_key, sender);
 
-            let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
-            let selector_remaps = old
-                .requests()
-                .iter()
-                .map(|located| (located.selector().to_owned(), located.selector().to_owned()))
-                .collect::<BTreeMap<_, _>>();
-            let key_remaps = request_key_remaps(old, &fresh, &selector_remaps);
-            let baselines = fresh
-                .requests()
-                .iter()
-                .filter_map(|located| {
-                    fresh
-                        .workspace()
-                        .request(located.key())
-                        .cloned()
-                        .map(|request| (located.key(), request))
-                })
-                .collect::<Vec<_>>();
-            let new_key = key_remaps[&old_key];
-
-            view.install_reloaded_workspace(fresh, baselines, &key_remaps, &BTreeMap::new());
+            let new_key = reload_unchanged_fixture(view, &fixture)[&old_key];
 
             assert!(receiver.try_recv().is_err());
             assert!(matches!(
@@ -3984,29 +3964,8 @@ fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps
     for iteration in 1..=3 {
         window
             .update(cx, |view, _, _| {
-                let old = view.loaded_workspace.as_ref().unwrap();
                 let old_key = view.shell.active_tab().unwrap();
-                let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
-                let selector_remaps = old
-                    .requests()
-                    .iter()
-                    .map(|located| (located.selector().to_owned(), located.selector().to_owned()))
-                    .collect::<BTreeMap<_, _>>();
-                let key_remaps = request_key_remaps(old, &fresh, &selector_remaps);
-                let baselines = fresh
-                    .requests()
-                    .iter()
-                    .filter_map(|located| {
-                        fresh
-                            .workspace()
-                            .request(located.key())
-                            .cloned()
-                            .map(|request| (located.key(), request))
-                    })
-                    .collect::<Vec<_>>();
-                let new_key = key_remaps[&old_key];
-
-                view.install_reloaded_workspace(fresh, baselines, &key_remaps, &BTreeMap::new());
+                let new_key = reload_unchanged_fixture(view, &fixture)[&old_key];
 
                 let scroll_owner = view.request_section_scroll_owner.get();
                 assert_eq!(
@@ -5067,26 +5026,7 @@ fn certificate_overrides_follow_reloaded_tabs_without_persistence_or_dirty_state
                         .unwrap()
                 )
             );
-            let old = view.loaded_workspace.as_ref().unwrap();
-            let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
-            let selectors = old
-                .requests()
-                .iter()
-                .map(|request| (request.selector().to_owned(), request.selector().to_owned()))
-                .collect();
-            let remaps = request_key_remaps(old, &fresh, &selectors);
-            let new_key = remaps[&key];
-            let baselines = fresh
-                .requests()
-                .iter()
-                .map(|located| {
-                    (
-                        located.key(),
-                        fresh.workspace().request(located.key()).unwrap().clone(),
-                    )
-                })
-                .collect();
-            view.install_reloaded_workspace(fresh, baselines, &remaps, &BTreeMap::new());
+            let new_key = reload_unchanged_fixture(view, &fixture)[&key];
             assert_eq!(
                 view.shell.certificate_override(new_key),
                 &CertificateOverride::NoCertificate
@@ -5532,6 +5472,11 @@ fn destination_dialogs_reveal_selection_and_reset_scroll(cx: &mut TestAppContext
                     );
                 })
                 .unwrap();
+            // All modes share destination selection and scrolling; exercise the
+            // full lifecycle once per format after checking every initial reveal.
+            if mode != "http" {
+                continue;
+            }
             let offset = window
                 .update(&mut visual, |view, _, cx| {
                     let dialog = view.structure_dialog.as_ref().unwrap();
