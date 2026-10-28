@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Duplicate the selected environment from the Environment Manager context menu or
+  with Command+D on macOS (Ctrl+D on Windows and Linux).
+
 ## [2.2.1] - 2026-10-27
 
 ### Added

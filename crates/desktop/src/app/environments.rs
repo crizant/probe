@@ -806,9 +806,31 @@ impl ProbeApp {
         self.create_named_environment(name, window, cx);
     }
 
+    pub(super) fn duplicate_selected_environment_from_manager(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.environment_manager_dialog.as_ref() else {
+            return;
+        };
+        let name = dialog.original_name.clone();
+        self.create_or_duplicate_environment(name, true, window, cx);
+    }
+
     pub(super) fn create_named_environment(
         &mut self,
         name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_or_duplicate_environment(name, false, window, cx);
+    }
+
+    fn create_or_duplicate_environment(
+        &mut self,
+        name: String,
+        duplicate: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -833,7 +855,12 @@ impl ProbeApp {
         let Some(loaded) = self.loaded_workspace.as_mut() else {
             return;
         };
-        let prepared = match loaded.prepare_environment_create(name.clone(), None) {
+        let result = if duplicate {
+            loaded.prepare_environment_duplicate(&name)
+        } else {
+            loaded.prepare_environment_create(name, None)
+        };
+        let prepared = match result {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.show_environment_dialog_error(
@@ -845,6 +872,7 @@ impl ProbeApp {
                 return;
             }
         };
+        let name = prepared.environment_name().to_owned();
         let prepared_baseline = loaded.baseline();
         self.environment_save_workspace_path = self.workspace_path.clone();
         let save_workspace_path = self.workspace_path.clone();

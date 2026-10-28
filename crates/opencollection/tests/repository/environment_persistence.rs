@@ -1221,3 +1221,76 @@ fn retained_source_comparison_ignores_local_edits_and_tracks_exact_saved_documen
             .unwrap();
     assert!(!memory.has_same_source(&memory));
 }
+
+#[test]
+fn duplicate_environment_round_trips_and_uses_available_names() {
+    for bundled in [true, false] {
+        let path = temporary_path(if bundled {
+            "duplicate-environment.yml"
+        } else {
+            "duplicate-environment"
+        });
+        if bundled {
+            fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+        } else {
+            copy_directory(&fixture("unbundled"), &path);
+        }
+        let document_path = if bundled {
+            path.to_path_buf()
+        } else {
+            path.join("environments/development.yml")
+        };
+        let text = fs::read_to_string(&document_path).unwrap();
+        let text = if bundled {
+            text.replace(
+                "    - name: development",
+                "    - name: development\n      vendor.example: retained",
+            )
+        } else {
+            format!("{text}vendor.example: retained\n")
+        };
+        fs::write(&document_path, text).unwrap();
+        let mut loaded = load_workspace(&path).unwrap();
+        let source = loaded.workspace().environments().last().unwrap().clone();
+        for suffix in [" Copy", " Copy 2"] {
+            let prepared = loaded.prepare_environment_duplicate(&source.name).unwrap();
+            let saved = prepared.execute().unwrap();
+            loaded.complete_environment_create(saved).unwrap();
+            let persisted = if bundled {
+                yaml(&path)["config"]["environments"]
+                    .as_sequence()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .clone()
+            } else {
+                yaml(&path.join(format!("environments/{}{suffix}.yml", source.name)))
+            };
+            assert_eq!(persisted["vendor.example"].as_str(), Some("retained"));
+            let reloaded = load_workspace(&path).unwrap();
+            let mut expected = source.clone();
+            expected.name.push_str(suffix);
+            assert_eq!(
+                reloaded
+                    .workspace()
+                    .environments()
+                    .iter()
+                    .find(|environment| environment.name == expected.name),
+                Some(&expected)
+            );
+            assert_eq!(
+                reloaded
+                    .workspace()
+                    .environments()
+                    .iter()
+                    .find(|environment| environment.name == source.name),
+                Some(&source)
+            );
+        }
+        if bundled {
+            fs::remove_file(path).unwrap();
+        } else {
+            fs::remove_dir_all(path).unwrap();
+        }
+    }
+}

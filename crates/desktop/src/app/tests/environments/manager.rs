@@ -2244,3 +2244,92 @@ fn missing_environment_is_not_restored(cx: &mut TestAppContext) {
         })
         .unwrap();
 }
+
+#[gpui_kit::test]
+fn environment_manager_duplicate_menu_copies_selected_environment(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "manager-context-duplicate");
+    workspace.open_manager(cx, "development");
+    let original = saved_environment(&workspace, "development").unwrap();
+    {
+        let mut visual = workspace.visual(cx);
+        let dialog = visual.debug_bounds("environment-manager-dialog").unwrap();
+        workspace.update(&mut visual, |view, _, cx| {
+            view.open_environment_manager_context_menu(
+                "development".to_owned(),
+                dialog.center(),
+                cx,
+            );
+        });
+        visual.run_until_parked();
+        let duplicate = visual
+            .debug_bounds("environment-manager-duplicate")
+            .unwrap();
+        visual.simulate_click(duplicate.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    cx.run_until_parked();
+    let mut expected = original;
+    expected.name = "development Copy".to_owned();
+    assert_eq!(
+        saved_environment(&workspace, &expected.name),
+        Some(expected)
+    );
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(manager_environment(view), Some("development Copy"));
+        assert!(view.transient.environment_manager_context_menu.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn environment_manager_duplicate_shortcut_preserves_dirty_draft(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
+    let workspace = EnvironmentWorkspace::writable(cx, "manager-duplicate-dirty");
+    workspace.open_manager(cx, "development");
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.draft_mut().name = "unsaved".to_owned();
+        });
+    });
+    {
+        let mut visual = workspace.visual(cx);
+        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-d"
+        } else {
+            "ctrl-d"
+        });
+        visual.run_until_parked();
+    }
+    workspace.update(cx, |view, _, _| {
+        assert!(view.environment_save_task.is_none());
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .draft()
+                .name,
+            "unsaved"
+        );
+    });
+    assert!(saved_environment(&workspace, "development Copy").is_none());
+    workspace.update(cx, |view, _, cx| {
+        view.apply_environment_manager_draft(cx, |dialog| {
+            dialog.draft_mut().name = "development".to_owned();
+        });
+        // The shortcut follows the manager selection even if request execution uses another environment.
+        view.select_environment(Some("base".to_owned()), cx);
+    });
+    {
+        let mut visual = workspace.visual(cx);
+        visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-d"
+        } else {
+            "ctrl-d"
+        });
+        visual.run_until_parked();
+    }
+    cx.run_until_parked();
+    assert!(saved_environment(&workspace, "development Copy").is_some());
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(manager_environment(view), Some("development Copy"));
+    });
+}
