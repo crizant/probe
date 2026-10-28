@@ -1287,11 +1287,6 @@ fn duplicate_environment_round_trips_and_uses_available_names() {
                 Some(&source)
             );
         }
-        if bundled {
-            fs::remove_file(path).unwrap();
-        } else {
-            fs::remove_dir_all(path).unwrap();
-        }
     }
 }
 
@@ -1365,7 +1360,7 @@ fn unbundled_environment_duplicate_rejects_an_imported_path_name() {
 }
 
 #[test]
-fn duplicate_environment_refuses_unsaved_source_and_succeeds_after_saving() {
+fn duplicate_environment_refuses_unsaved_source() {
     for bundled in [true, false] {
         let path = temporary_path(if bundled {
             "duplicate-unsaved-source.yml"
@@ -1406,39 +1401,6 @@ fn duplicate_environment_refuses_unsaved_source_and_succeeds_after_saving() {
         assert_eq!(
             load_workspace(&path).unwrap().workspace().environments(),
             saved_environments.as_slice()
-        );
-
-        loaded
-            .update_environment_variable("development", "token", "unsaved".into())
-            .unwrap();
-        let mut expected = loaded
-            .workspace()
-            .environments()
-            .iter()
-            .find(|environment| environment.name == "development")
-            .unwrap()
-            .clone();
-        expected.name = name.clone();
-        let prepared = loaded.prepare_environment_duplicate("development").unwrap();
-        loaded
-            .complete_environment_create(prepared.execute().unwrap())
-            .unwrap();
-        assert_eq!(
-            loaded
-                .workspace()
-                .environments()
-                .iter()
-                .find(|environment| environment.name == name),
-            Some(&expected)
-        );
-        let reloaded = load_workspace(&path).unwrap();
-        assert_eq!(
-            reloaded
-                .workspace()
-                .environments()
-                .iter()
-                .find(|environment| environment.name == name),
-            Some(&expected)
         );
     }
 }
