@@ -1252,7 +1252,7 @@ fn duplicate_environment_round_trips_and_uses_available_names() {
         fs::write(&document_path, text).unwrap();
         let mut loaded = load_workspace(&path).unwrap();
         let source = loaded.workspace().environments().last().unwrap().clone();
-        for suffix in [" Copy", " Copy 2"] {
+        for suffix in [" Copy", " Copy 2", " Copy 3", " Copy 4"] {
             let prepared = loaded.prepare_environment_duplicate(&source.name).unwrap();
             let saved = prepared.execute().unwrap();
             loaded.complete_environment_create(saved).unwrap();

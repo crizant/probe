@@ -432,17 +432,22 @@ impl LoadedWorkspace {
                 ))
             })?;
         let base = format!("{source_name} Copy");
-        let mut name = base.clone();
-        let mut suffix = 2;
-        while self
-            .workspace
-            .environments()
-            .iter()
-            .any(|environment| environment.name == name)
-        {
-            name = format!("{base} {suffix}");
-            suffix += 1;
-        }
+        let environments = self.workspace.environments();
+        // The source cannot occupy a copy name, so n candidates suffice for n environments.
+        let name = (1..=environments.len())
+            .map(|suffix| {
+                if suffix == 1 {
+                    base.clone()
+                } else {
+                    format!("{base} {suffix}")
+                }
+            })
+            .find(|candidate| {
+                !environments
+                    .iter()
+                    .any(|environment| &environment.name == candidate)
+            })
+            .expect("the source leaves at least one copy name available");
         environment.name = name.clone();
         let mut prepared =
             self.prepare_environment_create(name.clone(), environment.extends.clone())?;
