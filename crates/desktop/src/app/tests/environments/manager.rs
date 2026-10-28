@@ -1596,6 +1596,57 @@ fn environment_manager_cached_rows_follow_draft_edits_and_selection(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn environment_manager_context_menu_survives_reload_and_manual_dismissal(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "manager-menu-reload");
+    workspace.open_manager(cx, "development");
+    workspace.update(cx, |view, window, cx| {
+        let position = point(px(300.0), px(200.0));
+        // Context target can differ from the environment being edited.
+        view.open_environment_manager_context_menu("base".to_owned(), position, cx);
+        let fresh = probe_opencollection::load_workspace(&workspace.path).unwrap();
+        assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+        let menu = view
+            .transient
+            .environment_manager_context_menu
+            .as_ref()
+            .unwrap();
+        assert_eq!(menu.target, "base");
+        assert_eq!(menu.position, position);
+        view.close_environment_manager_context_menu(cx);
+        let fresh = probe_opencollection::load_workspace(&workspace.path).unwrap();
+        assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+        assert!(view.transient.environment_manager_context_menu.is_none());
+        view.open_environment_manager_context_menu("base".to_owned(), position, cx);
+        view.close_environment_manager_dialog(window, cx);
+        assert!(view.transient.environment_manager_context_menu.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn environment_manager_context_menu_dismisses_removed_target(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable(cx, "manager-menu-removed");
+    workspace.open_manager(cx, "base");
+    workspace.update(cx, |view, window, cx| {
+        view.open_environment_manager_context_menu(
+            "development".to_owned(),
+            point(px(300.0), px(200.0)),
+            cx,
+        );
+        let mut source = fs::read_to_string(&workspace.path)
+            .unwrap()
+            .replace("\r\n", "\n");
+        let start = source.find("    - name: development\n").unwrap();
+        let end = source.find("items:\n").unwrap();
+        source.replace_range(start..end, "");
+        fs::write(&workspace.path, source).unwrap();
+        let fresh = probe_opencollection::load_workspace(&workspace.path).unwrap();
+        assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+        assert_eq!(manager_environment(view), Some("base"));
+        assert!(view.transient.environment_manager_context_menu.is_none());
+    });
+}
+
+#[gpui_kit::test]
 fn environment_manager_rebinds_after_workspace_reload(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-reload");
     workspace.mark_stored(cx, &workspace.development_secret());

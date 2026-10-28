@@ -912,6 +912,10 @@ impl ProbeApp {
                 old.item_selector(item)
                     .map(|selector| (item.kind(), selector.to_owned()))
             }),
+            tree_context_target: self.transient.tree_context_menu.as_ref().and_then(|menu| {
+                old.item_selector(menu.target)
+                    .map(|selector| (menu.target.kind(), selector.to_owned()))
+            }),
         }
     }
 
@@ -922,11 +926,39 @@ impl ProbeApp {
         key_remaps: &BTreeMap<RequestKey, RequestKey>,
         selector_remaps: &BTreeMap<String, String>,
     ) -> BTreeMap<RequestKey, RequestKey> {
-        let selectors = self.snapshot_shell_selectors(
-            self.loaded_workspace
-                .as_ref()
-                .expect("workspace must exist before reload"),
-        );
+        let old = self
+            .loaded_workspace
+            .as_ref()
+            .expect("workspace must exist before reload");
+        // Directory selectors identify paths; bundled selectors identify positions.
+        // Without an explicit remap, only an existing directory path is safe.
+        let mapped_folder = |key| {
+            old.folder_selector(key).is_some_and(|selector| {
+                selector_remaps.contains_key(selector)
+                    || (old.uses_path_locators()
+                        && workspace.uses_path_locators()
+                        && workspace.folder_key(selector).is_some())
+            })
+        };
+        self.transient.tree_context_menu =
+            self.transient
+                .tree_context_menu
+                .take()
+                .filter(|menu| match menu.target {
+                    WorkspaceItemRef::Folder(key) => mapped_folder(key),
+                    WorkspaceItemRef::Request(_) => true,
+                });
+        self.transient.tab_context_menu =
+            self.transient
+                .tab_context_menu
+                .take()
+                .filter(|menu| match menu.target {
+                    crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) => {
+                        mapped_folder(key)
+                    }
+                    _ => true,
+                });
+        let selectors = self.snapshot_shell_selectors(old);
         let detached = self
             .detached_requests
             .iter()
@@ -1126,6 +1158,11 @@ impl ProbeApp {
             restored.iter().map(|(_, tab)| *tab),
             selectors.active_tab.and_then(resolve_runtime),
         );
+        self.transient.tab_context_menu =
+            self.transient.tab_context_menu.take().and_then(|mut menu| {
+                menu.target = resolve_runtime(menu.target)?;
+                Some(menu)
+            });
         if let Some(keep) = selectors.pending_keep.and_then(resolve_runtime)
             && let Some(PendingClose::OtherTabs { keep: pending_keep }) =
                 self.pending_close.as_mut()
@@ -1140,7 +1177,7 @@ impl ProbeApp {
                 self.shell.collapse_folder(key);
             }
         }
-        self.selected_tree_item = selectors.selected.and_then(|(kind, selector)| {
+        let resolve_item = |(kind, selector): (ItemKind, String)| {
             let selector = if kind == ItemKind::Request {
                 remaps.get(&selector)?.as_str()
             } else {
@@ -1149,7 +1186,16 @@ impl ProbeApp {
                     .map_or(selector.as_str(), String::as_str)
             };
             loaded.item_key(kind, selector)
-        });
+        };
+        self.selected_tree_item = selectors.selected.and_then(resolve_item);
+        self.transient.tree_context_menu =
+            self.transient
+                .tree_context_menu
+                .take()
+                .and_then(|mut menu| {
+                    menu.target = selectors.tree_context_target.and_then(resolve_item)?;
+                    Some(menu)
+                });
     }
 
     pub(super) fn apply_reconciled_workspace(

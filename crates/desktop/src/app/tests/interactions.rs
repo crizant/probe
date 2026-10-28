@@ -1,5 +1,226 @@
 use super::*;
 
+// Insert different items into the old arena slots as well as changing generations.
+fn reload_context_menu_workspace(
+    view: &mut ProbeApp,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::Context<ProbeApp>,
+) {
+    let source = fs::read_to_string(nested_fixture()).unwrap().replace("\r\n", "\n").replacen(
+        "items:\n",
+        "items:\n  - info:\n      name: Added folder\n      type: folder\n    items: []\n  - info:\n      name: Added request\n      type: http\n    http:\n      method: GET\n      url: https://example.com/added\n",
+        1,
+    );
+    let fresh = probe_opencollection::load_workspace_from_str(&source).unwrap();
+    let hints = BTreeMap::from([
+        ("items/0".to_owned(), "items/2".to_owned()),
+        ("items/1".to_owned(), "items/3".to_owned()),
+        ("items/1/items/0".to_owned(), "items/3/items/0".to_owned()),
+    ]);
+    assert!(view.reconcile_filesystem_workspace(fresh, hints, window, cx));
+}
+
+#[gpui_kit::test]
+fn tree_context_menu_follows_reloaded_target_and_rename_action(cx: &mut TestAppContext) {
+    let (window, [request, _, _]) = mixed_tab_window(cx);
+    let position = point(px(250.0), px(150.0));
+    window
+        .update(cx, |view, window, cx| {
+            let crate::shell::OpenTab::Request(key) = request else {
+                panic!()
+            };
+            view.open_tree_context_menu(WorkspaceItemRef::Request(key), position, cx);
+            reload_context_menu_workspace(view, window, cx);
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let target = loaded.request_key("items/2").unwrap();
+            assert_ne!(key, target);
+            assert_ne!(key.slot(), target.slot());
+            let menu = view.transient.tree_context_menu.as_ref().unwrap();
+            assert_eq!(menu.target, WorkspaceItemRef::Request(target));
+            assert_eq!(menu.position, position);
+            assert_eq!(view.selected_tree_item, Some(menu.target));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let rename = visual.debug_bounds("tree-context-rename-1").unwrap();
+        visual.simulate_click(rename.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    window
+        .update(cx, |view, _, _| {
+            assert!(matches!(view.structure_dialog.as_ref().unwrap().mode,
+            StructureDialogMode::Rename { ref selector, .. } if selector == "items/2"));
+            assert!(view.transient.tree_context_menu.is_none());
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn folder_tree_context_menu_follows_reloaded_target(cx: &mut TestAppContext) {
+    let (window, [_, _, folder]) = mixed_tab_window(cx);
+    let position = point(px(250.0), px(150.0));
+    window
+        .update(cx, |view, window, cx| {
+            let crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) = folder
+            else {
+                panic!()
+            };
+            view.open_tree_context_menu(WorkspaceItemRef::Folder(key), position, cx);
+            reload_context_menu_workspace(view, window, cx);
+            let target = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/3")
+                .unwrap();
+            assert_ne!(key, target);
+            assert_ne!(key.slot(), target.slot());
+            let menu = view.transient.tree_context_menu.as_ref().unwrap();
+            assert_eq!(menu.target, WorkspaceItemRef::Folder(target));
+            assert_eq!(menu.position, position);
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn bundled_folder_context_menus_dismiss_positional_targets_after_unhinted_insertion(
+    cx: &mut TestAppContext,
+) {
+    let (window, [_, _, folder]) = mixed_tab_window(cx);
+    window
+        .update(cx, |view, window, cx| {
+            let crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Folder(key)) = folder
+            else {
+                panic!()
+            };
+            view.open_tree_context_menu(
+                WorkspaceItemRef::Folder(key),
+                point(px(250.0), px(150.0)),
+                cx,
+            );
+            view.open_tab_context_menu(folder, point(px(350.0), px(150.0)), cx);
+            let source = fs::read_to_string(nested_fixture())
+                .unwrap()
+                .replace("\r\n", "\n")
+                .replace(
+                    "      name: Folder\n",
+                    "      name: Folder X\n      type: folder\n    items: []\n  - info:\n      name: Folder\n",
+                );
+            let fresh = probe_opencollection::load_workspace_from_str(&source).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let replacement = loaded.folder_key("items/1").unwrap();
+            assert_eq!(
+                loaded
+                    .workspace()
+                    .folder(replacement)
+                    .unwrap()
+                    .metadata
+                    .name
+                    .as_deref(),
+                Some("Folder X")
+            );
+            assert!(
+                loaded.folder_key("items/2").is_some(),
+                "the original folder still exists"
+            );
+            assert!(view.transient.tree_context_menu.is_none());
+            assert!(view.transient.tab_context_menu.is_none());
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn tab_context_menus_follow_reloaded_request_and_overview_targets(cx: &mut TestAppContext) {
+    let position = point(px(350.0), px(150.0));
+    for index in 0..3 {
+        let (window, tabs) = mixed_tab_window(cx);
+        window
+            .update(cx, |view, window, cx| {
+                let original = tabs[index];
+                view.open_tab_context_menu(original, position, cx);
+                reload_context_menu_workspace(view, window, cx);
+                let target = view.shell.open_tabs()[index];
+                let collection = matches!(
+                    original,
+                    crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Collection)
+                );
+                if collection {
+                    assert_eq!(original, target);
+                } else {
+                    assert_ne!(original, target);
+                }
+                let menu = view.transient.tab_context_menu.as_ref().unwrap();
+                assert_eq!(menu.target, target);
+                assert_eq!(menu.position, position);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn reload_dismisses_context_menus_for_deleted_items_and_respects_manual_dismissal(
+    cx: &mut TestAppContext,
+) {
+    let (window, [request, _, _]) = mixed_tab_window(cx);
+    window
+        .update(cx, |view, window, cx| {
+            let crate::shell::OpenTab::Request(key) = request else {
+                panic!()
+            };
+            let position = point(px(250.0), px(150.0));
+            view.open_tree_context_menu(WorkspaceItemRef::Request(key), position, cx);
+            view.open_tab_context_menu(request, position, cx);
+            view.close_tree_context_menu(cx);
+            view.close_tab_context_menu(cx);
+            let fresh = probe_opencollection::load_workspace(nested_fixture()).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            assert!(view.transient.tree_context_menu.is_none());
+            assert!(view.transient.tab_context_menu.is_none());
+            let key = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .request_key("items/0")
+                .unwrap();
+            view.open_tree_context_menu(WorkspaceItemRef::Request(key), position, cx);
+            view.open_tab_context_menu(key, position, cx);
+            // Removing Alpha puts Nested into its old arena slot.
+            let mut source = fs::read_to_string(nested_fixture())
+                .unwrap()
+                .replace("\r\n", "\n");
+            let start = source.find("  - info:\n      name: Alpha").unwrap();
+            let end = source.find("  - info:\n      name: Folder").unwrap();
+            source.replace_range(start..end, "");
+            let fresh = probe_opencollection::load_workspace_from_str(&source).unwrap();
+            assert_eq!(fresh.requests()[0].key().slot(), key.slot());
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            assert!(view.transient.tree_context_menu.is_none());
+            assert!(view.transient.tab_context_menu.is_none());
+            let folder = view
+                .loaded_workspace
+                .as_ref()
+                .unwrap()
+                .folder_key("items/0")
+                .unwrap();
+            let tab = crate::shell::OpenTab::from(crate::shell::OverviewTab::Folder(folder));
+            view.select_open_tab(tab, cx);
+            view.open_tree_context_menu(WorkspaceItemRef::Folder(folder), position, cx);
+            view.open_tab_context_menu(tab, position, cx);
+            let source = fs::read_to_string(nested_fixture())
+                .unwrap()
+                .replace("\r\n", "\n");
+            let source = &source[..source.find("  - info:\n      name: Folder").unwrap()];
+            let fresh = probe_opencollection::load_workspace_from_str(source).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            assert!(view.transient.tree_context_menu.is_none());
+            assert!(view.transient.tab_context_menu.is_none());
+        })
+        .unwrap();
+}
+
 fn drag_tab(
     visual: &mut VisualTestContext,
     source: &'static str,
@@ -212,8 +433,14 @@ fn tree_context_menu_duplicate_restores_tree_focus_for_delete_shortcut(cx: &mut 
             .expect("request row should render")
     };
     window
-        .update(cx, |view, _, cx| {
+        .update(cx, |view, window, cx| {
             view.open_tree_context_menu(WorkspaceItemRef::Request(request), row.center(), cx);
+            let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+            assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
+            assert_ne!(
+                view.transient.tree_context_menu.as_ref().unwrap().target,
+                WorkspaceItemRef::Request(request)
+            );
         })
         .expect("test window should remain open");
     cx.run_until_parked();
