@@ -1363,3 +1363,82 @@ fn unbundled_environment_duplicate_rejects_an_imported_path_name() {
         original.as_slice()
     );
 }
+
+#[test]
+fn duplicate_environment_refuses_unsaved_source_and_succeeds_after_saving() {
+    for bundled in [true, false] {
+        let path = temporary_path(if bundled {
+            "duplicate-unsaved-source.yml"
+        } else {
+            "duplicate-unsaved-source"
+        });
+        if bundled {
+            fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+        } else {
+            copy_directory(&fixture("unbundled"), &path);
+        }
+        let mut loaded = load_workspace(&path).unwrap();
+        loaded
+            .update_environment_variable("development", "token", "saved".into())
+            .unwrap();
+        let saved_environments = loaded.workspace().environments().to_vec();
+        loaded
+            .set_environment_variable("development", "token", "unsaved".into())
+            .unwrap();
+        let pending_environments = loaded.workspace().environments().to_vec();
+
+        let prepared = loaded.prepare_environment_duplicate("development").unwrap();
+        let name = prepared.environment_name().to_owned();
+        let error = prepared.execute().unwrap_err();
+        assert!(
+            matches!(&error, SaveError::Io { source, .. } if source.kind() == std::io::ErrorKind::InvalidInput)
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("source environment has unsaved changes")
+        );
+        loaded.revert_created_environment(&name);
+        assert_eq!(
+            loaded.workspace().environments(),
+            pending_environments.as_slice()
+        );
+        assert_eq!(
+            load_workspace(&path).unwrap().workspace().environments(),
+            saved_environments.as_slice()
+        );
+
+        loaded
+            .update_environment_variable("development", "token", "unsaved".into())
+            .unwrap();
+        let mut expected = loaded
+            .workspace()
+            .environments()
+            .iter()
+            .find(|environment| environment.name == "development")
+            .unwrap()
+            .clone();
+        expected.name = name.clone();
+        let prepared = loaded.prepare_environment_duplicate("development").unwrap();
+        loaded
+            .complete_environment_create(prepared.execute().unwrap())
+            .unwrap();
+        assert_eq!(
+            loaded
+                .workspace()
+                .environments()
+                .iter()
+                .find(|environment| environment.name == name),
+            Some(&expected)
+        );
+        let reloaded = load_workspace(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .workspace()
+                .environments()
+                .iter()
+                .find(|environment| environment.name == name),
+            Some(&expected)
+        );
+    }
+}

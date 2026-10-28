@@ -416,6 +416,9 @@ impl LoadedWorkspace {
 
     /// Copies a saved environment under an available name for background persistence.
     /// Secret declarations are copied; credential-store values are not.
+    ///
+    /// Execution refuses a source whose in-memory fields differ from retained YAML.
+    /// As with prepared creation, revert the new environment if execution fails.
     pub fn prepare_environment_duplicate(
         &mut self,
         source_name: &str,
@@ -1428,6 +1431,18 @@ impl PreparedEnvironmentCreate {
                     )
                 })?;
                 mapping.insert(string_key("name"), Value::String(name.clone()));
+                let saved_environment = serde_yaml_ng::from_value::<EnvironmentDocument>(environment.clone())
+                    .and_then(EnvironmentDocument::into_domain)
+                    .map_err(|error| SaveError::InvalidDocument(error.to_string()))?;
+                if saved_environment != self.environment {
+                    return Err(SaveError::Io {
+                        path: persistence.document_path,
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "source environment has unsaved changes; save or discard them before duplicating",
+                        ),
+                    });
+                }
                 Ok::<_, SaveError>(environment)
             })
             .transpose()?;
