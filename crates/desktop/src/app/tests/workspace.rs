@@ -802,12 +802,14 @@ fn directory_folder_context_menus_follow_existing_paths_and_dismiss_deleted_path
                 crate::shell::OverviewTab::Folder(current).into()
             );
             assert_eq!(tab_menu.position, position);
+            assert_eq!(view.selected_tree_item, Some(tree_menu.target));
 
             fs::remove_dir_all(fixture.join("group")).unwrap();
             let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
             assert!(view.reconcile_filesystem_workspace(fresh, BTreeMap::new(), window, cx));
             assert!(view.transient.tree_context_menu.is_none());
             assert!(view.transient.tab_context_menu.is_none());
+            assert!(view.selected_tree_item.is_none());
         })
         .unwrap();
 }

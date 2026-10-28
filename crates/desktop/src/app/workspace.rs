@@ -931,10 +931,13 @@ impl ProbeApp {
             .as_ref()
             .expect("workspace must exist before reload");
         // Directory selectors identify paths; bundled selectors identify positions.
-        // Without an explicit remap, only an existing directory path is safe.
+        // Without an explicit remap, only an existing directory path or unchanged
+        // source is safe.
+        let same_source = old.has_same_source(&workspace);
         let mapped_folder = |key| {
             old.folder_selector(key).is_some_and(|selector| {
                 selector_remaps.contains_key(selector)
+                    || same_source
                     || (old.uses_path_locators()
                         && workspace.uses_path_locators()
                         && workspace.folder_key(selector).is_some())
@@ -958,6 +961,11 @@ impl ProbeApp {
                     }
                     _ => true,
                 });
+        if let Some(WorkspaceItemRef::Folder(key)) = self.selected_tree_item
+            && !mapped_folder(key)
+        {
+            self.selected_tree_item = None;
+        }
         let selectors = self.snapshot_shell_selectors(old);
         let detached = self
             .detached_requests
