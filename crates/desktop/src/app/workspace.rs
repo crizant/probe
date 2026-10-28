@@ -1167,18 +1167,6 @@ impl ProbeApp {
                 Some(PendingClose::Overview(target)) => Some(target),
                 _ => None,
             })
-            .chain(
-                self.application_dialog
-                    .iter()
-                    .chain(self.pending_application_dialogs.iter())
-                    .filter_map(|dialog| match dialog {
-                        ApplicationDialog::Unsaved {
-                            pending: PendingClose::Overview(target),
-                            ..
-                        } => Some(target),
-                        _ => None,
-                    }),
-            )
             .map(|target| {
                 let mapped = match target {
                     OverviewTarget::Folder(selector) => match remaps.get(selector) {
