@@ -9,8 +9,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 ### Added
 
 - Import a Postman environment JSON file from the Desktop Environment Manager or
-  environment switcher, including collections without environments. Imports with
-  Postman secrets or compatibility warnings require confirmation before writing.
+  environment switcher, including collections without environments. Secret-marked
+  values use the native credential store; YAML contains only secret declarations. Compatibility warnings require confirmation before writing.
 
 ### Fixed
 

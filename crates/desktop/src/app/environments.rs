@@ -1,9 +1,10 @@
+use super::postman_environment_import::PostmanEnvironmentImport;
 use super::*;
 
 enum EnvironmentCreation {
     New(String),
     Duplicate(String),
-    Import(Environment),
+    Import(Box<PostmanEnvironmentImport>),
 }
 
 impl ProbeApp {
@@ -866,6 +867,7 @@ impl ProbeApp {
     pub(super) fn postman_environment_import_disabled(&self) -> bool {
         self.loaded_workspace.is_none()
             || self.loading
+            || self.secret_write_in_progress
             || self.has_active_workspace_write()
             || !self.pending_environment_saves.is_empty()
             || self.persistence.has_outstanding_saves()
@@ -911,6 +913,7 @@ impl ProbeApp {
                 let source = fs::read_to_string(path)
                     .map_err(|_| "Could not read the Postman environment JSON file.")?;
                 probe_postman::import_postman_environment(&source)
+                    .map(PostmanEnvironmentImport::from)
                     .map_err(|_| "Could not import: invalid or unsupported Postman environment JSON.")
             }).await;
             let _ = view.update_in(cx, |view, window, cx| {
@@ -931,34 +934,18 @@ impl ProbeApp {
 
     pub(super) fn review_postman_environment_import(
         &mut self,
-        imported: probe_postman::ImportedPostmanEnvironment,
+        imported: PostmanEnvironmentImport,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.postman_environment_import_disabled() {
             return;
         }
-        let contains_secrets = imported
-            .variable_types
-            .values()
-            .any(|kind| kind == "secret");
-        if contains_secrets || !imported.diagnostics.is_empty() {
-            let mut detail = String::new();
-            let mut diagnostics = imported.diagnostics;
-            if contains_secrets {
-                detail.push_str("Postman secret values, including credentials, will be saved as plaintext in YAML. They will not be stored in Probe's credential store. Only continue if you accept plaintext storage.");
-                // The persistence-specific warning above replaces the parser's in-memory warning.
-                diagnostics.retain(|diagnostic| diagnostic.code != "secret_value_plaintext");
-            }
-            if !diagnostics.is_empty() {
-                if !detail.is_empty() {
-                    detail.push_str("\n\n");
-                }
-                detail.push_str(&format_import_diagnostics(&diagnostics));
-            }
+        if !imported.diagnostics.is_empty() {
+            let detail = format_import_diagnostics(&imported.diagnostics);
             self.show_application_dialog(
                 ApplicationDialog::ConfirmPostmanEnvironmentImport {
-                    environment: Box::new(imported.environment),
+                    import: Box::new(imported),
                     workspace_path: self.workspace_path.clone(),
                     baseline: self.loaded_workspace.as_ref().unwrap().baseline(),
                     detail,
@@ -967,13 +954,13 @@ impl ProbeApp {
                 cx,
             );
         } else {
-            self.import_postman_environment(imported.environment, window, cx);
+            self.import_postman_environment(imported, window, cx);
         }
     }
 
     pub(super) fn import_postman_environment(
         &mut self,
-        environment: Environment,
+        imported: PostmanEnvironmentImport,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -983,7 +970,11 @@ impl ProbeApp {
                 EnvironmentDialogErrorResolution::Manual, cx);
             return;
         }
-        self.start_environment_creation(EnvironmentCreation::Import(environment), window, cx);
+        self.start_environment_creation(
+            EnvironmentCreation::Import(Box::new(imported)),
+            window,
+            cx,
+        );
     }
 
     fn start_environment_creation(
@@ -1015,10 +1006,13 @@ impl ProbeApp {
         };
         let imported = matches!(creation, EnvironmentCreation::Import(_));
         let duplicate = matches!(creation, EnvironmentCreation::Duplicate(_));
+        let mut imported_secrets = None;
         let result = match creation {
             EnvironmentCreation::New(name) => loaded.prepare_environment_create(name, None),
             EnvironmentCreation::Duplicate(name) => loaded.prepare_environment_duplicate(&name),
-            EnvironmentCreation::Import(environment) => {
+            EnvironmentCreation::Import(import) => {
+                let (environment, secrets) = import.into_parts();
+                imported_secrets = Some(secrets);
                 loaded.prepare_environment_import(environment)
             }
         };
@@ -1043,6 +1037,9 @@ impl ProbeApp {
                 return;
             }
         };
+        if imported {
+            self.secret_write_in_progress = true;
+        }
         let name = prepared.environment_name().to_owned();
         let prepared_baseline = loaded.baseline();
         self.environment_save_workspace_path = self.workspace_path.clone();
@@ -1073,21 +1070,32 @@ impl ProbeApp {
                                 .find(|environment| environment.name == name)
                                 .map(EnvironmentManagerDialog::new);
                             if !duplicate && !imported {
-                                view.select_environment(Some(name), cx);
+                                view.select_environment(Some(name.clone()), cx);
                             }
                         }
                         view.environment_save_workspace_path = None;
                         view.create_environment_dialog = None;
                         view.clear_environment_dialog_error(cx);
                         view.restore_environment_dialog_focus(window, cx);
-                        view.pump_workspace_writes(window, cx);
+                        if let Some(secrets) = imported_secrets {
+                            view.store_imported_environment_secrets(secrets, name, window, cx);
+                        } else {
+                            view.pump_workspace_writes(window, cx);
+                        }
                     }
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
+                        if imported {
+                            view.secret_write_in_progress = false;
+                            if imported_secrets.as_ref().is_some_and(|secrets| !secrets.is_empty()) {
+                                view.show_imported_secret_failure(cx);
+                            }
+                        }
                         view.environment_save_workspace_path = None;
                         view.pending_close = None;
                         view.recover_committed_save(save_workspace_path, None, window, cx);
                     }
                     Err(error) => {
+                        if imported { view.secret_write_in_progress = false; }
                         if view.environment_save_workspace_path == view.workspace_path
                             && let Some(loaded) = view.loaded_workspace.as_mut()
                             && loaded.baseline() == prepared_baseline

@@ -296,7 +296,7 @@ pub(crate) enum ApplicationDialog {
         candidates: Vec<PathBuf>,
     },
     ConfirmPostmanEnvironmentImport {
-        environment: Box<Environment>,
+        import: Box<super::postman_environment_import::PostmanEnvironmentImport>,
         workspace_path: Option<PathBuf>,
         baseline: probe_opencollection::WorkspaceBaseline,
         detail: String,

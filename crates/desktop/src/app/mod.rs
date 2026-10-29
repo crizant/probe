@@ -50,6 +50,7 @@ mod documentation;
 mod environments;
 mod imports;
 mod interactions;
+mod postman_environment_import;
 mod presentation;
 mod render;
 mod response;
@@ -348,6 +349,8 @@ pub(crate) struct ProbeApp {
     pending_tab_reveal: bool,
     frame_variable_context: Option<components::VariableContext>,
     #[cfg(test)]
+    environment_import_credentials_gate: Option<tokio::sync::oneshot::Receiver<()>>,
+    #[cfg(test)]
     filesystem_reload_gate: Option<(
         tokio::sync::oneshot::Sender<()>,
         tokio::sync::oneshot::Receiver<()>,
@@ -513,6 +516,8 @@ impl ProbeApp {
             tab_drop_target: None,
             pending_tab_reveal: false,
             frame_variable_context: None,
+            #[cfg(test)]
+            environment_import_credentials_gate: None,
             #[cfg(test)]
             filesystem_reload_gate: None,
             #[cfg(test)]

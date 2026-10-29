@@ -768,7 +768,7 @@ impl ProbeApp {
             }
             (
                 ApplicationDialog::ConfirmPostmanEnvironmentImport {
-                    environment,
+                    import,
                     workspace_path,
                     baseline,
                     ..
@@ -781,7 +781,7 @@ impl ProbeApp {
                         .as_ref()
                         .is_some_and(|loaded| loaded.baseline() == baseline)
                 {
-                    self.import_postman_environment(*environment, window, cx);
+                    self.import_postman_environment(*import, window, cx);
                 } else {
                     self.show_environment_dialog_error(
                         "The collection changed while confirming the import. Choose the Postman file again.",
