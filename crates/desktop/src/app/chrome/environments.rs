@@ -118,7 +118,7 @@ impl ProbeApp {
         div()
             .w(px(210.0))
             .h_full()
-            .pr(px(theme.metrics.spacing_1))
+            .pr(px(theme.metrics.spacing_2))
             .border_r_1()
             .border_color(theme.colors.borders.subtle)
             .flex()

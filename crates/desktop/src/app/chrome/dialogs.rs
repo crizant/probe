@@ -691,11 +691,6 @@ impl ProbeApp {
                         .disabled(busy),
                     )),
             )
-            .child(Self::render_postman_environment_import(
-                theme,
-                self.postman_environment_import_disabled(),
-                cx,
-            ))
             .child(
                 components::dialog_actions(theme)
                     .child(components::dialog_action_button(
