@@ -17,6 +17,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 - Clarify when Postman imports preserve existing credentials, and avoid partial-secret
   warnings for interrupted imports containing only empty or null secret values.
 - Accept Postman environment exports with variable descriptions in object format.
+- Keep Delete working in the Environment Manager and the request tree after a
+  confirmed deletion by selecting the next item, or the previous item when the
+  deleted one was last, and returning focus to the list.
 
 ## [2.3.0] - 2026-10-28
 

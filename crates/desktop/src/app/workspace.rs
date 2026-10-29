@@ -707,11 +707,15 @@ impl ProbeApp {
                     target: ItemLocator { kind, selector },
                 };
                 self.apply_structure(operation, window, cx);
+                self.restore_tree_focus_after_delete(window, cx);
             }
             (
                 ApplicationDialog::DeleteEnvironment { name, .. },
                 ApplicationDialogAction::Delete,
-            ) => self.delete_environment(name, window, cx),
+            ) => {
+                self.delete_environment(name, window, cx);
+                self.restore_environment_manager_focus(window, cx);
+            }
             (
                 ApplicationDialog::DeleteStoredSecret {
                     name, environment, ..

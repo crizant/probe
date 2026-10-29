@@ -589,6 +589,39 @@ impl ProbeApp {
         cx.notify();
     }
 
+    /// `None` when `operation` is not deleting the selection. `Some(None)` when that
+    /// selection is not currently visible.
+    fn deleted_visible_row(&self, operation: &StructureOperation) -> Option<Option<usize>> {
+        let StructureOperation::Delete { target } = operation else {
+            return None;
+        };
+        let item = self.selected_tree_item?;
+        let loaded = self.loaded_workspace.as_ref()?;
+        if item.kind() != target.kind
+            || loaded.item_selector(item) != Some(target.selector.as_str())
+        {
+            return None;
+        }
+        Some(
+            self.visible_tree_rows
+                .iter()
+                .position(|row| row.item == item),
+        )
+    }
+
+    pub(super) fn restore_tree_focus_after_delete(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.application_dialog.is_none()
+            && self.structure_dialog.is_none()
+            && self.environment_manager_dialog.is_none()
+        {
+            self.tree_focus_handle.focus(window, cx);
+        }
+    }
+
     /// Installs a committed on-disk workspace, carrying current in-memory drafts to
     /// their remapped selectors. `workspace` must not contain replayed drafts: its
     /// requests become the persistence baselines.
@@ -601,6 +634,7 @@ impl ProbeApp {
         cx: &mut Context<Self>,
     ) -> BTreeMap<RequestKey, RequestKey> {
         let (operation, detached_key) = origin;
+        let deleted_visible_row = self.deleted_visible_row(operation);
         let Some(old) = self.loaded_workspace.as_ref() else {
             return BTreeMap::new();
         };
@@ -737,6 +771,12 @@ impl ProbeApp {
                     self.scroll_selected_tree_item_into_view();
                 }
             }
+        }
+        if let Some(index) = deleted_visible_row {
+            self.selected_tree_item = index.and_then(|index| {
+                neighbor_after_removal(&self.visible_tree_rows, index).map(|row| row.item)
+            });
+            self.scroll_selected_tree_item_into_view();
         }
         self.reveal_active_tab();
         self.persist_session(cx);

@@ -226,6 +226,13 @@ fn request_key_remaps(
         .collect()
 }
 
+/// The item that takes the place of `removed_index` after that entry is removed.
+fn neighbor_after_removal<T>(items: &[T], removed_index: usize) -> Option<&T> {
+    items
+        .get(removed_index)
+        .or_else(|| items.get(removed_index.saturating_sub(1)))
+}
+
 #[derive(Clone, Copy)]
 struct TabTooltip {
     target: TabTooltipTarget,

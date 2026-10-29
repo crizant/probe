@@ -510,6 +510,170 @@ fn tree_context_menu_duplicate_restores_tree_focus_for_delete_shortcut(cx: &mut 
 }
 
 #[gpui_kit::test]
+fn delete_shortcut_selects_a_neighbor_and_keeps_tree_focus(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("delete-shortcut-neighbor");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let nested = workspace.request_key("items/1/items/0").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_tree_item(WorkspaceItemRef::Request(nested), cx);
+            view.tree_focus_handle.focus(window, cx);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let row = visual
+            .debug_bounds("tree-row-items/1/items/0")
+            .expect("nested request row should render");
+        visual.simulate_click(row.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+
+    cx.simulate_keystrokes(window.into(), tree_delete_shortcut());
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(matches!(
+                view.application_dialog.as_ref(),
+                Some(ApplicationDialog::Delete { name, .. }) if name == "Nested"
+            ));
+        })
+        .unwrap();
+
+    cx.simulate_keystrokes(window.into(), destructive_dialog_shortcut());
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
+            assert_eq!(selected_tree_name(view).as_deref(), Some("Folder"));
+            assert_eq!(window.focused(cx), Some(view.tree_focus_handle.clone()));
+        })
+        .unwrap();
+
+    cx.simulate_keystrokes(window.into(), tree_delete_shortcut());
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(matches!(
+                view.application_dialog.as_ref(),
+                Some(ApplicationDialog::Delete { name, .. }) if name == "Folder"
+            ));
+        })
+        .unwrap();
+
+    cx.simulate_keystrokes(window.into(), destructive_dialog_shortcut());
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
+            assert_eq!(selected_tree_name(view).as_deref(), Some("Alpha"));
+            assert_eq!(window.focused(cx), Some(view.tree_focus_handle.clone()));
+        })
+        .unwrap();
+
+    cx.simulate_keystrokes(window.into(), tree_delete_shortcut());
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert!(matches!(
+                view.application_dialog.as_ref(),
+                Some(ApplicationDialog::Delete { name, .. }) if name == "Alpha"
+            ));
+        })
+        .unwrap();
+
+    let forward = writable_structure_fixture("delete-shortcut-forward");
+    let forward_workspace = probe_opencollection::load_workspace(&forward).unwrap();
+    let alpha = forward_workspace.request_key("items/0").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.set_workspace(forward.clone(), forward_workspace);
+            view.select_tree_item(WorkspaceItemRef::Request(alpha), cx);
+            view.tree_focus_handle.focus(window, cx);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), tree_delete_shortcut());
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), destructive_dialog_shortcut());
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
+            assert_eq!(selected_tree_name(view).as_deref(), Some("Folder"));
+            assert_eq!(window.focused(cx), Some(view.tree_focus_handle.clone()));
+        })
+        .unwrap();
+    fs::remove_file(forward).unwrap();
+    fs::remove_file(fixture).unwrap();
+}
+
+#[gpui_kit::test]
+fn delete_shortcut_keeps_focus_moved_during_the_write(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("delete-shortcut-focus-move");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let alpha = workspace.request_key("items/0").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_tree_item(WorkspaceItemRef::Request(alpha), cx);
+            view.tree_focus_handle.focus(window, cx);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), tree_delete_shortcut());
+
+    cx.dispatch_keystroke(
+        window.into(),
+        Keystroke::parse(destructive_dialog_shortcut()).unwrap(),
+    );
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_task.is_some());
+            view.focus_handle.focus(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
+            assert_eq!(selected_tree_name(view).as_deref(), Some("Folder"));
+            assert_eq!(window.focused(cx), Some(view.focus_handle.clone()));
+        })
+        .unwrap();
+    fs::remove_file(fixture).unwrap();
+}
+
+fn selected_tree_name(view: &ProbeApp) -> Option<String> {
+    let item = view.selected_tree_item?;
+    view.loaded_workspace
+        .as_ref()?
+        .workspace()
+        .item_metadata(item)?
+        .name
+        .clone()
+}
+
+#[gpui_kit::test]
 fn tree_context_menu_duplicate_keeps_keyboard_rename_dialog_open_after_reconcile(
     cx: &mut TestAppContext,
 ) {
