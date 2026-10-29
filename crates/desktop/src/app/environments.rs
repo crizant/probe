@@ -644,6 +644,8 @@ impl ProbeApp {
                         view.clear_environment_dialog_error(cx);
                         if close_manager {
                             view.close_environment_manager_dialog(window, cx);
+                        } else {
+                            view.restore_environment_manager_focus(window, cx);
                         }
                     }
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
@@ -659,6 +661,7 @@ impl ProbeApp {
                             EnvironmentDialogErrorResolution::Manual,
                             cx,
                         );
+                        view.restore_environment_manager_focus(window, cx);
                     }
                 }
                 view.environment_save_workspace_path = None;
@@ -705,12 +708,8 @@ impl ProbeApp {
             return Ok(false);
         }
         let next = self.loaded_workspace.as_ref().and_then(|loaded| {
-            let environments = loaded.workspace().environments();
             deleted_index.and_then(|index| {
-                environments
-                    .get(index)
-                    .or_else(|| environments.get(index.saturating_sub(1)))
-                    .cloned()
+                neighbor_after_removal(loaded.workspace().environments(), index).cloned()
             })
         });
         match next {
@@ -746,6 +745,16 @@ impl ProbeApp {
                 .environment_manager_dialog
                 .as_ref()
                 .is_some_and(|dialog| dialog.certificate_editor.is_some())
+    }
+
+    pub(super) fn restore_environment_manager_focus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.application_dialog.is_none() && self.environment_manager_dialog.is_some() {
+            self.restore_environment_dialog_focus(window, cx);
+        }
     }
 
     pub(super) fn restore_environment_dialog_focus(

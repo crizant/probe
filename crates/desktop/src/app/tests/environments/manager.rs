@@ -1427,6 +1427,47 @@ fn environment_manager_delete_selects_a_neighbor(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn environment_manager_delete_shortcut_selects_neighbor_and_keeps_focus(cx: &mut TestAppContext) {
+    cx.update(bind_platform_hotkeys);
+    let workspace = EnvironmentWorkspace::writable(cx, "manager-delete-shortcut");
+    workspace.open_manager(cx, "development");
+
+    cx.simulate_keystrokes(workspace.window.into(), tree_delete_shortcut());
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(matches!(
+            view.application_dialog.as_ref(),
+            Some(ApplicationDialog::DeleteEnvironment { name, .. }) if name == "development"
+        ));
+    });
+
+    cx.simulate_keystrokes(workspace.window.into(), destructive_dialog_shortcut());
+    cx.run_until_parked();
+    workspace.update(cx, |view, window, cx| {
+        assert!(
+            view.environment_save_task.is_none(),
+            "{:?}",
+            toast_debug(view)
+        );
+        assert!(view.application_dialog.is_none());
+        assert_eq!(manager_environment(view), Some("base"));
+        assert_eq!(
+            window.focused(cx),
+            Some(view.environment_manager_dialog_focus.clone())
+        );
+    });
+
+    cx.simulate_keystrokes(workspace.window.into(), tree_delete_shortcut());
+    cx.run_until_parked();
+    workspace.update(cx, |view, _, _| {
+        assert!(matches!(
+            view.application_dialog.as_ref(),
+            Some(ApplicationDialog::DeleteEnvironment { name, .. }) if name == "base"
+        ));
+    });
+}
+
+#[gpui_kit::test]
 fn environment_manager_delete_of_the_last_environment_closes(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::writable(cx, "manager-delete-last");
     workspace.update(cx, |view, window, cx| {
