@@ -10,6 +10,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 - Import a Postman environment JSON file from the Desktop Environment Manager.
 
+### Fixed
+
+- Accept Postman environment exports with variable descriptions in object format.
+
 ## [2.3.0] - 2026-10-28
 
 ### Added

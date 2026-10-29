@@ -6,7 +6,10 @@ use probe_core::{Environment, EnvironmentVariable, ImportDiagnostic, Variable};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{conversion::variables::variable_value, diagnostics::warning};
+use crate::{
+    conversion::variables::variable_value,
+    diagnostics::{description_text, warning},
+};
 
 /// An environment plus source metadata that the domain cannot represent.
 ///
@@ -87,7 +90,7 @@ struct EnvironmentEntry {
     #[serde(default, rename = "type")]
     kind: Option<String>,
     #[serde(default)]
-    description: Option<String>,
+    description: Value,
     #[serde(default = "enabled_by_default")]
     enabled: bool,
 }
@@ -139,6 +142,12 @@ pub fn import_postman_environment(
         if entry.key.trim().is_empty() {
             return Err(Invalid);
         }
+        if !matches!(
+            entry.description,
+            Value::Null | Value::String(_) | Value::Object(_)
+        ) {
+            return Err(Invalid);
+        }
         if !names.insert(entry.key.clone()) {
             return Err(DuplicateVariable);
         }
@@ -149,11 +158,7 @@ pub fn import_postman_environment(
             _ => return Err(UnsupportedFormat),
         };
         let resource_id = index.to_string();
-        if entry
-            .description
-            .as_deref()
-            .is_some_and(|text| !text.trim().is_empty())
-        {
+        if description_text(&entry.description).is_some() {
             imported.diagnostics.push(warning(
                 "unsupported_description",
                 "environment_variable",

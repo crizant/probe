@@ -187,7 +187,17 @@ fn rejects_duplicates_and_unsupported_formats() {
 #[test]
 fn accepts_empty_and_nonempty_variable_descriptions() {
     let baseline = import_postman_environment(EXPORT).unwrap();
-    for description in [json!(null), json!(""), json!(" "), json!("Variable notes")] {
+    for (description, warning_expected) in [
+        (json!(null), false),
+        (json!(""), false),
+        (json!(" "), false),
+        (json!("Variable notes"), true),
+        (json!({"content": "", "type": "text/plain"}), false),
+        (
+            json!({"content": "Variable notes", "type": "text/plain"}),
+            true,
+        ),
+    ] {
         let mut source: Value = serde_json::from_str(EXPORT).unwrap();
         source["values"][0]["description"] = description.clone();
         let imported = import_postman_environment(&source.to_string()).unwrap();
@@ -198,17 +208,15 @@ fn accepts_empty_and_nonempty_variable_descriptions() {
             .iter()
             .filter(|d| d.code == "unsupported_description")
             .count();
-        assert_eq!(
-            warnings,
-            usize::from(description == json!("Variable notes"))
-        );
+        assert_eq!(warnings, usize::from(warning_expected));
     }
 }
 
 #[test]
 fn description_warning_does_not_disclose_description_or_value() {
     let mut source: Value = serde_json::from_str(EXPORT).unwrap();
-    source["values"][2]["description"] = json!("private-description-content");
+    source["values"][2]["description"] =
+        json!({"content": "private-description-content", "type": "text/plain"});
     let imported = import_postman_environment(&source.to_string()).unwrap();
     let diagnostic = imported
         .diagnostics
