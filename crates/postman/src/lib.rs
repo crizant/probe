@@ -1,7 +1,7 @@
-//! Postman Collection v2.0/v2.1 JSON import adapter.
+//! Postman collection and standalone environment JSON import adapter.
 //!
-//! This crate validates one exported Postman collection and projects it into
-//! Probe's serialization-independent domain model. Persistence remains owned by
+//! This crate validates exported Postman collections and environments and projects
+//! them into Probe's serialization-independent domain model. Persistence is owned by
 //! the `OpenCollection` repository.
 
 #![forbid(unsafe_code)]
@@ -13,6 +13,7 @@ use serde_json::Value;
 
 mod conversion;
 mod diagnostics;
+mod environment;
 mod errors;
 mod schema;
 
@@ -23,6 +24,9 @@ use conversion::convert_preview;
 use diagnostics::extra_fields as diagnose_extra_fields;
 use schema::PostmanDocument;
 
+pub use environment::{
+    ImportedPostmanEnvironment, PostmanEnvironmentImportError, import_postman_environment,
+};
 pub use errors::PostmanImportError;
 
 /// Environment used to retain Postman collection-scoped variables.

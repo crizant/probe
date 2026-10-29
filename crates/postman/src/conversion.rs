@@ -2,7 +2,7 @@ mod authentication;
 mod body;
 mod graphql;
 mod url;
-mod variables;
+pub(crate) mod variables;
 
 use probe_core::{
     Collection, CollectionItem, CollectionMetadata, Folder, Header, ImportDiagnostic, ItemMetadata,

@@ -1,0 +1,16 @@
+{
+  "id": "environment-fixture",
+  "name": " Development ",
+  "values": [
+    {"key": " base_url ", "value": "https://example.test/{{version}}", "type": "default", "description": "", "enabled": true},
+    {"key": "disabled", "value": "", "type": "text", "enabled": false},
+    {"key": "token", "value": "private-exported-token", "type": "secret", "enabled": false},
+    {"key": "number", "value": 42, "type": "number", "enabled": true},
+    {"key": "boolean", "value": false, "enabled": true},
+    {"key": "null", "value": null},
+    {"key": "object", "value": {"nested": "value"}, "type": "object"}
+  ],
+  "_postman_variable_scope": "environment",
+  "_postman_exported_at": "2025-01-01T00:00:00.000Z",
+  "_postman_exported_using": "Postman/11.0.0"
+}
