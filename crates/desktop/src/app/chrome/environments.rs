@@ -145,7 +145,7 @@ impl ProbeApp {
                     .child(
                         Popover::new("environment-manager-add-menu")
                             .trigger(
-                                components::icon_button(
+                                components::icon_button_with_disabled(
                                     theme,
                                     "environment-manager-add",
                                     add_label,
@@ -154,10 +154,10 @@ impl ProbeApp {
                                     } else {
                                         theme.colors.text.secondary
                                     }),
+                                    add_disabled,
                                     |_, _, _| {},
                                 )
-                                .flex_none()
-                                .disabled(add_disabled),
+                                .flex_none(),
                             )
                             .content(move |_, _, cx| {
                                 let create_menu = cx.weak_entity();
@@ -524,21 +524,19 @@ impl ProbeApp {
                     }),
             );
         row_element = if let Some(index) = direct_index {
-            row_element.child(
-                components::remove_row_button(
-                    theme,
-                    format!("environment-variable-delete-{row_id}"),
-                    format!("Remove {name} from this environment"),
-                    move |_, _, cx| {
-                        let _ = remove_view.update(cx, |view, cx| {
-                            view.apply_environment_manager_draft(cx, |dialog| {
-                                dialog.remove_variable(index);
-                            });
+            row_element.child(components::remove_row_button_with_disabled(
+                theme,
+                format!("environment-variable-delete-{row_id}"),
+                format!("Remove {name} from this environment"),
+                busy,
+                move |_, _, cx| {
+                    let _ = remove_view.update(cx, |view, cx| {
+                        view.apply_environment_manager_draft(cx, |dialog| {
+                            dialog.remove_variable(index);
                         });
-                    },
-                )
-                .disabled(busy),
-            )
+                    });
+                },
+            ))
         } else {
             row_element.child(div().w(px(32.0)))
         };

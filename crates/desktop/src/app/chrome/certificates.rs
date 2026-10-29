@@ -218,11 +218,12 @@ impl ProbeApp {
                             .flex()
                             .items_center()
                             .child(
-                                components::icon_button(
+                                components::icon_button_with_disabled(
                                     theme,
                                     format!("certificate-up-{index}"),
                                     CERTIFICATE_MOVE_UP,
                                     components::reorder_icon(theme, true),
+                                    busy || index == 0,
                                     move |_, _, cx| {
                                         let _ = up.update(cx, |view, cx| {
                                             view.apply_environment_manager_draft(cx, |dialog| {
@@ -233,15 +234,15 @@ impl ProbeApp {
                                         });
                                     },
                                 )
-                                .flex_none()
-                                .disabled(busy || index == 0),
+                                .flex_none(),
                             )
                             .child(
-                                components::icon_button(
+                                components::icon_button_with_disabled(
                                     theme,
                                     format!("certificate-down-{index}"),
                                     CERTIFICATE_MOVE_DOWN,
                                     components::reorder_icon(theme, false),
+                                    busy || index + 1 == dialog.draft().client_certificates.len(),
                                     move |_, _, cx| {
                                         let _ = down.update(cx, |view, cx| {
                                             view.apply_environment_manager_draft(cx, |dialog| {
@@ -250,31 +251,29 @@ impl ProbeApp {
                                         });
                                     },
                                 )
-                                .flex_none()
-                                .disabled(
-                                    busy || index + 1 == dialog.draft().client_certificates.len(),
-                                ),
+                                .flex_none(),
                             )
                             .child(
-                                components::icon_button(
+                                components::icon_button_with_disabled(
                                     theme,
                                     format!("certificate-edit-{index}"),
                                     format!("Edit certificate for {domain}"),
                                     components::edit_icon(theme),
+                                    busy,
                                     move |_, window, cx| {
                                         let _ = edit.update(cx, |view, cx| {
                                             view.open_certificate_editor(Some(index), window, cx)
                                         });
                                     },
                                 )
-                                .flex_none()
-                                .disabled(busy),
+                                .flex_none(),
                             )
                             .child(
-                                components::remove_row_button(
+                                components::remove_row_button_with_disabled(
                                     theme,
                                     format!("certificate-delete-{index}"),
                                     format!("Remove certificate for {domain}"),
+                                    busy,
                                     move |_, _, cx| {
                                         let _ = delete.update(cx, |view, cx| {
                                             view.apply_environment_manager_draft(cx, |dialog| {
@@ -283,8 +282,7 @@ impl ProbeApp {
                                         });
                                     },
                                 )
-                                .flex_none()
-                                .disabled(busy),
+                                .flex_none(),
                             ),
                     ),
             );

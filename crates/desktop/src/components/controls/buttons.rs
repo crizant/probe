@@ -177,11 +177,22 @@ pub(crate) fn remove_row_button(
     aria_label: impl Into<SharedString>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
-    icon_button(
+    remove_row_button_with_disabled(theme, id, aria_label, false, on_click)
+}
+
+pub(crate) fn remove_row_button_with_disabled(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    aria_label: impl Into<SharedString>,
+    disabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Button {
+    icon_button_with_disabled(
         theme,
         id,
         aria_label,
         trash_icon(theme.colors.text.secondary),
+        disabled,
         on_click,
     )
 }
@@ -208,6 +219,19 @@ pub(crate) fn icon_button(
     icon: impl IntoElement,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
+    icon_button_with_disabled(theme, id, aria_label, icon, false, on_click)
+}
+
+// Choose hover styling here: Button's disabled semantic styles cannot remove
+// GPUI hover styles after they have been attached.
+pub(crate) fn icon_button_with_disabled(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    aria_label: impl Into<SharedString>,
+    icon: impl IntoElement,
+    disabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Button {
     let id = id.into();
     let debug_id = id.to_string();
     let aria_label = aria_label.into();
@@ -224,8 +248,13 @@ pub(crate) fn icon_button(
         .bg(transparent_black())
         .border_1()
         .border_color(transparent_black())
-        .cursor_pointer()
-        .hover(move |button| button.bg(theme.colors.selection.inactive_background))
+        .disabled(disabled)
+        .when(disabled, |button| button.cursor_default())
+        .when(!disabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(move |button| button.bg(theme.colors.selection.inactive_background))
+        })
         .focus_visible(move |button| button.border_color(theme.colors.borders.focused))
         .on_click(on_click)
         .child(icon)
