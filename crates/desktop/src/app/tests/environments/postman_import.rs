@@ -525,6 +525,16 @@ fn postman_environment_import_preserves_successful_credential_writes_on_partial_
                 ToastIntent::Warning,
                 "partially completed"
             ));
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "Some secret values could not be imported"
+            ));
+            assert!(!has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "remain in use"
+            ));
             assert_eq!(
                 presence(view, &first_id),
                 if fail_lookup { None } else { Some(!fail_all) }
@@ -557,93 +567,219 @@ fn postman_environment_import_preserves_successful_credential_writes_on_partial_
 }
 
 #[gpui_kit::test]
+fn postman_environment_import_declarations_only_report_reused_credentials(cx: &mut TestAppContext) {
+    for (stored, fail_lookup) in [(true, false), (false, false), (true, true)] {
+        let workspace = EnvironmentWorkspace::writable(cx, "postman-import-declarations-only");
+        workspace.open_manager(cx, "development");
+        let id = workspace.credential("Imported", "token");
+        let null_id = workspace.credential("Imported", "null-secret");
+        if stored {
+            workspace.store.set(&id, SECRET_SENTINEL).unwrap();
+            workspace.store.set(&null_id, SECRET_SENTINEL).unwrap();
+        }
+        workspace.update(cx, |view, _, _| {
+            view.credential_store = Arc::new(AuditedImportStore {
+                inner: workspace.store.clone(),
+                path: workspace.path.clone(),
+                environment: "Imported",
+                fail: None,
+                fail_lookup,
+            });
+        });
+        let mut source: serde_json::Value = serde_json::from_str(&export("Imported")).unwrap();
+        source["values"][0]["value"] = serde_json::json!("");
+        source["values"].as_array_mut().unwrap().extend([
+            serde_json::json!({"key": "null-secret", "value": null, "type": "secret"}),
+            serde_json::json!({"key": "missing-secret", "value": null, "type": "secret"}),
+        ]);
+        choose_source(&workspace, cx, &source.to_string());
+        let expected_value = stored.then_some(SECRET_SENTINEL);
+        assert_eq!(workspace.store.value(&id).as_deref(), expected_value);
+        assert_eq!(workspace.store.value(&null_id).as_deref(), expected_value);
+        workspace.update(cx, |view, _, _| {
+            assert_eq!(
+                presence(view, &id),
+                if fail_lookup { None } else { Some(stored) }
+            );
+            assert_eq!(
+                presence(view, &null_id),
+                if fail_lookup { None } else { Some(stored) }
+            );
+            assert_eq!(
+                presence(view, &workspace.credential("Imported", "missing-secret")),
+                if fail_lookup { None } else { Some(false) }
+            );
+            assert!(!has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "partially completed"
+            ));
+            assert_eq!(
+                has_active_toast(
+                    view,
+                    ToastIntent::Warning,
+                    "were preserved and remain in use"
+                ),
+                stored && !fail_lookup
+            );
+            assert_eq!(
+                view.toasts
+                    .iter()
+                    .filter(|(_, toast, _)| toast.intent == ToastIntent::Warning)
+                    .count(),
+                usize::from(stored && !fail_lookup)
+            );
+            assert_no_leak(view);
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn postman_environment_import_never_replaces_existing_credentials(cx: &mut TestAppContext) {
-    let workspace = EnvironmentWorkspace::writable(cx, "postman-import-existing-credentials");
-    workspace.open_manager(cx, "development");
-    let existing = workspace.credential("development", "token");
-    let orphan = workspace.credential("Imported", "token");
-    workspace.store.set(&existing, "existing-value").unwrap();
-    workspace.store.set(&orphan, "orphan-value").unwrap();
-    choose_source(&workspace, cx, &export("development"));
-    assert_eq!(workspace.store.get_calls(), 0);
-    assert_eq!(
-        workspace.store.value(&existing).as_deref(),
-        Some("existing-value")
-    );
-    choose_source(&workspace, cx, &export("Imported"));
-    assert_eq!(
-        workspace.store.value(&orphan).as_deref(),
-        Some("orphan-value")
-    );
-    workspace.update(cx, |view, _, _| {
-        assert!(has_active_toast(
-            view,
-            ToastIntent::Warning,
-            "partially completed"
-        ));
-        assert_eq!(manager_status(view, "token"), Some(SecretUiStatus::Stored));
-        assert_eq!(presence(view, &orphan), Some(true));
-        assert_no_leak(view);
-    });
+    for mixed in [false, true] {
+        let workspace = EnvironmentWorkspace::writable(cx, "postman-import-existing-credentials");
+        workspace.open_manager(cx, "development");
+        let existing = workspace.credential("development", "token");
+        let orphan = workspace.credential("Imported", "token");
+        workspace.store.set(&existing, "existing-value").unwrap();
+        workspace.store.set(&orphan, "orphan-value").unwrap();
+        choose_source(&workspace, cx, &export("development"));
+        assert_eq!(workspace.store.get_calls(), 0);
+        assert_eq!(
+            workspace.store.value(&existing).as_deref(),
+            Some("existing-value")
+        );
+        let mut source: serde_json::Value = serde_json::from_str(&export("Imported")).unwrap();
+        if mixed {
+            source["values"].as_array_mut().unwrap().push(serde_json::json!({"key": "other-token", "value": "SECOND_SECRET_VALUE", "type": "secret"}));
+            workspace.store.fail_set.store(true, Ordering::SeqCst);
+        }
+        choose_source(&workspace, cx, &source.to_string());
+        assert_eq!(
+            workspace.store.value(&orphan).as_deref(),
+            Some("orphan-value")
+        );
+        workspace.update(cx, |view, _, _| {
+            assert!(has_active_toast(
+                view,
+                ToastIntent::Warning,
+                "Existing stored credentials were preserved and remain in use; their Postman values were not imported."
+            ));
+            assert_eq!(
+                has_active_toast(
+                    view,
+                    ToastIntent::Warning,
+                    "Some other secret values could not be imported"
+                ),
+                mixed
+            );
+            assert_eq!(has_active_toast(view, ToastIntent::Warning, "Import partially completed"), mixed);
+            assert_eq!(
+                view.toasts
+                    .iter()
+                    .filter(|(_, toast, _)| toast.intent == ToastIntent::Warning)
+                    .count(),
+                1
+            );
+            assert!(
+                !toast_debug(view)
+                    .iter()
+                    .any(|message| message.contains("orphan-value")
+                        || message.contains("existing-value"))
+            );
+            if mixed {
+                assert_eq!(
+                    presence(view, &workspace.credential("Imported", "other-token")),
+                    Some(false)
+                );
+            }
+            assert_eq!(manager_status(view, "token"), Some(SecretUiStatus::Stored));
+            assert_eq!(presence(view, &orphan), Some(true));
+            assert_no_leak(view);
+        });
+    }
 }
 
 #[gpui_kit::test]
 fn postman_environment_import_rechecks_workspace_after_yaml_before_credentials(
     cx: &mut TestAppContext,
 ) {
-    for change in ["switch", "reload", "conflict"] {
-        let workspace =
-            EnvironmentWorkspace::writable(cx, &format!("postman-import-after-yaml-{change}"));
-        let other = EnvironmentWorkspace::writable(cx, &format!("postman-import-other-{change}"));
-        workspace.open_manager(cx, "development");
-        let (release, gate) = tokio::sync::oneshot::channel();
-        workspace.update(cx, |view, _, _| {
-            view.environment_import_credentials_gate = Some(gate)
-        });
-        choose_source(&workspace, cx, &export("Imported"));
-        assert!(
-            load_workspace(&workspace.path)
-                .unwrap()
-                .workspace()
-                .environments()
-                .iter()
-                .any(|env| env.name == "Imported")
-        );
-        assert_eq!(workspace.store.get_calls(), 1);
-        workspace.update(cx, |view, _, cx| {
-            assert!(view.environment_save_task.is_some());
-            assert!(view.secret_write_in_progress);
-            match change {
-                "switch" => {
-                    view.set_workspace(other.path.clone(), load_workspace(&other.path).unwrap())
+    for values in ["nonempty", "empty", "null", "empty-then-nonempty"] {
+        for change in ["switch", "reload", "conflict"] {
+            let workspace =
+                EnvironmentWorkspace::writable(cx, &format!("postman-import-after-yaml-{change}"));
+            let other =
+                EnvironmentWorkspace::writable(cx, &format!("postman-import-other-{change}"));
+            workspace.open_manager(cx, "development");
+            let (release, gate) = tokio::sync::oneshot::channel();
+            workspace.update(cx, |view, _, _| {
+                view.environment_import_credentials_gate = Some(gate)
+            });
+            let mut source: serde_json::Value = serde_json::from_str(&export("Imported")).unwrap();
+            if values != "nonempty" {
+                source["values"][0]["value"] = if values == "null" {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!("")
+                };
+            }
+            if values == "empty-then-nonempty" {
+                source["values"].as_array_mut().unwrap().push(serde_json::json!({"key": "other-token", "value": "SECOND_SECRET_VALUE", "type": "secret"}));
+            }
+            choose_source(&workspace, cx, &source.to_string());
+            assert!(
+                load_workspace(&workspace.path)
+                    .unwrap()
+                    .workspace()
+                    .environments()
+                    .iter()
+                    .any(|env| env.name == "Imported")
+            );
+            assert_eq!(workspace.store.get_calls(), 1);
+            workspace.update(cx, |view, _, cx| {
+                assert!(view.environment_save_task.is_some());
+                assert!(view.secret_write_in_progress);
+                match change {
+                    "switch" => {
+                        view.set_workspace(other.path.clone(), load_workspace(&other.path).unwrap())
+                    }
+                    "reload" => {
+                        view.loaded_workspace = Some(load_workspace(&workspace.path).unwrap())
+                    }
+                    _ => view.enqueue_application_dialog(ApplicationDialog::FilesystemConflict {
+                        path: Some(workspace.path.clone()),
+                        detail: "External change".into(),
+                    }),
                 }
-                "reload" => view.loaded_workspace = Some(load_workspace(&workspace.path).unwrap()),
-                _ => view.enqueue_application_dialog(ApplicationDialog::FilesystemConflict {
-                    path: Some(workspace.path.clone()),
-                    detail: "External change".into(),
-                }),
-            }
-            cx.notify();
-        });
-        release.send(()).unwrap();
-        cx.run_until_parked();
-        assert!(workspace.store.values.lock().unwrap().is_empty());
-        assert_eq!(workspace.store.get_calls(), 1);
-        assert!(!workspace.yaml().contains(SECRET_SENTINEL));
-        assert!(!other.yaml().contains(SECRET_SENTINEL));
-        workspace.update(cx, |view, _, _| {
-            assert!(has_active_toast(
-                view,
-                ToastIntent::Warning,
-                "partially completed"
-            ));
-            assert!(!view.secret_write_in_progress);
-            assert!(view.environment_save_task.is_none());
-            if change == "switch" {
-                assert!(view.environment_manager_dialog.is_none());
-                assert_eq!(presence(view, &other.credential("Imported", "token")), None);
-            }
-            assert_no_leak(view);
-        });
+                cx.notify();
+            });
+            release.send(()).unwrap();
+            cx.run_until_parked();
+            assert!(workspace.store.values.lock().unwrap().is_empty());
+            assert_eq!(workspace.store.get_calls(), 1);
+            assert!(!workspace.yaml().contains(SECRET_SENTINEL));
+            assert!(!other.yaml().contains(SECRET_SENTINEL));
+            workspace.update(cx, |view, _, _| {
+                assert_eq!(
+                    has_active_toast(
+                        view,
+                        ToastIntent::Warning,
+                        "Some secret values could not be imported"
+                    ),
+                    values == "nonempty" || values == "empty-then-nonempty"
+                );
+                assert_eq!(
+                    presence(view, &workspace.credential("Imported", "token")),
+                    None
+                );
+                assert!(!view.secret_write_in_progress);
+                assert!(view.environment_save_task.is_none());
+                if change == "switch" {
+                    assert!(view.environment_manager_dialog.is_none());
+                    assert_eq!(presence(view, &other.credential("Imported", "token")), None);
+                }
+                assert_no_leak(view);
+            });
+        }
     }
 }
