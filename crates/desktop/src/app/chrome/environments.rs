@@ -176,7 +176,6 @@ impl ProbeApp {
             .mt(px(theme.metrics.spacing_3))
             .flex()
             .flex_col()
-            .gap(px(theme.metrics.spacing_2))
             .child(components::dialog_action_button(
                 theme,
                 "environment-manager-import-postman",
@@ -190,15 +189,6 @@ impl ProbeApp {
                     });
                 },
             ))
-            .child(
-                div()
-                    .text_size(px(theme.typography.caption_size))
-                    .text_color(theme.colors.text.secondary)
-                    .whitespace_normal()
-                    .child(
-                        "Imported plaintext values, including credentials, may be stored in YAML.",
-                    ),
-            )
     }
 
     fn environment_field_focus(
