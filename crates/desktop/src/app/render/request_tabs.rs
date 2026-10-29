@@ -349,6 +349,7 @@ impl ProbeApp {
         let environment_view = cx.weak_entity();
         let create_environment_view = cx.weak_entity();
         let manage_environment_view = cx.weak_entity();
+        let import_environment_view = cx.weak_entity();
         tabs = tabs.child(
             div().flex_none().px(px(theme.metrics.spacing_2)).child(
                 components::dropdown(
@@ -373,6 +374,11 @@ impl ProbeApp {
                 .with_action("Manage environments…", move |window, cx| {
                     let _ = manage_environment_view.update(cx, |view, cx| {
                         view.open_environment_manager_dialog(window, cx);
+                    });
+                })
+                .with_action("Import from Postman…", move |window, cx| {
+                    let _ = import_environment_view.update(cx, |view, cx| {
+                        view.choose_postman_environment(window, cx);
                     });
                 }),
             ),

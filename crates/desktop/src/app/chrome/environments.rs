@@ -5,10 +5,10 @@ const ENABLED_COLUMN_WIDTH: f32 = 44.0;
 
 impl ProbeApp {
     pub(super) fn render_environment_manager_sidebar(
+        &self,
         theme: Theme,
         environments: &[Environment],
         selected_name: &str,
-        active_environment: Option<&str>,
         busy: bool,
         dirty: bool,
         cx: &mut Context<Self>,
@@ -26,7 +26,7 @@ impl ProbeApp {
         for (index, environment) in environments.iter().enumerate() {
             let name = environment.name.clone();
             let selected = name == selected_name;
-            let active = active_environment == Some(name.as_str());
+            let active = self.shell.selected_environment() == Some(name.as_str());
             let item_dirty = selected && dirty;
             let select_name = name.clone();
             let menu_name = name;
@@ -118,7 +118,7 @@ impl ProbeApp {
         div()
             .w(px(210.0))
             .h_full()
-            .pr(px(theme.metrics.spacing_1))
+            .pr(px(theme.metrics.spacing_2))
             .border_r_1()
             .border_color(theme.colors.borders.subtle)
             .flex()
@@ -159,6 +159,36 @@ impl ProbeApp {
                     ),
             )
             .child(environment_list)
+            .child(Self::render_postman_environment_import(
+                theme,
+                self.postman_environment_import_disabled(),
+                cx,
+            ))
+    }
+
+    pub(super) fn render_postman_environment_import(
+        theme: Theme,
+        disabled: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::Div {
+        let view = cx.weak_entity();
+        div()
+            .mt(px(theme.metrics.spacing_3))
+            .flex()
+            .flex_col()
+            .child(components::dialog_action_button(
+                theme,
+                "environment-manager-import-postman",
+                "Import from Postman...",
+                components::DialogActionStyle::Secondary,
+                None,
+                disabled,
+                move |_, window, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        view.choose_postman_environment(window, cx);
+                    });
+                },
+            ))
     }
 
     fn environment_field_focus(
@@ -709,11 +739,10 @@ impl ProbeApp {
         let rows_empty = rows.is_empty();
         let busy = self.environment_save_task.is_some();
         let dirty = self.environment_manager_is_dirty();
-        let sidebar = Self::render_environment_manager_sidebar(
+        let sidebar = self.render_environment_manager_sidebar(
             theme,
             environments,
             &dialog.original_name,
-            self.shell.selected_environment(),
             busy,
             dirty,
             cx,

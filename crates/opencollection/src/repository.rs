@@ -414,6 +414,26 @@ impl LoadedWorkspace {
         }
     }
 
+    /// Creates a complete environment without overwriting an existing name.
+    /// Uses the same atomic persistence and completion protocol as empty creation.
+    pub fn prepare_environment_import(
+        &mut self,
+        environment: Environment,
+    ) -> Result<PreparedEnvironmentCreate, SaveError> {
+        let name = environment.name.clone();
+        let mut prepared =
+            self.prepare_environment_create(name.clone(), environment.extends.clone())?;
+        if let Err(error) = self
+            .workspace
+            .replace_environment(&name, environment.clone())
+        {
+            self.revert_created_environment(&name);
+            return Err(SaveError::Environment(error));
+        }
+        prepared.environment = environment;
+        Ok(prepared)
+    }
+
     /// Copies a saved environment under an available name for background persistence.
     /// Secret declarations are copied; credential-store values are not.
     ///

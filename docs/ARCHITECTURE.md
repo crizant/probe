@@ -631,6 +631,15 @@ Manager, and Secret Service on Linux. The Linux backend needs a user D-Bus sessi
 a Secret Service implementation; headless or locked sessions return an error. Native
 platform builds are CI-gated on macOS, Windows, and Linux.
 
+Desktop Postman environment imports convert secret-marked variables to declarations
+before handing the environment to persistence or display. Exported values are held
+separately and never serialized to YAML or session state. The atomic YAML create
+commits first; native credential writes follow, off the GPUI thread, using the
+captured workspace identity. Existing credentials are preserved. Empty or null
+exports create declarations without writing a value. Partial credential failures
+leave declarations and successful writes intact and report an incomplete import;
+there is no plaintext fallback. Workspace changes stop remaining credential writes.
+
 ### Native Credential Identity
 
 Credential identity v1 is a SHA-256 digest of length-prefixed canonical workspace

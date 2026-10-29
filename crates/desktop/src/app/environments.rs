@@ -1,4 +1,11 @@
+use super::postman_environment_import::PostmanEnvironmentImport;
 use super::*;
+
+enum EnvironmentCreation {
+    New(String),
+    Duplicate(String),
+    Import(Box<PostmanEnvironmentImport>),
+}
 
 impl ProbeApp {
     pub(super) fn close_workspace_now(&mut self, cx: &mut Context<Self>) {
@@ -845,7 +852,7 @@ impl ProbeApp {
             cx.notify();
             return;
         }
-        self.create_or_duplicate_environment(name, true, window, cx);
+        self.start_environment_creation(EnvironmentCreation::Duplicate(name), window, cx);
     }
 
     pub(super) fn create_named_environment(
@@ -854,13 +861,125 @@ impl ProbeApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.create_or_duplicate_environment(name, false, window, cx);
+        self.start_environment_creation(EnvironmentCreation::New(name), window, cx);
     }
 
-    fn create_or_duplicate_environment(
+    pub(super) fn postman_environment_import_disabled(&self) -> bool {
+        self.loaded_workspace.is_none()
+            || self.loading
+            || self.secret_write_in_progress
+            || self.has_active_workspace_write()
+            || !self.pending_environment_saves.is_empty()
+            || self.persistence.has_outstanding_saves()
+            || !self.pending_documentation_saves.is_empty()
+            || self.environment_manager_is_dirty()
+            || self.application_dialog.is_some()
+            || !self.pending_application_dialogs.is_empty()
+    }
+
+    pub(super) fn choose_postman_environment(
         &mut self,
-        name: String,
-        duplicate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.postman_environment_import_disabled() {
+            return;
+        }
+        let workspace_path = self.workspace_path.clone();
+        let manager_was_open = self.environment_manager_dialog.is_some();
+        let baseline = self.loaded_workspace.as_ref().unwrap().baseline();
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import Postman Environment JSON".into()),
+        });
+        let view = cx.weak_entity();
+        window.spawn(cx, async move |cx| {
+            let path = match receiver.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(_)) => {
+                    let _ = view.update(cx, |view, cx| {
+                        view.show_environment_dialog_error(
+                            "Could not open the JSON file picker.",
+                            EnvironmentDialogErrorResolution::Manual, cx);
+                    });
+                    return;
+                }
+            };
+            let Some(path) = path else { return; };
+            let result = cx.background_spawn(async move {
+                let source = fs::read_to_string(path)
+                    .map_err(|_| "Could not read the Postman environment JSON file.")?;
+                probe_postman::import_postman_environment(&source)
+                    .map(PostmanEnvironmentImport::from)
+                    .map_err(|_| "Could not import: invalid or unsupported Postman environment JSON.")
+            }).await;
+            let _ = view.update_in(cx, |view, window, cx| {
+                if view.workspace_path != workspace_path
+                    || (manager_was_open && view.environment_manager_dialog.is_none())
+                    || view.loaded_workspace.as_ref().is_none_or(|loaded| loaded.baseline() != baseline)
+                {
+                    return;
+                }
+                match result {
+                    Ok(imported) => view.review_postman_environment_import(imported, window, cx),
+                    Err(message) => view.show_environment_dialog_error(
+                        message, EnvironmentDialogErrorResolution::Manual, cx),
+                }
+            });
+        }).detach();
+    }
+
+    pub(super) fn review_postman_environment_import(
+        &mut self,
+        imported: PostmanEnvironmentImport,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.postman_environment_import_disabled() {
+            return;
+        }
+        if !imported.diagnostics.is_empty() {
+            let detail = format_import_diagnostics(&imported.diagnostics);
+            self.show_application_dialog(
+                ApplicationDialog::ConfirmPostmanEnvironmentImport {
+                    import: Box::new(imported),
+                    workspace_path: self.workspace_path.clone(),
+                    baseline: self.loaded_workspace.as_ref().unwrap().baseline(),
+                    detail,
+                },
+                window,
+                cx,
+            );
+        } else {
+            self.import_postman_environment(imported, window, cx);
+        }
+    }
+
+    pub(super) fn import_postman_environment(
+        &mut self,
+        imported: PostmanEnvironmentImport,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.postman_environment_import_disabled() {
+            self.show_environment_dialog_error(
+                "Save or discard environment changes and wait for pending writes or collection conflicts before importing.",
+                EnvironmentDialogErrorResolution::Manual, cx);
+            return;
+        }
+        self.start_environment_creation(
+            EnvironmentCreation::Import(Box::new(imported)),
+            window,
+            cx,
+        );
+    }
+
+    fn start_environment_creation(
+        &mut self,
+        creation: EnvironmentCreation,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -885,16 +1004,32 @@ impl ProbeApp {
         let Some(loaded) = self.loaded_workspace.as_mut() else {
             return;
         };
-        let result = if duplicate {
-            loaded.prepare_environment_duplicate(&name)
-        } else {
-            loaded.prepare_environment_create(name, None)
+        let imported = matches!(creation, EnvironmentCreation::Import(_));
+        let duplicate = matches!(creation, EnvironmentCreation::Duplicate(_));
+        let mut imported_secrets = None;
+        let result = match creation {
+            EnvironmentCreation::New(name) => loaded.prepare_environment_create(name, None),
+            EnvironmentCreation::Duplicate(name) => loaded.prepare_environment_duplicate(&name),
+            EnvironmentCreation::Import(import) => {
+                let (environment, secrets) = import.into_parts();
+                imported_secrets = Some(secrets);
+                loaded.prepare_environment_import(environment)
+            }
         };
         let prepared = match result {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.show_environment_dialog_error(
-                    format!("Could not create environment: {error}"),
+                    if imported {
+                        match error {
+                            probe_opencollection::SaveError::Environment(
+                                probe_core::EnvironmentResolutionError::DuplicateEnvironment(_)
+                            ) => "An environment with this name already exists. Nothing was imported.",
+                            _ => "Could not import environment. The environment is invalid for this collection.",
+                        }.to_owned()
+                    } else {
+                        format!("Could not create environment: {error}")
+                    },
                     EnvironmentDialogErrorResolution::Manual,
                     cx,
                 );
@@ -902,6 +1037,9 @@ impl ProbeApp {
                 return;
             }
         };
+        if imported {
+            self.secret_write_in_progress = true;
+        }
         let name = prepared.environment_name().to_owned();
         let prepared_baseline = loaded.baseline();
         self.environment_save_workspace_path = self.workspace_path.clone();
@@ -931,22 +1069,33 @@ impl ProbeApp {
                                 .iter()
                                 .find(|environment| environment.name == name)
                                 .map(EnvironmentManagerDialog::new);
-                            if !duplicate {
-                                view.select_environment(Some(name), cx);
+                            if !duplicate && !imported {
+                                view.select_environment(Some(name.clone()), cx);
                             }
                         }
                         view.environment_save_workspace_path = None;
                         view.create_environment_dialog = None;
                         view.clear_environment_dialog_error(cx);
                         view.restore_environment_dialog_focus(window, cx);
-                        view.pump_workspace_writes(window, cx);
+                        if let Some(secrets) = imported_secrets {
+                            view.store_imported_environment_secrets(secrets, name, window, cx);
+                        } else {
+                            view.pump_workspace_writes(window, cx);
+                        }
                     }
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
+                        if imported {
+                            view.secret_write_in_progress = false;
+                            if imported_secrets.as_ref().is_some_and(|secrets| !secrets.is_empty()) {
+                                view.show_imported_secret_failure(cx);
+                            }
+                        }
                         view.environment_save_workspace_path = None;
                         view.pending_close = None;
                         view.recover_committed_save(save_workspace_path, None, window, cx);
                     }
                     Err(error) => {
+                        if imported { view.secret_write_in_progress = false; }
                         if view.environment_save_workspace_path == view.workspace_path
                             && let Some(loaded) = view.loaded_workspace.as_mut()
                             && loaded.baseline() == prepared_baseline
@@ -959,7 +1108,11 @@ impl ProbeApp {
                         view.environment_save_workspace_path = None;
                         view.pending_close = None;
                         view.show_environment_dialog_error(
-                            format!("Could not create environment: {error}"),
+                            if imported {
+                                "Could not persist imported environment. Check for filesystem changes or write permissions and try again.".to_owned()
+                            } else {
+                                format!("Could not create environment: {error}")
+                            },
                             EnvironmentDialogErrorResolution::Manual,
                             cx,
                         );

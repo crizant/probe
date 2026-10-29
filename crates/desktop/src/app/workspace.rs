@@ -767,6 +767,31 @@ impl ProbeApp {
                 }
             }
             (
+                ApplicationDialog::ConfirmPostmanEnvironmentImport {
+                    import,
+                    workspace_path,
+                    baseline,
+                    ..
+                },
+                ApplicationDialogAction::ImportEnvironment,
+            ) => {
+                if self.workspace_path == workspace_path
+                    && self
+                        .loaded_workspace
+                        .as_ref()
+                        .is_some_and(|loaded| loaded.baseline() == baseline)
+                {
+                    self.import_postman_environment(*import, window, cx);
+                } else {
+                    self.show_environment_dialog_error(
+                        "The collection changed while confirming the import. Choose the Postman file again.",
+                        EnvironmentDialogErrorResolution::Manual,
+                        cx,
+                    );
+                }
+                self.restore_environment_dialog_focus(window, cx);
+            }
+            (
                 ApplicationDialog::ConfirmPartialImport { conversion, .. },
                 ApplicationDialogAction::ImportSupportedData,
             ) => self.convert_import(conversion, true, window, cx),

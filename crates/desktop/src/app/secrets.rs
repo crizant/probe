@@ -216,7 +216,7 @@ impl ProbeApp {
             .persistence_keys(workspace, environment, names)
     }
 
-    fn remember_stored_credential(&mut self, id: &CredentialId, cx: &mut Context<Self>) {
+    pub(super) fn remember_stored_credential(&mut self, id: &CredentialId, cx: &mut Context<Self>) {
         let changed = self
             .session
             .presence
@@ -228,7 +228,7 @@ impl ProbeApp {
         cx.notify();
     }
 
-    fn forget_stored_credential(&mut self, id: &CredentialId, cx: &mut Context<Self>) {
+    pub(super) fn forget_stored_credential(&mut self, id: &CredentialId, cx: &mut Context<Self>) {
         let changed = self
             .session
             .presence

@@ -295,6 +295,12 @@ pub(crate) enum ApplicationDialog {
     SelectCollectionFile {
         candidates: Vec<PathBuf>,
     },
+    ConfirmPostmanEnvironmentImport {
+        import: Box<super::postman_environment_import::PostmanEnvironmentImport>,
+        workspace_path: Option<PathBuf>,
+        baseline: probe_opencollection::WorkspaceBaseline,
+        detail: String,
+    },
     ConfirmPartialImport {
         conversion: ImportConversion,
         detail: String,
@@ -388,6 +394,9 @@ impl ApplicationDialog {
             Self::FilesystemConflict { .. } => {
                 Cow::Borrowed("Collection changes conflict with local edits")
             }
+            Self::ConfirmPostmanEnvironmentImport { .. } => {
+                Cow::Borrowed("Import environment with warnings?")
+            }
             Self::SelectYaakWorkspace { .. } => Cow::Borrowed("Select a Yaak workspace"),
             Self::SelectCollectionFile { .. } => Cow::Borrowed("Select a collection"),
             Self::ConfirmPartialImport { conversion, .. } => Cow::Owned(format!(
@@ -408,7 +417,8 @@ impl ApplicationDialog {
             | Self::DeleteEnvironment { detail, .. }
             | Self::DeleteStoredSecret { detail, .. }
             | Self::FilesystemConflict { detail, .. }
-            | Self::ConfirmPartialImport { detail, .. } => Cow::Borrowed(detail),
+            | Self::ConfirmPartialImport { detail, .. }
+            | Self::ConfirmPostmanEnvironmentImport { detail, .. } => Cow::Borrowed(detail),
             Self::RenameStoredSecrets {
                 kind: StoredSecretRename::Environment,
             } => Cow::Borrowed(ENVIRONMENT_SECRET_RENAME_DETAIL),
@@ -434,7 +444,8 @@ impl ApplicationDialog {
             Self::About | Self::Settings { .. } => 380.0,
             Self::SelectYaakWorkspace { .. }
             | Self::SelectCollectionFile { .. }
-            | Self::ConfirmPartialImport { .. } => components::WIDE_DIALOG_WIDTH,
+            | Self::ConfirmPartialImport { .. }
+            | Self::ConfirmPostmanEnvironmentImport { .. } => components::WIDE_DIALOG_WIDTH,
             _ => components::COMPACT_DIALOG_WIDTH,
         }
     }
@@ -451,6 +462,7 @@ impl ApplicationDialog {
             Self::SelectYaakWorkspace { .. } => None,
             Self::SelectCollectionFile { .. } => None,
             Self::ConfirmPartialImport { .. } => Some(PARTIAL_IMPORT_DIALOG_ACTIONS),
+            Self::ConfirmPostmanEnvironmentImport { .. } => Some(ENVIRONMENT_IMPORT_DIALOG_ACTIONS),
         }
     }
 
@@ -479,6 +491,7 @@ pub(crate) enum ApplicationDialogAction {
     SelectWorkspace(usize),
     SelectCollectionFile(usize),
     ImportSupportedData,
+    ImportEnvironment,
 }
 
 #[derive(Clone, Copy)]
@@ -582,6 +595,15 @@ const FILESYSTEM_CONFLICT_DIALOG_ACTIONS: &[DialogActionSpec] = &[
         "Use Disk",
         components::DialogActionStyle::Destructive,
         ApplicationDialogAction::UseDisk,
+    ),
+];
+const ENVIRONMENT_IMPORT_DIALOG_ACTIONS: &[DialogActionSpec] = &[
+    CANCEL_DIALOG_ACTION,
+    DialogActionSpec::new(
+        "application-dialog-import-environment",
+        "Import Anyway",
+        components::DialogActionStyle::Primary,
+        ApplicationDialogAction::ImportEnvironment,
     ),
 ];
 const PARTIAL_IMPORT_DIALOG_ACTIONS: &[DialogActionSpec] = &[
