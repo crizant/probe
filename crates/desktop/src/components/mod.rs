@@ -42,8 +42,9 @@ pub(crate) use controls::{
     FieldInput, ListScroll, ListScrollState, ResponseBodyInputOptions, browse_file_button,
     compact_icon_button, dialog_text_input, dropdown, dropdown_with_option_colors,
     editor_action_button, editor_add_button, editor_button, editor_key_value_row, editor_subtab,
-    icon_button, list_scroll_region, remove_row_button, sidebar_search_input, text_tab,
-    url_text_input, variable_text_input,
+    icon_button, icon_button_with_disabled, list_scroll_region, remove_row_button,
+    remove_row_button_with_disabled, sidebar_search_input, text_tab, url_text_input,
+    variable_text_input,
 };
 
 mod icons;
