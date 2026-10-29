@@ -42,7 +42,13 @@ pub(super) fn convert_collection_variables(
             diagnose_variable_metadata(variable, "collection_variable", resource_id, diagnostics);
             Ok(EnvironmentVariable::Plain(Variable {
                 name: Some(name),
-                value: Some(variable_value(variable, resource_id, diagnostics)),
+                value: Some(variable_value(
+                    &variable.value,
+                    variable.variable_type.as_deref(),
+                    "collection_variable",
+                    resource_id,
+                    diagnostics,
+                )),
                 disabled: variable.disabled,
             }))
         })
@@ -58,22 +64,23 @@ pub(super) fn convert_collection_variables(
     }])
 }
 
-fn variable_value(
-    variable: &PostmanVariable,
+pub(crate) fn variable_value(
+    value: &Value,
+    variable_type: Option<&str>,
+    resource_type: &str,
     resource_id: &str,
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> VariableValueSet {
-    let value = &variable.value;
     if value.is_null() {
         return VariableValueSet::Single(VariableValue::Typed {
             kind: VariableValueType::Null,
             data: "null".to_owned(),
         });
     }
-    let converted = match (variable.variable_type.as_deref(), value) {
+    let converted = match (variable_type, value) {
         (Some("string"), value) => VariableValue::String(convert_string(
             &value_string(value),
-            "collection_variable",
+            resource_type,
             resource_id,
             "value",
             diagnostics,
@@ -82,7 +89,7 @@ fn variable_value(
             kind: VariableValueType::Number,
             data: convert_string(
                 &value_string(value),
-                "collection_variable",
+                resource_type,
                 resource_id,
                 "value",
                 diagnostics,
@@ -92,7 +99,7 @@ fn variable_value(
             kind: VariableValueType::Boolean,
             data: convert_string(
                 &value_string(value),
-                "collection_variable",
+                resource_type,
                 resource_id,
                 "value",
                 diagnostics,
@@ -105,27 +112,28 @@ fn variable_value(
         (Some(kind), value) if !matches!(kind, "any" | "default") => {
             diagnostics.push(lossy(
                 "unsupported_variable_type",
-                "collection_variable",
+                resource_type,
                 Some(resource_id),
                 Some("type"),
                 &format!("Postman variable type '{kind}' is not supported"),
             ));
-            inferred_variable_value(value, resource_id, diagnostics)
+            inferred_variable_value(value, resource_type, resource_id, diagnostics)
         }
-        (_, value) => inferred_variable_value(value, resource_id, diagnostics),
+        (_, value) => inferred_variable_value(value, resource_type, resource_id, diagnostics),
     };
     VariableValueSet::Single(converted)
 }
 
 fn inferred_variable_value(
     value: &Value,
+    resource_type: &str,
     resource_id: &str,
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> VariableValue {
     match value {
         Value::String(value) => VariableValue::String(convert_string(
             value,
-            "collection_variable",
+            resource_type,
             resource_id,
             "value",
             diagnostics,
