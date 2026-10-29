@@ -82,7 +82,13 @@ fn preserves_exported_environment_and_secret_metadata() {
     assert_eq!(diagnostic.code, "secret_value_plaintext");
     assert!(diagnostic.message.contains("plaintext"));
     assert!(diagnostic.message.contains("not securely stored"));
-    assert!(!format!("{imported:?}").contains("private-exported-token"));
+    let summary = format!("{imported:?}");
+    assert!(summary.contains("ImportedPostmanEnvironment"));
+    assert!(summary.contains(&format!(
+        "variable_count: {}",
+        imported.environment.variables.len()
+    )));
+    assert!(!summary.contains("private-exported-token"));
 }
 
 #[test]
@@ -219,5 +225,19 @@ fn description_warning_does_not_disclose_description_or_value() {
     let report = format!("{:?} {imported:?}", imported.diagnostics);
     for sensitive in ["private-description-content", "private-exported-token"] {
         assert!(!report.contains(sensitive));
+    }
+}
+
+#[test]
+fn errors_explain_the_failure_category() {
+    for (error, explanation) in [
+        (ImportError::Invalid, "invalid Postman environment"),
+        (
+            ImportError::UnsupportedFormat,
+            "unsupported Postman environment",
+        ),
+        (ImportError::DuplicateVariable, "duplicate variable names"),
+    ] {
+        assert!(error.to_string().contains(explanation));
     }
 }
