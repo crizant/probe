@@ -1404,3 +1404,55 @@ fn duplicate_environment_refuses_unsaved_source() {
         );
     }
 }
+
+#[test]
+fn complete_environment_import_round_trips_without_changing_existing_environments() {
+    for bundled in [true, false] {
+        let path = temporary_path(if bundled {
+            "import-environment.yml"
+        } else {
+            "import-environment"
+        });
+        if bundled {
+            fs::copy(fixture("phase4-environments.yml"), &path).unwrap();
+        } else {
+            copy_directory(&fixture("unbundled"), &path);
+        }
+        let mut loaded = load_workspace(&path).unwrap();
+        let before = loaded.workspace().environments().to_vec();
+        let mut imported = before.last().unwrap().clone();
+        imported.name = "Imported".into();
+        let prepared = loaded.prepare_environment_import(imported.clone()).unwrap();
+        loaded
+            .complete_environment_create(prepared.execute().unwrap())
+            .unwrap();
+        let reloaded = load_workspace(&path).unwrap();
+        assert_eq!(reloaded.workspace().environments().len(), before.len() + 1);
+        for original in &before {
+            assert_eq!(
+                reloaded
+                    .workspace()
+                    .environments()
+                    .iter()
+                    .find(|env| env.name == original.name),
+                Some(original)
+            );
+        }
+        assert_eq!(
+            reloaded
+                .workspace()
+                .environments()
+                .iter()
+                .find(|env| env.name == imported.name),
+            Some(&imported)
+        );
+        let in_memory = loaded.workspace().environments().to_vec();
+        assert!(matches!(
+            loaded.prepare_environment_import(imported),
+            Err(SaveError::Environment(
+                probe_core::EnvironmentResolutionError::DuplicateEnvironment(_)
+            ))
+        ));
+        assert_eq!(loaded.workspace().environments(), in_memory.as_slice());
+    }
+}

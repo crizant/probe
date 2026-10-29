@@ -11,6 +11,7 @@ use std::sync::{
 
 mod certificates;
 mod manager;
+mod postman_import;
 mod secret_execution;
 mod secrets;
 mod variables;

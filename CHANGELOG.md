@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Added
+
+- Import a Postman environment JSON file from the Desktop Environment Manager.
+
 ## [2.3.0] - 2026-10-28
 
 ### Added
