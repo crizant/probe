@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-29
+
 ### Added
 
 - Import a Postman environment JSON file from the Desktop Environment Manager or
@@ -772,6 +774,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[2.4.0]: https://github.com/crizant/probe/releases/tag/v2.4.0
 [2.3.0]: https://github.com/crizant/probe/releases/tag/v2.3.0
 [2.2.1]: https://github.com/crizant/probe/releases/tag/v2.2.1
 [2.2.0]: https://github.com/crizant/probe/releases/tag/v2.2.0
