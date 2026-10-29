@@ -181,13 +181,13 @@ impl ProbeApp {
                         continue;
                     }
                 };
-                let Some(value) = value else {
-                    continue;
-                };
                 if exists {
                     preserved = true;
                     continue;
                 }
+                let Some(value) = value else {
+                    continue;
+                };
                 let write_store = Arc::clone(&store);
                 let result = window
                     .background_spawn(async move { write_store.set(&id, &value).map(|()| id) })
@@ -220,14 +220,23 @@ impl ProbeApp {
     ) {
         let detail = match (preserved, incomplete) {
             (true, true) => {
-                "Existing stored credentials remain in use; their Postman values were not imported. Some other secret values could not be imported."
+                "Existing stored credentials were preserved and remain in use; their Postman values were not imported. Some other secret values could not be imported."
             }
             (true, false) => {
-                "Existing stored credentials remain in use; their Postman values were not imported."
+                "Existing stored credentials were preserved and remain in use; their Postman values were not imported."
             }
             (false, true) => "Some secret values could not be imported.",
             (false, false) => return,
         };
-        self.show_toast(ToastIntent::Warning, format!("Import partially completed: the environment was saved. {detail} Set or replace values in Environment Manager."), cx);
+        let summary = if incomplete {
+            "Import partially completed: the environment was saved."
+        } else {
+            "Environment imported."
+        };
+        self.show_toast(
+            ToastIntent::Warning,
+            format!("{summary} {detail} Set or replace values in Environment Manager."),
+            cx,
+        );
     }
 }

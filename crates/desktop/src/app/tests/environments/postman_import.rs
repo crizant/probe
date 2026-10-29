@@ -567,14 +567,16 @@ fn postman_environment_import_preserves_successful_credential_writes_on_partial_
 }
 
 #[gpui_kit::test]
-fn postman_environment_import_declarations_only_preserve_presence_without_warning(
-    cx: &mut TestAppContext,
-) {
-    for fail_lookup in [false, true] {
+fn postman_environment_import_declarations_only_report_reused_credentials(cx: &mut TestAppContext) {
+    for (stored, fail_lookup) in [(true, false), (false, false), (true, true)] {
         let workspace = EnvironmentWorkspace::writable(cx, "postman-import-declarations-only");
         workspace.open_manager(cx, "development");
         let id = workspace.credential("Imported", "token");
-        workspace.store.set(&id, SECRET_SENTINEL).unwrap();
+        let null_id = workspace.credential("Imported", "null-secret");
+        if stored {
+            workspace.store.set(&id, SECRET_SENTINEL).unwrap();
+            workspace.store.set(&null_id, SECRET_SENTINEL).unwrap();
+        }
         workspace.update(cx, |view, _, _| {
             view.credential_store = Arc::new(AuditedImportStore {
                 inner: workspace.store.clone(),
@@ -586,19 +588,25 @@ fn postman_environment_import_declarations_only_preserve_presence_without_warnin
         });
         let mut source: serde_json::Value = serde_json::from_str(&export("Imported")).unwrap();
         source["values"][0]["value"] = serde_json::json!("");
-        source["values"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({"key": "null-secret", "value": null, "type": "secret"}));
+        source["values"].as_array_mut().unwrap().extend([
+            serde_json::json!({"key": "null-secret", "value": null, "type": "secret"}),
+            serde_json::json!({"key": "missing-secret", "value": null, "type": "secret"}),
+        ]);
         choose_source(&workspace, cx, &source.to_string());
-        assert_eq!(workspace.store.value(&id).as_deref(), Some(SECRET_SENTINEL));
+        let expected_value = stored.then_some(SECRET_SENTINEL);
+        assert_eq!(workspace.store.value(&id).as_deref(), expected_value);
+        assert_eq!(workspace.store.value(&null_id).as_deref(), expected_value);
         workspace.update(cx, |view, _, _| {
             assert_eq!(
                 presence(view, &id),
-                if fail_lookup { None } else { Some(true) }
+                if fail_lookup { None } else { Some(stored) }
             );
             assert_eq!(
-                presence(view, &workspace.credential("Imported", "null-secret")),
+                presence(view, &null_id),
+                if fail_lookup { None } else { Some(stored) }
+            );
+            assert_eq!(
+                presence(view, &workspace.credential("Imported", "missing-secret")),
                 if fail_lookup { None } else { Some(false) }
             );
             assert!(!has_active_toast(
@@ -606,6 +614,21 @@ fn postman_environment_import_declarations_only_preserve_presence_without_warnin
                 ToastIntent::Warning,
                 "partially completed"
             ));
+            assert_eq!(
+                has_active_toast(
+                    view,
+                    ToastIntent::Warning,
+                    "were preserved and remain in use"
+                ),
+                stored && !fail_lookup
+            );
+            assert_eq!(
+                view.toasts
+                    .iter()
+                    .filter(|(_, toast, _)| toast.intent == ToastIntent::Warning)
+                    .count(),
+                usize::from(stored && !fail_lookup)
+            );
             assert_no_leak(view);
         });
     }
@@ -640,7 +663,7 @@ fn postman_environment_import_never_replaces_existing_credentials(cx: &mut TestA
             assert!(has_active_toast(
                 view,
                 ToastIntent::Warning,
-                "Existing stored credentials remain in use; their Postman values were not imported."
+                "Existing stored credentials were preserved and remain in use; their Postman values were not imported."
             ));
             assert_eq!(
                 has_active_toast(
@@ -650,6 +673,7 @@ fn postman_environment_import_never_replaces_existing_credentials(cx: &mut TestA
                 ),
                 mixed
             );
+            assert_eq!(has_active_toast(view, ToastIntent::Warning, "Import partially completed"), mixed);
             assert_eq!(
                 view.toasts
                     .iter()
