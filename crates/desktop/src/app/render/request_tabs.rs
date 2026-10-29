@@ -371,14 +371,14 @@ impl ProbeApp {
                         view.open_create_environment_dialog(window, cx);
                     });
                 })
+                .with_action("Import Postman environment…", move |window, cx| {
+                    let _ = import_environment_view.update(cx, |view, cx| {
+                        view.choose_postman_environment(window, cx);
+                    });
+                })
                 .with_action("Manage environments…", move |window, cx| {
                     let _ = manage_environment_view.update(cx, |view, cx| {
                         view.open_environment_manager_dialog(window, cx);
-                    });
-                })
-                .with_action("Import from Postman…", move |window, cx| {
-                    let _ = import_environment_view.update(cx, |view, cx| {
-                        view.choose_postman_environment(window, cx);
                     });
                 }),
             ),

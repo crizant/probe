@@ -55,12 +55,36 @@ fn environment_switcher_is_available_without_a_request_and_offers_actions(cx: &m
         .expect("environment switcher should render without a selected request");
     visual.simulate_click(trigger.center(), Modifiers::default());
     visual.run_until_parked();
-    visual
+    let create = visual
         .debug_bounds("request-environment-action-0")
         .expect("environment switcher should include Create environment");
-    visual
+    let import = visual
         .debug_bounds("request-environment-action-1")
-        .expect("environment switcher should include Manage environments");
+        .expect("environment switcher should include Import Postman environment");
+    let manage = visual
+        .debug_bounds("request-environment-action-2")
+        .expect("environment switcher should include Manage environments last");
+    assert!(create.top() < import.top() && import.top() < manage.top());
+    visual.simulate_click(manage.center(), Modifiers::default());
+    visual.run_until_parked();
+    let add = visual.debug_bounds("environment-manager-add").unwrap();
+    assert!(
+        visual
+            .debug_bounds("environment-manager-import-postman")
+            .is_none()
+    );
+    visual.simulate_click(add.center(), Modifiers::default());
+    visual.run_until_parked();
+    let create = visual.debug_bounds("environment-manager-create").unwrap();
+    let import = visual
+        .debug_bounds("environment-manager-import-postman")
+        .unwrap();
+    assert!(create.top() < import.top());
+    visual.simulate_click(create.center(), Modifiers::default());
+    visual.run_until_parked();
+    workspace.update(&mut visual, |view, _, _| {
+        assert!(view.create_environment_dialog.is_some());
+    });
 }
 
 #[gpui_kit::test]
@@ -2313,7 +2337,7 @@ fn environment_manager_first_open_shortcut_duplicates_without_activating(cx: &mu
         let trigger = visual.debug_bounds("request-environment-trigger").unwrap();
         visual.simulate_click(trigger.center(), Modifiers::default());
         visual.run_until_parked();
-        let manage = visual.debug_bounds("request-environment-action-1").unwrap();
+        let manage = visual.debug_bounds("request-environment-action-2").unwrap();
         visual.simulate_click(manage.center(), Modifiers::default());
         visual.run_until_parked();
         workspace.update(&mut visual, |view, _, _| {

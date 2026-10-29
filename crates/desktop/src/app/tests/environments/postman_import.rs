@@ -30,6 +30,15 @@ fn choose_source(workspace: &EnvironmentWorkspace, cx: &mut TestAppContext, sour
     workspace.store.allow_execution_reads();
     {
         let mut visual = workspace.visual(cx);
+        assert!(
+            visual
+                .debug_bounds("environment-manager-import-postman")
+                .is_none()
+        );
+        let add = visual.debug_bounds("environment-manager-add").unwrap();
+        visual.simulate_click(add.center(), Modifiers::default());
+        visual.run_until_parked();
+        visual.debug_bounds("environment-manager-create").unwrap();
         let action = visual
             .debug_bounds("environment-manager-import-postman")
             .unwrap();
@@ -353,7 +362,7 @@ fn postman_environment_import_is_available_for_an_empty_collection(cx: &mut Test
         let trigger = visual.debug_bounds("request-environment-trigger").unwrap();
         visual.simulate_click(trigger.center(), Modifiers::default());
         visual.run_until_parked();
-        let action = visual.debug_bounds("request-environment-action-2").unwrap();
+        let action = visual.debug_bounds("request-environment-action-1").unwrap();
         visual.simulate_click(action.center(), Modifiers::default());
         visual.run_until_parked();
     }
