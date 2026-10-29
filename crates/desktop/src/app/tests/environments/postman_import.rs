@@ -14,9 +14,6 @@ fn export(name: &str) -> String {
 }
 
 fn choose_source(workspace: &EnvironmentWorkspace, cx: &mut TestAppContext, source: &str) {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("environment.json");
-    fs::write(&path, source).unwrap();
     {
         let mut visual = workspace.visual(cx);
         let action = visual
@@ -25,11 +22,28 @@ fn choose_source(workspace: &EnvironmentWorkspace, cx: &mut TestAppContext, sour
         visual.simulate_click(action.center(), Modifiers::default());
         visual.run_until_parked();
     }
+    respond_to_source(cx, source);
+}
+
+fn respond_to_source(cx: &mut TestAppContext, source: &str) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("environment.json");
+    fs::write(&path, source).unwrap();
     assert!(cx.did_prompt_for_paths());
     cx.simulate_path_prompt_response(|options| {
         assert!(options.files && !options.directories && !options.multiple);
         Some(vec![path])
     });
+    cx.run_until_parked();
+}
+
+fn confirm_import(workspace: &EnvironmentWorkspace, cx: &mut TestAppContext) {
+    let mut visual = workspace.visual(cx);
+    let action = visual
+        .debug_bounds("application-dialog-import-environment")
+        .unwrap();
+    visual.simulate_click(action.center(), Modifiers::default());
+    visual.run_until_parked();
     cx.run_until_parked();
 }
 
@@ -49,7 +63,20 @@ fn postman_environment_import_persists_complete_environment_without_activating(
         .environments()
         .to_vec();
     let source = export("Imported");
+    let before_yaml = workspace.yaml();
     choose_source(&workspace, cx, &source);
+    assert_eq!(workspace.yaml(), before_yaml);
+    workspace.update(cx, |view, _, _| {
+        let dialog = view.application_dialog.as_ref().unwrap();
+        let detail = dialog.description();
+        assert!(detail.contains("secret values"));
+        assert!(detail.contains("plaintext"));
+        assert!(detail.contains("YAML"));
+        assert!(detail.contains("not be stored in Probe's credential store"));
+        assert!(!detail.contains(SECRET_SENTINEL));
+        assert!(view.environment_save_task.is_none());
+    });
+    confirm_import(&workspace, cx);
     let reloaded = load_workspace(&workspace.path).unwrap();
     let environments = reloaded.workspace().environments();
     assert_eq!(&environments[..before.len()], before.as_slice());
@@ -101,6 +128,9 @@ fn postman_environment_import_rejects_duplicate_invalid_and_conflicting_sources(
         }
         let before = workspace.yaml();
         choose_source(&workspace, cx, &source);
+        if label != "invalid" {
+            confirm_import(&workspace, cx);
+        }
         assert_eq!(workspace.yaml(), before);
         workspace.update(cx, |view, _, _| {
             assert!(
@@ -169,6 +199,125 @@ fn postman_environment_import_preserves_unsaved_drafts_and_pending_writes(cx: &m
         );
         assert!(view.environment_save_task.is_none());
         assert_no_leak(view);
+    });
+    assert_eq!(workspace.yaml(), before);
+}
+
+#[gpui_kit::test]
+fn postman_environment_import_is_available_for_an_empty_collection(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::writable_source(
+        cx,
+        "postman-import-empty",
+        "opencollection: 1.0.0\ninfo:\n  name: Empty\nbundled: true\n",
+    );
+    workspace.update(cx, |_, _, cx| cx.notify());
+    cx.run_until_parked();
+    {
+        let mut visual = workspace.visual(cx);
+        let trigger = visual.debug_bounds("request-environment-trigger").unwrap();
+        visual.simulate_click(trigger.center(), Modifiers::default());
+        visual.run_until_parked();
+        let action = visual.debug_bounds("request-environment-action-2").unwrap();
+        visual.simulate_click(action.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    let source = export("Imported").replace("\"secret\"", "\"default\"");
+    respond_to_source(cx, &source);
+    let reloaded = load_workspace(&workspace.path).unwrap();
+    assert_eq!(
+        reloaded.workspace().environments(),
+        &[probe_postman::import_postman_environment(&source)
+            .unwrap()
+            .environment]
+    );
+    workspace.update(cx, |view, _, _| {
+        assert_eq!(view.shell.selected_environment(), None);
+        assert_eq!(
+            view.environment_manager_dialog
+                .as_ref()
+                .unwrap()
+                .original_name,
+            "Imported"
+        );
+        assert!(view.create_environment_dialog.is_none());
+        assert!(view.application_dialog.is_none());
+        assert_no_leak(view);
+    });
+}
+
+#[gpui_kit::test]
+fn postman_environment_import_cancel_stale_and_pending_confirmations_do_not_write(
+    cx: &mut TestAppContext,
+) {
+    for state in ["cancel", "stale", "pending", "conflict"] {
+        let workspace = EnvironmentWorkspace::writable(cx, &format!("postman-confirm-{state}"));
+        workspace.open_manager(cx, "development");
+        let before = workspace.yaml();
+        choose_source(&workspace, cx, &export("Imported"));
+        workspace.update(cx, |view, window, cx| {
+            assert!(matches!(
+                view.application_dialog,
+                Some(ApplicationDialog::ConfirmPostmanEnvironmentImport { .. })
+            ));
+            match state {
+                "stale" => view.loaded_workspace = Some(load_workspace(&workspace.path).unwrap()),
+                "pending" => {
+                    view.pending_environment_saves
+                        .insert(("development".into(), "token".into()));
+                }
+                "conflict" => {
+                    view.enqueue_application_dialog(ApplicationDialog::FilesystemConflict {
+                        path: Some(workspace.path.clone()),
+                        detail: "External change".into(),
+                    })
+                }
+                _ => {}
+            }
+            view.handle_application_dialog_action(
+                if state == "cancel" {
+                    ApplicationDialogAction::Cancel
+                } else {
+                    ApplicationDialogAction::ImportEnvironment
+                },
+                window,
+                cx,
+            );
+            assert!(view.environment_save_task.is_none());
+            assert_eq!(view.shell.selected_environment(), Some("development"));
+            assert_no_leak(view);
+        });
+        cx.run_until_parked();
+        assert_eq!(workspace.yaml(), before);
+        assert!(
+            !load_workspace(&workspace.path)
+                .unwrap()
+                .workspace()
+                .environments()
+                .iter()
+                .any(|environment| environment.name == "Imported")
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn postman_environment_import_surfaces_compatibility_warnings_without_secrets(
+    cx: &mut TestAppContext,
+) {
+    let workspace = EnvironmentWorkspace::writable(cx, "postman-import-diagnostics");
+    workspace.open_manager(cx, "development");
+    let before = workspace.yaml();
+    let mut source: serde_json::Value = serde_json::from_str(&export("Imported")).unwrap();
+    source["values"][0]["type"] = serde_json::json!("default");
+    source["values"][0]["description"] = serde_json::json!("PRIVATE_DESCRIPTION_SENTINEL");
+    source["values"][1]["value"] = serde_json::json!("{{$randomUUID}}");
+    choose_source(&workspace, cx, &source.to_string());
+    workspace.update(cx, |view, window, cx| {
+        let detail = view.application_dialog.as_ref().unwrap().description();
+        assert!(detail.contains("descriptions cannot be represented"));
+        assert!(detail.contains("dynamic variables"));
+        assert!(!detail.contains(SECRET_SENTINEL));
+        assert!(!detail.contains("PRIVATE_DESCRIPTION_SENTINEL"));
+        view.handle_application_dialog_action(ApplicationDialogAction::Cancel, window, cx);
     });
     assert_eq!(workspace.yaml(), before);
 }

@@ -872,6 +872,7 @@ impl ProbeApp {
             || !self.pending_documentation_saves.is_empty()
             || self.environment_manager_is_dirty()
             || self.application_dialog.is_some()
+            || !self.pending_application_dialogs.is_empty()
     }
 
     pub(super) fn choose_postman_environment(
@@ -883,6 +884,7 @@ impl ProbeApp {
             return;
         }
         let workspace_path = self.workspace_path.clone();
+        let manager_was_open = self.environment_manager_dialog.is_some();
         let baseline = self.loaded_workspace.as_ref().unwrap().baseline();
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -909,23 +911,64 @@ impl ProbeApp {
                 let source = fs::read_to_string(path)
                     .map_err(|_| "Could not read the Postman environment JSON file.")?;
                 probe_postman::import_postman_environment(&source)
-                    .map(|imported| imported.environment)
                     .map_err(|_| "Could not import: invalid or unsupported Postman environment JSON.")
             }).await;
             let _ = view.update_in(cx, |view, window, cx| {
                 if view.workspace_path != workspace_path
+                    || (manager_was_open && view.environment_manager_dialog.is_none())
                     || view.loaded_workspace.as_ref().is_none_or(|loaded| loaded.baseline() != baseline)
-                    || (view.environment_manager_dialog.is_none() && view.create_environment_dialog.is_none())
                 {
                     return;
                 }
                 match result {
-                    Ok(environment) => view.import_postman_environment(environment, window, cx),
+                    Ok(imported) => view.review_postman_environment_import(imported, window, cx),
                     Err(message) => view.show_environment_dialog_error(
                         message, EnvironmentDialogErrorResolution::Manual, cx),
                 }
             });
         }).detach();
+    }
+
+    pub(super) fn review_postman_environment_import(
+        &mut self,
+        imported: probe_postman::ImportedPostmanEnvironment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.postman_environment_import_disabled() {
+            return;
+        }
+        let contains_secrets = imported
+            .variable_types
+            .values()
+            .any(|kind| kind == "secret");
+        if contains_secrets || !imported.diagnostics.is_empty() {
+            let mut detail = String::new();
+            let mut diagnostics = imported.diagnostics;
+            if contains_secrets {
+                detail.push_str("Postman secret values, including credentials, will be saved as plaintext in YAML. They will not be stored in Probe's credential store. Only continue if you accept plaintext storage.");
+                // The persistence-specific warning above replaces the parser's in-memory warning.
+                diagnostics.retain(|diagnostic| diagnostic.code != "secret_value_plaintext");
+            }
+            if !diagnostics.is_empty() {
+                if !detail.is_empty() {
+                    detail.push_str("\n\n");
+                }
+                detail.push_str(&format_import_diagnostics(&diagnostics));
+            }
+            self.show_application_dialog(
+                ApplicationDialog::ConfirmPostmanEnvironmentImport {
+                    environment: Box::new(imported.environment),
+                    workspace_path: self.workspace_path.clone(),
+                    baseline: self.loaded_workspace.as_ref().unwrap().baseline(),
+                    detail,
+                },
+                window,
+                cx,
+            );
+        } else {
+            self.import_postman_environment(imported.environment, window, cx);
+        }
     }
 
     pub(super) fn import_postman_environment(

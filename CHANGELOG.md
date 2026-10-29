@@ -8,7 +8,9 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Added
 
-- Import a Postman environment JSON file from the Desktop Environment Manager.
+- Import a Postman environment JSON file from the Desktop Environment Manager or
+  environment switcher, including collections without environments. Imports with
+  Postman secrets or compatibility warnings require confirmation before writing.
 
 ### Fixed
 
