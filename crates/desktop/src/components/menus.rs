@@ -28,11 +28,22 @@ pub(crate) fn menu_button(
     shortcut: Option<String>,
     on_activate: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    menu_button_with_enabled(theme, id, label, shortcut, true, on_activate)
+}
+
+pub(crate) fn menu_button_with_enabled(
+    theme: Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<String>,
+    shortcut: Option<String>,
+    enabled: bool,
+    on_activate: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     menu_button_with_style(
         theme,
         id,
         MenuButtonContent::new(label, shortcut),
-        true,
+        enabled,
         MenuButtonStyle {
             height: theme.metrics.control_height + 4.0,
             padding_x: theme.metrics.spacing_2,

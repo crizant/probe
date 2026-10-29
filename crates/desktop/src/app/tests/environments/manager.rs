@@ -88,6 +88,65 @@ fn environment_switcher_is_available_without_a_request_and_offers_actions(cx: &m
 }
 
 #[gpui_kit::test]
+fn environment_manager_add_menu_respects_each_actions_availability(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "development");
+    workspace.update(cx, |view, _, cx| {
+        view.pending_environment_saves
+            .insert(("development".into(), "host".into()));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    {
+        let mut visual = workspace.visual(cx);
+        let add = visual.debug_bounds("environment-manager-add").unwrap();
+        visual.simulate_click(add.center(), Modifiers::default());
+        visual.run_until_parked();
+        let import = visual
+            .debug_bounds("environment-manager-import-postman")
+            .expect("unavailable import should remain visible");
+        visual.simulate_click(import.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert!(!visual.did_prompt_for_paths());
+        let create = visual
+            .debug_bounds("environment-manager-create")
+            .expect("disabled import should leave the menu open");
+        visual.simulate_click(create.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.create_environment_dialog.is_some());
+        view.close_create_environment_dialog(window, cx);
+        view.pending_environment_saves.clear();
+        view.request_save_task = Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    {
+        let mut visual = workspace.visual(cx);
+        let add = visual.debug_bounds("environment-manager-add").unwrap();
+        visual.simulate_click(add.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert!(
+            visual.debug_bounds("environment-manager-create").is_none(),
+            "a workspace write should disable the add menu trigger"
+        );
+    }
+    workspace.update(cx, |view, _, cx| {
+        view.request_save_task = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let mut visual = workspace.visual(cx);
+    let add = visual.debug_bounds("environment-manager-add").unwrap();
+    visual.simulate_click(add.center(), Modifiers::default());
+    visual.run_until_parked();
+    visual
+        .debug_bounds("environment-manager-create")
+        .expect("add menu should become available after the write");
+}
+
+#[gpui_kit::test]
 fn environment_manager_renders_editable_and_readonly_variable_fields(cx: &mut TestAppContext) {
     let workspace = EnvironmentWorkspace::open(cx);
     workspace.open_manager(cx, "base");

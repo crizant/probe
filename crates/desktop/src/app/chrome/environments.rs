@@ -111,7 +111,9 @@ impl ProbeApp {
         let add_view = cx.weak_entity();
         let import_view = cx.weak_entity();
         let import_disabled = self.postman_environment_import_disabled();
-        let add_disabled = busy || dirty;
+        let create_disabled =
+            busy || dirty || self.loaded_workspace.is_none() || self.has_active_workspace_write();
+        let add_disabled = create_disabled && import_disabled;
         let add_label = if dirty {
             "Add environment. Save or discard unsaved changes first."
         } else {
@@ -165,11 +167,12 @@ impl ProbeApp {
                                     "environment-manager-add-popup",
                                     220.0,
                                 )
-                                .child(components::menu_button(
+                                .child(components::menu_button_with_enabled(
                                     theme,
                                     "environment-manager-create",
                                     "Create environment…",
                                     None,
+                                    !create_disabled,
                                     move |window, cx| {
                                         let _ = create_menu
                                             .update(cx, |menu, cx| menu.dismiss(window, cx));
@@ -178,12 +181,13 @@ impl ProbeApp {
                                         });
                                     },
                                 ))
-                                .when(!import_disabled, |popup| {
-                                    popup.child(components::menu_button(
+                                .child(
+                                    components::menu_button_with_enabled(
                                         theme,
                                         "environment-manager-import-postman",
                                         "Import from Postman…",
                                         None,
+                                        !import_disabled,
                                         move |window, cx| {
                                             let _ = import_menu
                                                 .update(cx, |menu, cx| menu.dismiss(window, cx));
@@ -191,8 +195,8 @@ impl ProbeApp {
                                                 view.choose_postman_environment(window, cx);
                                             });
                                         },
-                                    ))
-                                })
+                                    ),
+                                )
                             }),
                     ),
             )
