@@ -55,12 +55,95 @@ fn environment_switcher_is_available_without_a_request_and_offers_actions(cx: &m
         .expect("environment switcher should render without a selected request");
     visual.simulate_click(trigger.center(), Modifiers::default());
     visual.run_until_parked();
-    visual
+    let create = visual
         .debug_bounds("request-environment-action-0")
         .expect("environment switcher should include Create environment");
-    visual
+    let import = visual
         .debug_bounds("request-environment-action-1")
-        .expect("environment switcher should include Manage environments");
+        .expect("environment switcher should include Import Postman environment");
+    let manage = visual
+        .debug_bounds("request-environment-action-2")
+        .expect("environment switcher should include Manage environments last");
+    assert!(create.top() < import.top() && import.top() < manage.top());
+    visual.simulate_click(manage.center(), Modifiers::default());
+    visual.run_until_parked();
+    let add = visual.debug_bounds("environment-manager-add").unwrap();
+    assert!(
+        visual
+            .debug_bounds("environment-manager-import-postman")
+            .is_none()
+    );
+    visual.simulate_click(add.center(), Modifiers::default());
+    visual.run_until_parked();
+    let create = visual.debug_bounds("environment-manager-create").unwrap();
+    let import = visual
+        .debug_bounds("environment-manager-import-postman")
+        .unwrap();
+    assert!(create.top() < import.top());
+    visual.simulate_click(create.center(), Modifiers::default());
+    visual.run_until_parked();
+    workspace.update(&mut visual, |view, _, _| {
+        assert!(view.create_environment_dialog.is_some());
+    });
+}
+
+#[gpui_kit::test]
+fn environment_manager_add_menu_respects_each_actions_availability(cx: &mut TestAppContext) {
+    let workspace = EnvironmentWorkspace::open(cx);
+    workspace.open_manager(cx, "development");
+    workspace.update(cx, |view, _, cx| {
+        view.pending_environment_saves
+            .insert(("development".into(), "host".into()));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    {
+        let mut visual = workspace.visual(cx);
+        let add = visual.debug_bounds("environment-manager-add").unwrap();
+        visual.simulate_click(add.center(), Modifiers::default());
+        visual.run_until_parked();
+        let import = visual
+            .debug_bounds("environment-manager-import-postman")
+            .expect("unavailable import should remain visible");
+        visual.simulate_click(import.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert!(!visual.did_prompt_for_paths());
+        let create = visual
+            .debug_bounds("environment-manager-create")
+            .expect("disabled import should leave the menu open");
+        visual.simulate_click(create.center(), Modifiers::default());
+        visual.run_until_parked();
+    }
+    workspace.update(cx, |view, window, cx| {
+        assert!(view.create_environment_dialog.is_some());
+        view.close_create_environment_dialog(window, cx);
+        view.pending_environment_saves.clear();
+        view.request_save_task = Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    {
+        let mut visual = workspace.visual(cx);
+        let add = visual.debug_bounds("environment-manager-add").unwrap();
+        visual.simulate_click(add.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert!(
+            visual.debug_bounds("environment-manager-create").is_none(),
+            "a workspace write should disable the add menu trigger"
+        );
+    }
+    workspace.update(cx, |view, _, cx| {
+        view.request_save_task = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let mut visual = workspace.visual(cx);
+    let add = visual.debug_bounds("environment-manager-add").unwrap();
+    visual.simulate_click(add.center(), Modifiers::default());
+    visual.run_until_parked();
+    visual
+        .debug_bounds("environment-manager-create")
+        .expect("add menu should become available after the write");
 }
 
 #[gpui_kit::test]
@@ -2354,7 +2437,7 @@ fn environment_manager_first_open_shortcut_duplicates_without_activating(cx: &mu
         let trigger = visual.debug_bounds("request-environment-trigger").unwrap();
         visual.simulate_click(trigger.center(), Modifiers::default());
         visual.run_until_parked();
-        let manage = visual.debug_bounds("request-environment-action-1").unwrap();
+        let manage = visual.debug_bounds("request-environment-action-2").unwrap();
         visual.simulate_click(manage.center(), Modifiers::default());
         visual.run_until_parked();
         workspace.update(&mut visual, |view, _, _| {

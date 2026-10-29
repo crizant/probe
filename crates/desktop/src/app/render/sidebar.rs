@@ -656,7 +656,7 @@ impl ProbeApp {
                 .child(components::menu_button(
                     theme,
                     "sidebar-import-postman",
-                    "Postman Export…",
+                    "Postman Collection…",
                     None,
                     move |window, cx| {
                         let _ = sidebar_import_postman_view.update(cx, |view, cx| {

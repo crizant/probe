@@ -766,7 +766,7 @@ fn macos_system_menu_delegates_services_to_the_operating_system() {
                             MenuItem::Action { name: postman, .. },
                             MenuItem::Action { name: yaak, .. },
                             MenuItem::Action { name: curl, .. },
-                        ] if postman == "Postman Export…" && yaak == "Yaak Export…"
+                        ] if postman == "Postman Collection…" && yaak == "Yaak Export…"
                             && curl == "cURL…"
                     )
         )
@@ -817,6 +817,7 @@ fn view_menu_state_changes_are_persisted(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn desktop_menu_action_opens_the_requested_menu(cx: &mut TestAppContext) {
+    use super::{DesktopMenuItem, ImportCurl, ImportPostmanExport, ImportYaakExport};
     cx.update(Theme::init);
     let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
         ProbeApp::new(window, cx)
@@ -824,7 +825,26 @@ fn desktop_menu_action_opens_the_requested_menu(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     window
-        .update(cx, |_, window, cx| {
+        .update(cx, |view, window, cx| {
+            let definition = view.desktop_menu_definition(DesktopMenu::File);
+            let imports = definition
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    DesktopMenuItem::Submenu("Import From…", _, submenu) => Some(&submenu.items),
+                    _ => None,
+                })
+                .expect("File should offer Import From");
+            assert!(matches!(imports.as_slice(), [
+                DesktopMenuItem::Action(postman, postman_action, _),
+                DesktopMenuItem::Action(yaak, yaak_action, _),
+                DesktopMenuItem::Action(curl, curl_action, _),
+            ] if *postman == "Postman Collection…"
+                && postman_action.as_any().is::<ImportPostmanExport>()
+                && *yaak == "Yaak Export…"
+                && yaak_action.as_any().is::<ImportYaakExport>()
+                && *curl == "cURL…"
+                && curl_action.as_any().is::<ImportCurl>()));
             window.dispatch_action(Box::new(OpenFileMenu), cx);
         })
         .expect("test window should remain open");

@@ -197,6 +197,7 @@ impl ProbeApp {
                             label: "Import",
                             width: 210.0,
                             items: vec![
+                                DesktopMenuItem::action("Postman Collection…", ImportPostmanExport),
                                 DesktopMenuItem::action("Yaak Export…", ImportYaakExport),
                                 DesktopMenuItem::action("cURL…", ImportCurl),
                             ],
@@ -358,7 +359,7 @@ impl ProbeApp {
                 .child(components::menu_button(
                     theme,
                     "workspace-switcher-import-postman",
-                    "Postman Export…",
+                    "Postman Collection…",
                     None,
                     move |window, cx| {
                         let _ = import_postman_view.update(cx, |view, cx| {

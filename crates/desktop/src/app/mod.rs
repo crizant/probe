@@ -826,7 +826,7 @@ fn system_menus(pane_layout: PaneLayout) -> [Menu; 5] {
             MenuItem::action("New Collection…", NewCollection),
             MenuItem::action("Open Collection…", OpenWorkspace),
             MenuItem::submenu(Menu::new("Import From…").items([
-                MenuItem::action("Postman Export…", ImportPostmanExport),
+                MenuItem::action("Postman Collection…", ImportPostmanExport),
                 MenuItem::action("Yaak Export…", ImportYaakExport),
                 MenuItem::action("cURL…", ImportCurl),
             ])),

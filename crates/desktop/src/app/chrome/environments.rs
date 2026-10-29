@@ -109,7 +109,11 @@ impl ProbeApp {
         }
 
         let add_view = cx.weak_entity();
-        let add_disabled = busy || dirty;
+        let import_view = cx.weak_entity();
+        let import_disabled = self.postman_environment_import_disabled();
+        let create_disabled =
+            busy || dirty || self.loaded_workspace.is_none() || self.has_active_workspace_write();
+        let add_disabled = create_disabled && import_disabled;
         let add_label = if dirty {
             "Add environment. Save or discard unsaved changes first."
         } else {
@@ -139,56 +143,64 @@ impl ProbeApp {
                             .child("ENVIRONMENTS"),
                     )
                     .child(
-                        components::icon_button(
-                            theme,
-                            "environment-manager-add",
-                            add_label,
-                            components::plus_icon(theme).text_color(if add_disabled {
-                                theme.colors.actions.disabled_foreground
-                            } else {
-                                theme.colors.text.secondary
+                        Popover::new("environment-manager-add-menu")
+                            .trigger(
+                                components::icon_button(
+                                    theme,
+                                    "environment-manager-add",
+                                    add_label,
+                                    components::plus_icon(theme).text_color(if add_disabled {
+                                        theme.colors.actions.disabled_foreground
+                                    } else {
+                                        theme.colors.text.secondary
+                                    }),
+                                    |_, _, _| {},
+                                )
+                                .flex_none()
+                                .disabled(add_disabled),
+                            )
+                            .content(move |_, _, cx| {
+                                let create_menu = cx.weak_entity();
+                                let import_menu = cx.weak_entity();
+                                components::popup_surface(
+                                    theme,
+                                    "environment-manager-add-popup",
+                                    220.0,
+                                )
+                                .child(components::menu_button_with_enabled(
+                                    theme,
+                                    "environment-manager-create",
+                                    "Create environment…",
+                                    None,
+                                    !create_disabled,
+                                    move |window, cx| {
+                                        let _ = create_menu
+                                            .update(cx, |menu, cx| menu.dismiss(window, cx));
+                                        let _ = add_view.update(cx, |view, cx| {
+                                            view.open_create_environment_dialog(window, cx);
+                                        });
+                                    },
+                                ))
+                                .child(
+                                    components::menu_button_with_enabled(
+                                        theme,
+                                        "environment-manager-import-postman",
+                                        "Import from Postman…",
+                                        None,
+                                        !import_disabled,
+                                        move |window, cx| {
+                                            let _ = import_menu
+                                                .update(cx, |menu, cx| menu.dismiss(window, cx));
+                                            let _ = import_view.update(cx, |view, cx| {
+                                                view.choose_postman_environment(window, cx);
+                                            });
+                                        },
+                                    ),
+                                )
                             }),
-                            move |_, window, cx| {
-                                let _ = add_view.update(cx, |view, cx| {
-                                    view.open_create_environment_dialog(window, cx);
-                                });
-                            },
-                        )
-                        .flex_none()
-                        .disabled(add_disabled),
                     ),
             )
             .child(environment_list)
-            .child(Self::render_postman_environment_import(
-                theme,
-                self.postman_environment_import_disabled(),
-                cx,
-            ))
-    }
-
-    pub(super) fn render_postman_environment_import(
-        theme: Theme,
-        disabled: bool,
-        cx: &mut Context<Self>,
-    ) -> gpui_kit::Div {
-        let view = cx.weak_entity();
-        div()
-            .mt(px(theme.metrics.spacing_3))
-            .flex()
-            .flex_col()
-            .child(components::dialog_action_button(
-                theme,
-                "environment-manager-import-postman",
-                "Import from Postman...",
-                components::DialogActionStyle::Secondary,
-                None,
-                disabled,
-                move |_, window, cx| {
-                    let _ = view.update(cx, |view, cx| {
-                        view.choose_postman_environment(window, cx);
-                    });
-                },
-            ))
     }
 
     fn environment_field_focus(

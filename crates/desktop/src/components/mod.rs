@@ -92,8 +92,8 @@ pub(crate) use icons::{
 use menus::{MenuButtonContent, MenuButtonStyle, context_menu_separator, menu_button_with_style};
 pub(crate) use menus::{
     app_menu_trigger, cascading_menu, checked_menu_button, destructive_menu_button,
-    import_submenu_menu_button, menu_button, menu_button_with_leading, menu_separator,
-    pane_layout_toggle, positioned_cascading_menu, shortcut_label_for_action,
+    import_submenu_menu_button, menu_button, menu_button_with_enabled, menu_button_with_leading,
+    menu_separator, pane_layout_toggle, positioned_cascading_menu, shortcut_label_for_action,
     shortcut_label_for_action_in_context, switch,
 };
 pub(crate) use splitter::pane_splitter;
