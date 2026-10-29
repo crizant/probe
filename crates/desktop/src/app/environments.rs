@@ -1086,8 +1086,8 @@ impl ProbeApp {
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
                         if imported {
                             view.secret_write_in_progress = false;
-                            if imported_secrets.as_ref().is_some_and(|secrets| !secrets.is_empty()) {
-                                view.show_imported_secret_failure(cx);
+                            if imported_secrets.as_ref().is_some_and(|secrets| secrets.has_values()) {
+                                view.show_imported_secret_warning(false, true, cx);
                             }
                         }
                         view.environment_save_workspace_path = None;

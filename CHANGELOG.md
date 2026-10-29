@@ -14,6 +14,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ### Fixed
 
+- Clarify when Postman imports preserve existing credentials, and avoid partial-secret
+  warnings for interrupted imports containing only empty or null secret values.
 - Accept Postman environment exports with variable descriptions in object format.
 
 ## [2.3.0] - 2026-10-28

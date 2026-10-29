@@ -71,8 +71,8 @@ impl PostmanEnvironmentImport {
 }
 
 impl ImportedEnvironmentSecrets {
-    pub(super) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    pub(super) fn has_values(&self) -> bool {
+        self.0.iter().any(|(_, value)| value.is_some())
     }
 }
 
@@ -107,7 +107,7 @@ impl ProbeApp {
         }
         let Some(path) = self.workspace_path.clone() else {
             self.secret_write_in_progress = false;
-            self.show_imported_secret_failure(cx);
+            self.show_imported_secret_warning(false, secrets.has_values(), cx);
             self.pump_workspace_writes(window, cx);
             return;
         };
@@ -117,6 +117,12 @@ impl ProbeApp {
         let mut gate = self.environment_import_credentials_gate.take();
         self.environment_save_task = Some(cx.spawn_in(window, async move |view, window| {
             let mut incomplete = false;
+            let mut preserved = false;
+            let mut remaining_values = secrets
+                .0
+                .iter()
+                .filter(|(_, value)| value.is_some())
+                .count();
             for (name, value) in secrets.0 {
                 let current = view
                     .update_in(window, |view, _, _| {
@@ -124,7 +130,7 @@ impl ProbeApp {
                     })
                     .unwrap_or(false);
                 if !current {
-                    incomplete = true;
+                    incomplete |= remaining_values > 0;
                     break;
                 }
                 let lookup_path = path.clone();
@@ -164,9 +170,10 @@ impl ProbeApp {
                     })
                     .unwrap_or(false);
                 if !current {
-                    incomplete = true;
+                    incomplete |= remaining_values > 0;
                     break;
                 }
+                remaining_values -= usize::from(value.is_some());
                 let (id, exists) = match lookup {
                     Ok(lookup) => lookup,
                     Err(_) => {
@@ -178,7 +185,7 @@ impl ProbeApp {
                     continue;
                 };
                 if exists {
-                    incomplete = true;
+                    preserved = true;
                     continue;
                 }
                 let write_store = Arc::clone(&store);
@@ -198,16 +205,29 @@ impl ProbeApp {
                 view.environment_save_task = None;
                 view.secret_write_in_progress = false;
                 view.sync_secret_statuses_from_presence();
-                if incomplete {
-                    view.show_imported_secret_failure(cx);
-                }
+                view.show_imported_secret_warning(preserved, incomplete, cx);
                 view.pump_workspace_writes(window, cx);
                 cx.notify();
             });
         }));
     }
 
-    pub(super) fn show_imported_secret_failure(&mut self, cx: &mut Context<Self>) {
-        self.show_toast(ToastIntent::Warning, "Import partially completed: the environment was saved, but some secret values were not imported. Set or replace them in Environment Manager.", cx);
+    pub(super) fn show_imported_secret_warning(
+        &mut self,
+        preserved: bool,
+        incomplete: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let detail = match (preserved, incomplete) {
+            (true, true) => {
+                "Existing stored credentials remain in use; their Postman values were not imported. Some other secret values could not be imported."
+            }
+            (true, false) => {
+                "Existing stored credentials remain in use; their Postman values were not imported."
+            }
+            (false, true) => "Some secret values could not be imported.",
+            (false, false) => return,
+        };
+        self.show_toast(ToastIntent::Warning, format!("Import partially completed: the environment was saved. {detail} Set or replace values in Environment Manager."), cx);
     }
 }
