@@ -123,6 +123,7 @@ fn rejects_invalid_structures_without_echoing_input() {
         ("/values/0/key", json!(123)),
         ("/values/0/enabled", json!("private-exported-token")),
         ("/values/0/type", json!({"private-exported-token": true})),
+        ("/values/0/description", json!(123)),
     ] {
         let mut source: Value = serde_json::from_str(EXPORT).unwrap();
         *source.pointer_mut(pointer).unwrap() = replacement;
@@ -175,4 +176,48 @@ fn rejects_duplicates_and_unsupported_formats() {
         import_postman_environment(&duplicate_field).unwrap_err(),
         ImportError::Invalid
     );
+}
+
+#[test]
+fn accepts_empty_and_nonempty_variable_descriptions() {
+    let baseline = import_postman_environment(EXPORT).unwrap();
+    for description in [json!(null), json!(""), json!(" "), json!("Variable notes")] {
+        let mut source: Value = serde_json::from_str(EXPORT).unwrap();
+        source["values"][0]["description"] = description.clone();
+        let imported = import_postman_environment(&source.to_string()).unwrap();
+        assert_eq!(imported.environment, baseline.environment);
+        assert_eq!(imported.variable_types, baseline.variable_types);
+        let warnings = imported
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "unsupported_description")
+            .count();
+        assert_eq!(
+            warnings,
+            usize::from(description == json!("Variable notes"))
+        );
+    }
+}
+
+#[test]
+fn description_warning_does_not_disclose_description_or_value() {
+    let mut source: Value = serde_json::from_str(EXPORT).unwrap();
+    source["values"][2]["description"] = json!("private-description-content");
+    let imported = import_postman_environment(&source.to_string()).unwrap();
+    let diagnostic = imported
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "unsupported_description")
+        .unwrap();
+    assert_eq!(diagnostic.resource_type, "environment_variable");
+    assert_eq!(diagnostic.resource_id.as_deref(), Some("2"));
+    assert_eq!(diagnostic.field.as_deref(), Some("description"));
+    assert_eq!(
+        diagnostic.severity,
+        probe_core::ImportDiagnosticSeverity::Warning
+    );
+    let report = format!("{:?} {imported:?}", imported.diagnostics);
+    for sensitive in ["private-description-content", "private-exported-token"] {
+        assert!(!report.contains(sensitive));
+    }
 }

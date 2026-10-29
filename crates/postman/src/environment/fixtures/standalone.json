@@ -2,7 +2,7 @@
   "id": "environment-fixture",
   "name": " Development ",
   "values": [
-    {"key": " base_url ", "value": "https://example.test/{{version}}", "type": "default", "enabled": true},
+    {"key": " base_url ", "value": "https://example.test/{{version}}", "type": "default", "description": "", "enabled": true},
     {"key": "disabled", "value": "", "type": "text", "enabled": false},
     {"key": "token", "value": "private-exported-token", "type": "secret", "enabled": false},
     {"key": "number", "value": 42, "type": "number", "enabled": true},

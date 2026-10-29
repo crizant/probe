@@ -86,6 +86,8 @@ struct EnvironmentEntry {
     value: Value,
     #[serde(default, rename = "type")]
     kind: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
     #[serde(default = "enabled_by_default")]
     enabled: bool,
 }
@@ -96,9 +98,12 @@ const fn enabled_by_default() -> bool {
 
 /// Converts one official standalone Postman environment JSON export in memory.
 ///
-/// Accepts the legacy `text` and current `default`/`secret` type markers as well
-/// as explicit SDK value types. An omitted enabled flag means enabled. Unknown
-/// fields are rejected rather than silently dropping alternate value formats.
+/// Accepts `text`, `default`, `secret`, `any`, `string`, `number`, `boolean`, and
+/// `object` type markers using the collection converter's value semantics. SDK
+/// `array` types and parsing JSON-encoded object strings are not supported.
+/// An omitted enabled flag means enabled. Nonempty variable descriptions produce
+/// a warning because the domain cannot retain them. Unknown fields are rejected
+/// rather than silently dropping alternate value formats.
 /// No files are read or written; diagnostics and errors omit variable values.
 ///
 /// # Errors
@@ -144,6 +149,19 @@ pub fn import_postman_environment(
             _ => return Err(UnsupportedFormat),
         };
         let resource_id = index.to_string();
+        if entry
+            .description
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+        {
+            imported.diagnostics.push(warning(
+                "unsupported_description",
+                "environment_variable",
+                Some(&resource_id),
+                Some("description"),
+                "Postman variable descriptions cannot be represented by the current Probe domain",
+            ));
+        }
         if entry.kind.as_deref() == Some("secret") {
             imported.diagnostics.push(warning(
                 "secret_value_plaintext",
