@@ -644,8 +644,6 @@ impl ProbeApp {
                         view.clear_environment_dialog_error(cx);
                         if close_manager {
                             view.close_environment_manager_dialog(window, cx);
-                        } else {
-                            view.restore_environment_manager_focus(window, cx);
                         }
                     }
                     Err(probe_opencollection::SaveError::CommittedButNotIntegrated) => {
@@ -661,7 +659,6 @@ impl ProbeApp {
                             EnvironmentDialogErrorResolution::Manual,
                             cx,
                         );
-                        view.restore_environment_manager_focus(window, cx);
                     }
                 }
                 view.environment_save_workspace_path = None;

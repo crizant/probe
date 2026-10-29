@@ -777,7 +777,6 @@ impl ProbeApp {
                 neighbor_after_removal(&self.visible_tree_rows, index).map(|row| row.item)
             });
             self.scroll_selected_tree_item_into_view();
-            self.restore_tree_focus_after_delete(window, cx);
         }
         self.reveal_active_tab();
         self.persist_session(cx);

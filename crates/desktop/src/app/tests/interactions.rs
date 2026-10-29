@@ -619,6 +619,50 @@ fn delete_shortcut_selects_a_neighbor_and_keeps_tree_focus(cx: &mut TestAppConte
     fs::remove_file(fixture).unwrap();
 }
 
+#[gpui_kit::test]
+fn delete_shortcut_keeps_focus_moved_during_the_write(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
+        ProbeApp::new(window, cx)
+    });
+    let fixture = writable_structure_fixture("delete-shortcut-focus-move");
+    let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let alpha = workspace.request_key("items/0").unwrap();
+    window
+        .update(cx, |view, window, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture.clone(), workspace);
+            view.select_tree_item(WorkspaceItemRef::Request(alpha), cx);
+            view.tree_focus_handle.focus(window, cx);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), tree_delete_shortcut());
+
+    cx.dispatch_keystroke(
+        window.into(),
+        Keystroke::parse(destructive_dialog_shortcut()).unwrap(),
+    );
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_task.is_some());
+            view.focus_handle.focus(window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.structure_task.is_none(), "{:?}", toast_debug(view));
+            assert_eq!(selected_tree_name(view).as_deref(), Some("Folder"));
+            assert_eq!(window.focused(cx), Some(view.focus_handle.clone()));
+        })
+        .unwrap();
+    fs::remove_file(fixture).unwrap();
+}
+
 fn selected_tree_name(view: &ProbeApp) -> Option<String> {
     let item = view.selected_tree_item?;
     view.loaded_workspace
