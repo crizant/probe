@@ -267,3 +267,74 @@ fn typed_auth_value(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use AuthenticationValue::{Boolean, Null, String as Text};
+
+    #[test]
+    fn api_key_placement_diagnostics_preserve_properties() {
+        let text = |value: &str| Some(Text(value.to_owned()));
+        for (source, placement, code) in [
+            (None, None, "invalid_api_key_placement"),
+            (text("cookie"), None, "invalid_api_key_placement"),
+            (text(""), None, "invalid_api_key_placement"),
+            (Some(Null), None, "invalid_api_key_placement"),
+            (Some(Boolean(true)), None, "invalid_api_key_placement"),
+            (text("{{placement}}"), None, "invalid_api_key_placement"),
+            (
+                text("header"),
+                text("query"),
+                "conflicting_api_key_placement",
+            ),
+            (text("query"), Some(Null), "conflicting_api_key_placement"),
+            (
+                text("cookie"),
+                text("header"),
+                "conflicting_api_key_placement",
+            ),
+            (None, text("invalid"), "invalid_api_key_placement"),
+        ] {
+            let mut properties = BTreeMap::from([
+                ("key".into(), Text("{{key}}".into())),
+                ("value".into(), Text("{{value}}".into())),
+                (
+                    "custom".into(),
+                    AuthenticationValue::Sequence(vec![Boolean(false)]),
+                ),
+            ]);
+            properties.extend(
+                [("in", source), ("placement", placement)]
+                    .into_iter()
+                    .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value))),
+            );
+            let original = properties.clone();
+            let mut diagnostics = Vec::new();
+            normalize_api_key_placement(&mut properties, "request", &mut diagnostics);
+            assert_eq!(properties, original);
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(diagnostics[0].code, code);
+            assert_eq!(
+                diagnostics[0].severity,
+                probe_core::ImportDiagnosticSeverity::Warning
+            );
+            assert_eq!(diagnostics[0].resource_id.as_deref(), Some("request"));
+        }
+    }
+
+    #[test]
+    fn api_key_existing_placement_is_normalized_without_warnings() {
+        for source in [None, Some(Text("query".into()))] {
+            let expected = BTreeMap::from([("placement".into(), Text("query".into()))]);
+            let mut properties = expected.clone();
+            if let Some(source) = source {
+                properties.insert("in".into(), source);
+            }
+            let mut diagnostics = Vec::new();
+            normalize_api_key_placement(&mut properties, "request", &mut diagnostics);
+            assert_eq!(properties, expected);
+            assert!(diagnostics.is_empty());
+        }
+    }
+}

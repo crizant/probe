@@ -22,7 +22,7 @@
           "apikey": [
             {
               "key": "key",
-              "value": "X-API-Key",
+              "value": "{{key}}",
               "type": "string"
             },
             {
@@ -54,7 +54,7 @@
           "apikey": [
             {
               "key": "key",
-              "value": "X-API-Key",
+              "value": "{{key}}",
               "type": "string"
             },
             {
