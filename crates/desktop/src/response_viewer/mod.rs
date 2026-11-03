@@ -164,6 +164,10 @@ pub(crate) struct ResponseViewerState {
     selections: std::collections::HashMap<probe_core::RequestKey, ResponseSelection>,
     documents: std::collections::BTreeMap<probe_core::RequestKey, PreparedDocument>,
     image_scrolls: std::collections::BTreeMap<probe_core::RequestKey, ScrollHandle>,
+    editors: std::collections::BTreeMap<
+        probe_core::RequestKey,
+        [crate::components::RetainedEditorState; 6],
+    >,
     next_generation: u64,
 }
 
@@ -172,9 +176,32 @@ struct ResponseSelection {
     tab: ResponseViewerTab,
     raw_view: RawBodyView,
     assertion_scroll: ScrollHandle,
+    inspector_scroll: gpui_kit::UniformListScrollHandle,
 }
 
 impl ResponseViewerState {
+    pub(crate) fn editor(
+        &self,
+        key: probe_core::RequestKey,
+        tab: ResponseViewerTab,
+    ) -> crate::components::RetainedEditorState {
+        let index = match tab {
+            ResponseViewerTab::Pretty => 0,
+            ResponseViewerTab::Raw => match self.raw_view(key) {
+                RawBodyView::Text => 1,
+                RawBodyView::Base64 => 2,
+                RawBodyView::Hex => 3,
+            },
+            ResponseViewerTab::Headers => 4,
+            ResponseViewerTab::Inspect => 5,
+            ResponseViewerTab::Assertions => unreachable!("assertions do not use a text editor"),
+        };
+        self.editors
+            .get(&key)
+            .expect("response document owns editor state")[index]
+            .clone()
+    }
+
     pub(crate) fn tab(&self, key: probe_core::RequestKey) -> ResponseViewerTab {
         self.selections
             .get(&key)
@@ -191,6 +218,17 @@ impl ResponseViewerState {
 
     pub(crate) fn document(&self, key: probe_core::RequestKey) -> Option<&PreparedDocument> {
         self.documents.get(&key)
+    }
+
+    pub(crate) fn inspector_scroll(
+        &self,
+        key: probe_core::RequestKey,
+    ) -> &gpui_kit::UniformListScrollHandle {
+        &self
+            .selections
+            .get(&key)
+            .expect("response owns a selection")
+            .inspector_scroll
     }
 
     pub(crate) fn image_scroll(&self, key: probe_core::RequestKey) -> Option<&ScrollHandle> {
@@ -219,6 +257,8 @@ impl ResponseViewerState {
         } else {
             self.image_scrolls.remove(&key);
         }
+        self.selections.entry(key).or_default().inspector_scroll = Default::default();
+        self.editors.insert(key, Default::default());
         self.documents.insert(key, document);
     }
 
@@ -236,10 +276,12 @@ impl ResponseViewerState {
     }
 
     pub(crate) fn remove(&mut self, key: probe_core::RequestKey) {
+        self.editors.remove(&key);
         self.documents.remove(&key);
         self.image_scrolls.remove(&key);
         if let Some(selection) = self.selections.get_mut(&key) {
             selection.assertion_scroll = ScrollHandle::new();
+            selection.inspector_scroll = Default::default();
         }
     }
 
@@ -249,6 +291,7 @@ impl ResponseViewerState {
 
     pub(crate) fn clear(&mut self) {
         self.selections.clear();
+        self.editors.clear();
         self.documents.clear();
         self.image_scrolls.clear();
     }
@@ -257,6 +300,10 @@ impl ResponseViewerState {
         &mut self,
         key_remaps: &std::collections::BTreeMap<probe_core::RequestKey, probe_core::RequestKey>,
     ) {
+        self.editors = std::mem::take(&mut self.editors)
+            .into_iter()
+            .filter_map(|(key, editors)| key_remaps.get(&key).map(|new| (*new, editors)))
+            .collect();
         self.selections = std::mem::take(&mut self.selections)
             .into_iter()
             .filter_map(|(key, selection)| key_remaps.get(&key).map(|new| (*new, selection)))

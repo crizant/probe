@@ -209,21 +209,12 @@ impl ProbeApp {
             section_kind,
             EditorSection::Body | EditorSection::Docs | EditorSection::WebSocketMessage
         ) && !section_kind.is_graphql();
-        if section_scrolls && self.request_section_scroll_owner.get() != Some((key, section_kind)) {
-            self.request_section_scroll
-                .set_offset(point(px(0.0), px(0.0)));
-            self.request_section_scroll_owner
-                .set(Some((key, section_kind)));
-        }
+        let section_scroll = self.request_editor.scroll(key, section_kind);
         let list_scroll = section_scrolls.then_some(&self.request_list_scroll);
         let section = self.render_request_section(key, &request, theme, list_scroll, cx);
         let section = if section_scrolls {
-            components::list_scroll_region(
-                section,
-                &self.request_section_scroll,
-                &self.request_list_scroll,
-            )
-            .into_any_element()
+            components::list_scroll_region(section, &section_scroll, &self.request_list_scroll)
+                .into_any_element()
         } else {
             section
         };
@@ -469,7 +460,7 @@ impl ProbeApp {
                     .when(section_scrolls, |content| {
                         content
                             .overflow_y_scroll()
-                            .track_scroll(&self.request_section_scroll)
+                            .track_scroll(&section_scroll)
                     })
                     .child(section),
             )
@@ -499,6 +490,10 @@ impl ProbeApp {
                     [
                         ("request-description", key.slot()).into(),
                         ("request-docs", key.slot()).into(),
+                    ],
+                    [
+                        self.request_editor.editor(key, "request-description"),
+                        self.request_editor.editor(key, "request-docs"),
                     ],
                     move |docs, value, _, cx| {
                         let _ = view.update(cx, |view, cx| {

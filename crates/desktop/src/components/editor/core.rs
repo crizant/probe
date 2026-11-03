@@ -2,11 +2,36 @@ use super::*;
 use crate::app::{ShiftTabOrOutdent, TabOrIndent};
 use gpui_kit::EntityInputHandler as _;
 
+/// Keeps the native editor and search session alive while its tab or section is hidden.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RetainedEditorState(Rc<std::cell::RefCell<Option<EditorSession>>>);
+
+#[derive(Clone, Debug)]
+struct EditorSession {
+    field: Entity<EditorField>,
+    search: Entity<EditorSearchState>,
+}
+
+impl RetainedEditorState {
+    #[cfg(test)]
+    pub(crate) fn editor(&self, cx: &App) -> Entity<EditorState> {
+        self.0
+            .borrow()
+            .as_ref()
+            .expect("editor rendered")
+            .field
+            .read(cx)
+            .state
+            .clone()
+    }
+}
+
 struct EditorField {
     state: Entity<EditorState>,
     decorations: TextDecorationCollection,
     last_decorations: Vec<TextDecoration>,
     last_value: SharedString,
+    last_external_value: SharedString,
     on_change: Option<InputChangeHandler>,
     last_scroll_range: Option<Range<usize>>,
     language: SharedString,
@@ -59,6 +84,7 @@ pub(crate) fn editor_paint_style(theme: Theme) -> InputEditorStyle {
 
 #[derive(IntoElement)]
 pub(in crate::components) struct ProbeEditor {
+    pub(in crate::components) retained_state: Option<RetainedEditorState>,
     pub(in crate::components) theme: Theme,
     pub(in crate::components) id: ElementId,
     pub(in crate::components) value: SharedString,
@@ -78,6 +104,25 @@ pub(in crate::components) struct ProbeEditor {
     pub(in crate::components) extra_context_menu_actions: Vec<TextContextMenuExtraAction>,
     pub(in crate::components) debug_selector: Option<&'static str>,
     pub(in crate::components) variables: Option<VariableContext>,
+}
+
+// Persistent sessions are owned by the tab, rather than by consecutive frames.
+// Observe them in the same view as keyed state so editor events still redraw it.
+fn session_state<S: 'static>(
+    persistent: bool,
+    id: ElementId,
+    window: &mut Window,
+    cx: &mut App,
+    init: impl FnOnce(&mut Window, &mut Context<S>) -> S,
+) -> Entity<S> {
+    if persistent {
+        let state = cx.new(|cx| init(window, cx));
+        let view = window.current_view();
+        cx.observe(&state, move |_, cx| cx.notify(view)).detach();
+        state
+    } else {
+        window.use_keyed_state(id, cx, init)
+    }
 }
 
 impl RenderOnce for ProbeEditor {
@@ -100,53 +145,80 @@ impl RenderOnce for ProbeEditor {
         let soft_wrap = self.soft_wrap;
         let language = self.language.clone();
         let editor_id = self.id.clone();
-        let search_state = window.use_keyed_state(
-            ElementId::NamedChild(
-                Arc::new(editor_id.clone()),
-                SharedString::from("search-state"),
-            ),
-            cx,
-            |_, _| EditorSearchState::default(),
-        );
+        let retained = self
+            .retained_state
+            .as_ref()
+            .and_then(|state| state.0.borrow().clone());
+        let search_state = if let Some(session) = &retained {
+            session.search.clone()
+        } else {
+            session_state(
+                self.retained_state.is_some(),
+                ElementId::NamedChild(
+                    Arc::new(editor_id.clone()),
+                    SharedString::from("search-state"),
+                ),
+                window,
+                cx,
+                |_, _| EditorSearchState::default(),
+            )
+        };
         let scroll_to_range = self.scroll_to_range;
-        let field = window.use_keyed_state(self.id.clone(), cx, |window, cx| {
-            let state = cx.new(|cx| {
-                let mut editor = EditorState::new(window, cx)
-                    .placeholder(placeholder.clone())
-                    // Kit 0.8 enables macOS bounce by default; keep Probe's
-                    // existing request and response editor scrolling behavior.
-                    .scroll_bounce(false)
-                    .smart_indent(language.as_ref() == "json")
-                    .folding(false)
-                    // Let the shortcut reach Probe’s search card; the native
-                    // session still owns matching, navigation, and painting.
-                    .searchable(false)
-                    .soft_wrap(soft_wrap)
-                    .language(language.clone());
-                editor.set_highlighter_factory(crate::syntax::factory(), cx);
-                editor.set_editor_style(paint_style.clone());
-                editor
+        let field = if let Some(session) = retained {
+            session.field
+        } else {
+            session_state(
+                self.retained_state.is_some(),
+                self.id.clone(),
+                window,
+                cx,
+                |window, cx| {
+                    let state = cx.new(|cx| {
+                        let mut editor = EditorState::new(window, cx)
+                            .placeholder(placeholder.clone())
+                            // Kit 0.8 enables macOS bounce by default; keep Probe's
+                            // existing request and response editor scrolling behavior.
+                            .scroll_bounce(false)
+                            .smart_indent(language.as_ref() == "json")
+                            .folding(false)
+                            // Let the shortcut reach Probe’s search card; the native
+                            // session still owns matching, navigation, and painting.
+                            .searchable(false)
+                            .soft_wrap(soft_wrap)
+                            .language(language.clone());
+                        editor.set_highlighter_factory(crate::syntax::factory(), cx);
+                        editor.set_editor_style(paint_style.clone());
+                        editor
+                    });
+                    state.update(cx, |editor, cx| {
+                        editor.set_readonly(self.readonly, cx);
+                        editor.set_value(self.value.clone(), window, cx);
+                    });
+                    let decorations = state.update(cx, |editor, cx| {
+                        editor.create_decorations_collection(Vec::new(), cx)
+                    });
+                    let subscription = cx.subscribe_in(&state, window, EditorField::on_event);
+                    EditorField {
+                        state,
+                        decorations,
+                        last_decorations: Vec::new(),
+                        last_value: self.value.clone(),
+                        last_external_value: self.value.clone(),
+                        on_change: on_change.clone(),
+                        last_scroll_range: None,
+                        language: language.clone(),
+                        soft_wrap,
+                        _subscription: subscription,
+                    }
+                },
+            )
+        };
+        if let Some(retained) = self.retained_state {
+            *retained.0.borrow_mut() = Some(EditorSession {
+                field: field.clone(),
+                search: search_state.clone(),
             });
-            state.update(cx, |editor, cx| {
-                editor.set_readonly(self.readonly, cx);
-                editor.set_value(self.value.clone(), window, cx);
-            });
-            let decorations = state.update(cx, |editor, cx| {
-                editor.create_decorations_collection(Vec::new(), cx)
-            });
-            let subscription = cx.subscribe_in(&state, window, EditorField::on_event);
-            EditorField {
-                state,
-                decorations,
-                last_decorations: Vec::new(),
-                last_value: self.value.clone(),
-                on_change: on_change.clone(),
-                last_scroll_range: None,
-                language: language.clone(),
-                soft_wrap,
-                _subscription: subscription,
-            }
-        });
+        }
         field.update(cx, |field, cx| {
             field.on_change = self.on_change.clone();
             let language_changed = field.language != self.language;
@@ -158,9 +230,13 @@ impl RenderOnce for ProbeEditor {
                 field.soft_wrap = self.soft_wrap;
             }
             let context_focus = field.state.read(cx).focus_handle(cx);
-            let open_context_menu = context_menu.clone();
-            let context_editor = field.state.clone();
-            let value_changed = field.last_value != self.value;
+            let open_context_menu = context_menu.downgrade();
+            let context_editor = field.state.downgrade();
+            // A rejected/incomplete draft (for example GraphQL variables while
+            // typing JSON) must survive remounts when the model has not changed.
+            let value_changed =
+                field.last_value != self.value && field.last_external_value != self.value;
+            field.last_external_value = self.value.clone();
             if value_changed {
                 field.last_value = self.value.clone();
             }
@@ -175,6 +251,11 @@ impl RenderOnce for ProbeEditor {
                     editor.set_soft_wrap(self.soft_wrap, window, cx);
                 }
                 editor.on_context_menu(Rc::new(move |_, capabilities, position, window, cx| {
+                    let (Some(open_context_menu), Some(context_editor)) =
+                        (open_context_menu.upgrade(), context_editor.upgrade())
+                    else {
+                        return;
+                    };
                     context_focus.focus(window, cx);
                     open_context_menu.update(cx, |state, cx| {
                         state.position = Some(position);

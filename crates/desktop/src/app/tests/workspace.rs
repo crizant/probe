@@ -448,7 +448,8 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
                 .update(cx, |view, _, cx| {
                     let key = view.shell.active_tab().unwrap();
                     view.request_editor.set_section(key, section);
-                    view.request_section_scroll
+                    view.request_editor
+                        .scroll(key, section)
                         .set_offset(point(px(0.0), px(0.0)));
                     cx.notify();
                 })
@@ -480,13 +481,67 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
             });
             assert_eq!(
                 window
-                    .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+                    .update(cx, |view, _, _| view
+                        .request_editor
+                        .scroll(view.shell.active_tab().unwrap(), section)
+                        .offset()
+                        .y)
                     .unwrap(),
                 px(-8.0),
                 "scroll wiring for {section:?}, value column: {value_column}"
             );
         }
     }
+    let key = window
+        .update(cx, |view, _, cx| {
+            let key = view.shell.active_tab().unwrap();
+            view.request_editor.set_section(key, EditorSection::Headers);
+            cx.notify();
+            key
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.request_editor
+                .scroll(key, EditorSection::Headers)
+                .set_offset(point(px(0.0), px(-120.0)));
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.request_editor.set_section(key, EditorSection::Path);
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.request_editor.set_section(key, EditorSection::Headers);
+            cx.notify();
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.request_editor
+                    .scroll(key, EditorSection::Headers)
+                    .offset()
+                    .y,
+                px(-120.0)
+            );
+            assert_eq!(
+                view.request_editor
+                    .scroll(key, EditorSection::Path)
+                    .offset()
+                    .y,
+                px(-8.0)
+            );
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
@@ -3936,7 +3991,7 @@ fn restored_active_tab_highlights_matching_sidebar_request(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps(
+fn workspace_reload_preserves_request_section_scroll_after_multiple_remaps(
     cx: &mut TestAppContext,
 ) {
     cx.update(Theme::init);
@@ -3956,8 +4011,9 @@ fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps
             view.request_editor
                 .set_section(old_key, EditorSection::Headers);
 
-            view.request_section_scroll_owner
-                .set(Some((old_key, EditorSection::Headers)));
+            view.request_editor
+                .scroll(old_key, EditorSection::Headers)
+                .set_offset(point(px(0.0), px(-120.0)));
         })
         .unwrap();
 
@@ -3965,13 +4021,18 @@ fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps
         window
             .update(cx, |view, _, _| {
                 let old_key = view.shell.active_tab().unwrap();
+                view.request_editor
+                    .scroll(old_key, EditorSection::Headers)
+                    .set_offset(point(px(0.0), px(-120.0)));
                 let new_key = reload_unchanged_fixture(view, &fixture)[&old_key];
 
-                let scroll_owner = view.request_section_scroll_owner.get();
                 assert_eq!(
-                    scroll_owner,
-                    Some((new_key, EditorSection::Headers)),
-                    "scroll owner should be remapped after reload {iteration}"
+                    view.request_editor
+                        .scroll(new_key, EditorSection::Headers)
+                        .offset()
+                        .y,
+                    px(-120.0),
+                    "scroll position should be remapped after reload {iteration}"
                 );
             })
             .unwrap();

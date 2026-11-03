@@ -6,6 +6,12 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve editor scroll positions, selections, undo history, and search sessions when
+  switching request, response, or documentation tabs. Keep request-section and response
+  Inspect list scroll positions separate for each request.
+
 ## [2.4.0] - 2026-10-29
 
 ### Added

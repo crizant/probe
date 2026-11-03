@@ -27,6 +27,7 @@ impl ProbeApp {
                     .min_h(px(0.0))
                     .child(components::body_text_input(
                         theme,
+                        self.request_editor.editor(key, "graphql-query"),
                         ("graphql-query", key.slot()),
                         query.to_owned(),
                         components::BodySyntax::Plain,
@@ -74,6 +75,7 @@ impl ProbeApp {
                     .min_h(px(0.0))
                     .child(components::body_text_input(
                         theme,
+                        self.request_editor.editor(key, "graphql-variables"),
                         ("graphql-variables", key.slot()),
                         variables,
                         components::BodySyntax::Json,
@@ -177,6 +179,7 @@ impl ProbeApp {
                     .min_h(px(0.0))
                     .child(components::body_text_input(
                         theme,
+                        self.request_editor.editor(key, "graphql-extensions"),
                         ("graphql-extensions", key.slot()),
                         extensions,
                         components::BodySyntax::Json,

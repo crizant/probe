@@ -56,7 +56,16 @@ impl ProbeApp {
                         .min_h(px(0.0))
                         .child(components::body_text_input(
                             theme,
-                            ("request-body", key.slot()),
+                            self.request_editor.editor(
+                                key,
+                                match raw.kind {
+                                    RawBodyKind::Json => "body-json",
+                                    RawBodyKind::Xml => "body-xml",
+                                    RawBodyKind::Sparql => "body-sparql",
+                                    _ => "body-text",
+                                },
+                            ),
+                            format!("request-body-{}-{:?}", key.slot(), raw.kind),
                             raw.data.clone(),
                             match raw.kind {
                                 RawBodyKind::Json => components::BodySyntax::Json,

@@ -11,7 +11,7 @@ mod variables;
 use core::ProbeEditor;
 #[cfg(test)]
 pub(super) use core::ProbeEditor;
-pub(crate) use core::editor_paint_style;
+pub(crate) use core::{RetainedEditorState, editor_paint_style};
 pub(crate) use response::{
     BodySyntax, body_text_input, curl_command_input, documentation_text_input, response_body_input,
     response_headers_input, response_inspector_input, websocket_composer,

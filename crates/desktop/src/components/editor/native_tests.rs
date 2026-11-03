@@ -14,6 +14,7 @@ impl Render for EditorHarness {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.weak_entity();
         let element = ProbeEditor {
+            retained_state: None,
             theme: Theme::light(),
             id: "native-editor-test".into(),
             value: self.value.clone(),
