@@ -43,7 +43,10 @@ pub(super) fn convert_authentication(
         }
     }
     let kind = authentication_kind(auth_type);
-    if !matches!(kind, AuthenticationKind::Basic | AuthenticationKind::Bearer) {
+    if !matches!(
+        kind,
+        AuthenticationKind::Basic | AuthenticationKind::Bearer | AuthenticationKind::ApiKey
+    ) {
         diagnostics.push(warning(
             "execution_unsupported",
             "request",
@@ -55,13 +58,53 @@ pub(super) fn convert_authentication(
             ),
         ));
     }
-    let properties = convert_properties(
+    let mut properties = convert_properties(
         format,
         object.get(auth_type).unwrap_or(&Value::Null),
         resource_id,
         diagnostics,
     )?;
+    if kind == AuthenticationKind::ApiKey {
+        normalize_api_key_placement(&mut properties, resource_id, diagnostics);
+    }
     Ok(Some(Authentication { kind, properties }))
+}
+
+fn normalize_api_key_placement(
+    properties: &mut BTreeMap<String, AuthenticationValue>,
+    resource_id: &str,
+    diagnostics: &mut Vec<ImportDiagnostic>,
+) {
+    let source = properties.get("in");
+    let placement = properties.get("placement");
+    if let (Some(source), Some(placement)) = (source, placement)
+        && source != placement
+    {
+        diagnostics.push(warning(
+            "conflicting_api_key_placement",
+            "request",
+            Some(resource_id),
+            Some("auth.apikey.in"),
+            "Postman API Key 'in' conflicts with 'placement'; both properties are preserved and Probe uses 'placement'",
+        ));
+        return;
+    }
+    if !matches!(
+        source.or(placement),
+        Some(AuthenticationValue::String(value)) if matches!(value.as_str(), "header" | "query")
+    ) {
+        diagnostics.push(warning(
+            "invalid_api_key_placement",
+            "request",
+            Some(resource_id),
+            Some("auth.apikey.in"),
+            "Postman API Key placement is missing or unsupported; expected 'header' or 'query'; properties are preserved without a default",
+        ));
+        return;
+    }
+    if let Some(source) = properties.remove("in") {
+        properties.insert("placement".to_owned(), source);
+    }
 }
 
 fn authentication_kind(auth_type: &str) -> AuthenticationKind {

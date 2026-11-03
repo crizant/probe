@@ -5,8 +5,9 @@ use std::{
 };
 
 use probe_core::{
-    AuthenticationKind, Body, CollectionItem, EnvironmentVariable, GraphqlBody, MultipartPartKind,
-    RequestBody, VariableValue, VariableValueSet, VariableValueType, WorkspaceItemRef,
+    AuthenticationKind, AuthenticationValue, Body, CollectionItem, EnvironmentVariable,
+    GraphqlBody, MultipartPartKind, RequestBody, VariableValue, VariableValueSet,
+    VariableValueType, WorkspaceItemRef,
 };
 use probe_opencollection::create_bundled_workspace_from_collection;
 
@@ -138,6 +139,170 @@ fn imports_v2_object_authentication() {
 }
 
 #[test]
+fn imports_api_key_placements_and_round_trips() {
+    for name in ["collection-apikey-v2.json", "collection-apikey-v2.1.json"] {
+        let imported = inspect_postman_source(fixture(name))
+            .unwrap()
+            .convert(false)
+            .unwrap();
+        assert!(imported.diagnostics.is_empty());
+        assert!(!imported.partial);
+        let destination = temporary_path("apikey.yml");
+        let loaded =
+            create_bundled_workspace_from_collection(&destination, &imported.collection).unwrap();
+        for (index, placement) in ["header", "query"].iter().enumerate() {
+            let CollectionItem::Request(request) = &imported.collection.items[index] else {
+                panic!("expected request");
+            };
+            let auth = request.authentication.as_ref().unwrap();
+            assert_eq!(auth.kind, AuthenticationKind::ApiKey);
+            assert_eq!(
+                auth.properties,
+                std::collections::BTreeMap::from([
+                    (
+                        "key".into(),
+                        AuthenticationValue::String("X-API-Key".into())
+                    ),
+                    (
+                        "value".into(),
+                        AuthenticationValue::String("{{token}}".into())
+                    ),
+                    (
+                        "placement".into(),
+                        AuthenticationValue::String((*placement).into())
+                    ),
+                    (
+                        "custom".into(),
+                        AuthenticationValue::String("{{custom}}".into())
+                    ),
+                ])
+            );
+            let WorkspaceItemRef::Request(key) = loaded.workspace().root_items()[index] else {
+                panic!("expected request");
+            };
+            assert_eq!(loaded.workspace().request(key).unwrap(), request);
+        }
+        fs::remove_file(destination).unwrap();
+    }
+}
+
+#[test]
+fn api_key_missing_invalid_and_conflicting_placements_preserve_source_data() {
+    use serde_json::{Value, json};
+
+    for format in [
+        PostmanSourceFormat::CollectionV2,
+        PostmanSourceFormat::CollectionV2_1,
+    ] {
+        for (extra, expected_code) in [
+            (json!({}), Some("invalid_api_key_placement")),
+            (json!({"in": "cookie"}), Some("invalid_api_key_placement")),
+            (json!({"in": ""}), Some("invalid_api_key_placement")),
+            (json!({"in": null}), Some("invalid_api_key_placement")),
+            (json!({"in": true}), Some("invalid_api_key_placement")),
+            (
+                json!({"in": "{{placement}}"}),
+                Some("invalid_api_key_placement"),
+            ),
+            (
+                json!({"in": "header", "placement": "query"}),
+                Some("conflicting_api_key_placement"),
+            ),
+            (
+                json!({"in": "query", "placement": null}),
+                Some("conflicting_api_key_placement"),
+            ),
+            (
+                json!({"in": "cookie", "placement": "header"}),
+                Some("conflicting_api_key_placement"),
+            ),
+            (
+                json!({"placement": "invalid"}),
+                Some("invalid_api_key_placement"),
+            ),
+            (json!({"placement": "query"}), None),
+            (json!({"in": "query", "placement": "query"}), None),
+        ] {
+            let mut properties =
+                json!({"key": "{{key}}", "value": "{{value}}", "custom": [1, false]});
+            properties
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let value = match format {
+                PostmanSourceFormat::CollectionV2 => properties.clone(),
+                PostmanSourceFormat::CollectionV2_1 => Value::Array(
+                    properties
+                        .as_object()
+                        .unwrap()
+                        .iter()
+                        .map(|(key, value)| json!({"key": key, "value": value}))
+                        .collect(),
+                ),
+            };
+            let name = match format {
+                PostmanSourceFormat::CollectionV2 => "collection-apikey-v2.json",
+                PostmanSourceFormat::CollectionV2_1 => "collection-apikey-v2.1.json",
+            };
+            let mut source: Value =
+                serde_json::from_slice(&fs::read(fixture(name)).unwrap()).unwrap();
+            source["item"].as_array_mut().unwrap().truncate(1);
+            source["item"][0]["id"] = json!("request");
+            source["item"][0]["request"]["auth"]["apikey"] = value;
+            let path = temporary_path("apikey.json");
+            fs::write(&path, serde_json::to_vec(&source).unwrap()).unwrap();
+            let imported = inspect_postman_source(&path)
+                .unwrap()
+                .convert(false)
+                .unwrap();
+            fs::remove_file(path).unwrap();
+            let diagnostics = &imported.diagnostics;
+            let CollectionItem::Request(request) = &imported.collection.items[0] else {
+                panic!("expected request");
+            };
+            let auth = request.authentication.as_ref().unwrap();
+            assert_eq!(
+                auth.properties["key"],
+                AuthenticationValue::String("{{key}}".into())
+            );
+            assert_eq!(
+                auth.properties["value"],
+                AuthenticationValue::String("{{value}}".into())
+            );
+            assert_eq!(
+                auth.properties["custom"],
+                AuthenticationValue::Sequence(vec![
+                    AuthenticationValue::Number("1".into()),
+                    AuthenticationValue::Boolean(false),
+                ])
+            );
+            if let Some(code) = expected_code {
+                assert_eq!(diagnostics.len(), 1, "{properties:?}");
+                assert_eq!(diagnostics[0].code, code);
+                assert_eq!(diagnostics[0].resource_id.as_deref(), Some("request"));
+                assert_eq!(auth.properties.len(), properties.as_object().unwrap().len());
+                for field in ["in", "placement"] {
+                    let expected = properties.get(field).map(|value| match value {
+                        Value::String(value) => AuthenticationValue::String(value.clone()),
+                        Value::Bool(value) => AuthenticationValue::Boolean(*value),
+                        Value::Null => AuthenticationValue::Null,
+                        _ => panic!("unexpected placement test value"),
+                    });
+                    assert_eq!(auth.properties.get(field), expected.as_ref());
+                }
+            } else {
+                assert!(diagnostics.is_empty());
+                assert!(!auth.properties.contains_key("in"));
+                assert_eq!(
+                    auth.properties["placement"],
+                    AuthenticationValue::String("query".into())
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn imports_all_supported_bodies_and_expands_authentication_inheritance() {
     let preview = inspect_postman_source(fixture("collection-bodies-v2.1.json")).unwrap();
     let imported = preview.convert(false).unwrap();
@@ -250,7 +415,7 @@ fn strict_mode_rejects_lossy_data_and_partial_is_explicit() {
             .any(|item| item.code == "dynamic_variable_unsupported")
     );
     assert!(
-        imported
+        !imported
             .diagnostics
             .iter()
             .any(|item| item.code == "execution_unsupported")
