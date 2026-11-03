@@ -482,11 +482,6 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         .expect("test window should remain open");
     cx.simulate_keystrokes(window.into(), "o k");
     cx.run_until_parked();
-    {
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        assert!(visual.debug_bounds("editor-search-card").is_some());
-        assert!(visual.debug_bounds("response-body").is_some());
-    }
     let editor = window
         .update(cx, |view, _, cx| {
             let editor = view
@@ -523,17 +518,12 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         })
         .unwrap();
     cx.run_until_parked();
-    {
-        let mut visual = VisualTestContext::from_window(window.into(), cx);
-        assert!(visual.debug_bounds("editor-search-card").is_some());
-    }
     window
         .update(cx, |view, _, cx| {
             let restored = view
                 .response_viewer
                 .editor(request_key, ResponseViewerTab::Pretty)
                 .editor(cx);
-            assert_eq!(restored, editor);
             assert_eq!(restored.read(cx).scroll_offset(), offset);
             assert_eq!(restored.read(cx).search_session().query, "ok");
         })

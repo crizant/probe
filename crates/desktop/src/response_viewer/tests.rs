@@ -707,34 +707,18 @@ fn inspector_scroll_is_per_request_survives_remaps_and_resets_with_response() {
     let mut viewer = super::ResponseViewerState::default();
     viewer.insert(first, document.clone());
     viewer.insert(second, document.clone());
-    let first_scroll = viewer
-        .inspector_scroll(first)
+    let first_scroll = viewer.inspector_scroll(first);
+    let second_scroll = viewer.inspector_scroll(second);
+    first_scroll
         .0
         .borrow()
         .base_handle
-        .clone();
-    let second_scroll = viewer
-        .inspector_scroll(second)
-        .0
-        .borrow()
-        .base_handle
-        .clone();
-    first_scroll.set_offset(point(px(0.0), px(-120.0)));
-    assert_eq!(second_scroll.offset().y, px(0.0));
+        .set_offset(point(px(0.0), px(-120.0)));
+    assert_eq!(second_scroll.0.borrow().base_handle.offset().y, px(0.0));
     viewer.remap_requests(&BTreeMap::from([(first, second)]));
-    let remapped = viewer
-        .inspector_scroll(second)
-        .0
-        .borrow()
-        .base_handle
-        .clone();
-    assert_eq!(remapped.offset().y, px(-120.0));
+    let remapped = viewer.inspector_scroll(second);
+    assert_eq!(remapped.0.borrow().base_handle.offset().y, px(-120.0));
     viewer.insert(second, document);
-    let replacement = viewer
-        .inspector_scroll(second)
-        .0
-        .borrow()
-        .base_handle
-        .clone();
-    assert_eq!(replacement.offset().y, px(0.0));
+    let replacement = viewer.inspector_scroll(second);
+    assert_eq!(replacement.0.borrow().base_handle.offset().y, px(0.0));
 }

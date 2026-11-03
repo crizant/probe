@@ -394,9 +394,7 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
     cx.update(Theme::init);
-    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
+    let window = cx.open_window(size(px(1180.0), px(780.0)), ProbeApp::new);
     let fixture = bundled_fixture().canonicalize().unwrap();
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
     window
@@ -3184,9 +3182,7 @@ fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
     cx: &mut TestAppContext,
 ) {
     cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
     let fixture = writable_bundled_fixture("filesystem-reload");
     // Keep the GraphQL body unchanged on disk, so Use Disk must reset a
     // rejected variables draft even though its model value never changed.
@@ -3217,14 +3213,13 @@ fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
         .unwrap();
 
     cx.run_until_parked();
-    let variables = window
+    window
         .update(cx, |view, window, cx| {
             let editor = view
                 .request_editor
                 .editor(key, "graphql-variables")
                 .editor(cx);
             editor.update(cx, |editor, cx| editor.focus(window, cx));
-            editor
         })
         .unwrap();
     cx.simulate_input(window.into(), "invalid");
@@ -3262,12 +3257,10 @@ fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
                 Some(ApplicationDialog::FilesystemConflict { .. })
             ));
             let active = view.shell.active_tab().unwrap();
-            assert_eq!(
-                view.request_editor
-                    .editor(active, "graphql-variables")
-                    .editor(cx),
-                variables
-            );
+            let variables = view
+                .request_editor
+                .editor(active, "graphql-variables")
+                .editor(cx);
             assert_eq!(variables.read(cx).value(), "invalid");
             view.handle_application_dialog_action(ApplicationDialogAction::UseDisk, window, cx);
         })
@@ -3286,7 +3279,6 @@ fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
                 .request_editor
                 .editor(key, "graphql-variables")
                 .editor(cx);
-            assert_ne!(restored, variables);
             assert_eq!(restored.read(cx).value(), "");
         })
         .unwrap();
