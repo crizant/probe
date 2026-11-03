@@ -324,6 +324,10 @@ impl RequestEditorState {
             .clone()
     }
 
+    pub(crate) fn invalidate_editors(&mut self, key: RequestKey) {
+        self.editors.get_mut().retain(|(owner, _), _| *owner != key);
+    }
+
     pub(crate) fn scroll(&self, key: RequestKey, section: EditorSection) -> gpui_kit::ScrollHandle {
         self.scrolls
             .borrow_mut()
@@ -364,7 +368,7 @@ impl RequestEditorState {
     }
 
     pub(crate) fn remove(&mut self, key: RequestKey) {
-        self.editors.get_mut().retain(|(owner, _), _| *owner != key);
+        self.invalidate_editors(key);
         self.scrolls.get_mut().retain(|(owner, _), _| *owner != key);
         self.sections.remove(&key);
         if self

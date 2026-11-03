@@ -853,6 +853,13 @@ impl ProbeApp {
                                 .collect::<Vec<_>>();
                             let result = reconcile(&clean_local, workspace, &BTreeMap::new());
                             if let ReconcileResult::Applied(reconciled) = result {
+                                // Use Disk also discards rejected drafts that never reached
+                                // the model. Detached requests are not replaced by disk.
+                                if let Some(loaded) = &view.loaded_workspace {
+                                    for request in loaded.requests() {
+                                        view.request_editor.invalidate_editors(request.key());
+                                    }
+                                }
                                 view.apply_reconciled_workspace(*reconciled, cx);
                                 view.pending_environment_saves.clear();
                                 view.failed_environment_saves.clear();
@@ -1046,6 +1053,19 @@ impl ProbeApp {
         for (old_key, request) in detached {
             let new_key = workspace.add_detached_request(request);
             remaps.insert(old_key, new_key);
+        }
+        // A changed GraphQL body may select a different operation with identical
+        // displayed text. Drop its drafts and undo history before remapping.
+        for (previous_key, current_key) in &remaps {
+            if let Some((previous, current)) = old
+                .workspace()
+                .request(*previous_key)
+                .zip(workspace.workspace().request(*current_key))
+                && (previous.kind.is_graphql() || current.kind.is_graphql())
+                && previous.kind != current.kind
+            {
+                self.request_editor.invalidate_editors(*previous_key);
+            }
         }
         self.detached_requests.remap(&remaps);
         self.persistence.reset(baselines);

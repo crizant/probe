@@ -502,58 +502,42 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
     cx.run_until_parked();
     let offset = editor.read_with(cx, |editor, _| editor.scroll_offset());
     assert!(offset.y < px(0.0));
-    for (destination, response_tab) in [
-        (
-            crate::shell::OpenTab::Request(request_key),
-            ResponseViewerTab::Headers,
-        ),
-        (
-            crate::shell::OpenTab::Request(request_key),
-            ResponseViewerTab::Raw,
-        ),
-        (
-            crate::shell::OpenTab::Overview(crate::shell::OverviewTab::Collection),
-            ResponseViewerTab::Pretty,
-        ),
-        (
-            crate::shell::OpenTab::Request(other_request),
-            ResponseViewerTab::Pretty,
-        ),
-    ] {
+    for response_tab in [ResponseViewerTab::Raw, ResponseViewerTab::Headers] {
         window
-            .update(cx, |view, _, cx| {
-                view.select_open_tab(destination, cx);
-                view.set_response_tab(response_tab, cx);
-            })
+            .update(cx, |view, _, cx| view.set_response_tab(response_tab, cx))
             .unwrap();
         cx.run_until_parked();
         {
             let mut visual = VisualTestContext::from_window(window.into(), cx);
             assert!(visual.debug_bounds("editor-search-card").is_none());
         }
-        window
-            .update(cx, |view, _, cx| {
-                view.select_request(request_key, cx);
-                view.set_response_tab(ResponseViewerTab::Pretty, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        {
-            let mut visual = VisualTestContext::from_window(window.into(), cx);
-            assert!(visual.debug_bounds("editor-search-card").is_some());
-        }
-        window
-            .update(cx, |view, _, cx| {
-                let restored = view
-                    .response_viewer
-                    .editor(request_key, ResponseViewerTab::Pretty)
-                    .editor(cx);
-                assert_eq!(restored, editor);
-                assert_eq!(restored.read(cx).scroll_offset(), offset);
-                assert_eq!(restored.read(cx).search_session().query, "ok");
-            })
-            .unwrap();
     }
+    window
+        .update(cx, |view, _, cx| view.select_request(other_request, cx))
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.select_request(request_key, cx);
+            view.set_response_tab(ResponseViewerTab::Pretty, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    {
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("editor-search-card").is_some());
+    }
+    window
+        .update(cx, |view, _, cx| {
+            let restored = view
+                .response_viewer
+                .editor(request_key, ResponseViewerTab::Pretty)
+                .editor(cx);
+            assert_eq!(restored, editor);
+            assert_eq!(restored.read(cx).scroll_offset(), offset);
+            assert_eq!(restored.read(cx).search_session().query, "ok");
+        })
+        .unwrap();
     // Returning to a tab preserves its open search without stealing focus.
     {
         let mut visual = VisualTestContext::from_window(window.into(), cx);

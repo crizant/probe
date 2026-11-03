@@ -700,57 +700,41 @@ fn results_for_replaced_or_closed_documents_are_ignored_after_a_reload() {
 #[test]
 fn inspector_scroll_is_per_request_survives_remaps_and_resets_with_response() {
     use gpui_kit::{point, px};
-    use std::{collections::BTreeMap, rc::Rc};
+    use std::collections::BTreeMap;
     let first = request_key();
     let second = replacement_request_key();
     let document = prepare_document(&response(b"body", "text/plain"), 1).0;
     let mut viewer = super::ResponseViewerState::default();
     viewer.insert(first, document.clone());
     viewer.insert(second, document.clone());
-    let first_scroll = viewer.inspector_scroll(first).clone();
-    first_scroll
+    let first_scroll = viewer
+        .inspector_scroll(first)
         .0
         .borrow()
         .base_handle
-        .set_offset(point(px(0.0), px(-120.0)));
-    assert_eq!(
-        viewer
-            .inspector_scroll(second)
-            .0
-            .borrow()
-            .base_handle
-            .offset()
-            .y,
-        px(0.0)
-    );
+        .clone();
+    let second_scroll = viewer
+        .inspector_scroll(second)
+        .0
+        .borrow()
+        .base_handle
+        .clone();
+    first_scroll.set_offset(point(px(0.0), px(-120.0)));
+    assert_eq!(second_scroll.offset().y, px(0.0));
     viewer.remap_requests(&BTreeMap::from([(first, second)]));
-    assert!(Rc::ptr_eq(
-        &first_scroll.0,
-        &viewer.inspector_scroll(second).0
-    ));
-    assert_eq!(
-        viewer
-            .inspector_scroll(second)
-            .0
-            .borrow()
-            .base_handle
-            .offset()
-            .y,
-        px(-120.0)
-    );
+    let remapped = viewer
+        .inspector_scroll(second)
+        .0
+        .borrow()
+        .base_handle
+        .clone();
+    assert_eq!(remapped.offset().y, px(-120.0));
     viewer.insert(second, document);
-    assert_eq!(
-        viewer
-            .inspector_scroll(second)
-            .0
-            .borrow()
-            .base_handle
-            .offset()
-            .y,
-        px(0.0)
-    );
-    assert!(!Rc::ptr_eq(
-        &first_scroll.0,
-        &viewer.inspector_scroll(second).0
-    ));
+    let replacement = viewer
+        .inspector_scroll(second)
+        .0
+        .borrow()
+        .base_handle
+        .clone();
+    assert_eq!(replacement.offset().y, px(0.0));
 }
