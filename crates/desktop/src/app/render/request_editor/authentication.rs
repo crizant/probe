@@ -39,11 +39,18 @@ impl ProbeApp {
             ));
         }
 
-        let mut editor = div()
+        let editor = div()
             .flex()
             .flex_col()
             .gap(px(theme.metrics.spacing_2))
             .child(kind_buttons);
+        let mut form = div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .max_w(px(560.0 + 2.0 * theme.metrics.spacing_2))
+            .px(px(theme.metrics.spacing_2))
+            .gap(px(theme.metrics.spacing_2));
         if let Some(authentication) = &request.authentication {
             let fields: &[(&str, &str)] = match authentication.kind {
                 AuthenticationKind::Basic => &[("username", "Username"), ("password", "Password")],
@@ -58,7 +65,7 @@ impl ProbeApp {
                     .get(property)
                     .map(auth_value)
                     .unwrap_or_default();
-                editor = editor.child(
+                form = form.child(
                     div()
                         .id(property)
                         .debug_selector(move || format!("authentication-{property}"))
@@ -106,7 +113,7 @@ impl ProbeApp {
                     options.push((value.clone(), value.clone()));
                 }
                 let placement_view = cx.weak_entity();
-                editor = editor.child(
+                form = form.child(
                     div()
                         .flex()
                         .flex_col()
@@ -143,18 +150,18 @@ impl ProbeApp {
                 );
             }
             if fields.is_empty() {
-                editor = editor.child(div().text_color(theme.colors.text.muted).child(format!(
+                form = form.child(div().text_color(theme.colors.text.muted).child(format!(
                     "{} authentication is not supported for execution. Imported configuration is preserved.",
                     auth_label(&authentication.kind),
                 )));
             }
         } else {
-            editor = editor.child(
+            form = form.child(
                 div()
                     .text_color(theme.colors.text.muted)
                     .child("This request does not use authentication."),
             );
         }
-        editor.into_any_element()
+        editor.child(form).into_any_element()
     }
 }

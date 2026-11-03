@@ -934,6 +934,75 @@ mod tests {
     use gpui_kit::{TouchPhase, px};
     use std::time::{Duration, Instant};
 
+    struct PasswordHarness {
+        request: usize,
+        scroll: super::ListScroll,
+    }
+
+    impl gpui_kit::Render for PasswordHarness {
+        fn render(
+            &mut self,
+            _: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            use gpui_kit::ParentElement as _;
+            self.scroll.update(cx, |scroll, _| scroll.fields.clear());
+            gpui_kit::div().child(
+                super::variable_text_input(
+                    crate::theme::Theme::light(),
+                    ("password", self.request),
+                    "{{password}}",
+                    "Password",
+                    Default::default(),
+                    |_, _, _| {},
+                )
+                .password(true)
+                .list_scroll(Some(&self.scroll)),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn password_reveal_preserves_value_and_remounts_masked(cx: &mut gpui_kit::TestAppContext) {
+        use crate::theme::Theme;
+        use gpui_kit::{AppContext as _, Modifiers, VisualTestContext, size};
+
+        cx.update(Theme::init);
+        let window = cx.open_window(size(px(400.0), px(180.0)), |_, cx| PasswordHarness {
+            request: 0,
+            scroll: cx.new(|_| super::ListScrollState::default()),
+        });
+        cx.run_until_parked();
+        let check = |cx: &mut gpui_kit::TestAppContext, masked| {
+            window
+                .read_with(cx, |view, cx| {
+                    let scroll = view.scroll.read(cx);
+                    let input = scroll.fields[0].read(cx);
+                    assert_eq!(input.presentation().is_masked(), masked);
+                    assert_eq!(input.value().as_ref(), "{{password}}");
+                })
+                .unwrap();
+        };
+        check(cx, true);
+        for masked in [false, true, false] {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            let toggle = visual.debug_bounds("password-0-reveal-password").unwrap();
+            visual.simulate_click(toggle.center(), Modifiers::default());
+            cx.run_until_parked();
+            check(cx, masked);
+        }
+        for request in [1, 0] {
+            window
+                .update(cx, |view, _, cx| {
+                    view.request = request;
+                    cx.notify();
+                })
+                .unwrap();
+            cx.run_until_parked();
+            check(cx, true);
+        }
+    }
+
     fn sample(
         at: Instant,
         phase: TouchPhase,

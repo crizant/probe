@@ -634,9 +634,8 @@ pub(crate) fn set_authentication(request: &mut Request, kind: Option<Authenticat
     }
     request.authentication = kind.map(|kind| {
         let fields: &[(&str, &str)] = match kind {
-            AuthenticationKind::Basic => &[("username", ""), ("password", "")],
-            AuthenticationKind::Bearer => &[("token", "")],
-            AuthenticationKind::ApiKey => &[("key", ""), ("value", ""), ("placement", "header")],
+            AuthenticationKind::Basic => &[("password", "")],
+            AuthenticationKind::ApiKey => &[("placement", "header")],
             _ => &[],
         };
         let properties = fields
@@ -799,11 +798,7 @@ mod tests {
         set_authentication(&mut request, Some(AuthenticationKind::ApiKey));
         assert_eq!(
             request.authentication.as_ref().unwrap().properties,
-            BTreeMap::from([
-                ("key".to_owned(), Text(String::new())),
-                ("value".to_owned(), Text(String::new())),
-                ("placement".to_owned(), Text("header".to_owned()))
-            ])
+            BTreeMap::from([("placement".to_owned(), Text("header".to_owned()))])
         );
         set_auth_property(&mut request, "placement".to_owned(), "query".to_owned());
         set_authentication(&mut request, Some(AuthenticationKind::ApiKey));
@@ -814,10 +809,7 @@ mod tests {
         set_authentication(&mut request, Some(AuthenticationKind::Basic));
         assert_eq!(
             request.authentication.as_ref().unwrap().properties,
-            BTreeMap::from([
-                ("username".to_owned(), Text(String::new())),
-                ("password".to_owned(), Text(String::new()))
-            ])
+            BTreeMap::from([("password".to_owned(), Text(String::new()))])
         );
         set_authentication(&mut request, None);
         assert!(request.authentication.is_none());
@@ -828,6 +820,36 @@ mod tests {
         });
         set_authentication(&mut request, Some(AuthenticationKind::ApiKey));
         assert!(request.authentication.unwrap().properties.is_empty());
+    }
+
+    #[test]
+    fn untouched_authentication_is_rejected_but_basic_allows_an_empty_password() {
+        use probe_http::{ExecutionOptions, HttpEngine, HttpError};
+
+        let engine = HttpEngine::new().unwrap();
+        let options = ExecutionOptions::default();
+        let mut request = Request {
+            method: Some("GET".to_owned()),
+            url: Some("https://example.com".to_owned()),
+            ..Request::default()
+        };
+        for (kind, scheme, property) in [
+            (AuthenticationKind::Basic, "basic", "username"),
+            (AuthenticationKind::Bearer, "bearer", "token"),
+        ] {
+            set_authentication(&mut request, Some(kind));
+            assert!(matches!(
+                engine.curl_command(&request.clone().into_http().unwrap(), &options),
+                Err(HttpError::MissingAuthenticationProperty { scheme: actual_scheme, property: actual_property })
+                    if actual_scheme == scheme && actual_property == property
+            ));
+        }
+        set_authentication(&mut request, Some(AuthenticationKind::Basic));
+        set_auth_property(&mut request, "username".to_owned(), "alice".to_owned());
+        let command = engine
+            .curl_command(&request.into_http().unwrap(), &options)
+            .unwrap();
+        assert!(command.contains("--user 'alice:'"));
     }
 
     #[test]
